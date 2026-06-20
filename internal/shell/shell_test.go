@@ -524,6 +524,19 @@ func TestEncodeErrorJSON(t *testing.T) {
 	}
 }
 
+// TestEncodeErrorJSONPreAuthEnvelope pins the contract main's exitErr relies on
+// for pre-auth (-json) failures: an auth/credentials error must serialize to the
+// same {"error":…} envelope that post-auth one-shot errors use, so scripts see a
+// single error contract on every failure path. No live credentials are involved.
+func TestEncodeErrorJSONPreAuthEnvelope(t *testing.T) {
+	var buf bytes.Buffer
+	EncodeErrorJSON(&buf, errors.New("read credentials.json: no such file or directory"))
+	want := `{"error":"read credentials.json: no such file or directory"}` + "\n"
+	if buf.String() != want {
+		t.Errorf("EncodeErrorJSON pre-auth envelope = %q, want %q", buf.String(), want)
+	}
+}
+
 func TestMessageEntryOmitsEmptyOptionalFields(t *testing.T) {
 	var buf bytes.Buffer
 	s := &Shell{out: &buf, jsonOut: true}

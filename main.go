@@ -68,7 +68,7 @@ func main() {
 
 	hc, err := auth.Client(ctx, *creds, *token)
 	if err != nil {
-		fatal(err)
+		exitErr(*jsonOut, err)
 	}
 
 	// "auth" is a standalone subcommand: running the OAuth flow (done above) and
@@ -80,7 +80,7 @@ func main() {
 
 	client, err := gmailpkg.New(ctx, hc)
 	if err != nil {
-		fatal(err)
+		exitErr(*jsonOut, err)
 	}
 	var auditLog *audit.Logger
 	if !*noLog {
@@ -91,12 +91,7 @@ func main() {
 	// One-shot mode: any positional args form a single command.
 	if args := flag.Args(); len(args) > 0 {
 		if err := sh.Execute(args); err != nil {
-			if *jsonOut {
-				// JSON mode: error envelope on stderr, still exit non-zero.
-				shell.EncodeErrorJSON(os.Stderr, err)
-				os.Exit(1)
-			}
-			fatal(err)
+			exitErr(*jsonOut, err)
 		}
 		return
 	}
@@ -181,6 +176,19 @@ func usage() {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "gmail-ftp:", err)
 	os.Exit(1)
+}
+
+// exitErr reports a fatal error and exits non-zero. In JSON mode it emits the
+// same {"error": …} envelope on stderr that post-auth one-shot errors use, so
+// scripts see one consistent error contract on every failure path (including
+// pre-auth credential/token failures). Otherwise it falls back to the
+// human-readable fatal form.
+func exitErr(jsonOut bool, err error) {
+	if jsonOut {
+		shell.EncodeErrorJSON(os.Stderr, err)
+		os.Exit(1)
+	}
+	fatal(err)
 }
 
 // configDir returns ~/.config/gmail-ftp (or the OS-appropriate equivalent).
