@@ -16,3 +16,4 @@
 | 2026-06-20T20:35:57+09:00 | architect | review-prep | review-criteria.md | Authored structural review checklist (A-H) and discovered reference boundaries |
 | 2026-06-20T20:40:45+09:00 | architect | code-review | internal/**, main.go | Approve with minor suggestions; all structural risks cleared; flagged deferred-verbs-in-dispatch fidelity |
 | 2026-06-20T20:40:45+09:00 | planner | e2e-testing | S1-S10 smoke | 9 PASS, 1 PARTIAL (S5b -json pre-auth envelope); Approve with minor suggestions |
+| 2026-06-20T20:41:28+09:00 | lead | amendment | plan.md | Amendment 2: permit discoverable deferred stubs; schedule S5b JSON-envelope fix for Iteration 1 |
