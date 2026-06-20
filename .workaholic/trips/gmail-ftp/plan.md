@@ -1,9 +1,9 @@
 ---
 instruction: "to create gmail version of gdrive-ftp (../gdrive-ftp), so same concept but handle not files but email, same dir structure, and experience"
-phase: coding
-step: iteration-1
+phase: complete
+step: done
 iteration: 1
-updated_at: 2026-06-20T20:41:00+09:00
+updated_at: 2026-06-20T20:47:00+09:00
 ---
 
 # Trip Plan
@@ -36,4 +36,5 @@ to create gmail version of gdrive-ftp (../gdrive-ftp), so same concept but handl
 - [x] planning/moderation — Lead Amendment 1 fixes navigation, rm/mkdir semantics, scope, and OAuth. Consensus gate passed; plan fixed.
 - [x] coding/concurrent-launch — Constructor implemented gmail-ftp (65 tests green); Planner authored E2E plan + validated toolchain; Architect authored review checklist.
 - [x] coding/review-and-testing — Architect approved w/ minor suggestions (all structural risks cleared); Planner E2E 9 PASS / 1 PARTIAL (S5b).
-- [ ] coding/iteration-1 — Constructor fixes S5b JSON envelope; Architect re-reviews; Planner re-tests S5.
+- [x] coding/iteration-1 — Constructor fixed S5b (JSON envelope via single `exitErr` helper); Architect re-reviewed (no regressions); Planner re-tested (S5b PARTIAL→PASS). Consensus: Approve.
+- [x] complete/done — gmail-ftp v1 delivered: builds clean, `go vet`/`gofmt` clean, 66 tests passing; E2E smoke 10/10. Backlog (non-blocking): batched metadata fetch + intra-command cache; one-shot `friendlyErr` normalization in `-json`; empty-audit cosmetic in piped text mode.
