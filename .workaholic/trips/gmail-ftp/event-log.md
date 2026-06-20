@@ -13,3 +13,4 @@
 | 2026-06-20T20:16:09+09:00 | lead | phase-transition | planning→coding | Consensus reached; Amendment 1 fixes 2-level navigation, rm/mkdir/OAuth, and defers send/label to v1.1 |
 | 2026-06-20T20:35:57+09:00 | constructor | implementation | internal/**, main.go, plugins/** | Implemented gmail-ftp v1: auth/gmail/shell/audit, 65 passing tests, build+vet clean |
 | 2026-06-20T20:35:57+09:00 | planner | e2e-plan | e2e-plan.md | Authored E2E plan (S1-S10 smoke, G1-G8 credential-gated) and validated Go toolchain |
+| 2026-06-20T20:35:57+09:00 | architect | review-prep | review-criteria.md | Authored structural review checklist (A-H) and discovered reference boundaries |
