@@ -10,3 +10,4 @@
 | 2026-06-20T20:11:31+09:00 | constructor | review | directions/direction-v1.md, models/model-v1.md | Requested revision of Model; conceded 2-level navigation over own 3-level design |
 | 2026-06-20T20:15:26+09:00 | constructor | revision | designs/design-v2.md | Accepted Planner request-revision: adopted 2-level nav, fixed rm, defined mkdir/label |
 | 2026-06-20T20:15:26+09:00 | architect | revision | models/model-v2.md | Accepted Constructor request-revision: committed to 2-level nav, added N+1 cost model |
+| 2026-06-20T20:16:09+09:00 | lead | phase-transition | planning→coding | Consensus reached; Amendment 1 fixes 2-level navigation, rm/mkdir/OAuth, and defers send/label to v1.1 |
