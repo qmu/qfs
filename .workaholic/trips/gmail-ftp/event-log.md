@@ -22,3 +22,4 @@
 | 2026-06-20T20:46:47+09:00 | planner | re-test | S5b, S2, S9 | S5b upgraded PARTIAL→PASS; overall Approve; zero panics |
 | 2026-06-20T20:47:09+09:00 | lead | phase-transition | coding→complete/done | Consensus Approve; gmail-ftp v1 complete, build/tests green, E2E smoke 10/10 |
 | 2026-06-20T22:12:01+09:00 | lead | followup | ~/.local/bin/gmail-ftp | Built and installed the gmail-ftp binary on this machine (PATH-resolved, --help verified) |
+| 2026-06-21T18:43:02+09:00 | constructor | fix | internal/auth/auth.go | Switch OAuth redirect from http://127.0.0.1:1 to http://localhost (bare-IP loopback silently stalls Google consent) |

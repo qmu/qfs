@@ -95,10 +95,13 @@ func tokenFromWeb(ctx context.Context, config *oauth2.Config) (*oauth2.Token, er
 // copies the URL to the user's local clipboard via the OSC 52 terminal escape
 // (the only channel that reaches a laptop over SSH), 'o' attempts to open a
 // local browser, and any other key falls through to manual copy. After
-// authorizing, the user pastes the entire http://127.0.0.1:1/...?state=...&code=...
+// authorizing, the user pastes the entire http://localhost/...?state=...&code=...
 // redirect URL their browser lands on; we extract the code and validate state.
 func consentFlow(ctx context.Context, config *oauth2.Config, state string) (*oauth2.Token, error) {
-	config.RedirectURL = "http://127.0.0.1:1/"
+	// http://localhost is the loopback redirect registered on the OAuth client.
+	// (A bare http://127.0.0.1:<port> loopback now silently stalls Google's
+	// consent screen for some accounts; localhost completes reliably.)
+	config.RedirectURL = "http://localhost"
 	authURL := config.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
 
 	fmt.Fprintf(os.Stderr,
@@ -112,7 +115,7 @@ func consentFlow(ctx context.Context, config *oauth2.Config, state string) (*oau
 	}
 
 	fmt.Fprint(os.Stderr,
-		"\nAfter you authorize, the browser redirects to a http://127.0.0.1:1/...\n"+
+		"\nAfter you authorize, the browser redirects to a http://localhost/...\n"+
 			"URL that fails to load. Paste that entire URL here (or just the code): ")
 	line, err := readLine()
 	if err != nil {
