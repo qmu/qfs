@@ -64,3 +64,4 @@
 | 2026-06-23T07:07:08+09:00 | Constructor | implementation | t10-refine | Bound pending-future admission, unify preview skip-propagation, lock runtime crate confinement |
 | 2026-06-23T07:07:51+09:00 | Lead | ticket-accepted | t10 | Interpreter accepted (with refinement) |
 | 2026-06-23T07:22:39+09:00 | Constructor | implementation | t11 | New cfs-txn crate: EffectKey idempotency, @version/ETag optimistic concurrency, single-source ACID vs cross-source saga + audit ledger + cp/mv triple; wired into interpreter commit_txn. +25 tests, 291 green. |
+| 2026-06-23T07:27:06+09:00 | Architect | code-review | t11 | Approve with observations; apply-once holds only for driver-idempotent legs, has_intent reconcile unwired, conflict-by-text bridge back-fills expected (not world) version |
