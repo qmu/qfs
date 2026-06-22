@@ -56,6 +56,13 @@ revision required):
 - Retained spike loser (winnow or chumsky) carries a banner pointing at the ADR so it is not misread
   as a live second parser.
 
+## Progress (continued — coding phase)
+
+- [x] **[Constructor]** coding/concurrent-launch — implemented t01: 9-crate workspace under `crates/` (cfs bin + cmd/core/lang/plan/driver/codec/server/parser), three open registries, Driver/Codec traits with type-level purity, frozen keyword fixture, Effect/Plan placeholders, clippy deny-warnings + rustfmt + CI. **29 unit/integration tests green**, fmt/clippy/build clean on native aarch64. Decision **D1** recorded (CfsError/Path in cfs-driver to keep spine acyclic). Commit `9557bda`.
+- [x] **[Architect]** coding/review-and-testing — analytical review of t01: **Approve with minor suggestions**; acyclic spine verified across all 9 manifests, D1 endorsed, guards G1–G6 + C4/C5 pass, E1/E2/E7 confirmed to land inside seams. Commit `415e9f1`.
+- [x] **[Planner]** coding/review-and-testing — E2E validation of t01 CLI: **E2E approved**; 7/7 scenarios pass, no panics, `--json` envelope `{"error":{"code","message"}}` parseable by python3 + jq. Commit (e2e review). Exit-code convention 0/1/2 consistent.
+- [x] **[Lead]** t01 ACCEPTED — all three coding gates green, no iteration required.
+
 ## Progress
 
 - [x] **[Planner]** planning/artifact-generation — wrote `directions/direction-v1.md` (business vision for cfs E0 foundation: value proposition, business/strategic risk, three user personas including the AI agent operating cfs, system positioning for Rust single-binary + closed-core/open-registries, and the business rationale for a night on E0 before the 39 downstream tickets). Night-mode empty-instruction assumption recorded prominently in the artifact.
