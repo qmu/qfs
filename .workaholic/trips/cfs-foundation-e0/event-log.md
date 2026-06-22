@@ -8,3 +8,4 @@
 | 2026-06-22T23:16:35+09:00 | Architect | artifact-created | models/model-v1.md | Structural model bridging RFD intent to E0 crate seams |
 | 2026-06-22T23:17:00+09:00 | Constructor | artifact-created | designs/design-v1.md | Technical design for cfs E0 scaffold + parser spike |
 | 2026-06-22T23:19:36+09:00 | Planner | review-submitted | reviews/round-1-planner.md | Planner one-turn review of model + design |
+| 2026-06-22T23:20:11+09:00 | Architect | review-submitted | reviews/round-1-architect.md | Architect one-turn review of direction + design |
