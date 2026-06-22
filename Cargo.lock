@@ -155,6 +155,11 @@ dependencies = [
 [[package]]
 name = "cfs-plan"
 version = "0.0.0"
+dependencies = [
+ "cfs-types",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "cfs-server"

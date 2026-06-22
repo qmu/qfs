@@ -18,7 +18,7 @@ these boundaries without restructuring the workspace.
 | `cmd` | `cfs-cmd` | argv parsing (clap-derive), dispatch into the engine; **no domain logic** (§7). |
 | `core` | `cfs-core` | Shared engine glue: 3 registries, `Engine`/`Session`, re-exports, `CfsError` (§3/§6). |
 | `lang` | `cfs-lang` | The frozen reserved-keyword closed core (§3); AST lands here in E1. |
-| `plan` | `cfs-plan` | Effects-as-data: `Effect`, `Plan`, `irreversible` (§3/§6). |
+| `plan` | `cfs-plan` | Effects-as-data: the typed `Plan` DAG of `EffectNode`s, `PlanApplier`/`commit`, and `PREVIEW` rendering (§3/§6/§10). Depends on `cfs-types` (leaf) for the row model (t09). |
 | `driver` | `cfs-driver` | The `Driver` contract + owned DTOs; owns `CfsError` & `Path` (§5/§9). |
 | `codec` | `cfs-codec` | The pure `bytes ↔ rows` `Codec` contract (§4). |
 | `types` | `cfs-types` | The canonical type & schema model: `Value`/`Row`/`RowBatch`, `Schema`/`ColumnType`, schema algebra + typed predicates (§4/§5). **Leaf** crate (t05). |
@@ -34,6 +34,7 @@ cfs (bin) → cfs-cmd → cfs-core → { cfs-lang, cfs-plan, cfs-driver, cfs-cod
 cfs-codec  → cfs-driver        (shared CfsError, decision D1 — acyclic)
 cfs-codec  → cfs-types         (canonical Value/Row/RowBatch row model, t05 — acyclic)
 cfs-driver → cfs-plan          (Driver methods reference plan types)
+cfs-plan   → cfs-types         (effect nodes carry the canonical RowBatch/DriverId, t09 — acyclic)
 cfs-parser → cfs-lang          (consumes the frozen keyword consts / AST)
 cfs-types  → (serde only)      (LEAF: no workspace deps; the vendor-free type model, t05)
 ```

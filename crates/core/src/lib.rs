@@ -32,7 +32,11 @@ pub use cfs_codec::Codec;
 pub use cfs_driver::{
     AliasFn, Archetype, Capabilities, CfsError, Driver, NodeSchema, Path, ProcedureDecl,
 };
-pub use cfs_plan::{Effect, Plan};
+pub use cfs_plan::{
+    commit, preview, Affected, AppliedEffect, ApplyError, CommitReport, EffectKind, EffectNode,
+    Plan, PlanApplier, PlanBuilder, PlanError, Preview, PreviewRow, RecordingApplier, Target,
+    VfsPath,
+};
 // The canonical type & schema model (t05), re-exported so consumers see one
 // `cfs_core::Schema` / `Value` / `TypeError` surface.
 pub use cfs_types::{
