@@ -238,6 +238,82 @@ fn date_round_trip_and_arithmetic() {
     assert!(scalar(&reg, "PARSE_DATE", &[Value::Text("2025-02-29".into())]).is_err());
 }
 
+/// Regression (ticket t08): the date conversions must be **total** on any `i64`
+/// epoch-day — extreme inputs that previously panicked (`attempt to add with overflow`
+/// in `civil_from_days`, debug) or silently wrapped to a wrong date (release) must now
+/// surface a structured `date_out_of_range` domain error instead.
+#[test]
+fn format_date_extreme_epoch_days_are_domain_errors_not_panics() {
+    let reg = StdlibRegistry::with_core();
+
+    // FORMAT_DATE(i64::MAX) previously panicked / wrapped — now a structured domain error.
+    let err = scalar(&reg, "FORMAT_DATE", &[Value::Int(i64::MAX)]).unwrap_err();
+    assert_eq!(err.code(), "fn_domain");
+    assert!(
+        matches!(&err, FnError::Domain { reason, .. } if *reason == "date_out_of_range"),
+        "expected date_out_of_range, got {err:?}"
+    );
+
+    // FORMAT_DATE(i64::MIN) previously emitted a junk negative-year string — now rejected.
+    let err = scalar(&reg, "FORMAT_DATE", &[Value::Int(i64::MIN)]).unwrap_err();
+    assert!(
+        matches!(&err, FnError::Domain { reason, .. } if *reason == "date_out_of_range"),
+        "expected date_out_of_range, got {err:?}"
+    );
+
+    // Just past the supported upper bound (9999-12-31 == epoch-day 2_932_896).
+    let err = scalar(&reg, "FORMAT_DATE", &[Value::Int(2_932_897)]).unwrap_err();
+    assert!(matches!(&err, FnError::Domain { reason, .. } if *reason == "date_out_of_range"));
+    // Just past the supported lower bound (0001-01-01 == epoch-day -719_162).
+    let err = scalar(&reg, "FORMAT_DATE", &[Value::Int(-719_163)]).unwrap_err();
+    assert!(matches!(&err, FnError::Domain { reason, .. } if *reason == "date_out_of_range"));
+
+    // The boundary days themselves still format correctly (inclusive range).
+    assert_eq!(
+        scalar(&reg, "FORMAT_DATE", &[Value::Int(2_932_896)]).unwrap(),
+        Value::Text("9999-12-31".into())
+    );
+    assert_eq!(
+        scalar(&reg, "FORMAT_DATE", &[Value::Int(-719_162)]).unwrap(),
+        Value::Text("0001-01-01".into())
+    );
+
+    // A normal in-range date still formats correctly (no regression).
+    let parsed = scalar(&reg, "PARSE_DATE", &[Value::Text("2026-06-22".into())]).unwrap();
+    assert_eq!(
+        scalar(&reg, "FORMAT_DATE", std::slice::from_ref(&parsed)).unwrap(),
+        Value::Text("2026-06-22".into())
+    );
+}
+
+/// Regression (ticket t08): `DATE_ADD` near the `i64` boundary must not overflow — both an
+/// out-of-range base and an in-range base shifted out of range are structured domain
+/// errors, while an in-range shift still computes the right day.
+#[test]
+fn date_add_boundary_is_total() {
+    let reg = StdlibRegistry::with_core();
+
+    // An out-of-range base is rejected before any arithmetic.
+    let err = scalar(&reg, "DATE_ADD", &[Value::Int(i64::MAX), Value::Int(1)]).unwrap_err();
+    assert!(matches!(&err, FnError::Domain { reason, .. } if *reason == "date_out_of_range"));
+
+    // An in-range base whose result would overflow `i64` does not panic.
+    let err = scalar(&reg, "DATE_ADD", &[Value::Int(0), Value::Int(i64::MAX)]).unwrap_err();
+    assert!(matches!(&err, FnError::Domain { reason, .. } if *reason == "date_out_of_range"));
+
+    // Adding off the top of the supported range is a domain error (no silent wrap).
+    let err = scalar(&reg, "DATE_ADD", &[Value::Int(2_932_896), Value::Int(1)]).unwrap_err();
+    assert!(matches!(&err, FnError::Domain { reason, .. } if *reason == "date_out_of_range"));
+
+    // A normal in-range shift still works.
+    let parsed = scalar(&reg, "PARSE_DATE", &[Value::Text("2026-06-22".into())]).unwrap();
+    let plus10 = scalar(&reg, "DATE_ADD", &[parsed, Value::Int(10)]).unwrap();
+    assert_eq!(
+        scalar(&reg, "FORMAT_DATE", &[plus10]).unwrap(),
+        Value::Text("2026-07-02".into())
+    );
+}
+
 // ---- number scalars ----
 
 #[test]

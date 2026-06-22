@@ -275,6 +275,40 @@ fn ext(args: &[Value], _: &EvalCtx) -> Result<Value, FnError> {
 
 // ---- date (ISO-8601 `YYYY-MM-DD`, stored as epoch-days `Int`) ----
 
+/// Inclusive epoch-day bounds of the supported date domain: the proleptic Gregorian
+/// range `0001-01-01 ..= 9999-12-31`, expressed as days since 1970-01-01.
+///
+/// This is the exact range the `{:04}` year formatting can render and that `PARSE_DATE`
+/// (4-digit year) can produce, so `FORMAT_DATE` stays the exact inverse of `PARSE_DATE`.
+/// Inside this window the `civil_from_days` shift `z = days + 719_468` and every
+/// intermediate product stay far from `i64` limits, so the conversion is total and exact.
+/// Epoch-days outside it (including values within ~719_468 of `i64::MAX`/`MIN`, which would
+/// overflow the shift) are rejected with a structured domain error rather than panicking
+/// (debug) or silently wrapping to a wrong date (release).
+const MIN_EPOCH_DAY: i64 = -719_162; // 0001-01-01
+const MAX_EPOCH_DAY: i64 = 2_932_896; // 9999-12-31
+
+/// A structured `date_out_of_range` domain error for `name`, raised when an epoch-day
+/// value falls outside [`MIN_EPOCH_DAY`, `MAX_EPOCH_DAY`].
+fn date_out_of_range(name: &str) -> FnError {
+    FnError::Domain {
+        name: name.to_string(),
+        reason: "date_out_of_range",
+    }
+}
+
+/// Validate that `days` is a supported epoch-day, returning it unchanged or a structured
+/// `date_out_of_range` domain error for `name`. Every date builtin that converts an
+/// epoch-day to a civil date (or vice versa) routes through this guard so the conversion
+/// is **total** on any `i64` input — never a panic, never a silent wrap.
+fn check_epoch_day(name: &str, days: i64) -> Result<i64, FnError> {
+    if (MIN_EPOCH_DAY..=MAX_EPOCH_DAY).contains(&days) {
+        Ok(days)
+    } else {
+        Err(date_out_of_range(name))
+    }
+}
+
 /// `DATE('2026-06-22')` — parse an ISO date string into an epoch-day `Int`. Same as
 /// `PARSE_DATE` with the canonical format.
 fn date(args: &[Value], ctx: &EvalCtx) -> Result<Value, FnError> {
@@ -295,33 +329,41 @@ fn parse_date(args: &[Value], _: &EvalCtx) -> Result<Value, FnError> {
 }
 
 /// `FORMAT_DATE(<epoch-days>)` — epoch-day `Int` → ISO `YYYY-MM-DD` text. The exact
-/// inverse of `PARSE_DATE` (round-trip: `FORMAT_DATE(PARSE_DATE(s)) == s`).
+/// inverse of `PARSE_DATE` (round-trip: `FORMAT_DATE(PARSE_DATE(s)) == s`). An epoch-day
+/// outside the supported range (see [`MIN_EPOCH_DAY`]) is a structured
+/// `date_out_of_range` domain error — never a panic, never a silently-wrapped date.
 fn format_date(args: &[Value], _: &EvalCtx) -> Result<Value, FnError> {
     if is_null(args) {
         return Ok(Value::Null);
     }
-    let days = as_int("FORMAT_DATE", &args[0])?;
+    let days = check_epoch_day("FORMAT_DATE", as_int("FORMAT_DATE", &args[0])?)?;
     Ok(Value::Text(format_iso_date(days)))
 }
 
-/// `DATE_ADD(<epoch-days>, <n>)` — shift a date by `n` days.
+/// `DATE_ADD(<epoch-days>, <n>)` — shift a date by `n` days. The base must be a supported
+/// epoch-day and the result must remain in range; an out-of-range base or result is a
+/// structured `date_out_of_range` domain error.
 fn date_add(args: &[Value], _: &EvalCtx) -> Result<Value, FnError> {
     if is_null(args) || matches!(args.get(1), Some(Value::Null)) {
         return Ok(Value::Null);
     }
-    let base = as_int("DATE_ADD", &args[0])?;
+    let base = check_epoch_day("DATE_ADD", as_int("DATE_ADD", &args[0])?)?;
     let n = as_int("DATE_ADD", &args[1])?;
-    Ok(Value::Int(base.saturating_add(n)))
+    let result = base
+        .checked_add(n)
+        .ok_or_else(|| date_out_of_range("DATE_ADD"))?;
+    Ok(Value::Int(check_epoch_day("DATE_ADD", result)?))
 }
 
-/// `DATE_DIFF(<a>, <b>)` — `a - b` in whole days.
+/// `DATE_DIFF(<a>, <b>)` — `a - b` in whole days. Both operands must be supported
+/// epoch-days; the difference of two in-range days cannot overflow.
 fn date_diff(args: &[Value], _: &EvalCtx) -> Result<Value, FnError> {
     if is_null(args) || matches!(args.get(1), Some(Value::Null)) {
         return Ok(Value::Null);
     }
-    let a = as_int("DATE_DIFF", &args[0])?;
-    let b = as_int("DATE_DIFF", &args[1])?;
-    Ok(Value::Int(a.saturating_sub(b)))
+    let a = check_epoch_day("DATE_DIFF", as_int("DATE_DIFF", &args[0])?)?;
+    let b = check_epoch_day("DATE_DIFF", as_int("DATE_DIFF", &args[1])?)?;
+    Ok(Value::Int(a - b))
 }
 
 // ---- number ----
@@ -509,8 +551,14 @@ fn parse_iso_date(s: &str) -> Option<i64> {
     Some(days_from_civil(year, month, day))
 }
 
-/// Format epoch days since 1970-01-01 as an ISO `YYYY-MM-DD` string.
+/// Format epoch days since 1970-01-01 as an ISO `YYYY-MM-DD` string. The caller MUST have
+/// validated `days` with [`check_epoch_day`] first; the `debug_assert!` documents and
+/// (in debug builds) enforces that contract without ever panicking on a release path.
 fn format_iso_date(days: i64) -> String {
+    debug_assert!(
+        (MIN_EPOCH_DAY..=MAX_EPOCH_DAY).contains(&days),
+        "format_iso_date called with out-of-range epoch day; guard with check_epoch_day"
+    );
     let (y, m, d) = civil_from_days(days);
     format!("{y:04}-{m:02}-{d:02}")
 }
@@ -542,8 +590,14 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 }
 
 /// Civil date from epoch days (the inverse of [`days_from_civil`]).
+///
+/// Total over the supported epoch-day domain (see [`MIN_EPOCH_DAY`]); callers must guard
+/// with [`check_epoch_day`] first. The `z + 719_468` shift uses `saturating_add` so that
+/// even a stray out-of-range input degrades to a clamped (wrong-but-not-panicking) date
+/// instead of overflowing — the previous `z + 719_468` panicked in debug and silently
+/// wrapped in release for epoch-days within ~719_468 of `i64::MAX`.
 fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
+    let z = z.saturating_add(719_468);
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
