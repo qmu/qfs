@@ -47,7 +47,7 @@ pub fn expand(batch: &RowBatch, field: &str) -> RowBatch {
                 }
             }
             Value::Struct(inner) => {
-                out_rows.push(splice_row(row, idx, inner.values));
+                out_rows.push(splice_row(row, idx, inner.into_values()));
             }
             // Scalar/Null/Json reaching here despite an expandable schema (irregular
             // row): keep it as a single passthrough value in the replacement slot.
@@ -62,7 +62,7 @@ pub fn expand(batch: &RowBatch, field: &str) -> RowBatch {
 /// array-of-struct vs array-of-scalar split).
 fn expand_element(item: Value) -> Vec<Value> {
     match item {
-        Value::Struct(inner) => inner.values,
+        Value::Struct(inner) => inner.into_values(),
         other => vec![other],
     }
 }
@@ -85,8 +85,10 @@ fn splice_row(row: &Row, idx: usize, replacement: Vec<Value>) -> Row {
 /// callers resolve the head column positionally against the schema, then hand the head
 /// value plus the remaining segments here.
 ///
-/// - Into a [`Value::Struct`], the next segment selects the field by its **schema name**
-///   (so the caller passes the struct's schema alongside).
+/// - Into a [`Value::Struct`], the next segment selects the field by its **real field
+///   name** carried in the struct value itself (so `a.b.c` resolves over decoded data,
+///   not positionally). The `schema` argument is advisory and no longer required to name
+///   the struct's fields.
 /// - Into a [`Value::Json`], navigation is late-bound: it walks the JSON object keys and
 ///   returns the sub-tree as a fresh [`Value::Json`] (or [`Value::Null`] if absent).
 /// - Into a scalar/array with remaining segments → [`None`] (no such path).
@@ -98,13 +100,17 @@ pub fn access(value: &Value, schema: &Schema, path: &[&str]) -> Option<Value> {
         return Some(value.clone());
     };
     match value {
-        Value::Struct(row) => {
-            let idx = schema.columns.iter().position(|c| &c.name == head)?;
-            let child = row.values.get(idx)?;
-            let child_schema = match &schema.columns.get(idx)?.ty {
-                cfs_types::ColumnType::Struct(s) => s.clone(),
-                _ => Schema::empty(),
-            };
+        Value::Struct(fields) => {
+            let child = fields.get(head)?;
+            // Carry the static nested schema down when available; otherwise an empty
+            // schema (the child struct is self-describing, so descent does not need it).
+            let child_schema = schema
+                .column(head)
+                .and_then(|col| match &col.ty {
+                    cfs_types::ColumnType::Struct(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(Schema::empty);
             access(child, &child_schema, rest)
         }
         Value::Json(json) => access_json(json, path).map(Value::Json),

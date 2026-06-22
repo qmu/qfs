@@ -10,8 +10,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use cfs_types::{
-    typecheck_predicate, CmpOp, ColRef, Column, ColumnType, Literal, Pattern, Predicate, Row,
-    RowBatch, Schema, TypeError, TypedPredicate, Value,
+    typecheck_predicate, CmpOp, ColRef, Column, ColumnType, Fields, Literal, Pattern, Predicate,
+    Row, RowBatch, Schema, TypeError, TypedPredicate, Value,
 };
 
 /// A reusable nested fixture schema:
@@ -333,7 +333,7 @@ fn property_row_conforms_to_its_schema() {
         Value::Bool(true),
         Value::Int(7),
         Value::Null, // t is nullable
-        Value::Struct(Row::new(vec![Value::Int(1)])),
+        Value::Struct(Fields::new(vec![("x".to_string(), Value::Int(1))])),
         Value::Array(vec![Value::Int(1), Value::Int(2)]),
     ]);
     assert!(row.conforms_to(&schema));

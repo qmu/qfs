@@ -43,3 +43,4 @@
 | 2026-06-23T05:34:29+09:00 | Constructor | implementation | t15 | Implemented six builtin codecs (json/jsonl/yaml/toml/csv/md+frontmatter), CodecRegistry::with_builtins, value-level EXPAND/path-access, structured Decode/Encode errors; +31 tests (182 total). |
 | 2026-06-23T05:38:34+09:00 | Architect | code-review | t15 | Approve with observations; flag nested-struct field-name loss on decode->access path and dropped infer_schema/DESCRIBE seam as carry-overs |
 | 2026-06-23T05:39:24+09:00 | Planner | e2e-testing | t15 | E2E approved: all 6 codecs resolve/decode/round-trip, structured errors, no panic; nested field-name loss documented |
+| 2026-06-23T05:46:38+09:00 | Constructor | implementation | t15-fix | Preserve nested struct field names so a.b.c access works over decoded data |

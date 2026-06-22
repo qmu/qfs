@@ -8,7 +8,7 @@
 //! The vendor type (`serde_json::Value`) is confined to this module's signatures and
 //! the codec impls — it never crosses the `cfs-codec` public boundary (RFD §9).
 
-use cfs_types::{Column, Row, RowBatch, Schema, Value};
+use cfs_types::{Column, Fields, Row, RowBatch, Schema, Value};
 
 /// Map a single parsed JSON node to a cfs [`Value`] (RFD §4):
 /// - object → [`Value::Struct`] (a nested record, key order preserved by `Row` columns);
@@ -17,9 +17,11 @@ use cfs_types::{Column, Row, RowBatch, Schema, Value};
 /// - anything that does not fit the scalar/struct/array model collapses to
 ///   [`Value::Json`] (the irregular fallback — decode never fails on shape, RFD §4).
 ///
-/// Objects are returned with a side-channel schema (the field names + inferred types)
-/// via [`json_to_struct`] so the *top-level* rows can name their columns; nested
-/// structs recover their names through [`Value::type_of`] on demand.
+/// Objects become a self-describing [`Value::Struct`] carrying their **real field
+/// names** (via [`json_to_fields`]), so nested structs preserve their keys for `a.b.c`
+/// access and lossless nested `ENCODE` — the names are no longer reconstructed
+/// positionally. Top-level rows additionally get a side-channel schema via
+/// [`json_to_struct`] so the batch columns are named.
 #[must_use]
 pub fn json_to_value(node: &serde_json::Value) -> Value {
     match node {
@@ -28,10 +30,23 @@ pub fn json_to_value(node: &serde_json::Value) -> Value {
         serde_json::Value::Number(n) => number_to_value(n),
         serde_json::Value::String(s) => Value::Text(s.clone()),
         serde_json::Value::Array(items) => Value::Array(items.iter().map(json_to_value).collect()),
-        serde_json::Value::Object(_) => {
-            let (row, _schema) = json_to_struct(node);
-            Value::Struct(row)
-        }
+        serde_json::Value::Object(_) => Value::Struct(json_to_fields(node)),
+    }
+}
+
+/// Convert a JSON object into named [`Fields`], preserving the object's key order.
+/// Non-object input wraps as a single anonymous `value` field so any node maps to a
+/// struct shape. Each child recurses through [`json_to_value`], so nested objects keep
+/// their names all the way down.
+#[must_use]
+fn json_to_fields(node: &serde_json::Value) -> Fields {
+    match node {
+        serde_json::Value::Object(map) => Fields::new(
+            map.iter()
+                .map(|(key, child)| (key.clone(), json_to_value(child)))
+                .collect(),
+        ),
+        other => Fields::new(vec![("value".to_string(), json_to_value(other))]),
     }
 }
 
@@ -143,8 +158,9 @@ pub fn row_to_json(row: &Row, schema: &Schema) -> serde_json::Value {
 }
 
 /// Map a cfs [`Value`] back to a JSON node. Inverse of [`json_to_value`]; a
-/// [`Value::Struct`] uses its own positional [`Value::type_of`] schema for field names,
-/// and [`Value::Bytes`]/[`Value::Timestamp`] map to their lossless JSON carriers.
+/// [`Value::Struct`] re-emits its **real field names** (the struct value is
+/// self-describing), and [`Value::Bytes`]/[`Value::Timestamp`] map to their lossless
+/// JSON carriers.
 #[must_use]
 pub fn value_to_json(value: &Value) -> serde_json::Value {
     match value {
@@ -159,9 +175,12 @@ pub fn value_to_json(value: &Value) -> serde_json::Value {
                 .map(|byte| serde_json::Value::Number((*byte).into()))
                 .collect(),
         ),
-        Value::Struct(row) => {
-            let schema = struct_schema(row);
-            row_to_json(row, &schema)
+        Value::Struct(fields) => {
+            let mut map = serde_json::Map::new();
+            for (name, child) in fields.iter() {
+                map.insert(name.clone(), value_to_json(child));
+            }
+            serde_json::Value::Object(map)
         }
         Value::Array(items) => serde_json::Value::Array(items.iter().map(value_to_json).collect()),
         Value::Json(j) => j.clone(),
@@ -169,18 +188,4 @@ pub fn value_to_json(value: &Value) -> serde_json::Value {
         // than failing, keeping encode total (RFD §4 irregular-data tolerance).
         _ => serde_json::Value::Null,
     }
-}
-
-/// Recover the field-named schema of a nested struct [`Row`] for re-encoding. The
-/// runtime [`Row`] carries no names, so a nested struct round-trips through *positional*
-/// names (`0`, `1`, …) — top-level objects keep their real keys because the batch schema
-/// names them. (Documented non-preservation: nested-object key names, RFD §4.)
-fn struct_schema(row: &Row) -> Schema {
-    Schema::new(
-        row.values
-            .iter()
-            .enumerate()
-            .map(|(i, v)| Column::new(i.to_string(), v.type_of(), matches!(v, Value::Null)))
-            .collect(),
-    )
 }

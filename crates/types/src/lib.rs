@@ -44,4 +44,4 @@ pub use predicate::{
     typecheck_predicate, CmpOp, ColRef, Literal, Pattern, Predicate, TypedPredicate,
 };
 pub use schema::{Column, ColumnType, DriverId, Name, Provenance, Schema, SchemaSource, Typed};
-pub use value::{Row, RowBatch, Value};
+pub use value::{Fields, Row, RowBatch, Value};

@@ -19,7 +19,7 @@ use cfs_codec::{
     MarkdownFrontmatterCodec, TomlCodec, YamlCodec,
 };
 use cfs_driver::CfsError;
-use cfs_types::{Column, ColumnType, Row, RowBatch, Schema, Value};
+use cfs_types::{Column, ColumnType, Fields, Row, RowBatch, Schema, Value};
 
 // ---------------------------------------------------------------------------
 // JSON
@@ -330,9 +330,9 @@ fn expand_array_of_structs_flattens_element_fields() {
     ]);
     let rows = vec![Row::new(vec![
         Value::Int(7),
-        Value::Array(vec![Value::Struct(Row::new(vec![
-            Value::Int(1),
-            Value::Int(2),
+        Value::Array(vec![Value::Struct(Fields::new(vec![
+            ("x".to_string(), Value::Int(1)),
+            ("y".to_string(), Value::Int(2)),
         ]))]),
     ])];
     let out = expand(&RowBatch::new(schema, rows), "pts");
@@ -369,8 +369,9 @@ fn path_access_navigates_nested_structs_without_flattening() {
     let inner = Schema::new(vec![Column::new("k", ColumnType::Int, false)]);
     let mid = Schema::new(vec![Column::new("inner", ColumnType::Struct(inner), false)]);
     let schema = Schema::new(vec![Column::new("meta", ColumnType::Struct(mid), false)]);
-    let row = Row::new(vec![Value::Struct(Row::new(vec![Value::Struct(
-        Row::new(vec![Value::Int(42)]),
+    let row = Row::new(vec![Value::Struct(Fields::new(vec![(
+        "inner".to_string(),
+        Value::Struct(Fields::new(vec![("k".to_string(), Value::Int(42))])),
     )]))]);
 
     let got = access_row(&row, &schema, &["meta", "inner", "k"]).unwrap();
@@ -382,6 +383,79 @@ fn path_access_navigates_nested_structs_without_flattening() {
 
     // An absent segment resolves to None (not a panic).
     assert!(access_row(&row, &schema, &["meta", "missing"]).is_none());
+}
+
+/// Regression (t15 fix): nested struct field names must survive the **real codec
+/// path**, so `a.b.c` over decoded data resolves by real key — not positional `meta.0`.
+/// This is the decode→access end-to-end test both reviewers flagged as missing: the
+/// schema is *not* hand-built here, it comes out of `JsonCodec::decode`.
+#[test]
+fn decode_then_access_nested_struct_resolves_by_real_field_name() {
+    // A real nested JSON document, decoded through the codec (no hand-built schema).
+    let batch = JsonCodec
+        .decode(br#"{"id": 1, "meta": {"k": "v", "n": 7}, "a": {"b": {"c": 99}}}"#)
+        .unwrap();
+    let row = &batch.rows[0];
+    let schema = &batch.schema;
+
+    // The previously-broken case: a two-deep field name resolves to the real value,
+    // NOT to positional `meta.0`. Before the fix this returned `None`.
+    assert_eq!(
+        access_row(row, schema, &["meta", "k"]),
+        Some(Value::Text("v".into())),
+        "meta.k must resolve to the decoded value, not positional meta.0"
+    );
+    assert_eq!(access_row(row, schema, &["meta", "n"]), Some(Value::Int(7)));
+
+    // A three-deep a.b.c path resolves all the way down by real names.
+    assert_eq!(
+        access_row(row, schema, &["a", "b", "c"]),
+        Some(Value::Int(99)),
+        "a.b.c must navigate decoded nested structs by real key name"
+    );
+
+    // The old positional path must NOT resolve any more — names, not indices, win.
+    assert!(
+        access_row(row, schema, &["meta", "0"]).is_none(),
+        "positional `meta.0` must not resolve once real names are preserved"
+    );
+
+    // An intermediate struct is returned whole, and its inner names are intact.
+    match access_row(row, schema, &["a", "b"]) {
+        Some(Value::Struct(fields)) => assert_eq!(fields.names(), vec!["c"]),
+        other => panic!("expected inner struct with real names, got {other:?}"),
+    }
+
+    // The inferred *type* also carries the real nested names (not `"0"`/`"1"`).
+    match &schema.column("meta").unwrap().ty {
+        ColumnType::Struct(inner) => assert_eq!(inner.column_names(), vec!["k", "n"]),
+        other => panic!("expected meta: Struct, got {other:?}"),
+    }
+}
+
+/// Regression (t15 fix): EXPAND of an array-of-struct that was **decoded** (so each
+/// element carries real field names) still flattens its element fields into the row,
+/// and the resulting columns are the real names from the inferred schema.
+#[test]
+fn decode_then_expand_array_of_struct_retains_field_names() {
+    let batch = JsonCodec
+        .decode(br#"{"id": 7, "pts": [{"x": 1, "y": 2}, {"x": 3, "y": 4}]}"#)
+        .unwrap();
+    // The `pts` column is an array-of-struct with real element field names.
+    let out = expand(&batch, "pts");
+    assert_eq!(out.rows.len(), 2);
+    // Element fields flatten in by their real names (x, y), not positional 0/1.
+    assert!(out.schema.column("x").is_some());
+    assert!(out.schema.column("y").is_some());
+    // And the flattened values line up.
+    assert_eq!(
+        access_row(&out.rows[0], &out.schema, &["x"]),
+        Some(Value::Int(1))
+    );
+    assert_eq!(
+        access_row(&out.rows[1], &out.schema, &["y"]),
+        Some(Value::Int(4))
+    );
 }
 
 // ---------------------------------------------------------------------------
