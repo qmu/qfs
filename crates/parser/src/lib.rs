@@ -21,7 +21,8 @@
 //! dependencies** and is macro-free/pure-Rust, so it adds no threads, `std::fs`,
 //! or sockets (a deciding factor over chumsky, which pulls `stacker`/`psm` — a
 //! C-built stack manipulator that is wasm-hostile). The `wasm32-unknown-unknown`
-//! build is validated in CI (the target is not installed on the dev host).
+//! build is deferred (the target is not installed on the dev host); CI carries a
+//! parked, commented-out placeholder to be activated by the E0 wasm32 sibling ticket.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 

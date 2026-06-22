@@ -19,3 +19,5 @@
 | 2026-06-23T00:02:53+09:00 | Constructor | implementation | spike+adr+cfs-parser | Implemented t02 parser spike (winnow vs chumsky), ADR locking choice, thin parser-skeleton |
 | 2026-06-23T00:06:30+09:00 | Architect | code-review | cfs-parser+adr+spike | Analytical review of t02 parser spike, ADR, and skeleton crate |
 | 2026-06-23T00:10:20+09:00 | Planner | e2e-testing | cfs-parser | E2E validation of t02 parser skeleton structured-error contract + spike comparison |
+| 2026-06-23T00:12:05+09:00 | Lead | doc-fix | adr+lib.rs | Corrected inaccurate 'validated in CI' wasm32 claim to 'deferred; parked CI placeholder' (flagged by Architect+Planner) |
+| 2026-06-23T00:12:05+09:00 | Lead | ticket-accepted | t02 | t02 parser spike accepted: winnow locked in ADR, structured ParseError verified, 38 tests green, no regression |

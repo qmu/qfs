@@ -92,8 +92,9 @@ expected-set advantages are decisive on top.
 `wasm32-unknown-unknown` is **not installed** on the dev host and `rustup target add` is a
 user-toolchain mutation forbidden by system-safety; the target is explicitly deferred
 (trip assumption A2 / risk R5). We therefore **did not** add the target. The wasm32 build
-of `cfs-parser` (`cargo build -p cfs-parser --target wasm32-unknown-unknown`) is validated
-**in CI only** (the runner installs the target freely). Qualitative datapoint: winnow is
+of `cfs-parser` (`cargo build -p cfs-parser --target wasm32-unknown-unknown`) is **deferred**:
+CI carries a parked, commented-out placeholder (`.github/workflows/ci.yml`, the wasm32 step),
+to be activated by the E0 wasm32 sibling ticket — it is not yet an active CI gate. Qualitative datapoint: winnow is
 pure-Rust, macro-free, with **zero** transitive deps → known-smaller and wasm-clean;
 chumsky's `stacker`/`psm` (C-built platform stack manipulation) is wasm-hostile and would
 need feature-gating. This corroborates the winnow choice and is not a close call, so the
