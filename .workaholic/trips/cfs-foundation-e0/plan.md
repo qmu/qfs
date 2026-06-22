@@ -86,3 +86,7 @@ revision required):
 - **[Architect]** catch-up review: both **Approve with observations** (G1 single keyword source verified byte-for-byte vs RFD §3; G6 no winnow leak audited; spine acyclic). Commit `017ce5c`.
 - **[Planner]** catch-up E2E: **E2E approved**, 56/56 checks, all DDL/effect/query forms parse, governance errors machine-branchable, no panics on 12 adversarial inputs, secret hygiene holds. Commit `d300a69`.
 - **[Lead]** t03 + t04 ACCEPTED. Remaining tickets t05–t41 run the full Constructor→Architect→Planner cycle each.
+
+### t05 ACCEPTED (Lead, 2026-06-23)
+- **[Constructor]** new leaf crate `cfs-types` (value/type/schema/predicate/unify), `cfs-codec` placeholders reconciled onto it, +23 tests, green. **[Architect]** Approve with observations (spine acyclic, D2 `DriverId`-in-types endorsed). **[Planner]** E2E approved 31/31 (algebra + serde round-trip).
+- **Carry-over → t13**: two schema notions exist — `cfs_driver::NodeSchema` (untyped `Vec<String>`) vs `cfs_types::Schema` (typed). The driver contract (t13) must reconcile them (lean: NodeSchema absorbs Schema + archetype tag, or an explicit adapter). E4 mount key should reuse `cfs_types::DriverId`.
