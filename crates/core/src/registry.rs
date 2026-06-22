@@ -54,6 +54,38 @@ impl MountRegistry {
             .ok_or_else(|| CfsError::UnknownMount(mount.to_string()))
     }
 
+    /// Route a full path to the driver whose mount is the **longest prefix** of it,
+    /// returning that driver and the remaining **sub-path** (the path with the matched
+    /// mount and its trailing `/` stripped). Overlapping mounts (`/g` and `/git`)
+    /// resolve to the longest match, so `/git/repo@ref/x` routes to the `/git` driver
+    /// with sub-path `repo@ref/x` (never to `/g`).
+    ///
+    /// A mount matches only at a path **boundary**: it must equal the path, or the path
+    /// must continue with `/` after it — so `/git` does not capture `/gitlab/x`. Returns
+    /// `None` when no mount is a boundary-prefix of `path` (the caller raises
+    /// [`CfsError::UnknownMount`] with context it owns).
+    #[must_use]
+    pub fn resolve_path(&self, path: &str) -> Option<(Arc<dyn Driver>, String)> {
+        let mut best: Option<(&String, &Arc<dyn Driver>)> = None;
+        for (mount, driver) in &self.mounts {
+            let matches = path == mount
+                || path
+                    .strip_prefix(mount.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'));
+            if matches && best.is_none_or(|(b, _)| mount.len() > b.len()) {
+                best = Some((mount, driver));
+            }
+        }
+        best.map(|(mount, driver)| {
+            let sub = path
+                .strip_prefix(mount.as_str())
+                .unwrap_or("")
+                .trim_start_matches('/')
+                .to_string();
+            (Arc::clone(driver), sub)
+        })
+    }
+
     /// Number of registered mounts.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -187,12 +219,17 @@ mod tests {
     }
 
     struct FakeDriver {
+        mount: &'static str,
         pushdown: PushdownProfile,
         applier: NoopApplier,
     }
     impl FakeDriver {
         fn new() -> Self {
+            Self::at("/fake")
+        }
+        fn at(mount: &'static str) -> Self {
             Self {
+                mount,
                 pushdown: PushdownProfile::None,
                 applier: NoopApplier,
             }
@@ -200,7 +237,7 @@ mod tests {
     }
     impl Driver for FakeDriver {
         fn mount(&self) -> &str {
-            "/fake"
+            self.mount
         }
         fn describe(&self, _p: &Path) -> Result<NodeDesc, CfsError> {
             let _ = NodeDesc::new(Archetype::BlobNamespace, Schema::empty());
@@ -253,6 +290,38 @@ mod tests {
 
         let dup = reg.register(Arc::new(FakeDriver::new()));
         assert!(matches!(dup, Err(CfsError::DuplicateRegistration(_))));
+    }
+
+    /// O1 — the longest-mount-prefix router: overlapping mounts (`/g`, `/git`) resolve to
+    /// the longest match, the matched mount is stripped to a sub-path, and an unmatched
+    /// path returns `None`. Also proves the boundary rule (`/git` ≠ `/gitlab/...`).
+    #[test]
+    fn resolve_path_picks_longest_mount_prefix() {
+        let mut reg = MountRegistry::new();
+        reg.register(Arc::new(FakeDriver::at("/g"))).unwrap();
+        reg.register(Arc::new(FakeDriver::at("/git"))).unwrap();
+
+        // Longest match wins: /git, not /g.
+        let (driver, sub) = reg.resolve_path("/git/repo@ref/x").unwrap();
+        assert_eq!(driver.mount(), "/git");
+        assert_eq!(sub, "repo@ref/x");
+
+        // The shorter mount still routes its own subtree.
+        let (driver, sub) = reg.resolve_path("/g/foo").unwrap();
+        assert_eq!(driver.mount(), "/g");
+        assert_eq!(sub, "foo");
+
+        // Exact-mount path yields an empty sub-path.
+        let (driver, sub) = reg.resolve_path("/git").unwrap();
+        assert_eq!(driver.mount(), "/git");
+        assert_eq!(sub, "");
+
+        // Boundary rule: /git must not capture /gitlab/* — and with no /gitlab mount,
+        // there is no boundary-prefix at all, so it is unmatched.
+        assert!(reg.resolve_path("/gitlab/x").is_none());
+
+        // Wholly unmatched path → None.
+        assert!(reg.resolve_path("/s3/bucket/key").is_none());
     }
 
     #[test]

@@ -19,7 +19,7 @@ these boundaries without restructuring the workspace.
 | `core` | `cfs-core` | Shared engine glue: 3 registries, `Engine`/`Session`, re-exports, `CfsError` (§3/§6). |
 | `lang` | `cfs-lang` | The frozen reserved-keyword closed core (§3); AST lands here in E1. |
 | `plan` | `cfs-plan` | Effects-as-data: the typed `Plan` DAG of `EffectNode`s, `PlanApplier`/`commit`, and `PREVIEW` rendering (§3/§6/§10). Depends on `cfs-types` (leaf) for the row model (t09). |
-| `driver` | `cfs-driver` | The `Driver` contract (archetype, typed `Schema`, capabilities + parse-time gate, `ProcSig`/pushdown/prelude/`@version`, the `applier()` seam) + owned DTOs; owns `CfsError` & `Path` (§5/§9). |
+| `driver` | `cfs-driver` | The `Driver` contract (mount + `id()` plan identity, archetype, typed `Schema`, capabilities + parse-time gate, `ProcSig`/pushdown/prelude/`@version`, the `applier()` seam) + owned DTOs (incl. the out-of-crate `Capabilities` builder); owns `CfsError` & `Path` (§5/§9). |
 | `codec` | `cfs-codec` | The pure `bytes ↔ rows` `Codec` contract (§4). |
 | `types` | `cfs-types` | The canonical type & schema model: `Value`/`Row`/`RowBatch`, `Schema`/`ColumnType`, schema algebra + typed predicates (§4/§5). **Leaf** crate (t05). |
 | `server` | `cfs-server` | The server face: `serve` stub + `/server` mount seam (§8). |
@@ -87,7 +87,10 @@ and that `cfs-parser` does not depend on `cfs-core`.
    procedure, or codec instead. The freeze test (`cfs-lang`) locks the set.
 2. **Open registries generic over trait objects (G2).** Extension = `register(...)`
    into one of the three `cfs-core` registries. Registries hold `Arc<dyn Driver>` /
-   `Arc<dyn Codec>` / owned `ProcedureDecl`, never concrete types.
+   `Arc<dyn Codec>` / owned `ProcedureDecl`, never concrete types. `MountRegistry`
+   additionally routes a full path to a driver by **longest mount-prefix**
+   (`MountRegistry::resolve_path`), so overlapping mounts (`/g`, `/git`) resolve
+   deterministically and the matched mount is stripped to a driver-local sub-path.
 3. **Purity invariant at the type level (G3).** `Driver` / `Codec` methods return
    data (or `Plan` nodes); none take `&mut self`, return a future, or perform I/O. The
    only impure op (`COMMIT : Plan -> World`) is reserved for E2 and absent from the

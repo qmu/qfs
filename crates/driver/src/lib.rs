@@ -45,7 +45,7 @@ pub use error::CfsError;
 pub use path::Path;
 
 use cfs_plan::{Plan, PlanApplier};
-use cfs_types::{ColumnType, Schema};
+use cfs_types::{ColumnType, DriverId, Schema};
 use serde::Serialize;
 
 /// How a node maps onto cfs's uniform model (RFD-0001 §5, "Four archetypes").
@@ -145,6 +145,127 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
+    /// The empty capability set — every verb denied. Out-of-crate driver impls (E4)
+    /// build from here with the chainable setters, since the struct is
+    /// `#[non_exhaustive]` and a struct literal is therefore unavailable (E0639).
+    ///
+    /// `Capabilities::none()` is an alias for [`Capabilities::default()`]; it reads
+    /// better as the start of a builder chain (`Capabilities::none().select().insert()`).
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            select: false,
+            insert: false,
+            upsert: false,
+            update: false,
+            remove: false,
+            ls: false,
+            cp: false,
+            mv: false,
+            rm: false,
+        }
+    }
+
+    /// Build a capability set from a slice of supported [`Verb`]s — the declarative
+    /// form a driver uses when its node's verb set is known up front. Verbs not listed
+    /// stay denied.
+    #[must_use]
+    pub fn from_verbs(verbs: &[Verb]) -> Self {
+        let mut caps = Self::none();
+        for &verb in verbs {
+            caps = caps.with(verb);
+        }
+        caps
+    }
+
+    /// Set (enable) a single [`Verb`] in this set — the verb-keyed builder step used by
+    /// [`Capabilities::from_verbs`] and available to driver authors that branch on a
+    /// [`Verb`] value rather than a named field.
+    #[must_use]
+    pub const fn with(mut self, verb: Verb) -> Self {
+        match verb {
+            Verb::Select => self.select = true,
+            Verb::Insert => self.insert = true,
+            Verb::Upsert => self.upsert = true,
+            Verb::Update => self.update = true,
+            Verb::Remove => self.remove = true,
+            Verb::Ls => self.ls = true,
+            Verb::Cp => self.cp = true,
+            Verb::Mv => self.mv = true,
+            Verb::Rm => self.rm = true,
+        }
+        self
+    }
+
+    /// Builder: enable `SELECT`.
+    #[must_use]
+    pub const fn select(self) -> Self {
+        self.with(Verb::Select)
+    }
+
+    /// Builder: enable `INSERT`.
+    #[must_use]
+    pub const fn insert(self) -> Self {
+        self.with(Verb::Insert)
+    }
+
+    /// Builder: enable `UPSERT`.
+    #[must_use]
+    pub const fn upsert(self) -> Self {
+        self.with(Verb::Upsert)
+    }
+
+    /// Builder: enable `UPDATE`.
+    #[must_use]
+    pub const fn update(self) -> Self {
+        self.with(Verb::Update)
+    }
+
+    /// Builder: enable `REMOVE`.
+    #[must_use]
+    pub const fn remove(self) -> Self {
+        self.with(Verb::Remove)
+    }
+
+    /// Builder: enable `LS`.
+    #[must_use]
+    pub const fn ls(self) -> Self {
+        self.with(Verb::Ls)
+    }
+
+    /// Builder: enable `CP`.
+    #[must_use]
+    pub const fn cp(self) -> Self {
+        self.with(Verb::Cp)
+    }
+
+    /// Builder: enable `MV`.
+    #[must_use]
+    pub const fn mv(self) -> Self {
+        self.with(Verb::Mv)
+    }
+
+    /// Builder: enable `RM`.
+    #[must_use]
+    pub const fn rm(self) -> Self {
+        self.with(Verb::Rm)
+    }
+
+    /// The canonical, declaration-ordered list of every [`Verb`]. The single source of
+    /// truth shared by [`Capabilities::supported_labels`] and the verb/capability tie
+    /// test, so a new verb cannot drift out of sync with the capability flags.
+    pub(crate) const ALL_VERBS: [Verb; 9] = [
+        Verb::Select,
+        Verb::Insert,
+        Verb::Upsert,
+        Verb::Update,
+        Verb::Remove,
+        Verb::Ls,
+        Verb::Cp,
+        Verb::Mv,
+        Verb::Rm,
+    ];
+
     /// Whether the given [`Verb`] is supported at this node.
     #[must_use]
     pub const fn allows(&self, verb: Verb) -> bool {
@@ -165,18 +286,8 @@ impl Capabilities {
     /// structured [`CfsError::UnsupportedVerb`] carries for AI recovery.
     #[must_use]
     pub fn supported_labels(&self) -> Vec<&'static str> {
-        const ALL: [Verb; 9] = [
-            Verb::Select,
-            Verb::Insert,
-            Verb::Upsert,
-            Verb::Update,
-            Verb::Remove,
-            Verb::Ls,
-            Verb::Cp,
-            Verb::Mv,
-            Verb::Rm,
-        ];
-        ALL.iter()
+        Self::ALL_VERBS
+            .iter()
             .filter(|v| self.allows(**v))
             .map(|v| v.label())
             .collect()
@@ -316,9 +427,99 @@ pub enum PushdownProfile {
         order: bool,
         /// Can push down a join.
         join: bool,
+        /// Can push down aggregation (`COUNT`/`SUM`/… — SQL, D1, GA4 metrics).
+        aggregate: bool,
+        /// Can push down `DISTINCT` deduplication.
+        distinct: bool,
+        /// Can push down `GROUP BY` bucketing (GA4 dimensions, SQL grouping).
+        group_by: bool,
     },
     /// Pushes everything down (a full SQL backend).
     Full,
+}
+
+impl PushdownProfile {
+    /// Whether this profile can push `WHERE` predicates down natively. `Full` pushes
+    /// everything; `None` pushes nothing; `Partial` answers from its declared flag — so
+    /// the planner (t14) queries by intent instead of exhaustively destructuring.
+    #[must_use]
+    pub const fn supports_where(&self) -> bool {
+        match self {
+            PushdownProfile::None => false,
+            PushdownProfile::Full => true,
+            PushdownProfile::Partial { where_, .. } => *where_,
+        }
+    }
+
+    /// Whether this profile can push projection (column subset) down natively.
+    #[must_use]
+    pub const fn supports_project(&self) -> bool {
+        match self {
+            PushdownProfile::None => false,
+            PushdownProfile::Full => true,
+            PushdownProfile::Partial { project, .. } => *project,
+        }
+    }
+
+    /// Whether this profile can push `LIMIT` down natively.
+    #[must_use]
+    pub const fn supports_limit(&self) -> bool {
+        match self {
+            PushdownProfile::None => false,
+            PushdownProfile::Full => true,
+            PushdownProfile::Partial { limit, .. } => *limit,
+        }
+    }
+
+    /// Whether this profile can push `ORDER BY` down natively.
+    #[must_use]
+    pub const fn supports_order(&self) -> bool {
+        match self {
+            PushdownProfile::None => false,
+            PushdownProfile::Full => true,
+            PushdownProfile::Partial { order, .. } => *order,
+        }
+    }
+
+    /// Whether this profile can push a join down natively.
+    #[must_use]
+    pub const fn supports_join(&self) -> bool {
+        match self {
+            PushdownProfile::None => false,
+            PushdownProfile::Full => true,
+            PushdownProfile::Partial { join, .. } => *join,
+        }
+    }
+
+    /// Whether this profile can push aggregation down natively (SQL, D1, GA4 metrics).
+    #[must_use]
+    pub const fn supports_aggregate(&self) -> bool {
+        match self {
+            PushdownProfile::None => false,
+            PushdownProfile::Full => true,
+            PushdownProfile::Partial { aggregate, .. } => *aggregate,
+        }
+    }
+
+    /// Whether this profile can push `DISTINCT` down natively.
+    #[must_use]
+    pub const fn supports_distinct(&self) -> bool {
+        match self {
+            PushdownProfile::None => false,
+            PushdownProfile::Full => true,
+            PushdownProfile::Partial { distinct, .. } => *distinct,
+        }
+    }
+
+    /// Whether this profile can push `GROUP BY` down natively (GA4 dimensions, SQL).
+    #[must_use]
+    pub const fn supports_group_by(&self) -> bool {
+        match self {
+            PushdownProfile::None => false,
+            PushdownProfile::Full => true,
+            PushdownProfile::Partial { group_by, .. } => *group_by,
+        }
+    }
 }
 
 /// Whether a node carries temporal coordinates (`@version`, RFD §4) — git refs, S3
@@ -374,6 +575,18 @@ impl AliasFn {
 pub trait Driver: Send + Sync {
     /// The mount point this driver answers for, e.g. `/mail`, `/s3`.
     fn mount(&self) -> &str;
+
+    /// The driver's **plan identity** — the [`DriverId`] that lands in every
+    /// [`Target`](cfs_plan::Target) routed here (RFD §9). Registry identity ([`mount`])
+    /// and plan identity must not drift, so the default **derives** the id from the
+    /// mount by stripping a single leading `/` (`/git` → `git`, `/` → ``). A driver
+    /// whose plan id legitimately differs from its mount label (rare) overrides this;
+    /// otherwise the default keeps the two in lockstep by construction.
+    ///
+    /// [`mount`]: Driver::mount
+    fn id(&self) -> DriverId {
+        DriverId::new(self.mount().strip_prefix('/').unwrap_or(self.mount()))
+    }
 
     /// Describe a node's archetype + typed schema (powers `DESCRIBE`). Pure: returns
     /// data, no I/O. Per-node — a multi-archetype driver returns different archetypes on
@@ -511,6 +724,9 @@ mod tests {
                     limit: true,
                     order: false,
                     join: false,
+                    aggregate: false,
+                    distinct: false,
+                    group_by: false,
                 },
                 applier: InMemoryApplier,
                 prelude: vec![AliasFn::new("SEND", "fix.send")],
@@ -824,10 +1040,82 @@ mod tests {
         let pushdown = serde_json::to_string(d.pushdown()).unwrap();
         assert_eq!(
             pushdown,
-            r#"{"partial":{"where_":true,"project":true,"limit":true,"order":false,"join":false}}"#
+            r#"{"partial":{"where_":true,"project":true,"limit":true,"order":false,"join":false,"aggregate":false,"distinct":false,"group_by":false}}"#
         );
 
         let version = serde_json::to_string(&d.version_support(&path)).unwrap();
         assert_eq!(version, r#""versioned""#);
+    }
+
+    /// O1 — the default `id()` derives the plan [`DriverId`] from the mount by stripping
+    /// the leading `/`, so registry identity and plan identity cannot drift. The fixture
+    /// mounts at `/fix`, so its id is `fix`.
+    #[test]
+    fn driver_id_defaults_from_mount() {
+        let d = FixtureDriver::new();
+        assert_eq!(d.mount(), "/fix");
+        assert_eq!(d.id(), DriverId::new("fix"));
+        // Reachable through the trait object the registries store (G2).
+        let dynd: std::sync::Arc<dyn Driver> = std::sync::Arc::new(FixtureDriver::new());
+        assert_eq!(dynd.id(), DriverId::new("fix"));
+    }
+
+    /// O2 — verb/capability tie: every [`Verb`] in the closed set has a corresponding
+    /// [`Capabilities`] flag, and `Capabilities::with(v)` enables exactly that one verb
+    /// (and `allows(v)` reports it). This binds the two so a future verb cannot be added
+    /// without a capability flag — they cannot silently drift apart.
+    #[test]
+    fn every_verb_has_a_capability_flag() {
+        // `allows` is total over the closed verb set: a full capability set allows all.
+        let all = Capabilities::from_verbs(&Capabilities::ALL_VERBS);
+        for &verb in &Capabilities::ALL_VERBS {
+            assert!(all.allows(verb), "{} not allowed by full set", verb.label());
+        }
+        // `supported_labels` of the full set is exactly every verb label, in order.
+        let labels: Vec<&str> = Capabilities::ALL_VERBS.iter().map(|v| v.label()).collect();
+        assert_eq!(all.supported_labels(), labels);
+
+        // Enabling one verb enables exactly that verb — the tie is 1:1, no aliasing.
+        for &verb in &Capabilities::ALL_VERBS {
+            let only = Capabilities::none().with(verb);
+            for &other in &Capabilities::ALL_VERBS {
+                assert_eq!(
+                    only.allows(other),
+                    verb == other,
+                    "{} leaked into {}",
+                    verb.label(),
+                    other.label()
+                );
+            }
+        }
+    }
+
+    /// O3 — a driver declares aggregate/distinct/group_by pushdown (the SQL/D1/GA4 case),
+    /// and the planner queries it by intent via the `supports_*` accessors rather than
+    /// destructuring the variant.
+    #[test]
+    fn pushdown_declares_wide_vocabulary() {
+        let profile = PushdownProfile::Partial {
+            where_: true,
+            project: false,
+            limit: false,
+            order: false,
+            join: false,
+            aggregate: true,
+            distinct: true,
+            group_by: true,
+        };
+        assert!(profile.supports_where());
+        assert!(!profile.supports_project());
+        assert!(profile.supports_aggregate());
+        assert!(profile.supports_distinct());
+        assert!(profile.supports_group_by());
+        assert!(!profile.supports_join());
+
+        // The endpoints answer by intent too: Full pushes the new verbs, None pushes none.
+        assert!(PushdownProfile::Full.supports_aggregate());
+        assert!(PushdownProfile::Full.supports_group_by());
+        assert!(!PushdownProfile::None.supports_aggregate());
+        assert!(!PushdownProfile::None.supports_distinct());
     }
 }
