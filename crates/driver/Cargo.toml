@@ -1,0 +1,16 @@
+[package]
+name = "cfs-driver"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "cfs driver contract (RFD-0001 §5): the consumer-side narrow Driver trait + owned-DTO conventions. Also owns the shared CfsError and Path primitives the trait signatures need."
+
+[dependencies]
+cfs-plan = { path = "../plan" }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

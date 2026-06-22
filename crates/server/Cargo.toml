@@ -1,0 +1,15 @@
+[package]
+name = "cfs-server"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "cfs server face (RFD-0001 §8): the server-is-a-driver seam. E0 ships serve(config) stub + /server mount stub; no bindings."
+
+[dependencies]
+cfs-core = { path = "../core" }
+
+[lints]
+workspace = true

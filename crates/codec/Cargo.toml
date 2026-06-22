@@ -1,0 +1,17 @@
+[package]
+name = "cfs-codec"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "cfs codec contract (RFD-0001 §4): the pure bytes <-> rows Codec trait. Codecs compose over any blob source independent of driver identity."
+
+[dependencies]
+# Depends on cfs-driver only for the shared CfsError (decision D1). This is an
+# acyclic, RFD-justified edge: both trait crates return Result<_, CfsError>.
+cfs-driver = { path = "../driver" }
+
+[lints]
+workspace = true

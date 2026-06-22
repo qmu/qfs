@@ -1,0 +1,22 @@
+[package]
+name = "cfs-core"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "cfs shared engine glue (RFD-0001 §3/§6): the three open registries, the Engine/Session context, and re-exports of the trait seams + structured CfsError."
+
+[dependencies]
+cfs-driver = { path = "../driver" }
+cfs-codec = { path = "../codec" }
+cfs-lang = { path = "../lang" }
+cfs-plan = { path = "../plan" }
+# NOTE (acceptance criterion C5): the intended `cfs-core -> cfs-parser` edge is
+# DECLARED but not yet wired. E1 adds cfs-parser here (one direction only) so the
+# parser front door is reachable from core's dispatch without a cycle. Do not add
+# the dependency line until E1; cfs-parser must never depend on cfs-core.
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "cfs"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "cfs: the single binary (CLI + server) for the AI-driven, DSL-programmable multi-service control plane (RFD-0001)."
+
+[[bin]]
+name = "cfs"
+path = "src/main.rs"
+
+[dependencies]
+cfs-cmd = { path = "../cmd" }
+
+[lints]
+workspace = true

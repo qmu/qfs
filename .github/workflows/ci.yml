@@ -1,0 +1,85 @@
+name: cfs CI
+
+# CI for the Rust `cfs` workspace (RFD-0001 epic E0). The toolchain is read from
+# `rust-toolchain.toml` (channel = stable, with rustfmt + clippy and the two Linux
+# targets). No secrets, no credentials are used anywhere in this workflow
+# (acceptance criterion: no live credentials in the build / tests / CI).
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy (-D warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  build-test:
+    name: build + test (native)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+
+  cross:
+    name: cross-compile (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-unknown-linux-gnu
+          - x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      - name: Install aarch64 cross-linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      # x86_64 is native on the ubuntu runner (full binary link); aarch64 uses the
+      # cross-linker installed above. Both build the whole workspace including the
+      # `cfs` binary.
+      - name: Build workspace for target
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --workspace --target ${{ matrix.target }}
+
+  # wasm32 is DEFERRED per t01 (kept wasm-friendly but not built here). The wasm32
+  # build of cfs-parser is a t02 / future-E0-sibling concern; this job is a parked
+  # placeholder so the matrix slot is visibly reserved, not forgotten.
+  #
+  # wasm32:
+  #   name: wasm32 (cfs-parser, deferred)
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - run: rustup target add wasm32-unknown-unknown
+  #     - run: cargo build -p cfs-parser --target wasm32-unknown-unknown

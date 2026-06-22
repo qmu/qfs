@@ -3,9 +3,12 @@ credentials.json
 token.json
 *.token.json
 
-# Built binary
+# Built binary (Go)
 /gmail-ftp
 /dist/
+
+# Rust build artifacts
+/target/
 
 # Editor / OS noise
 *.swp

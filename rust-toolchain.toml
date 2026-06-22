@@ -1,0 +1,8 @@
+[toolchain]
+# Pin the stable channel (A2 ground truth: pinning a numeric version triggers a
+# failing offline rustup download here). The installed stable is 1.96.0.
+channel = "stable"
+components = ["rustfmt", "clippy"]
+# x86_64 is CI-only for binary link (no local cross-linker); lib crates cross-compile.
+# wasm32 is deferred per t01 (kept wasm-friendly but not a build target here).
+targets = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]

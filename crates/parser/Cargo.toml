@@ -1,0 +1,16 @@
+[package]
+name = "cfs-parser"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "cfs parser front door (RFD-0001 §2.2/§9). Skeleton reserved for t02 (the winnow-vs-chumsky decision spike + owned ParseError + parse_statement). E0 ships an empty-but-typed crate."
+
+[dependencies]
+# The parser consumes the frozen keyword consts / AST from cfs-lang (boundary B6).
+cfs-lang = { path = "../lang" }
+
+[lints]
+workspace = true

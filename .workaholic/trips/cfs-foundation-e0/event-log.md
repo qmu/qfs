@@ -12,3 +12,4 @@
 | 2026-06-22T23:20:38+09:00 | Constructor | review-submitted | reviews/round-1-constructor.md | Constructor one-turn review of direction + model |
 | 2026-06-22T23:23:41+09:00 | Lead | phase-transition | planning->coding | Planning converged round 1 (unanimous approval); dev-env ground truth recorded (crates.io reachable, cache warmed, toolchain pin=stable); R8 retired |
 | 2026-06-22T23:23:41+09:00 | Lead | consensus-reached | round-1 | All reviews approved, no revision requests; plan fixed |
+| 2026-06-22T23:36:26+09:00 | Constructor | implementation | crates/* | Implemented t01 workspace scaffold; build/clippy/test green native aarch64 |
