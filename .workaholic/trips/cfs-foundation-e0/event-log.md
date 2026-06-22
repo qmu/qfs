@@ -69,3 +69,4 @@
 | 2026-06-23T07:29:39+09:00 | Lead | ticket-accepted | t11 | Transactions accepted; has_intent reconcile routed to t12 |
 | 2026-06-23T07:42:31+09:00 | Constructor | implementation | t12 | Audit ledger observability (tracing spans/events + TraceId) wired through the txn bridge; has_intent reconcile made real (Indeterminate on non-replay-safe crash window); EffectError::Conflict{version} threads the real world version. +10 tests, 301 green. |
 | 2026-06-23T07:46:40+09:00 | Architect | code-review | t12 | Approve with minor suggestions; both t11 carry-overs closed on live path; run_acid Indeterminate gap noted as latent carry-over |
+| 2026-06-23T07:50:22+09:00 | Planner | e2e-testing | t12 | E2E: items 1-4 PASS (audit determinism, secret-free, observability, has_intent reconcile); item 5 Conflict semantics PASS but RecoveryReport with Conflict(Version) FAILS serde_json serialization (internal-tagging newtype-over-primitive) -> E2E blocked |
