@@ -68,3 +68,4 @@
 | 2026-06-23T07:28:47+09:00 | Planner | e2e-testing | t11 | E2E approved: 14/14 checks pass — apply-once idempotency, typed Conflict + bounded re-read, ACID rollback, reverse-order saga compensation, irreversible never compensated, deterministic no-panic report |
 | 2026-06-23T07:29:39+09:00 | Lead | ticket-accepted | t11 | Transactions accepted; has_intent reconcile routed to t12 |
 | 2026-06-23T07:42:31+09:00 | Constructor | implementation | t12 | Audit ledger observability (tracing spans/events + TraceId) wired through the txn bridge; has_intent reconcile made real (Indeterminate on non-replay-safe crash window); EffectError::Conflict{version} threads the real world version. +10 tests, 301 green. |
+| 2026-06-23T07:46:40+09:00 | Architect | code-review | t12 | Approve with minor suggestions; both t11 carry-overs closed on live path; run_acid Indeterminate gap noted as latent carry-over |
