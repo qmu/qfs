@@ -118,7 +118,9 @@ impl Interpreter {
             );
             if matches!(
                 outcome,
-                LegOutcome::Failed(_) | LegOutcome::Conflict(_) | LegOutcome::Indeterminate { .. }
+                LegOutcome::Failed(_)
+                    | LegOutcome::Conflict { .. }
+                    | LegOutcome::Indeterminate { .. }
             ) {
                 failure = true;
             }
@@ -230,7 +232,9 @@ fn map_effect_error(e: EffectError, precondition: &Precondition) -> LegOutcome {
             // terminal failure rather than a typed conflict (there is no precondition to
             // reconcile against), but still preserve the world version in the reason.
             if precondition.is_conditional() {
-                LegOutcome::Conflict(cfs_txn::Version::new(version))
+                LegOutcome::Conflict {
+                    version: cfs_txn::Version::new(version),
+                }
             } else {
                 LegOutcome::Failed(TxnError::terminal(format!(
                     "unexpected conflict (no precondition) at world version `{version}`"
@@ -269,6 +273,6 @@ fn is_write(kind: &EffectKind) -> bool {
 fn is_hard(outcome: &LegOutcome) -> bool {
     matches!(
         outcome,
-        LegOutcome::Failed(_) | LegOutcome::Conflict(_) | LegOutcome::Indeterminate { .. }
+        LegOutcome::Failed(_) | LegOutcome::Conflict { .. } | LegOutcome::Indeterminate { .. }
     )
 }

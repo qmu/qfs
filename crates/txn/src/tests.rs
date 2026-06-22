@@ -15,8 +15,8 @@ use cfs_types::{Column, ColumnType, Row, RowBatch, Schema, Value};
 
 use crate::{
     all_succeeded, select_strategy, AuditLedger, CommitStrategy, Compensation, CpStep, EffectKey,
-    EffectLeg, EffectReceipt, InMemoryLedger, LegApplier, LegOutcome, Precondition, SagaExecutor,
-    SagaPolicy, TransactionalDrivers, Version,
+    EffectLeg, EffectReceipt, InMemoryLedger, LegApplier, LegOutcome, LegRecord, Precondition,
+    RecoveryReport, SagaExecutor, SagaPolicy, TransactionalDrivers, Version,
 };
 
 // ---- fixtures -------------------------------------------------------------------------
@@ -81,7 +81,7 @@ impl LegApplier for FakeApplier {
             let path = leg.descriptor.target.path.as_str().to_string();
             if let Some(world_v) = self.world.borrow().get(&path).cloned() {
                 if !precondition.is_satisfied_by(&world_v) {
-                    return LegOutcome::Conflict(world_v);
+                    return LegOutcome::Conflict { version: world_v };
                 }
             }
         }
@@ -218,7 +218,7 @@ fn optimistic_conflict_is_typed_and_blocks_write() {
     assert_eq!(report.conflict_count(), 1);
     assert!(!report.is_clean());
     match &report.legs[0].outcome {
-        LegOutcome::Conflict(v) => assert_eq!(v, &Version::new("v2")),
+        LegOutcome::Conflict { version } => assert_eq!(version, &Version::new("v2")),
         other => panic!("expected Conflict(v2), got {other:?}"),
     }
     assert!(
@@ -568,7 +568,9 @@ fn all_succeeded_counts_resume_as_success() {
         LegOutcome::AlreadyApplied,
     ];
     assert!(all_succeeded(&outs));
-    let with_conflict = vec![LegOutcome::Conflict(Version::new("v9"))];
+    let with_conflict = vec![LegOutcome::Conflict {
+        version: Version::new("v9"),
+    }];
     assert!(!all_succeeded(&with_conflict));
 }
 
@@ -607,6 +609,64 @@ fn recovery_report_json_is_secret_free_and_stable() {
     assert!(
         !json.contains("\"v\":7") && !json.contains("Int"),
         "no payload leaked: {json}"
+    );
+}
+
+/// Regression (t12 / CO-t12-1 Planner E2E block): a `RecoveryReport` holding **every**
+/// `LegOutcome` variant — explicitly including `Conflict` — must serialize to JSON without a
+/// runtime error. Before the fix `Conflict(Version)` was a newtype variant wrapping a
+/// primitive, which serde's internal `#[serde(tag = "outcome")]` tagging cannot represent
+/// ("cannot serialize tagged newtype variant LegOutcome::Conflict containing a string"), so any
+/// commit that surfaced an optimistic-concurrency conflict could not be emitted as the JSON
+/// audit-of-record. As a struct variant `Conflict { version }` it serializes cleanly.
+#[test]
+fn recovery_report_with_every_outcome_variant_serializes() {
+    // One leg per LegOutcome variant; the variant value is what exercises the tag encoding.
+    let leg = |id: u32| {
+        EffectLeg::from_node(
+            "p",
+            &write_node(id, "s3", &format!("/s3/k{id}"), EffectKind::Upsert, 1),
+            Precondition::None,
+        )
+    };
+    let conflict_leg = leg(2);
+    let outcomes = vec![
+        LegOutcome::Applied(EffectReceipt::new(NodeId(0), 1)),
+        LegOutcome::AlreadyApplied,
+        LegOutcome::Conflict {
+            version: Version::new("world-v9-REAL"),
+        },
+        LegOutcome::Indeterminate {
+            key: conflict_leg.key.clone(),
+        },
+        LegOutcome::Failed(crate::EffectError::terminal("boom")),
+    ];
+    // Sanity: we covered the whole closed set (every `code()` is distinct).
+    let mut codes: Vec<&str> = outcomes.iter().map(LegOutcome::code).collect();
+    codes.sort_unstable();
+    codes.dedup();
+    assert_eq!(codes.len(), outcomes.len(), "one leg per distinct variant");
+
+    let records: Vec<_> = outcomes
+        .into_iter()
+        .enumerate()
+        .map(|(i, o)| LegRecord::from_outcome(&leg(i as u32), o))
+        .collect();
+    let report = RecoveryReport::new(records, Some(NodeId(2)), Vec::new());
+
+    // This is the operation that FAILED before the fix (serde returns Err for the Conflict leg).
+    let json = serde_json::to_string(&report)
+        .expect("a report containing every LegOutcome variant must serialize");
+
+    // The Conflict leg serializes as an internally-tagged object carrying the real, non-secret
+    // world coordinate — never a credential (RFD §10).
+    assert!(
+        json.contains("\"outcome\":\"conflict\""),
+        "conflict tag present: {json}"
+    );
+    assert!(
+        json.contains("\"version\":\"world-v9-REAL\""),
+        "real world version present in conflict leg: {json}"
     );
 }
 

@@ -241,7 +241,7 @@ async fn optimistic_conflict_surfaces_typed() {
     match &report.legs[0].outcome {
         // The bridge surfaces the REAL world version the driver reported ("v2-world"), NOT the
         // precondition's expected token ("v1") — the t12 Conflict{version} threading.
-        LegOutcome::Conflict(v) => assert_eq!(v, &Version::new("v2-world")),
+        LegOutcome::Conflict { version } => assert_eq!(version, &Version::new("v2-world")),
         other => panic!("expected Conflict, got {other:?}"),
     }
 }

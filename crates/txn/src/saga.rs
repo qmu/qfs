@@ -97,9 +97,13 @@ impl<'a> SagaExecutor<'a> {
                     return LegOutcome::Applied(receipt);
                 }
                 LegOutcome::AlreadyApplied => return LegOutcome::AlreadyApplied,
-                LegOutcome::Conflict(world_version) => {
+                LegOutcome::Conflict {
+                    version: world_version,
+                } => {
                     if attempt >= max_conflict_attempts {
-                        return LegOutcome::Conflict(world_version);
+                        return LegOutcome::Conflict {
+                            version: world_version,
+                        };
                     }
                     attempt += 1;
                     // Bounded re-read-then-write: re-base the precondition on the version the
@@ -140,7 +144,9 @@ impl<'a> SagaExecutor<'a> {
             let is_fresh_apply = matches!(outcome, LegOutcome::Applied(_));
             let hard_failure = matches!(
                 outcome,
-                LegOutcome::Failed(_) | LegOutcome::Conflict(_) | LegOutcome::Indeterminate { .. }
+                LegOutcome::Failed(_)
+                    | LegOutcome::Conflict { .. }
+                    | LegOutcome::Indeterminate { .. }
             );
             records.push(LegRecord::from_outcome(leg, outcome));
             if is_fresh_apply {
@@ -188,7 +194,12 @@ impl<'a> SagaExecutor<'a> {
                 continue;
             }
             let outcome = self.apply_leg(applier, leg);
-            let hard_failure = matches!(outcome, LegOutcome::Failed(_) | LegOutcome::Conflict(_));
+            let hard_failure = matches!(
+                outcome,
+                LegOutcome::Failed(_)
+                    | LegOutcome::Conflict { .. }
+                    | LegOutcome::Indeterminate { .. }
+            );
             records.push(LegRecord::from_outcome(leg, outcome));
             if hard_failure {
                 failure_at = Some(leg.descriptor.id);

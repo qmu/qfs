@@ -128,7 +128,7 @@ impl RecoveryReport {
     pub fn conflict_count(&self) -> usize {
         self.legs
             .iter()
-            .filter(|l| matches!(l.outcome, LegOutcome::Conflict(_)))
+            .filter(|l| matches!(l.outcome, LegOutcome::Conflict { .. }))
             .count()
     }
 

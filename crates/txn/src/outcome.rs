@@ -154,7 +154,17 @@ pub enum LegOutcome {
     AlreadyApplied,
     /// The optimistic-concurrency guard failed: the world's version differs from the
     /// precondition. Carries the version the world actually holds (for a bounded re-read).
-    Conflict(Version),
+    ///
+    /// A **struct** variant (not a newtype) so it serializes cleanly under the enum's
+    /// internal `#[serde(tag = "outcome")]` tagging — internal tagging cannot represent a
+    /// newtype variant wrapping a primitive ([`Version`] is a newtype-over-`String`), which
+    /// would fail at runtime ("cannot serialize tagged newtype variant containing a string").
+    /// Mirrors [`Indeterminate`](LegOutcome::Indeterminate). The `version` is a non-secret
+    /// world coordinate (an `If-Version`/ETag token), never a credential (RFD §10).
+    Conflict {
+        /// The version the world actually holds (for a bounded re-read).
+        version: Version,
+    },
     /// An **intent was recorded but the apply outcome is ambiguous** — a crash landed between
     /// `record_intent` and `mark_applied`, so the effect may or may not have committed. The
     /// reconcile pass refuses to silently replay it because the leg is **not replay-safe**
@@ -176,7 +186,7 @@ impl LegOutcome {
         match self {
             LegOutcome::Applied(_) => "applied",
             LegOutcome::AlreadyApplied => "already_applied",
-            LegOutcome::Conflict(_) => "conflict",
+            LegOutcome::Conflict { .. } => "conflict",
             LegOutcome::Indeterminate { .. } => "indeterminate",
             LegOutcome::Failed(_) => "failed",
         }
