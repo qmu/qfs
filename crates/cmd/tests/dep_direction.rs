@@ -196,14 +196,15 @@ fn types_is_a_leaf_and_codec_depends_on_it() {
 }
 
 #[test]
-fn core_does_not_depend_on_parser_yet_but_reserves_the_edge() {
-    // C5: the cfs-core -> cfs-parser edge is reserved (declared in docs/Cargo
-    // comment) but NOT yet wired in E0, so E1 introduces it one-directionally.
+fn core_depends_on_parser_one_directionally() {
+    // C5 / E1 (ticket t06): the cfs-core -> cfs-parser edge is now WIRED — name
+    // resolution (`cfs_core::resolve`) consumes the parsed `cfs_parser::Statement`. The
+    // edge is one-directional, so the spine stays acyclic.
     let graph = load_graph();
     let core_deps = graph.direct_deps.get("cfs-core").expect("cfs-core package");
     assert!(
-        !core_deps.iter().any(|d| d == "cfs-parser"),
-        "at E0 cfs-core must NOT yet depend on cfs-parser (edge reserved for E1, C5)"
+        core_deps.iter().any(|d| d == "cfs-parser"),
+        "E1: cfs-core must depend on cfs-parser (name resolution consumes the AST, t06)"
     );
     // And the parser must never depend on core (cycle prevention).
     let parser_deps = graph

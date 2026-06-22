@@ -130,6 +130,7 @@ dependencies = [
  "cfs-codec",
  "cfs-driver",
  "cfs-lang",
+ "cfs-parser",
  "cfs-plan",
  "cfs-types",
 ]

@@ -13,10 +13,11 @@
 //! / `cfs-driver` / `cfs-codec` directly (fidelity guard G5 / acceptance criterion
 //! C4, mechanically enforced by `tests/dep_direction.rs`).
 //!
-//! ## Reserved upward edge to the parser (acceptance criterion C5)
-//! The intended edge is `cfs-core → cfs-parser` (core calls `parse_statement`). It is
-//! declared in `Cargo.toml` and `ARCHITECTURE.md` but **not yet wired**, so E1 adds
-//! it one-directionally and a cycle is impossible.
+//! ## Upward edge to the parser (acceptance criterion C5, wired at E1/t06)
+//! The `cfs-core → cfs-parser` edge is now **wired**: name resolution ([`resolve`])
+//! consumes the parsed `cfs_parser::Statement` AST. The edge is one-directional
+//! (`cfs-parser` never depends on `cfs-core`), so the spine stays acyclic;
+//! `tests/dep_direction.rs` asserts the edge is now present and the back-edge absent.
 //!
 //! ## wasm-friendliness (boundary guard B7)
 //! No threads, no `std::fs`, no sockets here. All I/O is behind (future) driver impls.
@@ -24,8 +25,10 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod registry;
+mod resolve;
 
 pub use registry::{CodecRegistry, MountRegistry, ProcRegistry};
+pub use resolve::{capability_verb_for, write_verb_for, ResolveError, ResolvedCall, Resolver};
 
 // Re-export the trait seams and shared types so consumers depend on `cfs-core` only.
 pub use cfs_codec::Codec;

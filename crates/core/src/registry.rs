@@ -86,6 +86,13 @@ impl MountRegistry {
         })
     }
 
+    /// Iterate every registered driver (deterministic mount order). Used by name
+    /// resolution (t06) to find which drivers ship a given prelude alias when deciding
+    /// receiver-typed alias scope / ambiguity.
+    pub fn drivers(&self) -> impl Iterator<Item = &Arc<dyn Driver>> {
+        self.mounts.values()
+    }
+
     /// Number of registered mounts.
     #[must_use]
     pub fn len(&self) -> usize {

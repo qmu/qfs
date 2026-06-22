@@ -45,3 +45,4 @@
 | 2026-06-23T05:39:24+09:00 | Planner | e2e-testing | t15 | E2E approved: all 6 codecs resolve/decode/round-trip, structured errors, no panic; nested field-name loss documented |
 | 2026-06-23T05:46:38+09:00 | Constructor | implementation | t15-fix | Preserve nested struct field names so a.b.c access works over decoded data |
 | 2026-06-23T05:47:32+09:00 | Lead | ticket-accepted | t15 | Codec registry accepted; nested-struct naming fix landed |
+| 2026-06-23T05:54:40+09:00 | Constructor | implementation | t06 | Implemented name resolution in cfs-core (CALL procedures + receiver-typed pure aliases), wired the cfs-core->cfs-parser edge and canonical EffectVerb maps; 200 tests green (+16). |
