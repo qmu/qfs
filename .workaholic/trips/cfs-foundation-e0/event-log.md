@@ -32,3 +32,4 @@
 | 2026-06-23T04:49:47+09:00 | Planner | e2e-testing | t05 | E2E-validated cfs-types via external consumer: 31/31 checks pass (type_of, conformance, resolve_path/project/expand/unify, predicate typecheck, serde round-trip); no panics on adversarial/empty; E2E approved |
 | 2026-06-23T04:50:36+09:00 | Lead | ticket-accepted | t05 | Type/schema model accepted; NodeSchema↔Schema carry-over to t13 |
 | 2026-06-23T04:59:13+09:00 | Constructor | implementation | t09 | Formalized cfs-plan into a typed effect DAG with PREVIEW/COMMIT semantics, RecordingApplier, golden+purity tests |
+| 2026-06-23T05:02:34+09:00 | Architect | code-review | t09 | Approve with observations: effect-plan DAG + PREVIEW/COMMIT faithful; recorded WriteVerb-drift, VfsPath-Path, purity-denylist, RETURNING-asymmetry carry-overs |
