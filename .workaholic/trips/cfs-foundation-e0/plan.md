@@ -98,3 +98,8 @@ revision required):
 ### t13 ACCEPTED (Lead, 2026-06-23)
 - **[Constructor]** full Driver contract (archetype, typed schema, per-node capabilities, procs, pushdown, prelude, @version, `applier()` impure seam); reconciled NodeSchema→Schema, Path↔VfsPath adapter, AppliedEffect::new. **[Architect]** Approve with observations. **[Planner]** E2E approved (external driver implemented). **Refinement** (commit `060a457`): Capabilities builder (external-constructible), `Driver::id()`+longest-prefix `MountRegistry::resolve_path` router, wider pushdown vocab (aggregate/distinct/group_by)+accessors, Verb↔Capability tie-test. 151 tests green.
 - **Carry-overs**: O4 validate mount() strings; t14 planner consumes pushdown via accessors (done).
+
+### t15 ACCEPTED (Lead, 2026-06-23)
+- **[Constructor]** codec registry + 6 builtins (json/jsonl/yaml/toml/csv/md+frontmatter), struct/array bridge, EXPAND/path-access, structured errors. **[Architect]** Approve with observations. **[Planner]** E2E approved.
+- **Defect caught by BOTH gates + fixed**: `Value::Struct` lost nested field names → `a.b.c` over decoded data returned None. Fixed by making `Value::Struct(Fields)` carry named ordered fields; decode→access regression test added (commit `6918d35`). 184 tests green. This was a t05-rooted core-model fix landed before drivers depend on it.
+- **Carry-over**: defaulted `Codec::infer_schema` (DESCRIBE-without-materialization) deferred to driver/DESCRIBE ticket (non-breaking later).
