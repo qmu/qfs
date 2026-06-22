@@ -71,3 +71,4 @@
 | 2026-06-23T07:46:40+09:00 | Architect | code-review | t12 | Approve with minor suggestions; both t11 carry-overs closed on live path; run_acid Indeterminate gap noted as latent carry-over |
 | 2026-06-23T07:50:22+09:00 | Planner | e2e-testing | t12 | E2E: items 1-4 PASS (audit determinism, secret-free, observability, has_intent reconcile); item 5 Conflict semantics PASS but RecoveryReport with Conflict(Version) FAILS serde_json serialization (internal-tagging newtype-over-primitive) -> E2E blocked |
 | 2026-06-23T07:54:23+09:00 | Constructor | implementation | t12-fix | Make LegOutcome::Conflict a struct variant so RecoveryReport JSON serializes; fix run_acid Indeterminate |
+| 2026-06-23T07:55:12+09:00 | Lead | ticket-accepted | t12 | Audit/observability accepted after serde fix; E2 complete |
