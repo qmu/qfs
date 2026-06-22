@@ -23,6 +23,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Async runtime + combinators for the effect interpreter. tokio/futures are deliberately
+# CONFINED to cfs-runtime (only that crate opts in) so cfs-plan's purity dep-closure test
+# (which forbids tokio/async runtimes) stays green — the effect substrate stays I/O-free.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+futures = "0.3"
+# `async fn` in the consumer-side ApplyDriver trait (object-safe `dyn ApplyDriver`).
+# Confined to cfs-runtime alongside tokio.
+async-trait = "0.1"
 
 # Workspace-wide lints. Inherited by each member via `[lints] workspace = true`.
 # The strict unwrap/expect/panic policy enforces the t01 "no unwrap/expect/panic in

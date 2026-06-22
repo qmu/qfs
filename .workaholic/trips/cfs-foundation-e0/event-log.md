@@ -58,3 +58,4 @@
 | 2026-06-23T06:37:32+09:00 | Planner | e2e-testing | t08 | E2E via external crate: 46 PASS / 1 FAIL — FORMAT_DATE(i64::MAX) panics (overflow); checks 1-4 approved, blocked on the panic |
 | 2026-06-23T06:41:26+09:00 | Constructor | implementation | t08-fix | Make date functions total: guard civil-day overflow, structured Domain error, no panic |
 | 2026-06-23T06:42:23+09:00 | Lead | ticket-accepted | t08 | Stdlib accepted after overflow fix; E1 complete |
+| 2026-06-23T06:55:34+09:00 | Constructor | implementation | t10 | New cfs-runtime crate: async effect interpreter with topo-frontier auto-batching (N+1->1), two-level bounded parallelism, irreversible-aware retry, capability re-check, ledger; +16 tests (263 green); tokio confined, cfs-plan purity test still passes. |
