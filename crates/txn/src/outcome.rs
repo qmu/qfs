@@ -32,6 +32,26 @@ pub struct EffectDescriptor {
     pub arg_rows: usize,
 }
 
+impl EffectDescriptor {
+    /// Whether this effect is **safe to replay** after an ambiguous-commit crash (intent
+    /// recorded, apply unsealed). Replay-safe iff the apply is naturally idempotent:
+    ///
+    /// - `UPSERT` is create-or-update — re-applying it converges (RFD §6 the driver-side
+    ///   dedup point), regardless of guard.
+    /// - Any leg carrying a conditional [`Precondition`] (`If-Version`/`If-Match`) is
+    ///   self-guarding: a stale re-apply is caught as a [`Conflict`](crate::LegOutcome::Conflict),
+    ///   never a silent double-apply.
+    ///
+    /// Everything else — an unconditional `Insert`, a `Remove`, or a `Call` (e.g.
+    /// `mail.send`) — is **not** replay-safe: a blind retry could create a duplicate or fire
+    /// a side effect twice, so the reconcile pass surfaces it as
+    /// [`Indeterminate`](crate::LegOutcome::Indeterminate) rather than re-applying it.
+    #[must_use]
+    pub fn is_replay_safe(&self) -> bool {
+        matches!(self.kind, EffectKind::Upsert) || self.precondition.is_conditional()
+    }
+}
+
 /// What a driver reports back for one applied effect — a secret-free **receipt**.
 ///
 /// Carries the affected count and the new version coordinate the write produced (so a
@@ -135,6 +155,16 @@ pub enum LegOutcome {
     /// The optimistic-concurrency guard failed: the world's version differs from the
     /// precondition. Carries the version the world actually holds (for a bounded re-read).
     Conflict(Version),
+    /// An **intent was recorded but the apply outcome is ambiguous** — a crash landed between
+    /// `record_intent` and `mark_applied`, so the effect may or may not have committed. The
+    /// reconcile pass refuses to silently replay it because the leg is **not replay-safe**
+    /// (a non-idempotent `Insert`/`Call`/`Remove` with no conditional guard): a blind retry
+    /// could double-apply (RFD §6/§10 apply-once). Surfaced for `UPSERT`-style re-apply or
+    /// operator confirmation. Carries the leg's [`EffectKey`] so the caller can correlate it.
+    Indeterminate {
+        /// The idempotency key whose intent was found unsealed on resume.
+        key: EffectKey,
+    },
     /// The leg failed (after exhausting any retries on a retryable, reversible leg).
     Failed(EffectError),
 }
@@ -147,6 +177,7 @@ impl LegOutcome {
             LegOutcome::Applied(_) => "applied",
             LegOutcome::AlreadyApplied => "already_applied",
             LegOutcome::Conflict(_) => "conflict",
+            LegOutcome::Indeterminate { .. } => "indeterminate",
             LegOutcome::Failed(_) => "failed",
         }
     }

@@ -68,6 +68,18 @@ impl Interpreter {
         let order = cfs_plan::topo_order(plan).ok_or(ApplyError::InvalidPlan)?;
         let strategy = select_strategy(plan, transactional);
 
+        // Observability root span (RFD §6): one trace id per execution, threaded through every
+        // per-leg child span so every applied-effect log line carries `trace_id` + `plan_id`.
+        // Metadata only — never a payload or credential (RFD §10).
+        let trace_id = crate::observe::TraceId::mint(plan_id);
+        let span = tracing::info_span!(
+            "commit_txn",
+            trace_id = %trace_id,
+            plan_id = %plan_id,
+            strategy = %strategy.code(),
+        );
+        let _enter = span.enter();
+
         let mut records: Vec<LegRecord> = Vec::new();
         let mut failure = false;
 
@@ -93,7 +105,21 @@ impl Interpreter {
             let outcome = self
                 .apply_txn_leg(node, caps, plan_id, &precondition, ledger)
                 .await;
-            if matches!(outcome, LegOutcome::Failed(_) | LegOutcome::Conflict(_)) {
+            // Structured audit event per leg: identity + outcome code + irreversibility, all
+            // secret-free (RFD §10). Every line carries the inherited `trace_id`/`plan_id` from
+            // the root span plus this leg's `effect.id`.
+            tracing::info!(
+                effect.id = node.id.index(),
+                effect.driver = %node.target.driver.as_str(),
+                effect.kind = %node.kind.label(),
+                effect.irreversible = node.irreversible,
+                outcome = %outcome.code(),
+                "leg applied"
+            );
+            if matches!(
+                outcome,
+                LegOutcome::Failed(_) | LegOutcome::Conflict(_) | LegOutcome::Indeterminate { .. }
+            ) {
                 failure = true;
             }
             records.push(LegRecord::from_outcome(&leg, outcome));
@@ -118,10 +144,38 @@ impl Interpreter {
         precondition: &Precondition,
         ledger: &dyn AuditLedger,
     ) -> LegOutcome {
+        // Per-leg child span (RFD §6): inherits the root `trace_id`/`plan_id` and adds this
+        // leg's identity, so every log line emitted while the leg applies carries all three
+        // ids. Metadata only — driver + path + kind, never a payload or credential (RFD §10).
+        let leg_span = tracing::info_span!(
+            "effect",
+            effect.id = node.id.index(),
+            effect.driver = %node.target.driver.as_str(),
+            effect.path = %node.target.path.as_str(),
+            effect.kind = %node.kind.label(),
+        );
+        let _leg_enter = leg_span.enter();
+
         let key = EffectKey::derive(plan_id, node);
-        // Idempotent resume / at-least-once dedup: a prior apply makes this a no-op.
+        // Idempotent resume / at-least-once dedup: a prior *sealed* apply makes this a no-op.
         if ledger.applied(&key).is_some() {
             return LegOutcome::AlreadyApplied;
+        }
+        let leg = EffectLeg::from_node(plan_id, node, precondition.clone());
+        // Crash-window reconcile (t12): an intent recorded with NO matching `applied` means a
+        // prior run crashed between `record_intent` and `mark_applied` — the apply outcome is
+        // ambiguous (the side effect may or may not have landed). Re-applying is only safe for
+        // a naturally idempotent leg (`UPSERT`, or a conditionally-guarded write that would
+        // catch a stale replay as a `Conflict`). A non-idempotent `Insert`/`Call`/`Remove`
+        // must NOT be blindly replayed (RFD §6/§10 apply-once): surface it as `Indeterminate`
+        // for `UPSERT`-style re-apply or operator confirmation instead.
+        if ledger.has_intent(&key) && !leg.descriptor.is_replay_safe() {
+            tracing::warn!(
+                effect.key = %key,
+                effect.kind = %node.kind.label(),
+                "indeterminate effect: unsealed intent found on resume; refusing silent replay"
+            );
+            return LegOutcome::Indeterminate { key };
         }
         // Defense-in-depth capability re-check (same gate as the batched commit).
         if !caps.allows(&node.target, &node.kind) {
@@ -131,7 +185,6 @@ impl Interpreter {
                 node.kind.label()
             )));
         }
-        let leg = EffectLeg::from_node(plan_id, node, precondition.clone());
         // Append-before-apply: a crash after this leaves a reconstructable intent.
         ledger.record_intent(&key, &leg.descriptor);
 
@@ -162,22 +215,28 @@ impl Interpreter {
     }
 }
 
-/// Map a runtime [`EffectError`] to a transactional [`LegOutcome`]. A terminal failure whose
-/// reason names a precondition/412/conflict on a conditional write is surfaced as a typed
-/// [`LegOutcome::Conflict`] (optimistic concurrency); everything else stays a `Failed`.
+/// Map a runtime [`EffectError`] to a transactional [`LegOutcome`]. A typed
+/// [`EffectError::Conflict`] (the driver observed the world's real version on an
+/// optimistic-concurrency miss) is surfaced as a typed [`LegOutcome::Conflict`] carrying that
+/// **real** world version — never inferred from reason text. Everything else stays a `Failed`.
+/// `precondition` is retained for context (the conflict is only meaningful on a conditional
+/// write) but the world version comes from the driver, not the expected token.
 fn map_effect_error(e: EffectError, precondition: &Precondition) -> LegOutcome {
-    let is_conflict = matches!(&e, EffectError::Terminal { reason }
-        if reason.contains("conflict") || reason.contains("precondition") || reason.contains("412"));
-    if is_conflict && precondition.is_conditional() {
-        // The world's version is not carried by the runtime error DTO at E0; surface the
-        // precondition's expected token as the best-known coordinate so the report is typed.
-        let world = precondition
-            .if_match_header()
-            .map(cfs_txn::Version::new)
-            .unwrap_or_else(|| cfs_txn::Version::new("unknown"));
-        return LegOutcome::Conflict(world);
-    }
     match e {
+        // The driver carried the world's actual version (t12): surface it directly so the
+        // saga's bounded re-read sees the true coordinate, not the expected one.
+        EffectError::Conflict { version } => {
+            // A conflict on an unconditional write is a driver/contract bug; record it as a
+            // terminal failure rather than a typed conflict (there is no precondition to
+            // reconcile against), but still preserve the world version in the reason.
+            if precondition.is_conditional() {
+                LegOutcome::Conflict(cfs_txn::Version::new(version))
+            } else {
+                LegOutcome::Failed(TxnError::terminal(format!(
+                    "unexpected conflict (no precondition) at world version `{version}`"
+                )))
+            }
+        }
         EffectError::Retryable { reason } => LegOutcome::Failed(TxnError::retryable(reason)),
         EffectError::Terminal { reason } => LegOutcome::Failed(TxnError::terminal(reason)),
         EffectError::CapabilityDenied { driver, verb } => {
@@ -204,7 +263,12 @@ fn is_write(kind: &EffectKind) -> bool {
     )
 }
 
-/// Whether a leg outcome is a hard failure (stops the strategy walk).
+/// Whether a leg outcome is a hard failure (stops the strategy walk). An `Indeterminate`
+/// outcome (unsealed-intent crash window we refused to replay) is hard: the saga cannot
+/// safely proceed past an effect whose commit is ambiguous.
 fn is_hard(outcome: &LegOutcome) -> bool {
-    matches!(outcome, LegOutcome::Failed(_) | LegOutcome::Conflict(_))
+    matches!(
+        outcome,
+        LegOutcome::Failed(_) | LegOutcome::Conflict(_) | LegOutcome::Indeterminate { .. }
+    )
 }

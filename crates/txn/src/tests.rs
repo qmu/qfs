@@ -609,3 +609,56 @@ fn recovery_report_json_is_secret_free_and_stable() {
         "no payload leaked: {json}"
     );
 }
+
+/// `EffectDescriptor::is_replay_safe` (t12 reconcile classifier): `UPSERT` and any
+/// conditionally-guarded write are replay-safe in the crash window; an unconditional
+/// `Insert`/`Remove`/`Call` is NOT (a blind replay could double-apply — apply-once, RFD §6/§10).
+#[test]
+fn replay_safe_classifies_idempotency_for_reconcile() {
+    let upsert = EffectLeg::from_node(
+        "p",
+        &write_node(0, "s3", "/s3/k", EffectKind::Upsert, 1),
+        Precondition::None,
+    );
+    assert!(upsert.descriptor.is_replay_safe(), "upsert is convergent");
+
+    let insert_unconditional = EffectLeg::from_node(
+        "p",
+        &write_node(1, "s3", "/s3/k", EffectKind::Insert, 1),
+        Precondition::None,
+    );
+    assert!(
+        !insert_unconditional.descriptor.is_replay_safe(),
+        "unconditional insert is not replay-safe"
+    );
+
+    let insert_guarded = EffectLeg::from_node(
+        "p",
+        &write_node(2, "s3", "/s3/k", EffectKind::Insert, 1),
+        Precondition::IfVersion(Version::new("v1")),
+    );
+    assert!(
+        insert_guarded.descriptor.is_replay_safe(),
+        "a conditional guard catches a stale replay as Conflict"
+    );
+
+    let remove = EffectLeg::from_node(
+        "p",
+        &write_node(3, "s3", "/s3/k", EffectKind::Remove, 0),
+        Precondition::None,
+    );
+    assert!(
+        !remove.descriptor.is_replay_safe(),
+        "an unconditional remove is not replay-safe"
+    );
+}
+
+/// The `Indeterminate` outcome has a stable machine code and is neither success nor a silent
+/// replay — the saga / bridge treat it as a hard stop.
+#[test]
+fn indeterminate_outcome_code_is_stable() {
+    let key = EffectKey::derive("p", &write_node(0, "s3", "/s3/k", EffectKind::Insert, 1));
+    let outcome = LegOutcome::Indeterminate { key };
+    assert_eq!(outcome.code(), "indeterminate");
+    assert!(!outcome.is_success());
+}

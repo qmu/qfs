@@ -56,6 +56,7 @@ mod caps;
 mod driver;
 mod error;
 mod interpreter;
+mod observe;
 mod outcome;
 mod schedule;
 mod txn;
@@ -65,6 +66,7 @@ pub use caps::{CapabilitySet, ConcurrencyLimits, RetryPolicy};
 pub use driver::{ApplyCx, ApplyDriver, DriverRegistry, EffectInput};
 pub use error::{ApplyError, EffectError};
 pub use interpreter::Interpreter;
+pub use observe::TraceId;
 pub use outcome::{EffectOutput, LedgerEntry, LegStatus, Outcome};
 pub use schedule::{Frontier, Ready};
 pub use txn::Preconditions;
@@ -72,6 +74,7 @@ pub use txn::Preconditions;
 // `Interpreter::commit_txn` and reads the recovery report without importing `cfs-txn`
 // directly. The pure orchestration types are defined in `cfs-txn`.
 pub use cfs_txn::{
-    select_strategy, AuditLedger, CommitStrategy, EffectKey, Etag, InMemoryLedger, LegOutcome,
-    Precondition, RecoveryReport, TransactionalDrivers, Version,
+    select_strategy, AuditLedger, CommitStrategy, EffectDescriptor, EffectKey, EffectLeg,
+    EffectReceipt, Etag, InMemoryLedger, LegOutcome, Precondition, RecoveryReport,
+    TransactionalDrivers, Version,
 };

@@ -109,6 +109,10 @@ impl<'a> SagaExecutor<'a> {
                     precondition = rebase_precondition(&world_version);
                 }
                 LegOutcome::Failed(e) => return LegOutcome::Failed(e),
+                // An applier that detects an ambiguous-commit window itself propagates it
+                // unchanged — never re-applied (RFD §6/§10 apply-once); the saga treats it as a
+                // hard stop below.
+                LegOutcome::Indeterminate { key } => return LegOutcome::Indeterminate { key },
             }
         }
     }
@@ -134,7 +138,10 @@ impl<'a> SagaExecutor<'a> {
             }
             let outcome = self.apply_leg(applier, leg);
             let is_fresh_apply = matches!(outcome, LegOutcome::Applied(_));
-            let hard_failure = matches!(outcome, LegOutcome::Failed(_) | LegOutcome::Conflict(_));
+            let hard_failure = matches!(
+                outcome,
+                LegOutcome::Failed(_) | LegOutcome::Conflict(_) | LegOutcome::Indeterminate { .. }
+            );
             records.push(LegRecord::from_outcome(leg, outcome));
             if is_fresh_apply {
                 applied_this_run.push(i);

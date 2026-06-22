@@ -43,6 +43,10 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 # The mock `ApplyDriver` in tests implements the async trait via the same macro.
 async-trait = { workspace = true }
+# Capture the interpreter's structured spans/events in tests to assert every applied-effect
+# log line carries trace_id/plan_id/effect.id and is secret-free (RFD §6/§10 observability).
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

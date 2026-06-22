@@ -6,8 +6,22 @@
 //! durable record the next run reads via [`AuditLedger::applied`] — an already-applied
 //! [`EffectKey`] makes re-apply a no-op ([`LegOutcome::AlreadyApplied`](crate::LegOutcome::AlreadyApplied)).
 //!
-//! Only the **contract** lives at E0 plus an in-memory default impl; the real durable sink
-//! (append-only file / structured-log) is deferred to the observability ticket (E8). Keeping
+//! ## Crash-window reconcile (t12)
+//! An intent recorded with **no** matching `applied` (a crash between `record_intent` and
+//! `mark_applied`) is the genuinely hard case: the side effect may or may not have landed. The
+//! runtime's resume gate queries [`AuditLedger::has_intent`] for exactly this window and, for a
+//! leg that is **not** replay-safe ([`EffectDescriptor::is_replay_safe`] — a non-idempotent
+//! `Insert`/`Call`/`Remove` with no conditional guard), refuses a silent replay, surfacing
+//! [`LegOutcome::Indeterminate`](crate::LegOutcome::Indeterminate) for `UPSERT`-style re-apply
+//! or operator confirmation (RFD §6/§10 apply-once). A replay-safe leg (`UPSERT` or a
+//! conditionally-guarded write) is re-applied: the driver-side dedup / `Conflict` catch makes
+//! that convergent. So apply-once now holds for non-idempotent legs too, not only
+//! driver-idempotent ones.
+//!
+//! Only the **contract** lives at E0 plus an in-memory default impl; the real **durable** sink
+//! (append-only file / structured-log with fsync-intent-before-apply) is deferred to the E8
+//! deployment ticket — the in-memory ledger here is process-local, so the reconcile guard is
+//! exercised within a single process / test, not yet across a real OS crash. Keeping
 //! [`AuditLedger`] the sole seam makes swapping the backend trivial. The ledger records
 //! **metadata only** — never payloads or credentials (RFD §10): the descriptor is already
 //! redacted at its boundary.

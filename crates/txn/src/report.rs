@@ -131,4 +131,16 @@ impl RecoveryReport {
             .filter(|l| matches!(l.outcome, LegOutcome::Conflict(_)))
             .count()
     }
+
+    /// The number of legs found `Indeterminate` on resume — an intent was recorded but the
+    /// apply was never sealed (a crash window) and the leg was not replay-safe, so the
+    /// reconcile pass refused to silently replay it (RFD §6/§10 apply-once). Each needs an
+    /// `UPSERT`-style re-apply or operator confirmation.
+    #[must_use]
+    pub fn indeterminate_count(&self) -> usize {
+        self.legs
+            .iter()
+            .filter(|l| matches!(l.outcome, LegOutcome::Indeterminate { .. }))
+            .count()
+    }
 }

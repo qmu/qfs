@@ -47,6 +47,17 @@ pub enum EffectError {
         /// The elapsed budget, in milliseconds.
         millis: u64,
     },
+    /// An optimistic-concurrency precondition failed: the world held a different version than
+    /// the conditional write expected (an `If-Version`/`If-Match` mismatch, typically a 412).
+    /// The driver carries the version the world **actually** holds so the txn bridge can
+    /// surface a typed [`LegOutcome::Conflict`](cfs_txn::LegOutcome::Conflict) with the real
+    /// coordinate (no guessing from reason text). Never retried — a re-read must precede any
+    /// re-apply, so this is terminal for the leg (RFD §6 no-lost-update).
+    #[error("optimistic-concurrency conflict: world holds version `{version}`")]
+    Conflict {
+        /// The version the world currently holds (secret-free, opaque token).
+        version: String,
+    },
 }
 
 impl EffectError {
@@ -59,6 +70,7 @@ impl EffectError {
             EffectError::Terminal { .. } => "terminal",
             EffectError::CapabilityDenied { .. } => "capability_denied",
             EffectError::TimedOut { .. } => "timed_out",
+            EffectError::Conflict { .. } => "conflict",
         }
     }
 
@@ -85,6 +97,14 @@ impl EffectError {
     pub fn terminal(reason: impl Into<String>) -> Self {
         EffectError::Terminal {
             reason: reason.into(),
+        }
+    }
+
+    /// Construct an optimistic-concurrency conflict carrying the version the world holds.
+    #[must_use]
+    pub fn conflict(version: impl Into<String>) -> Self {
+        EffectError::Conflict {
+            version: version.into(),
         }
     }
 }
