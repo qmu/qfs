@@ -26,3 +26,4 @@
 | 2026-06-23T04:28:02+09:00 | Constructor | implementation | t04 | Implemented full RFD §3 pipe-SQL grammar + owned AST over the t03 token stream, with closed-core/three-registry governance and span-bearing structured errors; 38 parser tests green |
 | 2026-06-23T04:35:01+09:00 | Architect | code-review | t03,t04 | Catch-up analytical review of lexer and grammar |
 | 2026-06-23T04:35:40+09:00 | Planner | e2e-testing | t03,t04 | E2E validation of lexer + grammar front door |
+| 2026-06-23T04:36:36+09:00 | Lead | ticket-accepted | t03,t04 | Lexer + grammar accepted after retroactive review/E2E gates |

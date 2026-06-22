@@ -79,3 +79,10 @@ revision required):
 ## Progress
 
 - [x] **[Planner]** planning/artifact-generation — wrote `directions/direction-v1.md` (business vision for cfs E0 foundation: value proposition, business/strategic risk, three user personas including the AI agent operating cfs, system positioning for Rust single-binary + closed-core/open-registries, and the business rationale for a night on E0 before the 39 downstream tickets). Night-mode empty-instruction assumption recorded prominently in the artifact.
+
+### t03 / t04 — implemented then caught up to full protocol (Lead, 2026-06-23)
+- **[Constructor]** t03 lexer in `cfs-lang` (zero-dep, wasm-clean), 60 tests green, commit `0ec2168`. t04 full pipe-SQL grammar + AST + closed-core governance (4 statement / 18 pipe-op variants locked), winnow over token stream behind owned `ParseError`, parser 36+2 tests, commit `f96bfee`.
+- **Process correction**: t03/t04 were first implemented solo (Constructor only). Per user directive ("trip it"), the team protocol was restored — Architect review + Planner E2E run retroactively before continuing.
+- **[Architect]** catch-up review: both **Approve with observations** (G1 single keyword source verified byte-for-byte vs RFD §3; G6 no winnow leak audited; spine acyclic). Commit `017ce5c`.
+- **[Planner]** catch-up E2E: **E2E approved**, 56/56 checks, all DDL/effect/query forms parse, governance errors machine-branchable, no panics on 12 adversarial inputs, secret hygiene holds. Commit `d300a69`.
+- **[Lead]** t03 + t04 ACCEPTED. Remaining tickets t05–t41 run the full Constructor→Architect→Planner cycle each.
