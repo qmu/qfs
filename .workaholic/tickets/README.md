@@ -44,6 +44,7 @@ Recommended build order follows the dependency graph: **E0 → E1 / E2 / E3 foun
 - [ ] **t24** — Driver: GitHub · depends_on: t13, t18
 - [ ] **t25** — Driver: Slack · depends_on: t13, t18
 - [ ] **t26** — Driver: git object model · depends_on: t13, t15
+- [ ] **t41** — Driver: Google Analytics (GA4, read-only) · depends_on: t13, t19
 
 ## E5 — Auth / credentials
 
