@@ -90,3 +90,7 @@ revision required):
 ### t05 ACCEPTED (Lead, 2026-06-23)
 - **[Constructor]** new leaf crate `cfs-types` (value/type/schema/predicate/unify), `cfs-codec` placeholders reconciled onto it, +23 tests, green. **[Architect]** Approve with observations (spine acyclic, D2 `DriverId`-in-types endorsed). **[Planner]** E2E approved 31/31 (algebra + serde round-trip).
 - **Carry-over → t13**: two schema notions exist — `cfs_driver::NodeSchema` (untyped `Vec<String>`) vs `cfs_types::Schema` (typed). The driver contract (t13) must reconcile them (lean: NodeSchema absorbs Schema + archetype tag, or an explicit adapter). E4 mount key should reuse `cfs_types::DriverId`.
+
+### t09 ACCEPTED (Lead, 2026-06-23)
+- **[Constructor]** typed effect-plan DAG in `cfs-plan` (EffectKind/EffectNode/Plan + validate/topo/PREVIEW/COMMIT, PlanApplier impure seam), +22 tests. **[Architect]** Approve with observations. **[Planner]** E2E approved 46/46.
+- **Carry-overs**: (O2) `WriteVerb`↔`EffectVerb` drift → put canonical exhaustive match in `cfs-core` at E1 and drop the mirror; (O3) define `VfsPath`↔driver `Path` adapter at E4/t13; (Planner) add `AppliedEffect::new` public ctor so out-of-crate driver appliers can build success values (needed by t13/E4).
