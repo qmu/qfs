@@ -49,3 +49,4 @@
 | 2026-06-23T05:57:54+09:00 | Architect | code-review | t06 | Approve with observations: edge wired+guarded, resolution faithful, purity holds by construction; keep WriteVerb mirror as parser-free plan-side intermediate |
 | 2026-06-23T05:59:44+09:00 | Planner | e2e-testing | t06 | External-consumer E2E: 14/14 checks PASS (CALL, all 8 ResolveError arms, alias desugar/fail-closed, namespace isolation, capability gate, no I/O, no panics) — E2E approved |
 | 2026-06-23T06:00:21+09:00 | Lead | ticket-accepted | t06 | Name resolution accepted |
+| 2026-06-23T06:06:47+09:00 | Constructor | implementation | t07 | Pure evaluator: AST Statement -> cfs_plan::Plan effect-plan + logical PlanSource with threaded schema; verb pipeline via write_verb_for∘kind_for_verb; +18 unit tests |

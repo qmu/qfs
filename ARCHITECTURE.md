@@ -73,12 +73,15 @@ from `cfs-driver`, and the `SchemaSource` trait takes a logical segment list
 `cfs_core::Schema` / `Value` / `TypeError`. Mechanically enforced by
 `dep_direction.rs::types_is_a_leaf_and_codec_depends_on_it`.
 
-### Reserved edge — `cfs-core → cfs-parser` (acceptance criterion C5)
+### Wired edge — `cfs-core → cfs-parser` (acceptance criterion C5, E1)
 
-The intended edge is declared (a comment in `crates/core/Cargo.toml` and here) but
-**not yet wired** in E0. E1 adds it one-directionally so `cfs-parser` can never depend
-on `cfs-core` (cycle prevention). `dep_direction.rs` asserts the edge is absent at E0
-and that `cfs-parser` does not depend on `cfs-core`.
+The edge is now **wired** (E1): name resolution (`cfs_core::resolve`, t06) and the pure
+evaluator (`cfs_core::eval`, t07) both consume the parsed `cfs_parser::Statement` AST —
+the resolver binds `CALL`/alias names and gates effect verbs, and the evaluator folds a
+statement into a `cfs_plan::Plan` (effect-plan) + logical `PlanSource` relation. The edge
+is one-directional so `cfs-parser` can never depend on `cfs-core` (cycle prevention).
+`dep_direction.rs::core_depends_on_parser_one_directionally` asserts the edge is present
+and the back-edge absent.
 
 ## Boundary rules (must hold for every later ticket)
 
