@@ -499,6 +499,12 @@ pub fn binding_config_row(ddl: &ServerBindingDdl) -> ConfigRow {
                 "query",
                 canonical_or_empty(d.query.as_ref().map(StatementSpec::canonical)),
             );
+            // t32: emit the policy handle when present (the t31 `policy_ref` seam). When
+            // `None` (the t31 default until t34), the field is omitted so the row stays
+            // byte-identical to a pre-t32 endpoint (the column fills with `Null`).
+            if let Some(policy) = d.policy_ref.as_ref() {
+                row.set_text("policy", policy.as_str());
+            }
         }
         ServerBindingDdl::Trigger(d) => {
             row.set_text("on", d.event.as_str());
@@ -632,6 +638,11 @@ pub fn server_node_schema(node: ServerNode) -> Schema {
             col("method", ColumnType::Text, true),
             col("route", ColumnType::Text, true),
             col("query", ColumnType::Text, true),
+            // t32: the read-only-policy seam (the t31 `policy_ref`). A handle (a `/server/
+            // policies` row name) the t32 HTTP binding reads to decide whether a write-
+            // lowering endpoint is permitted; `Null`/empty until t34 wires POLICY. Nullable
+            // so existing body-less endpoints round-trip unchanged.
+            col("policy", ColumnType::Text, true),
         ]),
         ServerNode::Triggers => Schema::new(vec![
             col("name", ColumnType::Text, false),

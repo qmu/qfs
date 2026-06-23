@@ -307,6 +307,11 @@ fn insert_row(
                     method: text("method"),
                     route: text("route"),
                     query: StatementSource::new(text("query")),
+                    // An absent / empty `policy` column means read-only-by-default (`None`).
+                    policy: match get("policy") {
+                        Some(Value::Text(s)) if !s.is_empty() => Some(s.clone()),
+                        _ => None,
+                    },
                 },
             );
         }

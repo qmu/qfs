@@ -183,6 +183,12 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         "cfs-exec",
         "cfs-driver-local",
         "cfs-pushdown",
+        // t32: the binary is ALSO the `cfs serve` composition root — it wires the HTTP serving
+        // binding (cfs-http, a leaf consuming cfs-server + cfs-exec) and injects it into cfs-cmd
+        // via the ServeLauncher. This is the HTTP sibling of the t28 shell composition root: the
+        // binary is the terminal sink (nothing depends on it), so reaching up into cfs-http is a
+        // composition root consuming a leaf binding, not a layer inversion.
+        "cfs-http",
     ];
     let workspace_prefixed: Vec<&String> =
         bin_deps.iter().filter(|d| d.starts_with("cfs")).collect();
@@ -560,15 +566,81 @@ fn exec_is_confined_above_the_spine_and_off_the_runtime() {
         .filter(|(pkg, deps)| pkg.as_str() != "cfs-exec" && deps.iter().any(|d| d == "cfs-exec"))
         .map(|(pkg, _)| pkg)
         .collect();
-    let allowed_exec_consumers = ["cfs-cmd", "cfs"];
+    // t32: `cfs-http` (the HTTP serving binding) is a THIRD admitted consumer. It is a LEAF
+    // integration consumer of the read executor — the same role cfs-cmd plays — that evaluates
+    // an endpoint's query through `execute_read`. It is NOT a spine/lower crate reaching up: it
+    // sits ABOVE the spine alongside cfs-cmd, and nothing depends on it except the terminal
+    // `cfs` binary (asserted by `http_binding_is_a_leaf_serve_consumer` below), so tokio still
+    // dead-ends in the binary. Admitting it does not invert the layering; a spine/lower crate
+    // reaching UP into cfs-exec still fails here.
+    let allowed_exec_consumers = ["cfs-cmd", "cfs", "cfs-http"];
     for consumer in &exec_consumers {
         assert!(
             allowed_exec_consumers.contains(&consumer.as_str()),
-            "topology violation: {consumer} depends on cfs-exec, but only cfs-cmd and the terminal \
-             `cfs` binary (the t28 shell composition root) may consume the integration layer. A \
-             spine/lower crate reaching UP into cfs-exec is a layer inversion (t29)."
+            "topology violation: {consumer} depends on cfs-exec, but only cfs-cmd, the terminal \
+             `cfs` binary (the t28 shell composition root), and cfs-http (the t32 leaf HTTP \
+             serving binding) may consume the integration layer. A spine/lower crate reaching UP \
+             into cfs-exec is a layer inversion (t29)."
         );
     }
+}
+
+#[test]
+fn http_binding_is_a_leaf_serve_consumer() {
+    // t32 (the HTTP serving binding topology): `cfs-http` is the leaf binding crate that turns
+    // the /server/endpoints registry into live HTTP routes. The t32 placement decision rests on
+    // three structural facts this guard pins so the property cannot silently invert:
+    //
+    //   (a) cfs-http consumes cfs-server (the Binding/ServerState/EndpointDef registry) AND
+    //       cfs-exec (the read executor) — it is the one crate that legitimately binds both, the
+    //       reason it is a NEW leaf rather than living in cfs-server (which must stay off cfs-exec
+    //       and runtime-free, CO-t30-1) or in cfs-cmd (which must stay off cfs-exec/cfs-http).
+    //   (b) cfs-http is a LEAF: NOTHING depends on it except the terminal `cfs` binary (the serve
+    //       composition root). That is what keeps its tokio HTTP listener dead-ended in the
+    //       binary — exactly the precondition the t28 runtime-leaf exemption relies on.
+    //   (c) cfs-http does NOT depend on cfs-runtime. It uses tokio for the HTTP I/O domain only,
+    //       never the COMMIT interpreter — so the runtime-leaf-confinement guard is untouched
+    //       (cfs-http never appears in its consumer allowlist).
+    let graph = load_graph();
+
+    // (a) cfs-http depends on both cfs-server and cfs-exec.
+    let http_deps = graph
+        .direct_deps
+        .get("cfs-http")
+        .expect("cfs-http is a workspace package");
+    for required in ["cfs-server", "cfs-exec"] {
+        assert!(
+            http_deps.iter().any(|d| d == required),
+            "t32: cfs-http must depend on {required} (it binds the server registry to the read \
+             executor). Deps were: {http_deps:?}"
+        );
+    }
+
+    // (b) cfs-http is a leaf: only the terminal `cfs` binary may depend on it.
+    let http_consumers: Vec<&String> = graph
+        .direct_deps
+        .iter()
+        .filter(|(pkg, deps)| pkg.as_str() != "cfs-http" && deps.iter().any(|d| d == "cfs-http"))
+        .map(|(pkg, _)| pkg)
+        .collect();
+    for consumer in &http_consumers {
+        assert_eq!(
+            consumer.as_str(),
+            "cfs",
+            "t32 leaf violation: {consumer} depends on cfs-http, but only the terminal `cfs` \
+             binary (the serve composition root) may consume the HTTP serving binding. If \
+             something else depends on it, cfs-http's tokio listener no longer dead-ends in the \
+             binary and the runtime-leaf exemption is unsound."
+        );
+    }
+
+    // (c) cfs-http must NOT depend on cfs-runtime (it uses tokio for HTTP I/O, never the COMMIT
+    // interpreter — the two impure stages stay separate, as for cfs-exec).
+    assert!(
+        !http_deps.iter().any(|d| d == "cfs-runtime"),
+        "t32: cfs-http must NOT depend on cfs-runtime — its tokio is the HTTP I/O domain, not the \
+         write/COMMIT interpreter. Deps were: {http_deps:?}"
+    );
 }
 
 #[test]

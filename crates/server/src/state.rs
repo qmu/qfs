@@ -52,6 +52,12 @@ pub struct EndpointDef {
     pub route: String,
     /// The backing query the endpoint serves (`AS <query>`), as source text.
     pub query: StatementSource,
+    /// The optional read-only-policy handle (a `/server/policies` row name) the t32 HTTP
+    /// binding consults to decide whether a write-lowering query is permitted. `None`
+    /// (the t31 default) means the endpoint is read-only by default — a write effect is
+    /// refused. The full POLICY engine is t34; this is the registration-time gate handle.
+    #[serde(default)]
+    pub policy: Option<String>,
 }
 
 /// An event-trigger definition (`CREATE TRIGGER name ON <event> DO <plan>`). The t33

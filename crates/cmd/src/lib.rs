@@ -31,6 +31,14 @@ use clap::{Parser, Subcommand};
 /// supplies the registry wiring + REPL driver. Returns the process exit code.
 pub type ShellLauncher<'a> = dyn Fn() -> i32 + 'a;
 
+/// The injected **serve launcher** (t32): the binary supplies `cfs serve <config>` so the
+/// HTTP serving binding (`cfs-http`, a leaf that consumes both `cfs-server` and the `cfs-exec`
+/// read executor) lives in the binary composition root — NOT in cfs-cmd, which must stay off
+/// cfs-exec/cfs-http (the dep_direction guards). cfs-cmd only knows "the `serve` subcommand →
+/// call the launcher with the config path"; the leaf binary wires the `Runtime` + `HttpBinding`
+/// + listener and returns the process exit code.
+pub type ServeLauncher<'a> = dyn Fn(&std::path::Path) -> i32 + 'a;
+
 /// cfs — one binary that is both a CLI and a server, exposing every external
 /// service through one uniform, filesystem-shaped, pipe-SQL DSL (RFD-0001 §1).
 #[derive(Parser, Debug)]
@@ -132,7 +140,7 @@ enum AccountVerb {
 /// binary supplies the runtime-coupled local read facet + REPL driver). Returns the intended
 /// process exit code; the binary forwards it to `std::process::exit`.
 #[must_use]
-pub fn run<I, T>(args: I, shell: &ShellLauncher) -> i32
+pub fn run<I, T>(args: I, shell: &ShellLauncher, serve: &ServeLauncher) -> i32
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -196,7 +204,12 @@ where
     let outcome = match cli.cmd {
         // Handled above; unreachable here but kept total.
         Some(Command::Run { .. }) | None => Ok(()),
-        Some(Command::Serve { config }) => cfs_server::serve(&config),
+        // `serve` is dispatched through the injected launcher (the binary composition root that
+        // wires the HTTP binding); it returns the process exit code directly.
+        Some(Command::Serve { config }) => {
+            tracing::debug!(target: "cfs::cmd", "dispatch serve via launcher");
+            return serve(&config);
+        }
         Some(Command::Account { verb }) => dispatch_account(&engine, &session, &verb),
     };
 
@@ -376,13 +389,13 @@ mod tests {
         0
     }
 
-    /// Run with the no-op shell launcher (every non-shell test path ignores it).
+    /// Run with the no-op shell + serve launchers (every non-shell/serve test path ignores them).
     fn run_t<I, T>(args: I) -> i32
     where
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        run(args, &noop_shell)
+        run(args, &noop_shell, &|_cfg| 0)
     }
 
     #[test]
@@ -410,10 +423,14 @@ mod tests {
         // no subcommand, `run` calls the launcher and returns its exit code. The real REPL +
         // local read facet are tested in the binary crate's `shell` module.
         let launched = std::cell::Cell::new(false);
-        let code = run(["cfs"], &|| {
-            launched.set(true);
-            0
-        });
+        let code = run(
+            ["cfs"],
+            &|| {
+                launched.set(true);
+                0
+            },
+            &|_cfg| 0,
+        );
         assert!(
             launched.get(),
             "no subcommand must invoke the shell launcher"
@@ -444,9 +461,20 @@ mod tests {
     }
 
     #[test]
-    fn serve_returns_exit_code_one_on_not_implemented() {
-        let code = run_t(["cfs", "serve", "x.cfs"]);
-        assert_eq!(code, 1);
+    fn serve_dispatches_through_the_injected_launcher() {
+        // t32: `cfs serve <config>` is dispatched through the injected ServeLauncher (the
+        // binary composition root that wires the HTTP binding). cfs-cmd only routes to it with
+        // the config path and returns its exit code — here a noop launcher returning 0.
+        let launched = std::cell::Cell::new(false);
+        let code = run(["cfs", "serve", "x.cfs"], &noop_shell, &|cfg| {
+            launched.set(cfg.ends_with("x.cfs"));
+            0
+        });
+        assert!(
+            launched.get(),
+            "serve must invoke the serve launcher with the config path"
+        );
+        assert_eq!(code, 0);
     }
 
     #[test]

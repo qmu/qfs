@@ -11,9 +11,14 @@
 //! binary is that leaf, so it builds the wired shell and injects it into `cfs-cmd` via the
 //! [`cfs_cmd::ShellLauncher`]. The shell LOGIC itself lives in `cfs-exec`; this only wires it.
 
+mod serve;
 mod shell;
 
 fn main() {
-    let code = cfs_cmd::run(std::env::args_os(), &shell::run_interactive_shell);
+    let code = cfs_cmd::run(
+        std::env::args_os(),
+        &shell::run_interactive_shell,
+        &serve::run_serve,
+    );
     std::process::exit(code);
 }
