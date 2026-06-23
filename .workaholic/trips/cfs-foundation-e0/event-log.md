@@ -101,3 +101,4 @@
 | 2026-06-23T10:44:02+09:00 | Architect | code-review | t20-rereview | Revision accepted: e4ffab3 keeps exact-predicate residual for all lossy q= terms; no WHERE returns wrong rows |
 | 2026-06-23T10:44:49+09:00 | Lead | ticket-accepted | t20 | Gmail driver accepted after revision |
 | 2026-06-23T10:56:47+09:00 | Constructor | implementation | t21 | Implemented cfs-driver-gdrive: /drive blob driver, WHERE→q pushdown with truthful residual, trash-not-delete, multi-account, mocked-API tests (+23, 491 total green) |
+| 2026-06-23T11:00:04+09:00 | Architect | code-review | t21 | Approve with minor suggestions: residual truthfulness PASS, token safety PASS, trash-not-delete PASS; one parked live-path PUT-vs-PATCH observation |
