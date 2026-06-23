@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use crate::error::HttpError;
-use crate::request::{HttpMethod, HttpRequest, HttpResponse};
+use crate::request::{HttpRequest, HttpResponse};
 
 /// The thin HTTP transport seam. A driver builds an owned [`HttpRequest`] and calls
 /// [`HttpClient::send`]; the implementation performs the wire exchange and returns an owned
@@ -84,12 +84,12 @@ impl Default for ReqwestClient {
 
 impl HttpClient for ReqwestClient {
     fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
-        let method = match req.method {
-            HttpMethod::Get => reqwest::Method::GET,
-            HttpMethod::Post => reqwest::Method::POST,
-            HttpMethod::Put => reqwest::Method::PUT,
-            HttpMethod::Delete => reqwest::Method::DELETE,
-        };
+        // Derive the reqwest method from the DTO's canonical uppercase wire token. Going through
+        // `as_str()` keeps this total over `cfs_http_core::HttpMethod` even though it is a foreign
+        // `#[non_exhaustive]` enum (a future variant just yields its token, no `_ => panic` arm),
+        // and the token is always a valid method name so the fallback is unreachable in practice.
+        let method = reqwest::Method::from_bytes(req.method.as_str().as_bytes())
+            .unwrap_or(reqwest::Method::GET);
         let mut builder = self.inner.request(method, &req.url);
         for (name, value) in &req.headers {
             builder = builder.header(name, value);

@@ -30,7 +30,8 @@ these boundaries without restructuring the workspace.
 | `runtime` | `cfs-runtime` | The async effect interpreter (t10): `Interpreter::commit`, `ApplyDriver`/`DriverRegistry`, `EffectError` taxonomy, `CapabilitySet` gate, the sync→async `PlanApplierBridge`/`SharedApplier`. **tokio is CONFINED here** — the sole impure stage; nothing in the pure spine depends back onto it (§3/§5/§6). |
 | `driver-local` | `cfs-driver-local` | The **first concrete driver** (t16): a blob/namespace driver over the host filesystem mounted at `/local` (`ls cp mv rm` + `upsert`/`remove`), least-privilege sandbox, streaming reads, atomic temp+rename writes, copy→verify(size+hash)→[delete]. A **LEAF runtime consumer** — it bridges its synchronous `PlanApplier` to the async `ApplyDriver`; tokio dead-ends here (§5/§6/§10). |
 | `secrets` | `cfs-secrets` | The credential / secret store + multi-account resolution (t27): consumer-side, owned-DTO `Secrets` surface reusing the canonical `cfs_types::DriverId`. Depends on `cfs-types` only; `cfs-core` threads a `Secrets` handle into the driver-bind context (§10). |
-| `google-auth` | `cfs-google-auth` | The **shared Google OAuth2 + multi-account auth base** (t19): the loopback authorization-code flow (`localhost`-not-`127.0.0.1` redirect — the load-bearing detail), access-token exchange/refresh, per-account refresh-token storage via `cfs-secrets` (keyed `(google, <encoded-email>)`), profile-email account identity, and the reusable `TokenSource` + authenticated `GoogleApiClient` (bearer inject, refresh-on-401) the Gmail (t20)/Drive (t21)/Analytics (t41) drivers build on. Scope-agnostic; tokens are `cfs_secrets::Secret`. Among workspace crates it depends on **`cfs-secrets` only** — network rides a thin, synchronous, runtime-free `HttpExchange` seam (mirroring the t18 `HttpClient` shape) kept **local** so this crate does NOT depend on `cfs-driver-http` (a runtime leaf); the consuming drivers adapt their `Arc<dyn cfs_driver_http::HttpClient>` to `HttpExchange`. Constructs no `Plan`/effect; `authorize` is native-only (feature-gated off `wasm32`) (§5/§6/§10). |
+| `http-core` | `cfs-http-core` | The shared **pure-leaf** HTTP DTO + redaction crate (t19 refinement): the **single source of truth** for the vendor-free HTTP exchange DTOs (`HttpMethod` (the `#[non_exhaustive]` 4-variant set), `HttpRequest`, `HttpResponse`) and the header-redaction authority (`SENSITIVE_HEADERS` / `is_sensitive_header` + the redacting `Debug` impls). Carries **no** `reqwest`/`tokio`/`cfs-runtime` — its only workspace dep is `cfs-secrets` (the one `REDACTED` marker), so the closure is `cfs-http-core → cfs-secrets → cfs-types`. Both `cfs-driver-http` (real reqwest `HttpClient`) and `cfs-google-auth` (local `HttpExchange` seam) depend on it for ONE redaction set instead of each hand-copying a drift-prone duplicate (the prior hazard: a sensitive header added on one side and lagging on the other leaks a header *value* across the seam). The concrete transports stay in their own crates (§5/§10). |
+| `google-auth` | `cfs-google-auth` | The **shared Google OAuth2 + multi-account auth base** (t19): the loopback authorization-code flow (`localhost`-not-`127.0.0.1` redirect — the load-bearing detail), access-token exchange/refresh, per-account refresh-token storage via `cfs-secrets` (keyed `(google, <encoded-email>)`), profile-email account identity, and the reusable `TokenSource` + authenticated `GoogleApiClient` (bearer inject, refresh-on-401) the Gmail (t20)/Drive (t21)/Analytics (t41) drivers build on. Scope-agnostic; tokens are `cfs_secrets::Secret`. Among workspace crates it depends on **`cfs-secrets` + `cfs-http-core` only** (both pure leaves reaching no further than `cfs-types`) — network rides a thin, synchronous, runtime-free `HttpExchange` seam (over the shared `cfs-http-core` DTOs) kept **local** so this crate does NOT depend on `cfs-driver-http` (a runtime leaf); the consuming drivers adapt their `Arc<dyn cfs_driver_http::HttpClient>` to `HttpExchange`. The HTTP DTOs + header redaction now come from the shared `cfs-http-core` leaf (single source of truth), not a local copy. Constructs no `Plan`/effect; `authorize` is native-only (feature-gated off `wasm32`) (§5/§6/§10). |
 
 ## Dependency spine (acyclic, no back-edges)
 
@@ -61,12 +62,25 @@ cfs-secrets → cfs-types        (t27 credential/secret store + multi-account re
                                 owned-DTO, reuses the canonical DriverId. LEAF over cfs-types — acyclic.)
 cfs-core   → cfs-secrets       (t27 bind-context credential surface: the Engine threads a Secrets
                                 handle into the driver-bind context; cfs-core re-exports it.)
-cfs-google-auth → cfs-secrets  (t19 shared Google OAuth + multi-account auth base. Among workspace
-                                crates it depends on cfs-secrets ONLY (which reaches cfs-types only),
-                                so it stays OFF cfs-runtime: network rides a local, runtime-free
-                                HttpExchange seam rather than cfs-driver-http (which depends on
-                                cfs-runtime and must remain a leaf). Acyclic; not on the spine —
-                                consumed only by the future Google driver leaves (t20/t21/t41).)
+cfs-http-core → cfs-secrets    (t19 refinement: the shared PURE-LEAF HTTP DTO + redaction crate.
+                                Owns HttpMethod/HttpRequest/HttpResponse + SENSITIVE_HEADERS/
+                                is_sensitive_header + the redacting Debug — the SINGLE source of
+                                truth for both HTTP seams. Among workspace crates it depends on
+                                cfs-secrets ONLY (the REDACTED marker; reaches cfs-types only), and
+                                carries NO reqwest/tokio/cfs-runtime — so depending on it does not
+                                pull either HTTP crate toward the runtime. Acyclic leaf.)
+cfs-driver-http → cfs-http-core (t19 refinement: the REST driver's request/response DTOs +
+                                redaction now come from the shared leaf, not a local copy; its
+                                HttpClient trait + reqwest impl stay local.)
+cfs-google-auth → { cfs-secrets, cfs-http-core }  (t19 shared Google OAuth + multi-account auth
+                                base. Among workspace crates it depends on cfs-secrets + cfs-http-core
+                                ONLY (both reach no further than cfs-types), so it stays OFF
+                                cfs-runtime: network rides a local, runtime-free HttpExchange seam
+                                (over the shared cfs-http-core DTOs) rather than cfs-driver-http
+                                (which depends on cfs-runtime and must remain a leaf). The HTTP DTOs
+                                + redaction are single-sourced in cfs-http-core, not hand-copied.
+                                Acyclic; not on the spine — consumed only by the future Google
+                                driver leaves (t20/t21/t41).)
 cfs-driver-local → { cfs-driver, cfs-plan, cfs-types, cfs-codec, cfs-runtime }  (t16 FIRST concrete
                                 driver; LEAF runtime consumer — bridges the synchronous PlanApplier →
                                 async ApplyDriver and registers it in the DriverRegistry. Nothing

@@ -247,6 +247,7 @@ version = "0.0.0"
 dependencies = [
  "cfs-codec",
  "cfs-driver",
+ "cfs-http-core",
  "cfs-plan",
  "cfs-runtime",
  "cfs-secrets",
@@ -288,12 +289,20 @@ dependencies = [
 name = "cfs-google-auth"
 version = "0.0.0"
 dependencies = [
+ "cfs-http-core",
  "cfs-secrets",
  "serde",
  "serde_json",
  "thiserror",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "cfs-http-core"
+version = "0.0.0"
+dependencies = [
+ "cfs-secrets",
 ]
 
 [[package]]

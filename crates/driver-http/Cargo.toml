@@ -29,6 +29,11 @@ cfs-runtime = { path = "../runtime" }
 # The credential / secret store (t27): auth headers are resolved from a `Secret` at commit
 # time via the `Secrets` trait; raw tokens never enter config structs, Debug, or logs.
 cfs-secrets = { path = "../secrets" }
+# The shared pure HTTP DTO + redaction leaf (t19 refinement): the single source of truth for
+# HttpMethod/HttpRequest/HttpResponse and the SENSITIVE_HEADERS redaction set. This crate keeps
+# its HttpClient trait + reqwest impl local; only the DTOs + redaction live in cfs-http-core, so
+# the GitHub (t24)/Slack (t25) layers and cfs-google-auth share ONE redaction authority.
+cfs-http-core = { path = "../http-core" }
 # Owned config DTOs (RestApiConfig/AuthStrategy/Pagination) deserialize from the cfs config.
 serde = { workspace = true }
 serde_json = { workspace = true }

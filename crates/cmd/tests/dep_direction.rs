@@ -405,3 +405,99 @@ fn core_depends_on_parser_one_directionally() {
         "cfs-parser must never depend on cfs-core (C5 cycle prevention)"
     );
 }
+
+#[test]
+fn http_core_is_a_pure_leaf_single_sourcing_the_redaction_set() {
+    // t19 refinement: cfs-http-core is the SINGLE SOURCE OF TRUTH for the pure HTTP exchange
+    // DTOs (HttpMethod/HttpRequest/HttpResponse) and the header-redaction authority
+    // (SENSITIVE_HEADERS / is_sensitive_header + the redacting Debug). Before it, both
+    // cfs-driver-http and cfs-google-auth hand-copied those DTOs + the redaction set, and the
+    // copies had already drifted — the risk being a token leak by drift (one side adds a
+    // sensitive header, the other's copy lags and copies that header VALUE across the seam with
+    // redaction silently missing it). Centralizing closes that hazard. This test pins three
+    // structural facts that keep it closed:
+    //
+    //   (a) cfs-http-core is a PURE LEAF — among workspace crates it depends on cfs-secrets ONLY
+    //       (for the one REDACTED marker), reaching no further than cfs-types. Crucially it
+    //       carries NO reqwest/tokio/cfs-runtime, so depending on it does NOT pull either HTTP
+    //       crate toward the runtime (the generic runtime-leaf confinement below stays intact).
+    //   (b) BOTH HTTP crates depend on cfs-http-core — so neither carries a second DTO/redaction
+    //       copy; the shared leaf is the only place HttpMethod/SENSITIVE_HEADERS are defined.
+    //   (c) cfs-google-auth still does NOT depend on cfs-driver-http (the local HttpExchange seam
+    //       is retained), so cfs-driver-http stays a leaf and tokio stays confined.
+    let graph = load_graph();
+
+    // (a) pure leaf: cfs-http-core's only workspace dep is cfs-secrets, and it carries no
+    // runtime/http vendor crates.
+    let http_core_deps = graph
+        .direct_deps
+        .get("cfs-http-core")
+        .expect("cfs-http-core is a workspace package");
+    let workspace_crates = [
+        "cfs-cmd",
+        "cfs-core",
+        "cfs-server",
+        "cfs-lang",
+        "cfs-plan",
+        "cfs-driver",
+        "cfs-codec",
+        "cfs-parser",
+        "cfs-types",
+        "cfs-runtime",
+        "cfs-txn",
+        "cfs-pushdown",
+        "cfs-secrets",
+        "cfs-driver-http",
+        "cfs-google-auth",
+    ];
+    for d in http_core_deps
+        .iter()
+        .filter(|d| workspace_crates.contains(&d.as_str()))
+    {
+        assert_eq!(
+            d, "cfs-secrets",
+            "spine violation: cfs-http-core must depend only on cfs-secrets among workspace \
+             crates (a pure leaf: owned DTOs + redaction, no driver/runtime coupling), but \
+             depends on {d}"
+        );
+    }
+    // It MUST NOT carry reqwest/tokio/cfs-runtime — that is what makes it safe for the
+    // off-runtime cfs-google-auth to depend on it without becoming a runtime consumer.
+    let forbidden_in_leaf = ["reqwest", "tokio", "cfs-runtime", "futures", "async-trait"];
+    for f in forbidden_in_leaf {
+        assert!(
+            !http_core_deps.iter().any(|d| d == f),
+            "purity violation: cfs-http-core must be a pure leaf with NO {f} (it must stay \
+             runtime-free so cfs-google-auth can depend on it off the runtime). Deps were: \
+             {http_core_deps:?}"
+        );
+    }
+
+    // (b) both HTTP crates depend on the shared leaf — neither keeps a second DTO/redaction copy.
+    for crate_name in ["cfs-driver-http", "cfs-google-auth"] {
+        let deps = graph
+            .direct_deps
+            .get(crate_name)
+            .unwrap_or_else(|| panic!("{crate_name} is a workspace package"));
+        assert!(
+            deps.iter().any(|d| d == "cfs-http-core"),
+            "single-source violation: {crate_name} must depend on cfs-http-core for the shared \
+             HTTP DTOs + redaction set (t19 refinement) rather than hand-copying them. Deps \
+             were: {deps:?}"
+        );
+    }
+
+    // (c) cfs-google-auth still does NOT depend on cfs-driver-http: the local HttpExchange seam is
+    // retained, so cfs-driver-http stays a leaf and the runtime confinement is untouched.
+    let google_auth_deps = graph
+        .direct_deps
+        .get("cfs-google-auth")
+        .expect("cfs-google-auth is a workspace package");
+    assert!(
+        !google_auth_deps.iter().any(|d| d == "cfs-driver-http"),
+        "confinement violation: cfs-google-auth must NOT depend on cfs-driver-http (which \
+         depends on cfs-runtime). It must keep its local HttpExchange seam and share only the \
+         pure cfs-http-core DTOs, so cfs-driver-http stays a runtime leaf. Deps were: \
+         {google_auth_deps:?}"
+    );
+}

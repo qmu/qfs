@@ -111,6 +111,10 @@ impl HttpEffect {
             HttpMethod::Post => "INSERT",
             HttpMethod::Put => "UPSERT",
             HttpMethod::Delete => "REMOVE",
+            // `cfs_http_core::HttpMethod` is a foreign `#[non_exhaustive]` enum: a wildcard is
+            // required for a total match. All four mapped methods are handled above; a future
+            // variant falls back to its uppercase wire token rather than panicking (lib policy).
+            _ => self.method.as_str(),
         }
     }
 }

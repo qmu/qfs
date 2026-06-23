@@ -11,9 +11,17 @@ description = "cfs shared Google OAuth2 + multi-account auth base (RFD-0001 §5/
 [dependencies]
 # The Secret type + the Secrets store + (driver, account) keys: per-account refresh tokens
 # are persisted/resolved through this one surface; raw tokens never leave a `Secret`. Among
-# workspace crates this is the ONLY dependency, so cfs-google-auth stays off cfs-runtime and
-# the spine confinement test stays green (cfs-secrets -> cfs-types only).
+# workspace crates it depends only on cfs-secrets + cfs-http-core, both of which reach no
+# further than cfs-types, so cfs-google-auth stays off cfs-runtime and the spine confinement
+# test stays green (cfs-secrets -> cfs-types; cfs-http-core -> cfs-secrets -> cfs-types).
 cfs-secrets = { path = "../secrets" }
+# The shared pure HTTP DTO + redaction leaf (t19 refinement): the single source of truth for
+# HttpMethod/HttpRequest/HttpResponse and the SENSITIVE_HEADERS redaction set. This crate keeps
+# its local HttpExchange seam + MockExchange (so it does NOT depend on cfs-driver-http, which
+# depends on cfs-runtime and must stay a leaf); only the DTOs + redaction come from cfs-http-core,
+# so the OAuth seam and the REST driver can never drift to a different redaction set. cfs-http-core
+# is itself a pure leaf, so this edge keeps cfs-google-auth off cfs-runtime exactly as before.
+cfs-http-core = { path = "../http-core" }
 # Owned auth-flow + token DTOs (de)serialize from the Google token/userinfo JSON. No vendor
 # SDK type ever appears in a public signature (RFD §171/§9 — owned DTOs only).
 serde = { workspace = true }
