@@ -8,12 +8,19 @@
 //! **residual** for the engine to filter locally.
 //!
 //! ## The t20 lesson — TRUTHFUL residual (the headline invariant)
-//! A Slack time-window param is an **inclusive/exclusive boundary** on `ts`, so a `ts >= X` lowers
-//! to `oldest=X` (Slack's `oldest` is inclusive by default) and `ts <= X` to `latest=X`. These are
-//! exact for the boundary they express, so the conjunct **drops** from the residual. Any other
-//! predicate (`text LIKE`, `user =`, `OR`, …) Slack cannot push, so it is **kept** residual and the
-//! engine re-filters locally — over-fetch then filter, never wrong rows. This module is the pure
-//! translation: it builds the param list + the residual; it performs **no I/O** and holds no token.
+//! Slack's `oldest`/`latest` window params are **inclusive** bounds on `ts`. So the truthfulness of
+//! dropping the residual depends on the comparison operator:
+//! - `ts >= X` → `oldest=X` and `ts <= X` → `latest=X` are **exact** (inclusive ≡ inclusive), so
+//!   the conjunct **drops** from the residual.
+//! - `ts >  X` → `oldest=X` and `ts <  X` → `latest=X` are a **lossy pre-filter**: Slack's
+//!   inclusive bound also returns the `ts == X` boundary row, so the **strict** comparison is
+//!   **kept as residual** to re-exclude that one row locally. Dropping it here would over-return a
+//!   wrong row — exactly the t20 defect.
+//!
+//! Any other predicate (`text LIKE`, `user =`, `OR`, …) Slack cannot push, so it is **kept**
+//! residual and the engine re-filters locally — over-fetch then filter, never wrong rows. This
+//! module is the pure translation: it builds the param list + the residual; it performs **no I/O**
+//! and holds no token.
 
 use cfs_types::{CmpOp, ColRef, Literal, Predicate};
 
@@ -59,10 +66,19 @@ fn lower(p: &Predicate, params: &mut Vec<(String, String)>) -> Option<Predicate>
             }
         }
         Predicate::Cmp(col, op, lit) => match lower_cmp(col, *op, lit) {
-            // The `ts` boundary param means exactly the comparison — push it, drop the predicate.
-            Some(param) => {
+            // An INCLUSIVE boundary (`>=`/`<=`) means *exactly* the comparison — push it, drop the
+            // predicate.
+            Some(Lowered::Exact(param)) => {
                 params.push(param);
                 None
+            }
+            // A STRICT boundary (`>`/`<`) is lowered to Slack's INCLUSIVE `oldest`/`latest`, which
+            // over-returns the boundary row itself — so the strict comparison is KEPT as an exact
+            // residual that re-excludes that one boundary row locally (the t20 lesson — over-fetch
+            // then filter, never wrong rows).
+            Some(Lowered::PreFilter(param)) => {
+                params.push(param);
+                Some(p.clone())
             }
             None => Some(p.clone()),
         },
@@ -72,11 +88,25 @@ fn lower(p: &Predicate, params: &mut Vec<(String, String)>) -> Option<Predicate>
     }
 }
 
+/// The outcome of lowering one `ts` comparison into a Slack window param.
+enum Lowered {
+    /// The param means *exactly* the SQL predicate (an inclusive `>=`/`<=` boundary) — push it and
+    /// drop the predicate.
+    Exact((String, String)),
+    /// The param is *looser* than the SQL predicate (a strict `>`/`<` lowered to Slack's inclusive
+    /// boundary) — push it as a pre-filter but keep the original strict comparison as residual so
+    /// the engine re-excludes the boundary row locally.
+    PreFilter((String, String)),
+}
+
 /// Lower a single comparison on `ts` into a Slack window param, or `None` if Slack cannot express
-/// it. `ts >= X` / `ts > X` → `oldest=X`; `ts <= X` / `ts < X` → `latest=X`. Slack's `oldest` is
-/// inclusive and `latest` inclusive; the boundary the param expresses is exactly the comparison's
-/// boundary, so the residual can be dropped (the param is the whole truth for that conjunct).
-fn lower_cmp(col: &ColRef, op: CmpOp, lit: &Literal) -> Option<(String, String)> {
+/// it. Slack's `oldest`/`latest` are **inclusive** bounds, so:
+/// - `ts >= X` → `oldest=X` (Exact — inclusive matches inclusive);
+/// - `ts <= X` → `latest=X` (Exact);
+/// - `ts >  X` → `oldest=X` (PreFilter — Slack would also return the `ts == X` row, so the strict
+///   `>` is kept residual to re-exclude it);
+/// - `ts <  X` → `latest=X` (PreFilter — symmetric).
+fn lower_cmp(col: &ColRef, op: CmpOp, lit: &Literal) -> Option<Lowered> {
     let field = field_of(col)?;
     if field != "ts" {
         return None;
@@ -87,8 +117,10 @@ fn lower_cmp(col: &ColRef, op: CmpOp, lit: &Literal) -> Option<(String, String)>
         _ => return None,
     };
     match op {
-        CmpOp::Gt | CmpOp::Ge => Some(("oldest".to_string(), value)),
-        CmpOp::Lt | CmpOp::Le => Some(("latest".to_string(), value)),
+        CmpOp::Ge => Some(Lowered::Exact(("oldest".to_string(), value))),
+        CmpOp::Le => Some(Lowered::Exact(("latest".to_string(), value))),
+        CmpOp::Gt => Some(Lowered::PreFilter(("oldest".to_string(), value))),
+        CmpOp::Lt => Some(Lowered::PreFilter(("latest".to_string(), value))),
         _ => None,
     }
 }

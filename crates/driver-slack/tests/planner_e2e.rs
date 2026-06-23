@@ -20,16 +20,14 @@ use cfs_http_core::{HttpRequest, HttpResponse};
 use cfs_plan::{
     preview, DriverId, EffectKind, EffectNode, NodeId, PlanBuilder, ProcId, Target, VfsPath,
 };
-use cfs_runtime::{
-    CapabilitySet, DriverRegistry, Interpreter, LegStatus, Outcome, SharedApplier,
-};
+use cfs_runtime::{CapabilitySet, DriverRegistry, Interpreter, LegStatus, Outcome, SharedApplier};
 use cfs_secrets::{AccountId, CredentialKey, InMemoryStore, Secret, Secrets};
 use cfs_types::{CmpOp, ColRef, Column, Literal, Predicate, Row, RowBatch, Schema, Value};
 
 use cfs_driver_slack::{
-    parse_event, read, BodyErrorRule, EventHeaders, HttpTransport, NodeKind, ReadPlan, RecordedCall,
-    RestSlackClient, SlackApiCall, SlackClient, SlackDriver, SlackEffect, SlackError, SlackEventKind,
-    SlackInbound, SlackPath, SlackWsConfig, TransportError,
+    parse_event, read, BodyErrorRule, EventHeaders, HttpTransport, NodeKind, ReadPlan,
+    RecordedCall, RestSlackClient, SlackApiCall, SlackClient, SlackDriver, SlackEffect, SlackError,
+    SlackEventKind, SlackInbound, SlackPath, SlackWsConfig, TransportError,
 };
 
 // =====================================================================================
@@ -115,7 +113,10 @@ fn ok_json(body: &str) -> HttpResponse {
 fn commit_one_via_rest(
     node: EffectNode,
     responses: Vec<HttpResponse>,
-) -> (Result<cfs_runtime::EffectOutput, cfs_runtime::EffectError>, Arc<ScriptedTransport>) {
+) -> (
+    Result<cfs_runtime::EffectOutput, cfs_runtime::EffectError>,
+    Arc<ScriptedTransport>,
+) {
     let (client, transport) = rest_client(responses);
     let driver = SlackDriver::new(Arc::new(client) as Arc<dyn SlackClient>);
     let out = driver.slack_applier().apply_shared(&node);
@@ -261,13 +262,23 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 
 #[test]
 fn s1_describe_per_node_archetype_schema_and_capabilities() {
-    let d = SlackDriver::new(Arc::new(cfs_driver_slack::MockSlackClient::new()) as Arc<dyn SlackClient>);
+    let d = SlackDriver::new(
+        Arc::new(cfs_driver_slack::MockSlackClient::new()) as Arc<dyn SlackClient>
+    );
 
     // Archetype + key schema columns per node (golden-style).
     let cases: &[(&str, &str, &[&str])] = &[
         ("acme/#general/messages", "append_log", &["ts", "text"]),
-        ("acme/#general/messages/9.9/replies", "append_log", &["ts", "text"]),
-        ("acme/#general/messages/9.9/reactions", "append_log", &["name", "count"]),
+        (
+            "acme/#general/messages/9.9/replies",
+            "append_log",
+            &["ts", "text"],
+        ),
+        (
+            "acme/#general/messages/9.9/reactions",
+            "append_log",
+            &["name", "count"],
+        ),
         ("acme/dms/U07/messages", "append_log", &["ts", "text"]),
         ("acme/files", "blob_namespace", &["id", "name", "size"]),
         ("acme/users", "relational_table", &["id", "name", "is_bot"]),
@@ -291,16 +302,32 @@ fn s1_describe_per_node_archetype_schema_and_capabilities() {
     assert!(cap_json("/slack/acme/#general/messages").contains("\"remove\":true"));
     // reactions: insert+remove, no select.
     let r = cap_json("/slack/acme/#general/messages/9.9/reactions");
-    assert!(r.contains("\"insert\":true") && r.contains("\"remove\":true") && r.contains("\"select\":false"));
+    assert!(
+        r.contains("\"insert\":true")
+            && r.contains("\"remove\":true")
+            && r.contains("\"select\":false")
+    );
     // users: select only.
     let u = cap_json("/slack/acme/users");
-    assert!(u.contains("\"select\":true") && u.contains("\"insert\":false") && u.contains("\"update\":false"));
+    assert!(
+        u.contains("\"select\":true")
+            && u.contains("\"insert\":false")
+            && u.contains("\"update\":false")
+    );
     // files: ls/cp/rm only.
     let f = cap_json("/slack/acme/files");
-    assert!(f.contains("\"ls\":true") && f.contains("\"cp\":true") && f.contains("\"rm\":true") && f.contains("\"select\":false"));
+    assert!(
+        f.contains("\"ls\":true")
+            && f.contains("\"cp\":true")
+            && f.contains("\"rm\":true")
+            && f.contains("\"select\":false")
+    );
 
     // A bare workspace root is not a describable node (honest structured error).
-    assert_eq!(d.describe(&Path::new("/slack/acme")).unwrap_err().code(), "invalid_path");
+    assert_eq!(
+        d.describe(&Path::new("/slack/acme")).unwrap_err().code(),
+        "invalid_path"
+    );
 }
 
 // =====================================================================================
@@ -309,16 +336,29 @@ fn s1_describe_per_node_archetype_schema_and_capabilities() {
 
 #[test]
 fn s2_insert_message_yields_postmessage_with_client_msg_id() {
-    let node = EffectNode::new(NodeId(0), EffectKind::Insert, target("/slack/acme/#general/messages"))
-        .with_args(args(&[("text", Value::Text("hi".into()))]));
+    let node = EffectNode::new(
+        NodeId(0),
+        EffectKind::Insert,
+        target("/slack/acme/#general/messages"),
+    )
+    .with_args(args(&[("text", Value::Text("hi".into()))]));
     let eff = SlackEffect::from_node(&node).unwrap();
     match eff {
-        SlackEffect::PostMessage { channel, text, thread_ts, client_msg_id, is_dm } => {
+        SlackEffect::PostMessage {
+            channel,
+            text,
+            thread_ts,
+            client_msg_id,
+            is_dm,
+        } => {
             assert_eq!(channel, "#general");
             assert_eq!(text, "hi");
             assert!(thread_ts.is_none());
             assert!(!is_dm);
-            assert!(client_msg_id.starts_with("cfs-"), "idempotency key attached: {client_msg_id}");
+            assert!(
+                client_msg_id.starts_with("cfs-"),
+                "idempotency key attached: {client_msg_id}"
+            );
             // The redacted-in-logged-form requirement: the token is NOT part of the effect/plan.
             assert!(!format!("{:?}", node).contains(BOT_TOKEN));
         }
@@ -365,7 +405,11 @@ fn s2_insert_reaction_and_call_react_are_equivalent_plans() {
         emoji: "tada".into(),
     };
     assert_eq!(SlackEffect::from_node(&insert).unwrap(), expected);
-    assert_eq!(SlackEffect::from_node(&call).unwrap(), expected, "CALL ≡ INSERT plan");
+    assert_eq!(
+        SlackEffect::from_node(&call).unwrap(),
+        expected,
+        "CALL ≡ INSERT plan"
+    );
 }
 
 #[test]
@@ -392,8 +436,12 @@ fn s2_call_pin_is_one_irreversible_call_node() {
 
 #[test]
 fn s2_remove_message_is_chat_delete_irreversible() {
-    let del = EffectNode::new(NodeId(0), EffectKind::Remove, target("/slack/acme/#general/messages"))
-        .with_args(args(&[("ts", Value::Text("5.5".into()))]));
+    let del = EffectNode::new(
+        NodeId(0),
+        EffectKind::Remove,
+        target("/slack/acme/#general/messages"),
+    )
+    .with_args(args(&[("ts", Value::Text("5.5".into()))]));
     let eff = SlackEffect::from_node(&del).unwrap();
     assert!(matches!(eff, SlackEffect::DeleteMessage { .. }));
     assert!(eff.is_irreversible(), "chat.delete irreversible=true");
@@ -405,13 +453,23 @@ fn s2_remove_message_is_chat_delete_irreversible() {
 
 #[test]
 fn s3_unsupported_verbs_on_users_rejected_at_parse_with_structured_error() {
-    let d = SlackDriver::new(Arc::new(cfs_driver_slack::MockSlackClient::new()) as Arc<dyn SlackClient>);
+    let d = SlackDriver::new(
+        Arc::new(cfs_driver_slack::MockSlackClient::new()) as Arc<dyn SlackClient>
+    );
     let users = Path::new("/slack/acme/users");
     for verb in [Verb::Insert, Verb::Update] {
         let err = check_capability(&d, &users, verb).unwrap_err();
-        assert_eq!(err.code(), "unsupported_verb", "{verb:?} must be a structured capability error");
+        assert_eq!(
+            err.code(),
+            "unsupported_verb",
+            "{verb:?} must be a structured capability error"
+        );
         match &err {
-            cfs_driver::CfsError::UnsupportedVerb { path, verb: v, supported } => {
+            cfs_driver::CfsError::UnsupportedVerb {
+                path,
+                verb: v,
+                supported,
+            } => {
                 assert_eq!(path, "/slack/acme/users");
                 assert_eq!(*v, verb.label());
                 assert_eq!(supported, &vec!["SELECT"], "lists supported verbs");
@@ -434,7 +492,9 @@ fn s4_url_verification_returns_challenge() {
     let sig = slack_sign(SIGNING_SECRET, ts, body);
     let h = EventHeaders::new(sig, ts);
     match parse_event(&h, body, SIGNING_SECRET, 1_700_000_000).unwrap() {
-        SlackInbound::UrlVerification { challenge } => assert_eq!(challenge, "planner-challenge-xyz"),
+        SlackInbound::UrlVerification { challenge } => {
+            assert_eq!(challenge, "planner-challenge-xyz")
+        }
         other => panic!("expected UrlVerification, got {other:?}"),
     }
 }
@@ -449,7 +509,11 @@ fn s4_valid_message_and_reaction_normalize_with_event_id() {
     match parse_event(&EventHeaders::new(sig, ts), msg, SIGNING_SECRET, now).unwrap() {
         SlackInbound::Event(e) => {
             assert_eq!(e.kind, SlackEventKind::Message);
-            assert_eq!(e.event_id.as_deref(), Some("EvPLAN1"), "event_id surfaced for dedupe");
+            assert_eq!(
+                e.event_id.as_deref(),
+                Some("EvPLAN1"),
+                "event_id surfaced for dedupe"
+            );
             assert_eq!(e.channel.as_deref(), Some("C9"));
             assert_eq!(e.ts.as_deref(), Some("7.7"));
         }
@@ -463,7 +527,11 @@ fn s4_valid_message_and_reaction_normalize_with_event_id() {
         SlackInbound::Event(e) => {
             assert_eq!(e.kind, SlackEventKind::ReactionAdded);
             assert_eq!(e.reaction.as_deref(), Some("rocket"));
-            assert_eq!(e.channel.as_deref(), Some("C9"), "channel from item.channel");
+            assert_eq!(
+                e.channel.as_deref(),
+                Some("C9"),
+                "channel from item.channel"
+            );
             assert_eq!(e.ts.as_deref(), Some("7.7"), "ts from item.ts");
         }
         other => panic!("expected Event, got {other:?}"),
@@ -479,8 +547,18 @@ fn s4_tampered_signature_and_wrong_secret_rejected() {
     // Tamper the body AFTER signing — the signature no longer matches the bytes.
     let sig = slack_sign(SIGNING_SECRET, ts, body);
     let tampered_body = br#"{"type":"event_callback","event":{"type":"message","text":"X"}}"#;
-    let err = parse_event(&EventHeaders::new(sig.clone(), ts), tampered_body, SIGNING_SECRET, now).unwrap_err();
-    assert_eq!(err.code(), "slack_event_bad_signature", "tampered body fails");
+    let err = parse_event(
+        &EventHeaders::new(sig.clone(), ts),
+        tampered_body,
+        SIGNING_SECRET,
+        now,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.code(),
+        "slack_event_bad_signature",
+        "tampered body fails"
+    );
 
     // Flip a signature hex char.
     let mut bad = sig.clone();
@@ -492,7 +570,11 @@ fn s4_tampered_signature_and_wrong_secret_rejected() {
     // Wrong secret fails (constant-time compare).
     let good = slack_sign(SIGNING_SECRET, ts, body);
     let err = parse_event(&EventHeaders::new(good, ts), body, "the-wrong-secret", now).unwrap_err();
-    assert_eq!(err.code(), "slack_event_bad_signature", "wrong secret fails");
+    assert_eq!(
+        err.code(),
+        "slack_event_bad_signature",
+        "wrong secret fails"
+    );
 }
 
 #[test]
@@ -503,13 +585,27 @@ fn s4_stale_timestamp_rejected_as_replay_both_directions() {
 
     // Replay far in the future relative to the signed ts.
     let now_future = 1_700_000_000 + 5 * 60 + 1;
-    let err = parse_event(&EventHeaders::new(sig.clone(), ts), body, SIGNING_SECRET, now_future).unwrap_err();
-    assert_eq!(err.code(), "slack_event_stale_timestamp", "future skew rejected");
+    let err = parse_event(
+        &EventHeaders::new(sig.clone(), ts),
+        body,
+        SIGNING_SECRET,
+        now_future,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.code(),
+        "slack_event_stale_timestamp",
+        "future skew rejected"
+    );
 
     // A delivery dated in the future relative to now (other side of the window).
     let now_past = 1_700_000_000 - 5 * 60 - 1;
     let err = parse_event(&EventHeaders::new(sig, ts), body, SIGNING_SECRET, now_past).unwrap_err();
-    assert_eq!(err.code(), "slack_event_stale_timestamp", "negative skew rejected too");
+    assert_eq!(
+        err.code(),
+        "slack_event_stale_timestamp",
+        "negative skew rejected too"
+    );
 
     // Just inside the window passes (signature valid, ts fresh).
     let fresh_now = 1_700_000_000 + 5 * 60 - 1;
@@ -523,10 +619,20 @@ fn s4_missing_headers_rejected() {
     // EventHeaders is #[non_exhaustive]: build via the public ctor then null out one field.
     let mut no_sig = EventHeaders::new("v0=deadbeef", "1700000000");
     no_sig.signature = None;
-    assert_eq!(parse_event(&no_sig, body, SIGNING_SECRET, 1_700_000_000).unwrap_err().code(), "slack_event_missing_header");
+    assert_eq!(
+        parse_event(&no_sig, body, SIGNING_SECRET, 1_700_000_000)
+            .unwrap_err()
+            .code(),
+        "slack_event_missing_header"
+    );
     let mut no_ts = EventHeaders::new("v0=deadbeef", "1700000000");
     no_ts.timestamp = None;
-    assert_eq!(parse_event(&no_ts, body, SIGNING_SECRET, 1_700_000_000).unwrap_err().code(), "slack_event_missing_header");
+    assert_eq!(
+        parse_event(&no_ts, body, SIGNING_SECRET, 1_700_000_000)
+            .unwrap_err()
+            .code(),
+        "slack_event_missing_header"
+    );
 }
 
 // =====================================================================================
@@ -535,9 +641,15 @@ fn s4_missing_headers_rejected() {
 
 #[test]
 fn s5_three_cursor_pages_concatenate_through_rest_client() {
-    let p1 = ok_json(r#"{"ok":true,"messages":[{"ts":"1.1","text":"a"}],"response_metadata":{"next_cursor":"C2"}}"#);
-    let p2 = ok_json(r#"{"ok":true,"messages":[{"ts":"1.2","text":"b"}],"response_metadata":{"next_cursor":"C3"}}"#);
-    let p3 = ok_json(r#"{"ok":true,"messages":[{"ts":"1.3","text":"c"}],"response_metadata":{"next_cursor":""}}"#);
+    let p1 = ok_json(
+        r#"{"ok":true,"messages":[{"ts":"1.1","text":"a"}],"response_metadata":{"next_cursor":"C2"}}"#,
+    );
+    let p2 = ok_json(
+        r#"{"ok":true,"messages":[{"ts":"1.2","text":"b"}],"response_metadata":{"next_cursor":"C3"}}"#,
+    );
+    let p3 = ok_json(
+        r#"{"ok":true,"messages":[{"ts":"1.3","text":"c"}],"response_metadata":{"next_cursor":""}}"#,
+    );
     let (client, transport) = rest_client(vec![p1, p2, p3]);
 
     let plan = ReadPlan::list(NodeKind::Messages, None);
@@ -564,8 +676,15 @@ fn s5_page_cap_bounds_runaway_pagination() {
     let batch = read::decode_list(NodeKind::Messages, &value).unwrap();
     // MAX_PAGES is 50 — the cap halts the fan-out well before the 100 scripted pages.
     let fetched = transport.requests().len();
-    assert!(fetched <= 50, "page cap enforced: fetched {fetched} pages (cap 50)");
-    assert_eq!(batch.rows.len(), fetched, "one row per fetched page, bounded");
+    assert!(
+        fetched <= 50,
+        "page cap enforced: fetched {fetched} pages (cap 50)"
+    );
+    assert_eq!(
+        batch.rows.len(),
+        fetched,
+        "one row per fetched page, bounded"
+    );
 }
 
 // =====================================================================================
@@ -575,12 +694,23 @@ fn s5_page_cap_bounds_runaway_pagination() {
 #[test]
 fn s6_body_error_on_write_path_is_terminal_not_false_success() {
     let resp = ok_json(r#"{"ok":false,"error":"not_in_channel"}"#);
-    let node = EffectNode::new(NodeId(0), EffectKind::Insert, target("/slack/acme/#general/messages"))
-        .with_args(args(&[("text", Value::Text("hi".into()))]));
+    let node = EffectNode::new(
+        NodeId(0),
+        EffectKind::Insert,
+        target("/slack/acme/#general/messages"),
+    )
+    .with_args(args(&[("text", Value::Text("hi".into()))]));
     let (out, transport) = commit_one_via_rest(node, vec![resp]);
     let err = out.expect_err("ok:false must NOT be a success");
-    assert_eq!(err.code(), "terminal", "BodyError surfaces terminal (no retry)");
-    assert!(format!("{err}").contains("not_in_channel"), "carries Slack's error code");
+    assert_eq!(
+        err.code(),
+        "terminal",
+        "BodyError surfaces terminal (no retry)"
+    );
+    assert!(
+        format!("{err}").contains("not_in_channel"),
+        "carries Slack's error code"
+    );
     assert_eq!(transport.requests().len(), 1, "issued once, never retried");
 }
 
@@ -589,7 +719,11 @@ fn s6_body_error_on_read_path_is_terminal() {
     let resp = ok_json(r#"{"ok":false,"error":"channel_not_found"}"#);
     let (client, _t) = rest_client(vec![resp]);
     let err = client.list(NodeKind::Messages, &[]).unwrap_err();
-    assert_eq!(err.code(), "slack_body_error", "read path BodyError is structured terminal");
+    assert_eq!(
+        err.code(),
+        "slack_body_error",
+        "read path BodyError is structured terminal"
+    );
     assert!(format!("{err}").contains("channel_not_found"));
 }
 
@@ -613,7 +747,10 @@ fn s7_remove_absent_reaction_no_reaction_outcome() {
 
     // Document EXACTLY what happens (no assertion of success — we report the observed reality).
     match &out {
-        Ok(o) => println!("S7 no_reaction: SWALLOWED as no-op (affected={})", o.affected),
+        Ok(o) => println!(
+            "S7 no_reaction: SWALLOWED as no-op (affected={})",
+            o.affected
+        ),
         Err(e) => println!("S7 no_reaction: SURFACED as {} -> {e}", e.code()),
     }
     // The idempotency contract expectation:
@@ -638,7 +775,10 @@ fn s7_unpin_already_unpinned_not_pinned_outcome() {
     let (out, _t) = commit_one_via_rest(node, vec![resp]);
 
     match &out {
-        Ok(o) => println!("S7 not_pinned: SWALLOWED as no-op (affected={})", o.affected),
+        Ok(o) => println!(
+            "S7 not_pinned: SWALLOWED as no-op (affected={})",
+            o.affected
+        ),
         Err(e) => println!("S7 not_pinned: SURFACED as {} -> {e}", e.code()),
     }
     assert!(
@@ -658,8 +798,14 @@ fn s7_control_add_side_already_done_is_swallowed() {
         target("/slack/acme/#general/messages/9.9/reactions"),
     )
     .with_args(args(&[("emoji", Value::Text("tada".into()))]));
-    let (out, _t) = commit_one_via_rest(add, vec![ok_json(r#"{"ok":false,"error":"already_reacted"}"#)]);
-    assert!(out.is_ok(), "already_reacted on ADD is swallowed (control passes)");
+    let (out, _t) = commit_one_via_rest(
+        add,
+        vec![ok_json(r#"{"ok":false,"error":"already_reacted"}"#)],
+    );
+    assert!(
+        out.is_ok(),
+        "already_reacted on ADD is swallowed (control passes)"
+    );
 
     let pin = EffectNode::new(
         NodeId(0),
@@ -667,8 +813,14 @@ fn s7_control_add_side_already_done_is_swallowed() {
         target("/slack/acme/#general/messages"),
     )
     .with_args(args(&[("ts", Value::Text("5.5".into()))]));
-    let (out, _t) = commit_one_via_rest(pin, vec![ok_json(r#"{"ok":false,"error":"already_pinned"}"#)]);
-    assert!(out.is_ok(), "already_pinned on PIN is swallowed (control passes)");
+    let (out, _t) = commit_one_via_rest(
+        pin,
+        vec![ok_json(r#"{"ok":false,"error":"already_pinned"}"#)],
+    );
+    assert!(
+        out.is_ok(),
+        "already_pinned on PIN is swallowed (control passes)"
+    );
 }
 
 // =====================================================================================
@@ -695,12 +847,24 @@ fn s8_ge_boundary_drops_and_nonpushable_stays_residual() {
 #[test]
 fn s8_or_predicate_stays_wholly_residual() {
     let or = Predicate::Or(
-        Box::new(Predicate::Cmp(ColRef::col("ts"), CmpOp::Ge, Literal::Text("1".into()))),
-        Box::new(Predicate::Cmp(ColRef::col("text"), CmpOp::Eq, Literal::Text("z".into()))),
+        Box::new(Predicate::Cmp(
+            ColRef::col("ts"),
+            CmpOp::Ge,
+            Literal::Text("1".into()),
+        )),
+        Box::new(Predicate::Cmp(
+            ColRef::col("text"),
+            CmpOp::Eq,
+            Literal::Text("z".into()),
+        )),
     );
     let plan = ReadPlan::list(NodeKind::Messages, Some(&or));
     assert!(plan.params().is_empty(), "nothing pushed for an OR");
-    assert_eq!(plan.pushdown.residual, Some(or), "the whole OR stays residual");
+    assert_eq!(
+        plan.pushdown.residual,
+        Some(or),
+        "the whole OR stays residual"
+    );
 }
 
 /// PROBE: a STRICT `ts > 100` lowers to `oldest=100`. Slack's `oldest` is INCLUSIVE, so a row at
@@ -739,19 +903,32 @@ fn s9_bot_token_canary_absent_from_plan_preview_and_serialized_plan() {
     // A real INSERT plan over /slack carries no token.
     let mut b = PlanBuilder::new();
     b.push(
-        EffectNode::new(NodeId(0), EffectKind::Insert, target("/slack/acme/#general/messages"))
-            .with_args(args(&[("text", Value::Text("a normal message".into()))])),
+        EffectNode::new(
+            NodeId(0),
+            EffectKind::Insert,
+            target("/slack/acme/#general/messages"),
+        )
+        .with_args(args(&[("text", Value::Text("a normal message".into()))])),
     );
     let plan = b.build();
 
     let serialized = serde_json::to_string(&plan).unwrap();
-    assert!(!serialized.contains(BOT_TOKEN), "no bot token in serialized plan");
-    assert!(!serialized.contains("Bearer"), "no Bearer material in serialized plan");
+    assert!(
+        !serialized.contains(BOT_TOKEN),
+        "no bot token in serialized plan"
+    );
+    assert!(
+        !serialized.contains("Bearer"),
+        "no Bearer material in serialized plan"
+    );
 
     let pv = preview(&plan);
     let pv_dbg = format!("{pv:?}");
     assert!(!pv_dbg.contains(BOT_TOKEN), "no bot token in PREVIEW");
-    assert!(!pv_dbg.contains(SIGNING_SECRET), "no signing secret in PREVIEW");
+    assert!(
+        !pv_dbg.contains(SIGNING_SECRET),
+        "no signing secret in PREVIEW"
+    );
 }
 
 #[test]
@@ -763,11 +940,20 @@ fn s9_bot_token_canary_redacted_in_request_debug_after_real_injection() {
     let reqs = transport.requests();
     assert_eq!(reqs.len(), 1);
     // The header value is genuinely the token (auth works)...
-    assert_eq!(reqs[0].header_value("authorization"), Some(format!("Bearer {BOT_TOKEN}").as_str()));
+    assert_eq!(
+        reqs[0].header_value("authorization"),
+        Some(format!("Bearer {BOT_TOKEN}").as_str())
+    );
     // ...but the redacting Debug never reveals it.
     let dbg = format!("{:?}", reqs[0]);
-    assert!(!dbg.contains(BOT_TOKEN), "token must not appear in request Debug: {dbg}");
-    assert!(dbg.contains(cfs_secrets::REDACTED), "redaction marker present");
+    assert!(
+        !dbg.contains(BOT_TOKEN),
+        "token must not appear in request Debug: {dbg}"
+    );
+    assert!(
+        dbg.contains(cfs_secrets::REDACTED),
+        "redaction marker present"
+    );
 }
 
 #[test]
@@ -775,30 +961,65 @@ fn s9_signing_secret_canary_absent_from_event_error_and_inbound_debug() {
     // A BAD signature must produce an error that carries NO signing-secret material.
     let ts = "1700000000";
     let body = br#"{"type":"event_callback","event":{"type":"message","text":"x"}}"#;
-    let err = parse_event(&EventHeaders::new("v0=deadbeef", ts), body, SIGNING_SECRET, 1_700_000_000).unwrap_err();
+    let err = parse_event(
+        &EventHeaders::new("v0=deadbeef", ts),
+        body,
+        SIGNING_SECRET,
+        1_700_000_000,
+    )
+    .unwrap_err();
     let err_text = format!("{err} {err:?}");
-    assert!(!err_text.contains(SIGNING_SECRET), "signing secret must NOT appear in EventError: {err_text}");
+    assert!(
+        !err_text.contains(SIGNING_SECRET),
+        "signing secret must NOT appear in EventError: {err_text}"
+    );
 
     // A GOOD parse: the normalized SlackInbound Debug must not echo the signing secret either.
     let sig = slack_sign(SIGNING_SECRET, ts, body);
-    let inbound = parse_event(&EventHeaders::new(sig, ts), body, SIGNING_SECRET, 1_700_000_000).unwrap();
+    let inbound = parse_event(
+        &EventHeaders::new(sig, ts),
+        body,
+        SIGNING_SECRET,
+        1_700_000_000,
+    )
+    .unwrap();
     let inbound_dbg = format!("{inbound:?}");
-    assert!(!inbound_dbg.contains(SIGNING_SECRET), "signing secret must NOT appear in SlackInbound: {inbound_dbg}");
+    assert!(
+        !inbound_dbg.contains(SIGNING_SECRET),
+        "signing secret must NOT appear in SlackInbound: {inbound_dbg}"
+    );
 }
 
 #[test]
 fn s9_slack_errors_are_secret_free() {
     // Construct the structured errors a failing call would surface and scan for canaries.
     let errs = [
-        SlackError::Http { op: "chat.postMessage", status: 401 },
-        SlackError::Body { op: "chat.postMessage", code: "not_authed".into() },
-        SlackError::Auth { code: "secret_not_found" },
-        SlackError::Transport { op: "http", reason: "connection failed".into() },
+        SlackError::Http {
+            op: "chat.postMessage",
+            status: 401,
+        },
+        SlackError::Body {
+            op: "chat.postMessage",
+            code: "not_authed".into(),
+        },
+        SlackError::Auth {
+            code: "secret_not_found",
+        },
+        SlackError::Transport {
+            op: "http",
+            reason: "connection failed".into(),
+        },
     ];
     for e in &errs {
         let text = format!("{e} {e:?}");
-        assert!(!text.contains(BOT_TOKEN) && !text.contains("xoxb-"), "no bot token in error: {text}");
-        assert!(!text.contains(SIGNING_SECRET), "no signing secret in error: {text}");
+        assert!(
+            !text.contains(BOT_TOKEN) && !text.contains("xoxb-"),
+            "no bot token in error: {text}"
+        );
+        assert!(
+            !text.contains(SIGNING_SECRET),
+            "no signing secret in error: {text}"
+        );
         assert!(!text.contains("Bearer"), "no Bearer in error: {text}");
     }
 
@@ -806,7 +1027,10 @@ fn s9_slack_errors_are_secret_free() {
     let (_secrets, key) = store();
     let cfg = SlackWsConfig::new("acme", "T123", key.clone(), key);
     let dbg = format!("{cfg:?}");
-    assert!(!dbg.contains(BOT_TOKEN) && !dbg.contains(SIGNING_SECRET), "config Debug secret-free: {dbg}");
+    assert!(
+        !dbg.contains(BOT_TOKEN) && !dbg.contains(SIGNING_SECRET),
+        "config Debug secret-free: {dbg}"
+    );
 }
 
 // =====================================================================================
@@ -823,8 +1047,12 @@ async fn e2e_commit_post_message_through_interpreter_is_complete() {
 
     let mut b = PlanBuilder::new();
     b.push(
-        EffectNode::new(NodeId(0), EffectKind::Insert, target("/slack/acme/#general/messages"))
-            .with_args(args(&[("text", Value::Text("hi".into()))])),
+        EffectNode::new(
+            NodeId(0),
+            EffectKind::Insert,
+            target("/slack/acme/#general/messages"),
+        )
+        .with_args(args(&[("text", Value::Text("hi".into()))])),
     );
     let plan = b.build();
     plan.validate().unwrap();
@@ -836,7 +1064,10 @@ async fn e2e_commit_post_message_through_interpreter_is_complete() {
         [RecordedCall::Apply(SlackEffect::PostMessage { .. })]
     ));
     // Ledger leg is Applied.
-    assert!(matches!(outcome.ledger[0].status, LegStatus::Applied { .. }));
+    assert!(matches!(
+        outcome.ledger[0].status,
+        LegStatus::Applied { .. }
+    ));
 }
 
 /// A NEGATIVE end-to-end: an `ok:false` write through the FULL interpreter records a Failed leg.
@@ -850,14 +1081,22 @@ async fn e2e_commit_body_error_records_failed_leg() {
 
     let mut b = PlanBuilder::new();
     b.push(
-        EffectNode::new(NodeId(0), EffectKind::Insert, target("/slack/acme/#general/messages"))
-            .with_args(args(&[("text", Value::Text("hi".into()))])),
+        EffectNode::new(
+            NodeId(0),
+            EffectKind::Insert,
+            target("/slack/acme/#general/messages"),
+        )
+        .with_args(args(&[("text", Value::Text("hi".into()))])),
     );
     let plan = b.build();
     let caps = CapabilitySet::none().grant(DriverId::new("slack"), &EffectKind::Insert);
     let outcome = interp.commit(plan, &caps).await.unwrap();
     assert!(!outcome.is_complete(), "ok:false must not complete");
-    assert_eq!(outcome.failed_count(), 1, "the BodyError leg failed terminally");
+    assert_eq!(
+        outcome.failed_count(),
+        1,
+        "the BodyError leg failed terminally"
+    );
     match &outcome.ledger[0].status {
         LegStatus::Failed { error, .. } => {
             assert_eq!(error.code(), "terminal");

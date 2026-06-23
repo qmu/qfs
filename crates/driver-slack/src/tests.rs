@@ -362,6 +362,72 @@ fn ts_lt_pushes_to_latest_and_or_stays_wholly_residual() {
     assert_eq!(res.residual, Some(or_pred));
 }
 
+/// Defect #2 (the t20 class): a STRICT `ts > 100` lowers to Slack's INCLUSIVE `oldest=100`, which
+/// over-returns the `ts == 100` boundary row — so the strict comparison MUST be kept as residual to
+/// re-exclude that row locally. Asserts the residual is preserved AND that applying it excludes the
+/// boundary row (a tiny ts-only evaluator stands in for the engine's local filter).
+#[test]
+fn strict_ts_gt_keeps_residual_and_re_excludes_the_boundary_row() {
+    use cfs_types::{CmpOp, ColRef, Literal, Predicate};
+    let gt = Predicate::Cmp(ColRef::col("ts"), CmpOp::Gt, Literal::Text("100".into()));
+    let res = pushdown::build_params(Some(&gt));
+    // The inclusive bound is pushed …
+    assert_eq!(res.params, vec![("oldest".to_string(), "100".to_string())]);
+    // … but the strict comparison is KEPT as an exact residual (not dropped).
+    assert_eq!(
+        res.residual,
+        Some(gt.clone()),
+        "a strict > must keep the residual so the inclusive oldest boundary row is re-excluded"
+    );
+
+    // Slack (inclusive oldest=100) would hand back rows with ts == 100 AND ts == 101. Applying the
+    // residual must drop the ts == 100 boundary row, leaving only ts == 101.
+    let slack_returned = ["100", "101"];
+    let surviving: Vec<&str> = slack_returned
+        .into_iter()
+        .filter(|ts| eval_ts_residual(res.residual.as_ref().unwrap(), ts))
+        .collect();
+    assert_eq!(
+        surviving,
+        vec!["101"],
+        "the boundary row ts==100 is re-excluded by the residual; no wrong rows"
+    );
+
+    // Symmetric for strict <: ts < 200 → latest=200 (inclusive) + kept residual re-excludes ts==200.
+    let lt = Predicate::Cmp(ColRef::col("ts"), CmpOp::Lt, Literal::Text("200".into()));
+    let res = pushdown::build_params(Some(&lt));
+    assert_eq!(res.params, vec![("latest".to_string(), "200".to_string())]);
+    assert_eq!(
+        res.residual,
+        Some(lt.clone()),
+        "strict < keeps its residual"
+    );
+    let surviving: Vec<&str> = ["199", "200"]
+        .into_iter()
+        .filter(|ts| eval_ts_residual(res.residual.as_ref().unwrap(), ts))
+        .collect();
+    assert_eq!(surviving, vec!["199"], "ts==200 boundary row re-excluded");
+}
+
+/// A minimal `ts`-only predicate evaluator standing in for the engine's local residual filter —
+/// just enough to prove the boundary-row exclusion (numeric `ts` compare).
+fn eval_ts_residual(pred: &cfs_types::Predicate, ts: &str) -> bool {
+    use cfs_types::{CmpOp, Literal, Predicate};
+    match pred {
+        Predicate::Cmp(_, op, Literal::Text(bound)) => {
+            let (a, b) = (ts.parse::<i64>().unwrap(), bound.parse::<i64>().unwrap());
+            match op {
+                CmpOp::Gt => a > b,
+                CmpOp::Ge => a >= b,
+                CmpOp::Lt => a < b,
+                CmpOp::Le => a <= b,
+                _ => true,
+            }
+        }
+        _ => true,
+    }
+}
+
 // ---- read path: cursor pagination as a single bounded fetch node + decode ----------------
 
 #[test]
@@ -586,6 +652,53 @@ fn already_done_class_is_swallowed_for_naturally_idempotent_ops() {
     // But a non-idempotent op does NOT swallow it (it surfaces as a Body error).
     assert!(BodyErrorRule::On
         .check("chat.postMessage", &already, false)
+        .is_err());
+}
+
+/// Defect #1: the swallow set is SYMMETRIC across the add/remove pair (RFD §6 at-least-once). A
+/// redelivered `reactions.remove` on an already-removed reaction (`no_reaction`) and `pins.remove`
+/// on an already-unpinned message (`not_pinned`) must be no-op successes, not terminal errors —
+/// the selector gate (`swallows_already_done`) must include the remove-side effects so it stays in
+/// sync with the recognizer (`is_already_done`), which already lists those codes.
+#[test]
+fn remove_side_already_done_is_swallowed_symmetrically() {
+    // The selector gate now lists every idempotent op — both sides of each pair.
+    let remove_reaction = SlackEffect::RemoveReaction {
+        channel: "#g".into(),
+        ts: "1".into(),
+        emoji: "x".into(),
+    };
+    let unpin = SlackEffect::Unpin {
+        channel: "#g".into(),
+        ts: "1".into(),
+    };
+    assert!(
+        remove_reaction.swallows_already_done(),
+        "reactions.remove swallows no_reaction"
+    );
+    assert!(
+        unpin.swallows_already_done(),
+        "pins.remove swallows not_pinned"
+    );
+
+    // The recognizer + the gate agree: the remove-side codes are swallowed no-ops.
+    let no_reaction = serde_json::json!({"ok": false, "error": "no_reaction"});
+    assert!(BodyErrorRule::On
+        .check(
+            "reactions.remove",
+            &no_reaction,
+            remove_reaction.swallows_already_done()
+        )
+        .is_ok());
+    let not_pinned = serde_json::json!({"ok": false, "error": "not_pinned"});
+    assert!(BodyErrorRule::On
+        .check("pins.remove", &not_pinned, unpin.swallows_already_done())
+        .is_ok());
+
+    // A genuine remove-side error (not the already-done class) still surfaces, even when swallowed.
+    let real_err = serde_json::json!({"ok": false, "error": "message_not_found"});
+    assert!(BodyErrorRule::On
+        .check("reactions.remove", &real_err, true)
         .is_err());
 }
 
@@ -976,6 +1089,24 @@ fn parse_event_rejects_a_missing_signature_header() {
     };
     let err = parse_event(&headers, body, secret, 1_700_000_000).unwrap_err();
     assert_eq!(err.code(), "slack_event_missing_header");
+}
+
+/// Architect carry-over (b): a signature-valid envelope whose top-level `type` is neither
+/// `url_verification` nor `event_callback` is surfaced as a distinct `Unhandled` outcome (acked +
+/// logged by the ingress), NOT as a fabricated `Event`.
+#[test]
+fn parse_event_surfaces_an_unknown_envelope_type_as_unhandled() {
+    let secret = "s3cret";
+    let ts = "1700000300";
+    let now = 1_700_000_300;
+    let body = br#"{"type":"app_rate_limited","minute_rate_limited":1700000200}"#;
+    let sig = sign(secret, ts, body);
+    match parse_event(&EventHeaders::new(sig, ts), body, secret, now).unwrap() {
+        SlackInbound::Unhandled { envelope_type, .. } => {
+            assert_eq!(envelope_type, "app_rate_limited");
+        }
+        other => panic!("expected Unhandled, got {other:?}"),
+    }
 }
 
 // ---- golden DESCRIBE snapshots (the ticket's golden/snapshot acceptance) ------------------

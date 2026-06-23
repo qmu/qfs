@@ -270,12 +270,22 @@ impl SlackEffect {
     }
 
     /// Whether the applier should swallow an "already done" application error (the naturally
-    /// idempotent ops): `reactions.add` (`already_reacted`) and `pins.add` (`already_pinned`).
+    /// idempotent ops). This is **symmetric** across the add/remove pair (RFD §6 — the event story
+    /// is at-least-once, so a redelivered or already-satisfied op must be a no-op success, not a
+    /// terminal error):
+    /// - `reactions.add` (`already_reacted`) / `reactions.remove` (`no_reaction`)
+    /// - `pins.add` (`already_pinned`)        / `pins.remove`      (`not_pinned`)
+    ///
+    /// The already-done *codes* are recognized by [`crate::client::is_already_done`]; this selector
+    /// must list every effect whose op is idempotent so the recognizer and the gate stay in sync.
     #[must_use]
     pub const fn swallows_already_done(&self) -> bool {
         matches!(
             self,
-            SlackEffect::AddReaction { .. } | SlackEffect::Pin { .. }
+            SlackEffect::AddReaction { .. }
+                | SlackEffect::RemoveReaction { .. }
+                | SlackEffect::Pin { .. }
+                | SlackEffect::Unpin { .. }
         )
     }
 

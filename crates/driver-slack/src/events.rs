@@ -134,6 +134,17 @@ pub enum SlackInbound {
     },
     /// A normalized `event_callback` delivery the trigger bus routes.
     Event(SlackEvent),
+    /// A **signature-valid** delivery whose top-level envelope `type` is neither `url_verification`
+    /// nor `event_callback` (e.g. a future Slack control envelope). Carries the raw envelope + its
+    /// `type` so the ingress can ack it (Slack expects a 200) and log it **without** the driver
+    /// fabricating a synthetic `Event` from an envelope that has no inner `event` shape (Architect
+    /// carry-over: keep the unhandled case structurally distinct from a real normalized event).
+    Unhandled {
+        /// The top-level envelope `type` string.
+        envelope_type: String,
+        /// The raw envelope, for the ingress to inspect/log.
+        raw: serde_json::Value,
+    },
 }
 
 /// Why [`parse_event`] rejected an inbound delivery — secret-free and structured (the signing
@@ -218,11 +229,13 @@ pub fn parse_event(
             ))?;
             Ok(SlackInbound::Event(normalize(&envelope, inner)))
         }
-        // Any other top-level type is surfaced as a fact (no panic); the trigger bus decides.
-        _ => Ok(SlackInbound::Event(normalize(
-            &envelope,
-            envelope.get("event").unwrap_or(&envelope),
-        ))),
+        // Any other top-level type is surfaced as a distinct Unhandled fact (no panic, and NOT a
+        // fabricated Event): the ingress acks it (Slack wants a 200) and logs it, but the trigger
+        // bus is not handed a synthetic event built from an envelope with no inner `event` shape.
+        other => Ok(SlackInbound::Unhandled {
+            envelope_type: other.to_string(),
+            raw: envelope.clone(),
+        }),
     }
 }
 

@@ -14,9 +14,13 @@ default = ["runtime"]
 # (parse_event + the introspective Driver surface + HMAC) build for wasm32-unknown-unknown with
 # `--no-default-features --features events`, where tokio/rt-multi-thread cannot link.
 runtime = ["dep:cfs-runtime"]
-# The pure event-parsing + introspection subset. Carries no I/O; this is the wasm32 build target
-# (Workers WEBHOOK ingress, RFD §8). It is a no-op marker feature that documents the wasm subset;
-# building with `--no-default-features` (no `runtime`) already excludes the bridge.
+# A documentation marker for the pure event-parsing + introspection subset (the wasm32 build
+# target — Workers WEBHOOK ingress, RFD §8). NOTE (Architect carry-over): this feature is a no-op
+# *enabler* — it adds no code. The REAL fence excluding the runtime bridge is the **absence of the
+# `runtime` feature** (cfs-runtime is `optional`), so the load-bearing wasm invocation is
+# `--no-default-features [--features events]`. `events` exists only so a downstream wasm consumer
+# can name an intent-revealing feature; the dep-closure proof is the absence of `runtime`, not the
+# presence of `events`.
 events = []
 # Exposes test-only DTO constructors so a downstream consumer can fabricate the otherwise
 # `#[non_exhaustive]` DTOs in their own integration tests.
