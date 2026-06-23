@@ -81,3 +81,4 @@
 | 2026-06-23T08:47:18+09:00 | Planner | e2e-testing | t27 | E2E approved: 6/6 items PASS; redaction holds (canary absent from Debug/Display + all error surfaces), Secret has no Serialize path, resolution precedence and scopes correct. |
 | 2026-06-23T08:48:16+09:00 | Lead | ticket-accepted | t27 | Secret store accepted; E5 complete |
 | 2026-06-23T09:00:00+09:00 | Constructor | implementation | t16 | Local FS driver (cfs-driver-local) + sync PlanApplier->async ApplyDriver bridge in cfs-runtime; 390 tests green (+22) |
+| 2026-06-23T09:04:10+09:00 | Architect | code-review | t16 | Approve with minor suggestions: confinement narrowing correct (harden to leaf-property assertion), spawn_blocking bridge right adapter, verify-before-delete sound (suggest content hash) |
