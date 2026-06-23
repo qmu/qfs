@@ -53,7 +53,7 @@ pub use handler::EndpointCtx;
 pub use params::{BindError, QueryArgs};
 pub use policy::{assert_read_only, PolicyError};
 pub use route::{compile_endpoint, CompileError, RoutePattern, Router};
-pub use serve::{serve, serve_config, DEFAULT_BIND_ADDR};
+pub use serve::{serve, serve_config, serve_config_with, DEFAULT_BIND_ADDR};
 
 use std::collections::BTreeMap;
 

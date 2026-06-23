@@ -192,6 +192,7 @@ dependencies = [
  "async-trait",
  "cfs-cmd",
  "cfs-core",
+ "cfs-cron",
  "cfs-driver-local",
  "cfs-exec",
  "cfs-http",
@@ -241,6 +242,21 @@ dependencies = [
  "cfs-types",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cfs-cron"
+version = "0.0.0"
+dependencies = [
+ "cfs-core",
+ "cfs-exec",
+ "cfs-parser",
+ "cfs-server",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

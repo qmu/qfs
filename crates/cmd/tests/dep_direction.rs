@@ -189,6 +189,11 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // binary is the terminal sink (nothing depends on it), so reaching up into cfs-http is a
         // composition root consuming a leaf binding, not a layer inversion.
         "cfs-http",
+        // t33: the binary ALSO wires the JOB scheduler binding (cfs-cron, the cron sibling of
+        // cfs-http — a leaf consuming cfs-server + cfs-exec). It builds the CronBinding + the
+        // binary-local JobStore + the committer + the native daemon loop here, so cfs-cron's
+        // feature-gated tokio dead-ends in the terminal sink. Same composition-root rationale.
+        "cfs-cron",
     ];
     let workspace_prefixed: Vec<&String> =
         bin_deps.iter().filter(|d| d.starts_with("cfs")).collect();
@@ -573,16 +578,85 @@ fn exec_is_confined_above_the_spine_and_off_the_runtime() {
     // `cfs` binary (asserted by `http_binding_is_a_leaf_serve_consumer` below), so tokio still
     // dead-ends in the binary. Admitting it does not invert the layering; a spine/lower crate
     // reaching UP into cfs-exec still fails here.
-    let allowed_exec_consumers = ["cfs-cmd", "cfs", "cfs-http"];
+    // t33: `cfs-cron` (the JOB scheduler binding) is a FOURTH admitted consumer. Like cfs-http it
+    // is a LEAF integration consumer of the executor — its `RecordingCommitter`/real committer
+    // builds a JOB's DO plan via `build_plan` — that sits ABOVE the spine alongside cfs-cmd, and
+    // nothing depends on it except the terminal `cfs` binary (asserted by
+    // `cron_binding_is_a_leaf_serve_consumer` below). Admitting it does not invert the layering; a
+    // spine/lower crate reaching UP into cfs-exec still fails here.
+    let allowed_exec_consumers = ["cfs-cmd", "cfs", "cfs-http", "cfs-cron"];
     for consumer in &exec_consumers {
         assert!(
             allowed_exec_consumers.contains(&consumer.as_str()),
             "topology violation: {consumer} depends on cfs-exec, but only cfs-cmd, the terminal \
-             `cfs` binary (the t28 shell composition root), and cfs-http (the t32 leaf HTTP \
-             serving binding) may consume the integration layer. A spine/lower crate reaching UP \
-             into cfs-exec is a layer inversion (t29)."
+             `cfs` binary (the t28 shell composition root), cfs-http (the t32 leaf HTTP serving \
+             binding), and cfs-cron (the t33 leaf JOB scheduler binding) may consume the \
+             integration layer. A spine/lower crate reaching UP into cfs-exec is a layer \
+             inversion (t29)."
         );
     }
+}
+
+#[test]
+fn cron_binding_is_a_leaf_serve_consumer() {
+    // t33 (the JOB scheduler binding topology): `cfs-cron` is the leaf binding crate that makes
+    // `/server/jobs` rows fire on cadence. The placement decision (the cron sibling of the t32
+    // cfs-http binding) rests on four structural facts this guard pins so they cannot invert:
+    //
+    //   (a) cfs-cron consumes cfs-server (the Binding/ServerState/JobDef registry) AND cfs-exec
+    //       (the build_plan evaluator) — the one crate that legitimately binds both for the JOB
+    //       cause, the reason it is a NEW leaf rather than living in cfs-server (which must stay
+    //       off cfs-exec and runtime-free, CO-t30-1) or cfs-cmd (off cfs-exec/the binding crates).
+    //       NOTE: cfs-server + cfs-exec are OPTIONAL deps gated behind cfs-cron's default-on
+    //       `native` feature so the PURE scheduler core builds for wasm32; with the default
+    //       features active (as the workspace builds), both edges are present.
+    //   (b) cfs-cron is a LEAF: nothing depends on it except the terminal `cfs` binary (the serve
+    //       composition root). That keeps its feature-gated tokio daemon dead-ended in the binary
+    //       — the precondition the t28 runtime-leaf exemption relies on.
+    //   (c) cfs-cron does NOT depend on cfs-runtime. It threads the REAL commit through an INJECTED
+    //       Committer the binary builds; the scheduler never drives the COMMIT interpreter, so the
+    //       runtime-leaf-confinement guard is untouched (cfs-cron never appears in its allowlist).
+    let graph = load_graph();
+
+    // (a) cfs-cron depends on both cfs-server and cfs-exec (with default `native` features on).
+    let cron_deps = graph
+        .direct_deps
+        .get("cfs-cron")
+        .expect("cfs-cron is a workspace package");
+    for required in ["cfs-server", "cfs-exec"] {
+        assert!(
+            cron_deps.iter().any(|d| d == required),
+            "t33: cfs-cron must depend on {required} (it binds the server registry to the build_plan \
+             evaluator for the JOB cause). Deps were: {cron_deps:?}"
+        );
+    }
+
+    // (b) cfs-cron is a leaf: only the terminal `cfs` binary may depend on it.
+    let cron_consumers: Vec<&String> = graph
+        .direct_deps
+        .iter()
+        .filter(|(pkg, deps)| pkg.as_str() != "cfs-cron" && deps.iter().any(|d| d == "cfs-cron"))
+        .map(|(pkg, _)| pkg)
+        .collect();
+    for consumer in &cron_consumers {
+        assert_eq!(
+            consumer.as_str(),
+            "cfs",
+            "t33 leaf violation: {consumer} depends on cfs-cron, but only the terminal `cfs` \
+             binary (the serve composition root) may consume the JOB scheduler binding. If \
+             something else depends on it, cfs-cron's tokio daemon no longer dead-ends in the \
+             binary and the runtime-leaf exemption is unsound."
+        );
+    }
+
+    // (c) cfs-cron must NOT depend on cfs-runtime (the real applier is the injected Committer the
+    // binary builds; the scheduler never drives the COMMIT interpreter — the two impure stages
+    // stay separate, as for cfs-exec / cfs-http).
+    assert!(
+        !cron_deps.iter().any(|d| d == "cfs-runtime"),
+        "t33: cfs-cron must NOT depend on cfs-runtime — the real commit path is the INJECTED \
+         Committer the composition root builds, not the COMMIT interpreter. Deps were: {cron_deps:?}"
+    );
 }
 
 #[test]

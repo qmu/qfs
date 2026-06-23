@@ -55,6 +55,25 @@ pub async fn serve_config(
     addr: SocketAddr,
     max_rows: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    serve_config_with(config, engine, reads, addr, max_rows, Vec::new()).await
+}
+
+/// Like [`serve_config`], but also registers `extra_bindings` (e.g. the t33 cron `CronBinding`)
+/// into the runtime alongside the HTTP binding. The binary's serve composition root builds the
+/// cron binding (a sibling leaf) and passes it here as a `Box<dyn cfs_server::Binding>` — so
+/// `cfs-http` gains no dependency on `cfs-cron` (the bindings cross only through the generic
+/// `Binding` trait), keeping both leaves independent.
+///
+/// # Errors
+/// A boxed error if boot fails, the listener cannot bind, or the runtime wiring fails.
+pub async fn serve_config_with(
+    config: &Path,
+    engine: Arc<Engine>,
+    reads: Arc<ReadRegistry>,
+    addr: SocketAddr,
+    max_rows: usize,
+    extra_bindings: Vec<Box<dyn cfs_server::Binding>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Construct the binding and capture its shared router handle BEFORE boxing it into the
     // runtime (the listener reads the same atomically-swapped table the runtime reconciles).
     let binding = HttpBinding::new(Arc::clone(&engine), Arc::clone(&reads), max_rows);
@@ -62,6 +81,9 @@ pub async fn serve_config(
     let ctx = binding.ctx();
 
     let mut runtime = Runtime::new().with_binding(Box::new(binding));
+    for extra in extra_bindings {
+        runtime = runtime.with_binding(extra);
+    }
     runtime.boot(config)?;
 
     // The runtime's `run` OWNS the single `ctrl_c` shutdown + the audit drain — it must run to

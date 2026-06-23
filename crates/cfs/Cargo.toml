@@ -30,6 +30,12 @@ cfs-pushdown = { path = "../pushdown" }
 # cfs-server + the cfs-exec read executor + tokio; putting its composition here keeps cfs-cmd
 # off cfs-exec/cfs-http and lets tokio dead-end in the terminal binary.
 cfs-http = { path = "../http" }
+# t33 serve composition root: the binary ALSO wires the cron JOB scheduler binding (cfs-cron, a
+# leaf consuming cfs-server + cfs-exec, the cron sibling of cfs-http). The binary builds the
+# CronBinding + the binary-local JobStore + the committer + the native daemon loop here, so
+# cfs-cron's feature-gated tokio dead-ends in the terminal binary and cfs-cmd stays off it. The
+# `native` feature (default-on) is required for the CronBinding + RecordingCommitter + daemon.
+cfs-cron = { path = "../cron" }
 # The serve composition builds a tokio runtime to drive the async listener + supervised wait.
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "signal", "macros"] }
 async-trait = { workspace = true }

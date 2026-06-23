@@ -11,6 +11,7 @@
 //! binary is that leaf, so it builds the wired shell and injects it into `cfs-cmd` via the
 //! [`cfs_cmd::ShellLauncher`]. The shell LOGIC itself lives in `cfs-exec`; this only wires it.
 
+mod cron;
 mod serve;
 mod shell;
 
