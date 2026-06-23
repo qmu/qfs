@@ -840,8 +840,10 @@ fn s7_genuine_remove_failure_still_surfaces_terminal() {
         target("/slack/acme/#general/messages/9.9/reactions"),
     )
     .with_args(args(&[("emoji", Value::Text("tada".into()))]));
-    let (out, _t) =
-        commit_one_via_rest(node, vec![ok_json(r#"{"ok":false,"error":"message_not_found"}"#)]);
+    let (out, _t) = commit_one_via_rest(
+        node,
+        vec![ok_json(r#"{"ok":false,"error":"message_not_found"}"#)],
+    );
     let err = out.expect_err("a genuine remove failure must NOT be swallowed");
     assert_eq!(err.code(), "terminal", "real remove failure stays terminal");
     assert!(
@@ -964,7 +966,10 @@ fn s8_inclusive_ge_still_drops_residual() {
     let ts_le = Predicate::Cmp(ColRef::col("ts"), CmpOp::Le, Literal::Text("200".into()));
     let plan = ReadPlan::list(NodeKind::Messages, Some(&ts_le));
     assert_eq!(plan.params(), &[("latest".to_string(), "200".to_string())]);
-    assert!(plan.pushdown.residual.is_none(), "inclusive <= drops residual symmetrically");
+    assert!(
+        plan.pushdown.residual.is_none(),
+        "inclusive <= drops residual symmetrically"
+    );
 }
 
 // =====================================================================================
