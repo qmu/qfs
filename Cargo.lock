@@ -285,6 +285,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfs-google-auth"
+version = "0.0.0"
+dependencies = [
+ "cfs-secrets",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "cfs-lang"
 version = "0.0.0"
 

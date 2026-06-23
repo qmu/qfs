@@ -89,3 +89,4 @@
 | 2026-06-23T09:37:15+09:00 | Architect | code-review | t18 | Approve with minor suggestions: token-safety PASS (single expose door, redacting DTO Debug); GitHub reuses seam unforked, Slack needs body-error hook (R1) |
 | 2026-06-23T09:41:11+09:00 | Planner | e2e-testing | t18 | E2E-validated t18 HTTP/REST driver via local loopback mock: 19/19 checks pass, no token leak, GET retries/POST does not, pagination follows+caps; E2E approved |
 | 2026-06-23T09:42:04+09:00 | Lead | ticket-accepted | t18 | HTTP/REST driver accepted |
+| 2026-06-23T09:57:37+09:00 | Constructor | implementation | t19 | Implemented cfs-google-auth: OAuth2 loopback (localhost redirect), token exchange/refresh, per-account Secret storage, TokenSource + GoogleApiClient (refresh-on-401); +17 tests, 439 green; runtime-leaf confinement preserved via local HttpExchange seam |
