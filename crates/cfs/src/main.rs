@@ -14,6 +14,7 @@
 mod cron;
 mod host;
 mod serve;
+mod serve_builtins;
 mod shell;
 mod watchtower;
 

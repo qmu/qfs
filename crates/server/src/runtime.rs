@@ -211,23 +211,70 @@ impl Runtime {
         Ok(())
     }
 
-    /// **Run**: block until a shutdown signal (`ctrl_c`), then drain the audit ledger and
-    /// return. The cause bindings (HTTP/cron/webhook) attach in E7; at t30 the run loop is
-    /// the supervised wait + graceful drain. Consumes the runtime.
+    /// **Run**: block until a shutdown signal (`SIGINT`/ctrl_c **or** `SIGTERM`), then drain the
+    /// audit ledger and return. The cause bindings (HTTP/cron/webhook) attach in E7; at t30 the run
+    /// loop is the supervised wait + graceful drain. Consumes the runtime.
+    ///
+    /// ## SIGTERM is a first-class graceful-shutdown trigger (t36)
+    /// A `cfs serve` daemon is stopped by systemd with `KillSignal=SIGTERM` (see
+    /// `deploy/cfs.service`); the operator's interactive ctrl_c is `SIGINT`. EITHER triggers the
+    /// SAME graceful path — the supervised wait resolves, in-flight plans stop being accepted, and
+    /// the audit ledger drains — so a `systemctl stop` is a clean drain, not an uncaught SIGTERM
+    /// (exit 143 with no drain). The SIGTERM listener is unix-only (`tokio::signal::unix`);
+    /// non-unix targets fall back to `ctrl_c` alone (`SIGTERM` does not exist there).
     ///
     /// # Errors
-    /// [`ServerError`] only if the shutdown wiring fails (rare); a normal `ctrl_c` returns
-    /// `Ok(())` after draining.
+    /// [`ServerError`] only if the shutdown wiring fails (rare); a normal signal returns `Ok(())`
+    /// after draining.
     pub async fn run(self) -> Result<(), ServerError> {
-        tracing::info!(target: "cfs::server", summary = %self.snapshot().summary(), "server running; press ctrl_c to stop");
-        // Block on the shutdown signal. A failure to install the handler degrades to an
-        // immediate shutdown (drain + return) rather than a panic.
-        if let Err(e) = tokio::signal::ctrl_c().await {
-            tracing::warn!(target: "cfs::server", error = %e, "ctrl_c handler failed; shutting down");
-        }
+        tracing::info!(target: "cfs::server", summary = %self.snapshot().summary(), "server running; press ctrl_c (SIGINT) or send SIGTERM to stop");
+        // Block on the shutdown signal. A failure to install a handler degrades to an immediate
+        // shutdown (drain + return) rather than a panic.
+        shutdown_signal().await;
         let drained = self.audit.drain();
         tracing::info!(target: "cfs::server", entries = drained, "shutdown: audit ledger drained");
         Ok(())
+    }
+}
+
+/// Wait for a graceful-shutdown signal: `SIGINT` (ctrl_c) **or**, on unix, `SIGTERM`. Resolves on
+/// whichever fires first. A handler-install failure logs a secret-free warning and resolves
+/// immediately (degrade to shutdown, never panic) so the daemon still drains.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        // SIGTERM listener (systemd `stop` / `KillSignal=SIGTERM`). If it cannot be installed, a
+        // never-ready future lets the SIGINT arm win the `select!` (degrade to ctrl_c only).
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(target: "cfs::server", error = %e, "SIGTERM handler failed; ctrl_c only");
+                // Fall back to ctrl_c alone.
+                if let Err(e) = tokio::signal::ctrl_c().await {
+                    tracing::warn!(target: "cfs::server", error = %e, "ctrl_c handler failed; shutting down");
+                }
+                return;
+            }
+        };
+        tokio::select! {
+            r = tokio::signal::ctrl_c() => {
+                if let Err(e) = r {
+                    tracing::warn!(target: "cfs::server", error = %e, "ctrl_c handler failed; shutting down");
+                }
+                tracing::info!(target: "cfs::server", "received SIGINT; shutting down");
+            }
+            _ = term.recv() => {
+                tracing::info!(target: "cfs::server", "received SIGTERM; shutting down");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Non-unix (incl. wasm): SIGTERM does not exist; ctrl_c is the only graceful trigger.
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::warn!(target: "cfs::server", error = %e, "ctrl_c handler failed; shutting down");
+        }
     }
 }
 

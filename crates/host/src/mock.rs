@@ -117,7 +117,9 @@ impl MockHost {
     pub fn deliver(&self, cause: &str, run_key: &str) -> Result<bool, HostError> {
         let key = StateKey::new(format!("cursor/{cause}"));
         let prior = block_on(self.durable.get(&key))?;
-        let prior_key = prior.as_ref().map(|b| String::from_utf8_lossy(b.as_slice()).into_owned());
+        let prior_key = prior
+            .as_ref()
+            .map(|b| String::from_utf8_lossy(b.as_slice()).into_owned());
         // Already at this run_key ⇒ a redelivery ⇒ no-op.
         if prior_key.as_deref() == Some(run_key) {
             return Ok(false);

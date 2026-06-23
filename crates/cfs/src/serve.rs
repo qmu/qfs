@@ -26,8 +26,13 @@ pub fn run_serve(config: &Path) -> i32 {
     // as a structured 422 at request time, never a panic.
     let mut engine = Engine::new();
     engine.codecs = CodecRegistry::with_builtins();
+    // t36: register the always-available, credential-free built-in read sources (the `/status`
+    // daemon-liveness table) so a liveness ENDPOINT serves a real JSON body over loopback before
+    // any deployment driver is wired. The deployment registers its real E4 drivers on top.
+    let mut reads = ReadRegistry::new();
+    crate::serve_builtins::register_builtins(&mut engine, &mut reads);
     let engine = Arc::new(engine);
-    let reads = Arc::new(ReadRegistry::new());
+    let reads = Arc::new(reads);
 
     // The bind address: loopback by default (RFD §10 trusted bind), overridable via env.
     let addr = match resolve_bind_addr() {

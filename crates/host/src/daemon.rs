@@ -85,8 +85,7 @@ impl FileDurableStore {
             f.sync_all()
                 .map_err(|e| HostError::Durable(format!("fsync temp: {e}")))?;
         }
-        fs::rename(&tmp, &target)
-            .map_err(|e| HostError::Durable(format!("rename: {e}")))?;
+        fs::rename(&tmp, &target).map_err(|e| HostError::Durable(format!("rename: {e}")))?;
         // fsync the directory so the rename itself is durable (best-effort: a fs that rejects a
         // dir fsync — some platforms — degrades gracefully, the rename is already ordered).
         if let Ok(dir) = fs::File::open(&self.root) {
@@ -239,7 +238,9 @@ mod tests {
     fn ledger_appends_and_persists() {
         let dir = tmp();
         let ledger = AuditLedger::open(&dir, "audit.log").unwrap();
-        ledger.append("boot INSERT /server/jobs name=nightly").unwrap();
+        ledger
+            .append("boot INSERT /server/jobs name=nightly")
+            .unwrap();
         ledger.append("fired job:nightly").unwrap();
         assert_eq!(ledger.line_count().unwrap(), 2);
         let _ = fs::remove_dir_all(&dir);

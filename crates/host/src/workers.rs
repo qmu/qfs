@@ -110,7 +110,10 @@ impl DurableObjectStore {
 }
 
 impl DurableStore for DurableObjectStore {
-    fn get<'a>(&'a self, _key: &'a crate::dto::StateKey) -> HostFuture<'a, Option<crate::dto::StateBytes>> {
+    fn get<'a>(
+        &'a self,
+        _key: &'a crate::dto::StateKey,
+    ) -> HostFuture<'a, Option<crate::dto::StateBytes>> {
         Box::pin(async move {
             Err(HostError::Durable(
                 "host-workers DurableObjectStore parked: requires the `worker` crate (ADR-0005)"
@@ -183,7 +186,10 @@ mod tests {
             on: "inbox".to_string(),
             policy: None,
         };
-        assert_eq!(watcher_event(&w), (CfEvent::DurableObject, DURABLE_OBJECT_CLASS));
+        assert_eq!(
+            watcher_event(&w),
+            (CfEvent::DurableObject, DURABLE_OBJECT_CLASS)
+        );
 
         let ns = NativeStoreBinding {
             kind: NativeStoreKind::D1,

@@ -60,11 +60,17 @@ pub fn derivation_input(state: &ServerState) -> DerivationInput {
             predicate_source: source_text(&t.predicate),
         })
         .collect();
+    let view_sources = state
+        .views
+        .values()
+        .map(|v| source_text(&v.query))
+        .collect();
     DerivationInput {
         endpoints,
         jobs,
         webhooks,
         watchers,
+        view_sources,
     }
 }
 

@@ -85,29 +85,20 @@ pub trait RuntimeHost {
     ///
     /// # Errors
     /// [`HostError::Attach`] if the cause could not be attached (e.g. a port bind failed).
-    fn serve_endpoints(
-        &self,
-        set: &BindingSet,
-    ) -> impl Future<Output = Result<(), HostError>>;
+    fn serve_endpoints(&self, set: &BindingSet) -> impl Future<Output = Result<(), HostError>>;
 
     /// Attach the JOB causes (→ Cron Triggers on CF, a `tokio::time` interval on the daemon).
     ///
     /// # Errors
     /// [`HostError::Attach`] if the schedule could not be installed.
-    fn schedule_jobs(
-        &self,
-        set: &BindingSet,
-    ) -> impl Future<Output = Result<(), HostError>>;
+    fn schedule_jobs(&self, set: &BindingSet) -> impl Future<Output = Result<(), HostError>>;
 
     /// Attach the WEBHOOK/event causes (→ a Queue consumer on CF, the in-process bus + `/hooks/...`
     /// ingest on the daemon).
     ///
     /// # Errors
     /// [`HostError::Attach`] if the consumer could not be attached.
-    fn consume_events(
-        &self,
-        set: &BindingSet,
-    ) -> impl Future<Output = Result<(), HostError>>;
+    fn consume_events(&self, set: &BindingSet) -> impl Future<Output = Result<(), HostError>>;
 
     /// The durable store for watcher cursors / `LAST_RUN` (→ DO storage on CF, an fsync'd file on
     /// the daemon).

@@ -169,6 +169,11 @@ pub struct DerivationInput {
     pub webhooks: Vec<WebhookInput>,
     /// `(name, on, policy)` per trigger/watcher, plus the trigger's plan + predicate source.
     pub watchers: Vec<WatcherInput>,
+    /// Per-view backing-query sources. A VIEW attaches no deployment CAUSE (it is not a binding),
+    /// but its query may reference a `/cf/d1`·`/cf/r2`·`/cf/kv` mount the deployment must provision
+    /// — so its source IS scanned for native-store bindings (RFD §8: the native binding set is the
+    /// union of every mount the config touches, not only the ones a cause references).
+    pub view_sources: Vec<String>,
 }
 
 /// Owned endpoint derivation input.
@@ -271,6 +276,11 @@ pub fn derive_bindings(input: &DerivationInput) -> BindingSet {
             &mut native,
         );
     }
+    // VIEWs attach no cause, but their query sources are scanned for native-store mounts the
+    // deployment must still provision (the native binding set is the union of every mount touched).
+    for view_src in &input.view_sources {
+        scan_native_stores(&[view_src.as_str()], &mut native);
+    }
 
     set.native_stores = native.into_iter().collect();
     set
@@ -306,18 +316,21 @@ mod tests {
         );
         let v: Vec<_> = out.into_iter().collect();
         assert_eq!(v.len(), 3, "three distinct native stores: {v:?}");
-        assert!(v.iter().any(|b| b.kind == NativeStoreKind::D1 && b.resource == "analytics"));
-        assert!(v.iter().any(|b| b.kind == NativeStoreKind::R2 && b.resource == "backups"));
-        assert!(v.iter().any(|b| b.kind == NativeStoreKind::Kv && b.resource == "sessions"));
+        assert!(v
+            .iter()
+            .any(|b| b.kind == NativeStoreKind::D1 && b.resource == "analytics"));
+        assert!(v
+            .iter()
+            .any(|b| b.kind == NativeStoreKind::R2 && b.resource == "backups"));
+        assert!(v
+            .iter()
+            .any(|b| b.kind == NativeStoreKind::Kv && b.resource == "sessions"));
     }
 
     #[test]
     fn mount_scan_dedups_repeated_refs() {
         let mut out = BTreeSet::new();
-        scan_native_stores(
-            &["FROM /cf/d1/db1/t1", "FROM /cf/d1/db1/t2"],
-            &mut out,
-        );
+        scan_native_stores(&["FROM /cf/d1/db1/t1", "FROM /cf/d1/db1/t2"], &mut out);
         assert_eq!(out.len(), 1, "same db referenced twice yields one binding");
     }
 

@@ -88,11 +88,16 @@ fn fixture_path() -> PathBuf {
 /// Send SIGINT to a child PID via the `kill` command (no extra crate dep; the harness just
 /// delivers the same signal an operator's ctrl_c would).
 fn send_sigint(pid: u32) {
+    send_signal(pid, "-INT");
+}
+
+/// Send a named signal to a child PID via the `kill` command.
+fn send_signal(pid: u32, signal: &str) {
     let status = Command::new("kill")
-        .args(["-INT", &pid.to_string()])
+        .args([signal, &pid.to_string()])
         .status()
         .expect("spawn kill");
-    assert!(status.success(), "kill -INT failed");
+    assert!(status.success(), "kill {signal} failed");
 }
 
 #[test]
@@ -157,6 +162,61 @@ fn serve_boots_blocks_then_sigint_drains_audit_cleanly() {
     assert_eq!(
         drained_lines, 8,
         "exactly 8 audit entries flushed on drain (one per /server mutation):\n{log}"
+    );
+}
+
+#[test]
+fn serve_shuts_down_cleanly_on_sigterm_and_drains_audit() {
+    // t36 — SIGTERM is a FIRST-CLASS graceful-shutdown trigger (the systemd `KillSignal=SIGTERM`
+    // path). Before t36 the serve supervisor waited on ctrl_c (SIGINT) only, so a SIGTERM was
+    // uncaught (exit 143, no drain) — contradicting the daemon's graceful-shutdown contract. We
+    // assert the real binary: boot the fixture, reach the run loop, then send SIGTERM and confirm
+    // it exits 0 (clean) with the audit ledger drained (one entry per /server mutation), exactly
+    // as the SIGINT path does. This pins the systemd `cfs.service` graceful-drain claim.
+    let mut child = Command::new(cfs_bin())
+        .args(["serve", fixture_path().to_str().unwrap()])
+        .env("RUST_LOG", "cfs::server=info,cfs::server::audit=info")
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn cfs serve");
+    let mut stderr = child.stderr.take().expect("child stderr");
+
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(
+        child.try_wait().expect("try_wait").is_none(),
+        "server must still be running (blocked in the run loop) before SIGTERM"
+    );
+
+    send_signal(child.id(), "-TERM");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(s) = child.try_wait().expect("try_wait") {
+            break s;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "server did not exit after SIGTERM (the supervisor must catch SIGTERM, not only SIGINT)"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        status.success(),
+        "clean shutdown on SIGTERM must exit 0 (not 143/uncaught), got {status:?}"
+    );
+
+    let mut log = String::new();
+    stderr.read_to_string(&mut log).expect("read stderr");
+    assert!(
+        log.contains("received SIGTERM"),
+        "the supervisor must report it caught SIGTERM:\n{log}"
+    );
+    assert!(
+        log.contains("audit ledger drained") && log.contains("entries=8"),
+        "SIGTERM must drain exactly 8 audit entries (the same graceful path as SIGINT):\n{log}"
     );
 }
 

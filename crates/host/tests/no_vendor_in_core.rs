@@ -42,8 +42,7 @@ fn load_resolved_graph() -> ResolvedGraph {
         "cargo metadata failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("metadata JSON");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("metadata JSON");
 
     let mut name_of = BTreeMap::new();
     let mut id_of = BTreeMap::new();

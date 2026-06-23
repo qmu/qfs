@@ -70,7 +70,12 @@ fn fixture_yields_the_expected_host_agnostic_binding_set() {
     );
 
     // Three native stores, sorted (D1 < R2 < Kv by enum order), each name-only.
-    assert_eq!(set.native_stores.len(), 3, "d1 + r2 + kv: {:?}", set.native_stores);
+    assert_eq!(
+        set.native_stores.len(),
+        3,
+        "d1 + r2 + kv: {:?}",
+        set.native_stores
+    );
     let kinds: Vec<NativeStoreKind> = set.native_stores.iter().map(|n| n.kind).collect();
     assert!(kinds.contains(&NativeStoreKind::D1));
     assert!(kinds.contains(&NativeStoreKind::R2));
@@ -122,11 +127,32 @@ fn wrangler_toml_matches_the_checked_in_golden() {
     );
 
     // Sanity: the golden carries the load-bearing deployment facts and NO secret value.
-    assert!(golden.contains("crons = [\"0 */6 * * *\"]"), "Cron expr present");
-    assert!(golden.contains("class_name = \"WatchtowerState\""), "DO class present");
-    assert!(golden.contains("queue = \"inbound-events\""), "Queue present");
-    assert!(golden.contains("binding = \"D1_ANALYTICS\""), "d1 binding name");
-    assert!(golden.contains("binding = \"R2_BACKUPS\""), "r2 binding name");
-    assert!(golden.contains("binding = \"KV_SESSIONS\""), "kv binding name");
-    assert!(golden.contains("database_id = \"\""), "no database_id value embedded");
+    assert!(
+        golden.contains("crons = [\"0 */6 * * *\"]"),
+        "Cron expr present"
+    );
+    assert!(
+        golden.contains("class_name = \"WatchtowerState\""),
+        "DO class present"
+    );
+    assert!(
+        golden.contains("queue = \"inbound-events\""),
+        "Queue present"
+    );
+    assert!(
+        golden.contains("binding = \"D1_ANALYTICS\""),
+        "d1 binding name"
+    );
+    assert!(
+        golden.contains("binding = \"R2_BACKUPS\""),
+        "r2 binding name"
+    );
+    assert!(
+        golden.contains("binding = \"KV_SESSIONS\""),
+        "kv binding name"
+    );
+    assert!(
+        golden.contains("database_id = \"\""),
+        "no database_id value embedded"
+    );
 }
