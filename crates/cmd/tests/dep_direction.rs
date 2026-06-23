@@ -205,9 +205,15 @@ fn runtime_is_confined_to_plan_and_types() {
     //       cfs-txn}` (no `cfs-core`/`cfs-parser`/`cfs-driver`/`cfs-codec`/`cfs-lang`/
     //       `cfs-cmd`/`cfs-server`), so the runtime walks the effect plan + the pure
     //       transactional envelope and nothing else; and
-    //   (b) NOTHING in the workspace depends back up onto `cfs-runtime`, so tokio can never
-    //       enter another crate's closure via this edge (the confinement that keeps
-    //       `cfs-plan` I/O-free and its purity dep-closure test green by construction).
+    //   (b) NONE of the **pure-spine** crates depends back up onto `cfs-runtime`, so tokio can
+    //       never enter the spine's closure via this edge (the confinement that keeps
+    //       `cfs-plan` I/O-free and its purity dep-closure test green by construction). A
+    //       concrete **driver-impl** crate (t16 `cfs-driver-local`) and the top-level binary
+    //       ARE permitted to depend on `cfs-runtime`: they are leaf consumers that bridge a
+    //       driver's synchronous `PlanApplier` to the async `ApplyDriver` and register it in
+    //       the `DriverRegistry`. Nothing depends back onto *them*, so tokio still cannot
+    //       reach the spine — the edge only flows up out of the runtime into a leaf, never
+    //       into `cfs-plan`/`cfs-types`/`cfs-driver`/`cfs-codec`/`cfs-txn`/… .
     //
     // t11 added `cfs-txn` (the transactional correctness envelope). It is ITSELF pure
     // orchestration confined to `{cfs-plan, cfs-types}` (no tokio of its own — the runtime
@@ -270,16 +276,21 @@ fn runtime_is_confined_to_plan_and_types() {
         );
     }
 
-    // (b) nothing depends back up onto the runtime — the edge is strictly
-    // cfs-runtime -> {cfs-plan, cfs-types}, never the reverse.
+    // (b) no PURE-SPINE crate depends back up onto the runtime — tokio must never enter the
+    // spine's closure. Concrete driver-impl crates and the top-level binary are leaf consumers
+    // that legitimately bridge into the runtime (registering an ApplyDriver), and nothing
+    // depends back onto them, so they are explicitly admitted. Anything else depending on
+    // cfs-runtime is a confinement violation.
+    let runtime_consumers_allowed = ["cfs-driver-local", "cfs"];
     for (pkg, deps) in &graph.direct_deps {
-        if pkg == "cfs-runtime" {
+        if pkg == "cfs-runtime" || runtime_consumers_allowed.contains(&pkg.as_str()) {
             continue;
         }
         assert!(
             !deps.iter().any(|d| d == "cfs-runtime"),
             "confinement violation: {pkg} depends on cfs-runtime; tokio must stay confined to \
-             cfs-runtime, so no other crate may depend back up onto it"
+             cfs-runtime + leaf driver-impl consumers ({runtime_consumers_allowed:?}), so no \
+             spine crate may depend back up onto it"
         );
     }
 }

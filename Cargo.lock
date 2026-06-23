@@ -212,6 +212,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfs-driver-local"
+version = "0.0.0"
+dependencies = [
+ "cfs-codec",
+ "cfs-driver",
+ "cfs-plan",
+ "cfs-runtime",
+ "cfs-types",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "cfs-engine"
 version = "0.0.0"
 dependencies = [

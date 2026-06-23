@@ -52,6 +52,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod batch;
+mod bridge;
 mod caps;
 mod driver;
 mod error;
@@ -62,6 +63,7 @@ mod schedule;
 mod txn;
 
 pub use batch::{coalesce, BatchGroup, GroupKey};
+pub use bridge::{PlanApplierBridge, SharedApplier};
 pub use caps::{CapabilitySet, ConcurrencyLimits, RetryPolicy};
 pub use driver::{ApplyCx, ApplyDriver, DriverRegistry, EffectInput};
 pub use error::{ApplyError, EffectError};

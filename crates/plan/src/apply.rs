@@ -49,6 +49,20 @@ pub struct ApplyError {
     pub reason: String,
 }
 
+impl ApplyError {
+    /// Construct an apply failure for `id` with a secret-free reason. Provided because the
+    /// struct is `#[non_exhaustive]`, so out-of-crate (E4) driver-backed [`PlanApplier`]
+    /// impls cannot build one with a struct literal — they need a constructor to report a
+    /// failed apply. Additive; the `#[non_exhaustive]` guarantee is preserved.
+    #[must_use]
+    pub fn new(id: NodeId, reason: impl Into<String>) -> Self {
+        Self {
+            id,
+            reason: reason.into(),
+        }
+    }
+}
+
 impl std::fmt::Display for ApplyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "apply {} failed: {}", self.id, self.reason)
