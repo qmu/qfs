@@ -36,6 +36,11 @@ pub enum AuditEntry {
         /// What fired it (`"job:nightly"`, `"endpoint:recent"`, …).
         cause: String,
     },
+    /// A policy-evaluated fired plan (t35): the full [`crate::policy::FiredPlanRecord`] — handler,
+    /// bound policy, allow/deny decision (deny carries verb/driver/rule), secret-free per-effect
+    /// summaries, ts. Emitted for EVERY fired plan (allow AND deny) so the ledger is the single
+    /// unattended-execution funnel (RFD §6/§10).
+    FiredPlan(crate::policy::FiredPlanRecord),
 }
 
 impl AuditEntry {
@@ -68,6 +73,7 @@ impl AuditEntry {
                 name.as_deref().unwrap_or("-")
             ),
             AuditEntry::PlanFired { cause } => format!("fired {cause}"),
+            AuditEntry::FiredPlan(r) => r.summary(),
         }
     }
 }
@@ -93,6 +99,26 @@ impl AuditSink {
         if let Ok(mut log) = self.entries.lock() {
             log.push(entry);
         }
+    }
+
+    /// Append one t35 fired-plan record (the policy-evaluated fire — allow or deny). The single
+    /// funnel every E7 committer calls so no plan fires unaudited (RFD §6/§10).
+    pub fn record_fired(&self, record: crate::policy::FiredPlanRecord) {
+        self.record(AuditEntry::FiredPlan(record));
+    }
+
+    /// The number of recorded [`AuditEntry::FiredPlan`] entries — the t35 fired-plan count
+    /// (test/observability aid; one per evaluated handler plan).
+    #[must_use]
+    pub fn fired_count(&self) -> usize {
+        self.entries
+            .lock()
+            .map(|l| {
+                l.iter()
+                    .filter(|e| matches!(e, AuditEntry::FiredPlan(_)))
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     /// The number of recorded entries (test/observability aid).

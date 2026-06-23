@@ -205,8 +205,9 @@ fn describe_server_triggers_returns_the_trigger_schema_with_no_backend() {
         .map(|c| c.name.as_str())
         .collect();
     // t34 (CO-t31-4): the trigger schema gains the optional `predicate` (the `WHERE <pred>`
-    // guard's canonical spec), between `on` and `plan`.
-    assert_eq!(names, vec!["name", "on", "predicate", "plan"]);
+    // guard's canonical spec), between `on` and `plan`. t35 appends the optional `policy`
+    // attachment handle (the fired-plan least-privilege ref).
+    assert_eq!(names, vec!["name", "on", "predicate", "plan", "policy"]);
 }
 
 #[test]

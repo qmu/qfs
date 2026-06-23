@@ -323,6 +323,10 @@ fn insert_row(
                     on: text("on"),
                     predicate: StatementSource::new(text("predicate")),
                     plan: StatementSource::new(text("plan")),
+                    policy: match get("policy") {
+                        Some(Value::Text(s)) if !s.is_empty() => Some(s.clone()),
+                        _ => None,
+                    },
                 },
             );
         }
@@ -337,6 +341,10 @@ fn insert_row(
                     name,
                     every: text("every"),
                     plan: StatementSource::new(text("plan")),
+                    policy: match get("policy") {
+                        Some(Value::Text(s)) if !s.is_empty() => Some(s.clone()),
+                        _ => None,
+                    },
                     last_run,
                 },
             );

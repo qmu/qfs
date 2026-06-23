@@ -356,7 +356,7 @@ pub fn from_server_ddl(ddl: &ServerDdl) -> Result<ServerBindingDdl, DdlError> {
                     .as_query
                     .as_deref()
                     .map(StatementSpec::from_statement_ref),
-                policy_ref: None,
+                policy_ref: ddl.policy.clone(),
             }))
         }
         DdlKind::Trigger => {
@@ -376,7 +376,7 @@ pub fn from_server_ddl(ddl: &ServerDdl) -> Result<ServerBindingDdl, DdlError> {
                     .as_deref()
                     .map(StatementSpec::from_statement_ref),
                 plan: ddl.do_plan.as_deref().map(PlanSpec::from_statement_ref),
-                policy_ref: None,
+                policy_ref: ddl.policy.clone(),
             }))
         }
         DdlKind::Job => {
@@ -387,7 +387,7 @@ pub fn from_server_ddl(ddl: &ServerDdl) -> Result<ServerBindingDdl, DdlError> {
                 name,
                 every,
                 plan: ddl.do_plan.as_deref().map(PlanSpec::from_statement_ref),
-                policy_ref: None,
+                policy_ref: ddl.policy.clone(),
             }))
         }
         DdlKind::View | DdlKind::MaterializedView => Ok(ServerBindingDdl::View(ViewDecl {
@@ -397,7 +397,7 @@ pub fn from_server_ddl(ddl: &ServerDdl) -> Result<ServerBindingDdl, DdlError> {
                 .as_deref()
                 .map(StatementSpec::from_statement_ref),
             materialized: matches!(ddl.kind, DdlKind::MaterializedView),
-            policy_ref: None,
+            policy_ref: ddl.policy.clone(),
         })),
         DdlKind::Webhook => {
             let route = Route(ddl.on.clone().ok_or_else(|| {
@@ -406,7 +406,7 @@ pub fn from_server_ddl(ddl: &ServerDdl) -> Result<ServerBindingDdl, DdlError> {
             Ok(ServerBindingDdl::Webhook(WebhookDecl {
                 name,
                 route,
-                policy_ref: None,
+                policy_ref: ddl.policy.clone(),
             }))
         }
         DdlKind::Policy => Err(DdlError::validation(
@@ -523,6 +523,11 @@ pub fn binding_config_row(ddl: &ServerBindingDdl) -> ConfigRow {
                 "plan",
                 canonical_or_empty(d.plan.as_ref().map(PlanSpec::canonical)),
             );
+            // t35: emit the attached POLICY handle when present (the fired-plan least-privilege
+            // ref). Omitted when `None` so a policy-less trigger row stays byte-identical.
+            if let Some(policy) = d.policy_ref.as_ref() {
+                row.set_text("policy", policy.as_str());
+            }
         }
         ServerBindingDdl::Job(d) => {
             row.set_text("every", d.every.as_str());
@@ -530,6 +535,10 @@ pub fn binding_config_row(ddl: &ServerBindingDdl) -> ConfigRow {
                 "plan",
                 canonical_or_empty(d.plan.as_ref().map(PlanSpec::canonical)),
             );
+            // t35: emit the attached POLICY handle when present.
+            if let Some(policy) = d.policy_ref.as_ref() {
+                row.set_text("policy", policy.as_str());
+            }
         }
         ServerBindingDdl::View(d) => {
             row.set_text(
@@ -664,12 +673,17 @@ pub fn server_node_schema(node: ServerNode) -> Schema {
             // pre-t34 triggers round-trip unchanged.
             col("predicate", ColumnType::Text, true),
             col("plan", ColumnType::Text, true),
+            // t35: the attached POLICY handle (a `/server/policies` row) the watchtower commits
+            // the fired plan under. Nullable so pre-t35 triggers round-trip unchanged.
+            col("policy", ColumnType::Text, true),
         ]),
         ServerNode::Jobs => Schema::new(vec![
             col("name", ColumnType::Text, false),
             col("every", ColumnType::Text, true),
             col("plan", ColumnType::Text, true),
             col("last_run", ColumnType::Timestamp, true),
+            // t35: the attached POLICY handle the cron scheduler commits the fired plan under.
+            col("policy", ColumnType::Text, true),
         ]),
         ServerNode::Views => Schema::new(vec![
             col("name", ColumnType::Text, false),

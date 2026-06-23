@@ -33,7 +33,7 @@ use winnow::{ModalResult, Parser};
 use crate::ast::{
     Assignment, CallRef, Codec, DdlKind, EffectBody, EffectStmt, EffectVerb, Expr, FnRef, Ident,
     JoinOp, Literal, NamedArg, Op, OrderKey, PathExpr, PathRef, PathSegment, PipeOp, Pipeline,
-    PlanWrap, Projection, ServerDdl, Source, Statement, Values,
+    PlanWrap, PolicyRuleAst, Projection, ServerDdl, Source, Statement, Values,
 };
 use crate::error::{ParseError, ParseErrorCode};
 
@@ -885,7 +885,28 @@ fn server_ddl(input: &mut Stream<'_>) -> ModalResult<ServerDdl> {
     let mut as_query = None;
     let mut where_pred = None;
     let mut do_plan = None;
+    let mut policy_rules: Vec<PolicyRuleAst> = Vec::new();
+    let mut policy_attach: Option<String> = None;
     loop {
+        // The `POLICY <name>` ATTACHMENT clause (t35) on a binding DDL — the policy a fired
+        // plan commits under. `POLICY` is a frozen keyword (no new keyword). Only on a
+        // non-POLICY DDL (for `CREATE POLICY` the leading POLICY is the kind, not an attach).
+        if !matches!(kind, DdlKind::Policy) && policy_attach.is_none() {
+            if let Some(v) = opt(policy_attach_clause).parse_next(input)? {
+                policy_attach = Some(v);
+                continue;
+            }
+        }
+        // `CREATE POLICY … ALLOW … DENY …` rule clauses (t35). Parsed FIRST for the POLICY
+        // form so the `ALLOW`/`DENY` contextual idents (not frozen keywords) are consumed
+        // before the generic clause probes. A rule may carry its own `ON <driver-glob>`, so
+        // this must win over the generic `on_clause` inside the POLICY form.
+        if matches!(kind, DdlKind::Policy) {
+            if let Some(rule) = opt(policy_rule_clause).parse_next(input)? {
+                policy_rules.push(rule);
+                continue;
+            }
+        }
         if on.is_none() {
             if let Some(v) = opt(on_clause).parse_next(input)? {
                 on = Some(v);
@@ -932,7 +953,67 @@ fn server_ddl(input: &mut Stream<'_>) -> ModalResult<ServerDdl> {
         where_pred,
         every,
         on,
+        policy_rules,
+        policy: policy_attach,
     })
+}
+
+/// `POLICY <name>` — the binding attachment clause (t35): the `/server/policies` row a fired
+/// plan commits under. `POLICY` IS a frozen keyword; the name is a bare identifier.
+fn policy_attach_clause(input: &mut Stream<'_>) -> ModalResult<String> {
+    let _ = kw(Keyword::Policy).parse_next(input)?;
+    ident(input).map(|s| s.node)
+}
+
+/// `(ALLOW|DENY) <verbs> [ON <driver-glob>]` — one `CREATE POLICY` rule clause (t35).
+///
+/// ## Keyword-freeze (the t31 `AT` lesson)
+/// `ALLOW`/`DENY`/`ALL` are **NOT** in the frozen RFD §3 keyword table; only `POLICY`/`ON` and
+/// the verbs (`SELECT`/`UPDATE`/`REMOVE`/`CALL` as keywords; `INSERT`/`UPSERT` as the
+/// `INTO`-lead idents) are frozen. So this binds over the **existing surface**: `ALLOW`/`DENY`/
+/// `ALL` are matched as contextual UPPERCASE identifiers ([`word`]) — adding no new closed-core
+/// keyword — exactly as t31 bound `AT` and the DDL handles `MATERIALIZED`.
+fn policy_rule_clause(input: &mut Stream<'_>) -> ModalResult<PolicyRuleAst> {
+    let allow =
+        alt((word("ALLOW").map(|_| true), word("DENY").map(|_| false))).parse_next(input)?;
+    let (verbs, all_token) = policy_verb_list(input)?;
+    // The optional per-rule `ON <driver-glob>` scope (`ON` IS a frozen keyword).
+    let driver = opt(preceded(kw(Keyword::On), raw_token_text)).parse_next(input)?;
+    Ok(PolicyRuleAst {
+        allow,
+        verbs,
+        all_token,
+        driver,
+    })
+}
+
+/// A POLICY rule's verb list: the bare `ALL` token, or a comma-separated list of verbs. The
+/// verbs span both lexer shapes — `SELECT`/`UPDATE`/`REMOVE`/`CALL` are reserved keyword
+/// tokens, while `INSERT`/`UPSERT` are the bare `INTO`-lead UPPERCASE idents — so this accepts
+/// either. Returns `(verb_labels, was_all_token)`.
+fn policy_verb_list(input: &mut Stream<'_>) -> ModalResult<(Vec<String>, bool)> {
+    if opt(word("ALL")).parse_next(input)?.is_some() {
+        return Ok((vec!["ALL".to_string()], true));
+    }
+    let mut verbs = vec![policy_verb_token(input)?];
+    while opt(punct(Token::Comma)).parse_next(input)?.is_some() {
+        verbs.push(policy_verb_token(input)?);
+    }
+    Ok((verbs, false))
+}
+
+/// A single POLICY verb token: a reserved verb keyword (`SELECT`/`UPDATE`/`REMOVE`/`CALL`) or a
+/// bare UPPERCASE verb ident (`INSERT`/`UPSERT`). Returns the uppercase label.
+fn policy_verb_token(input: &mut Stream<'_>) -> ModalResult<String> {
+    any.verify_map(|t: Spanned<Token>| match t.node {
+        Token::Keyword(Keyword::Select) => Some("SELECT".to_string()),
+        Token::Keyword(Keyword::Update) => Some("UPDATE".to_string()),
+        Token::Keyword(Keyword::Remove) => Some("REMOVE".to_string()),
+        Token::Keyword(Keyword::Call) => Some("CALL".to_string()),
+        Token::Ident(ref s) if s == "INSERT" || s == "UPSERT" => Some(s.clone()),
+        _ => None,
+    })
+    .parse_next(input)
 }
 
 /// `WHERE <pred>` — the optional TRIGGER guard (t34). `WHERE` is a frozen keyword, so this adds no

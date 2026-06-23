@@ -36,25 +36,32 @@ use cfs_watchtower::{
 };
 
 /// The committer the binary injects into the dispatch loop: builds a fired trigger's plan via
-/// `cfs_exec::build_plan` over the serve engine + commits it (PREVIEW path). Reuses cfs-watchtower's
-/// own `RecordingCommitter` shape — the binary just supplies the serve engine.
+/// `cfs_exec::build_plan` over the serve engine, enforces the trigger's bound POLICY against it
+/// (t35, default-deny / atomic abort), and commits it (PREVIEW path). Reuses cfs-watchtower's own
+/// `RecordingCommitter` shape — the binary supplies the serve engine + the live policy table.
 pub struct WatchtowerCommitter {
     inner: cfs_watchtower::RecordingCommitter,
 }
 
 impl WatchtowerCommitter {
-    /// Build a committer over a clone of the serve engine's registries (mounts + codecs).
+    /// Build a committer over a clone of the serve engine's registries (mounts + codecs) wired
+    /// with the live `/server/policies` table the trigger's bound policy ref resolves against.
     #[must_use]
-    pub fn new(engine: Engine) -> Self {
+    pub fn new(engine: Engine, policies: cfs_watchtower::PolicyTableHandle) -> Self {
         Self {
-            inner: cfs_watchtower::RecordingCommitter::with_engine(engine),
+            inner: cfs_watchtower::RecordingCommitter::with_engine(engine).with_policies(policies),
         }
     }
 }
 
 impl Committer for WatchtowerCommitter {
-    fn commit(&self, stmt: &cfs_watchtower::Statement) -> Result<FireOutcome, FireError> {
-        self.inner.commit(stmt)
+    fn commit(
+        &self,
+        trigger: &str,
+        stmt: &cfs_watchtower::Statement,
+        policy: Option<&str>,
+    ) -> Result<FireOutcome, FireError> {
+        self.inner.commit(trigger, stmt, policy)
     }
 }
 
@@ -73,10 +80,12 @@ pub fn build_watchtower(
     tokio::sync::mpsc::Receiver<cfs_watchtower::Event>,
     Arc<dyn cfs_watchtower::EventBus>,
     cfs_http::Fallback,
+    cfs_watchtower::PolicyTableHandle,
 ) {
     let (local_bus, rx) = LocalBus::new(1024);
     let bus: Arc<dyn cfs_watchtower::EventBus> = Arc::new(local_bus);
     let binding = WatchtowerBinding::new(secrets, Arc::clone(&bus));
+    let policies = binding.policies_handle();
 
     // The HTTP fallback: route `/hooks/...` to the shared webhook ingest core. The closure holds an
     // Arc clone of the SAME WebhookIngest the binding reconciles, so the listener + the runtime
@@ -99,7 +108,7 @@ pub fn build_watchtower(
         ))
     });
 
-    (binding, rx, bus, fallback)
+    (binding, rx, bus, fallback, policies)
 }
 
 /// Spawn the dispatch loop: drain the bus receiver, match each event against the live trigger set,
@@ -112,9 +121,10 @@ pub fn spawn_dispatch_loop(
     triggers: Arc<std::sync::RwLock<Arc<Vec<TriggerDef>>>>,
     audit: Arc<AuditSink>,
     engine: Engine,
+    policies: cfs_watchtower::PolicyTableHandle,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let committer = WatchtowerCommitter::new(engine);
+        let committer = WatchtowerCommitter::new(engine, policies);
         let dispatcher = Dispatcher::new(AllowAllGate);
         while let Some(event) = rx.recv().await {
             let snapshot = triggers

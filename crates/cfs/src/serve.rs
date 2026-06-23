@@ -54,9 +54,16 @@ pub fn run_serve(config: &Path) -> i32 {
     // t33 cron composition: build the cron binding (reconciled by the runtime from /server/jobs)
     // and spawn the native scheduler daemon over a binary-local JobStore + committer. The daemon
     // reads the binding's live JOB set; its tokio loop dead-ends in this terminal binary.
-    let (cron_binding, jobs_handle) = cfs_cron::build_cron_binding();
+    let (cron_binding, jobs_handle, cron_policies) = cfs_cron::build_cron_binding();
     let cron_store = crate::cron::LedgerJobStore::new(jobs_handle);
-    let cron_committer = crate::cron::PreviewCommitter::new(clone_engine(&engine));
+    // t35: the cron committer enforces the JOB's bound POLICY against the built plan before any
+    // apply (default-deny / atomic abort) and emits one FiredPlanRecord per fire to this sink.
+    let cron_audit = Arc::new(cfs_cron::AuditSink::new());
+    let cron_committer = crate::cron::PreviewCommitter::with_policy(
+        clone_engine(&engine),
+        cron_policies,
+        Arc::clone(&cron_audit),
+    );
 
     // t34 watchtower composition: build the watchtower binding + shared bus + the webhook ingest
     // fallback the HTTP listener routes `/hooks/...` to. The binding is reconciled by the runtime
@@ -64,7 +71,7 @@ pub fn run_serve(config: &Path) -> i32 {
     // triggers through the injected committer (PREVIEW path), acking only after a successful
     // commit (at-least-once). The watchtower's own fire-audit sink is drained on shutdown.
     let secrets: Arc<dyn cfs_secrets::Secrets> = Arc::new(cfs_secrets::InMemoryStore::new());
-    let (wt_binding, wt_rx, wt_bus, wt_fallback) =
+    let (wt_binding, wt_rx, wt_bus, wt_fallback, wt_policies) =
         crate::watchtower::build_watchtower(Arc::clone(&secrets));
     let wt_triggers = wt_binding.triggers_handle();
     let wt_audit = Arc::new(cfs_watchtower::AuditSink::new());
@@ -89,6 +96,7 @@ pub fn run_serve(config: &Path) -> i32 {
             wt_triggers,
             Arc::clone(&wt_audit),
             clone_engine(&engine),
+            wt_policies,
         );
         // `cron_binding` is ALREADY a `Box<dyn Binding>` (from build_cron_binding); the watchtower
         // binding is boxed here. Both are `cfs_server::Binding` (cfs-watchtower re-exports the same
@@ -109,6 +117,13 @@ pub fn run_serve(config: &Path) -> i32 {
         dispatch.abort();
         served
     });
+
+    // t35: drain the cron fired-plan audit ledger on shutdown (secret-free summaries — driver +
+    // path + verb/rule only). The watchtower's own fire-audit sink drains via its dispatch loop.
+    let drained = cron_audit.drain();
+    if drained > 0 {
+        tracing::info!(target: "cfs::serve", fired = drained, "drained cron fired-plan audit ledger");
+    }
 
     match result {
         Ok(()) => 0,

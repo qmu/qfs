@@ -279,6 +279,34 @@ pub struct ServerDdl {
     pub every: Option<String>,
     /// The optional `ON <event>` clause (trigger event / route).
     pub on: Option<String>,
+    /// The `ALLOW`/`DENY` rule clauses of a `CREATE POLICY` form (t35). Empty for every
+    /// non-POLICY DDL. `ALLOW`/`DENY` are **not** frozen keywords (RFD §3 freeze) — they are
+    /// parsed as contextual UPPERCASE identifiers within the POLICY form (the t31 `AT` lesson,
+    /// see the grammar), so wiring `CREATE POLICY … ALLOW … DENY …` adds NO new keyword.
+    #[serde(default)]
+    pub policy_rules: Vec<PolicyRuleAst>,
+    /// The optional `POLICY <name>` **attachment** clause (t35): the `/server/policies` row a
+    /// binding (`ENDPOINT`/`TRIGGER`/`JOB`/…) commits its fired plan under (least privilege).
+    /// `POLICY` IS a frozen keyword, so this adds none. `None` = no policy attached (fail-closed
+    /// default-deny at fire time). Distinct from `policy_rules`, which are the rule body of a
+    /// `CREATE POLICY` statement itself.
+    #[serde(default)]
+    pub policy: Option<String>,
+}
+
+/// One `ALLOW`/`DENY` rule clause inside a `CREATE POLICY` form (t35). A shape-only AST node —
+/// the verb-set / driver-glob semantics live in `cfs-server::policy`. Owned, vendor-free.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PolicyRuleAst {
+    /// Whether this is an `ALLOW` (`true`) or `DENY` (`false`) rule.
+    pub allow: bool,
+    /// The verb tokens (`SELECT`/`INSERT`/`UPSERT`/`UPDATE`/`REMOVE`/`CALL`), uppercased — or
+    /// a single `ALL` token captured here as the literal `"ALL"`.
+    pub verbs: Vec<String>,
+    /// Whether the verb list was the bare `ALL` token (vs an explicit list).
+    pub all_token: bool,
+    /// The optional `ON <driver-glob>` scope (e.g. `mail`, `s3/*`); `None` = every driver.
+    pub driver: Option<String>,
 }
 
 /// The kind of a server-DDL statement (RFD §8). Frozen, driver-agnostic.

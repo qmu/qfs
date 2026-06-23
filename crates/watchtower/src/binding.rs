@@ -69,7 +69,14 @@ pub struct WatchtowerBinding {
     /// The live trigger set (atomically swapped on reconcile) — the binary's dispatch loop reads
     /// this to match an event off the bus without holding the runtime's state guard.
     triggers: Arc<RwLock<Arc<Vec<TriggerDef>>>>,
+    /// The live `/server/policies` table (t35); the committer resolves a trigger's bound policy
+    /// ref against this snapshot at fire time.
+    policies: PolicyTableHandle,
 }
+
+/// The shared, atomically-swappable `/server/policies` table handle (t35) the committer resolves
+/// a trigger's bound policy ref against. An alias so the composition root + binding agree.
+pub type PolicyTableHandle = Arc<RwLock<Arc<cfs_server::PolicyTable>>>;
 
 impl WatchtowerBinding {
     /// Construct over a shared secrets surface + event bus. Starts empty (boot reconciles).
@@ -80,6 +87,7 @@ impl WatchtowerBinding {
             bus,
             watchers: Arc::new(RwLock::new(Arc::new(WatcherSet::default()))),
             triggers: Arc::new(RwLock::new(Arc::new(Vec::new()))),
+            policies: Arc::new(RwLock::new(Arc::new(cfs_server::PolicyTable::new()))),
         }
     }
 
@@ -87,6 +95,13 @@ impl WatchtowerBinding {
     #[must_use]
     pub fn triggers_handle(&self) -> Arc<RwLock<Arc<Vec<TriggerDef>>>> {
         Arc::clone(&self.triggers)
+    }
+
+    /// A shared handle to the live `/server/policies` table (the committer's fire-time policy
+    /// resolution reads this, t35).
+    #[must_use]
+    pub fn policies_handle(&self) -> PolicyTableHandle {
+        Arc::clone(&self.policies)
     }
 
     /// Snapshot the current live trigger set.
@@ -169,6 +184,11 @@ impl Binding for WatchtowerBinding {
                 kind: BindingKind::Ingest.label().to_string(),
                 reason: "watchtower trigger set lock poisoned".to_string(),
             });
+        }
+        // (4) Live policy table (t35): the committer resolves a trigger's bound policy ref
+        //     against this snapshot — a hot POLICY change is visible to the next fire.
+        if let Ok(mut guard) = self.policies.write() {
+            *guard = Arc::new(state.policies.clone());
         }
         tracing::info!(
             target: "cfs::watchtower",

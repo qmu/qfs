@@ -22,18 +22,27 @@ CREATE WEBHOOK inbox_hook ON '/hooks/inbox';
 # driver namespace; the actual secret bytes live ONLY in the encrypted store (RFD §10).
 UPSERT INTO /server/webhooks VALUES (name, route, secret) ('inbox_hook', '/hooks/inbox', 'inbox-signing');
 
+# --- Least-privilege policy (t35) --------------------------------------------
+# Default-deny is the law (RFD §10): a TRIGGER that COMMITs a write plan with NO attached POLICY
+# is denied at fire time. This policy grants exactly the idempotent UPSERT the trigger handlers
+# below perform — and nothing else (no INSERT, no irreversible REMOVE/CALL). Each trigger that
+# should fire attaches it via the `POLICY <name>` clause. `ALLOW` is NOT a frozen keyword — it is
+# a contextual ident within the POLICY form (the t31 `AT` lesson), so this adds no new keyword.
+CREATE POLICY trigger_writer ALLOW UPSERT;
+
 # --- Trigger off the webhook event (with a WHERE guard, t34 CO-t31-4) --------
 # A TRIGGER on the `webhook` event kind, GUARDED by `WHERE NEW.body LIKE '%urgent%'`: only an
 # inbound webhook whose body contains "urgent" fires the handler. The handler binds NEW.body into
-# an idempotent UPSERT (so a re-delivered identical webhook yields ONE net effect).
-CREATE TRIGGER on_urgent_webhook ON webhook WHERE NEW.body LIKE '%urgent%' DO UPSERT INTO /log VALUES (NEW.body);
+# an idempotent UPSERT (so a re-delivered identical webhook yields ONE net effect). The
+# `POLICY trigger_writer` clause grants the UPSERT (default-deny otherwise).
+CREATE TRIGGER on_urgent_webhook ON webhook WHERE NEW.body LIKE '%urgent%' DO UPSERT INTO /log VALUES (NEW.body) POLICY trigger_writer;
 
 # --- Polling source watcher --------------------------------------------------
 # A TRIGGER whose `on` is a SOURCE PATH (`/mail/inbox`) is a polling watcher: the watchtower
 # re-runs the source query on a cadence, diffs new rows against its cursor, and emits a RowAppended
 # event per new row. This trigger archives each newly-appeared message id (an idempotent UPSERT).
-CREATE TRIGGER archive_new_mail ON /mail/inbox DO UPSERT INTO /archive VALUES (NEW.id);
+CREATE TRIGGER archive_new_mail ON /mail/inbox DO UPSERT INTO /archive VALUES (NEW.id) POLICY trigger_writer;
 
 # --- An unguarded trigger (always fires on its event) ------------------------
 # Demonstrates a trigger with no WHERE (always fires on a matching event). Idempotent handler.
-CREATE TRIGGER log_all_webhooks ON webhook DO UPSERT INTO /audit VALUES (NEW.body);
+CREATE TRIGGER log_all_webhooks ON webhook DO UPSERT INTO /audit VALUES (NEW.body) POLICY trigger_writer;

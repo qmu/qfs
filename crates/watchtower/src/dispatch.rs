@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 
 use cfs_core::{Row, StatementSpec};
-use cfs_server::{AuditEntry, AuditSink, TriggerDef};
+use cfs_server::{AuditSink, FiredDecision, FiredPlanRecord, TriggerDef};
 
 use crate::bind::{bind_new, NewBindings};
 use crate::commit::{Committer, FireError, FireOutcome, PolicyGate};
@@ -139,21 +139,48 @@ impl<G: PolicyGate> Dispatcher<G> {
                     continue;
                 }
             };
-            // 3. Policy gate hook (RFD §10) — a denial fires nothing.
+            // 3. Statement-level gate hook (a no-op pass-through in the live composition; the
+            //    load-bearing plan-level POLICY engine is enforced in the committer, t35).
             if let Err(reason) = self.gate.check(&trigger.name, &bound) {
                 tracing::warn!(
                     target: "cfs::watchtower",
                     trigger = %trigger.name,
                     %reason,
-                    "policy gate denied fire"
+                    "statement-level gate denied fire"
                 );
                 continue;
             }
-            // 4. COMMIT through the injected committer. A FAILURE bubbles up so the event is NOT
-            //    acked (redelivered). On success, record the audit entry + advance the ledger.
-            let outcome = committer.commit(&bound)?;
-            self.record_fire(event, trigger, &outcome, audit);
-            fired += 1;
+            // 4. COMMIT through the injected committer, threading the trigger's bound POLICY ref
+            //    (t35): the committer resolves it, runs the pure enforcer over the built plan,
+            //    emits the ONE FiredPlanRecord (allow + deny), and aborts atomically on deny
+            //    (ZERO effects). A POLICY DENIAL fires nothing (Gated, the event is acked — it is
+            //    a permanent decision, not a transient failure to retry). A BUILD/APPLY failure
+            //    bubbles up so the event is NOT acked (redelivered — at-least-once).
+            match committer.commit(&trigger.name, &bound, trigger.policy.as_deref()) {
+                Ok(outcome) => {
+                    self.record_allow(trigger, &outcome, audit);
+                    fired += 1;
+                }
+                Err(FireError::PolicyDenied {
+                    reason,
+                    verb,
+                    driver,
+                    rule,
+                    effects,
+                }) => {
+                    // A POLICY denial: emit the ONE deny fired-plan record, fire nothing. This is
+                    // a terminal decision (ack), not a redeliverable failure.
+                    self.record_deny(trigger, verb, driver, rule, effects, audit);
+                    tracing::warn!(
+                        target: "cfs::watchtower",
+                        trigger = %trigger.name,
+                        %reason,
+                        "policy denied fire (atomic abort, zero effects)"
+                    );
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
         }
 
         // Advance the idempotency ledger only AFTER all matching handlers committed (so a partial
@@ -220,31 +247,49 @@ impl<G: PolicyGate> Dispatcher<G> {
         Some(stmt)
     }
 
-    /// Record ONE audit ledger entry per fired plan (event id + trigger + outcome). Secret-free.
-    fn record_fire(
-        &self,
-        event: &Event,
-        trigger: &TriggerDef,
-        outcome: &FireOutcome,
-        audit: &AuditSink,
-    ) {
-        audit.record(AuditEntry::PlanFired {
-            cause: format!(
-                "trigger:{} event:{} kind:{} plan:{} affected:{}",
-                trigger.name,
-                event.id.as_str(),
-                event.kind.label(),
-                outcome.plan_summary,
-                outcome.affected,
-            ),
+    /// Record the ONE allow fired-plan record per committed plan (t35). Secret-free: handler +
+    /// policy + effect summaries (driver + path + verb), never a payload.
+    fn record_allow(&self, trigger: &TriggerDef, outcome: &FireOutcome, audit: &AuditSink) {
+        audit.record_fired(FiredPlanRecord {
+            handler: format!("trigger:{}", trigger.name),
+            policy: trigger.policy.clone().unwrap_or_default(),
+            decision: FiredDecision::Allow,
+            effects: outcome.effects.clone(),
+            ts: now_secs(),
         });
         tracing::info!(
             target: "cfs::watchtower",
             trigger = %trigger.name,
-            event = %event.id.as_str(),
-            kind = %event.kind.label(),
             affected = outcome.affected,
-            "trigger fired and committed"
+            "trigger fired and committed (policy allowed)"
         );
     }
+
+    /// Record the ONE deny fired-plan record (t35): the offending verb/driver/rule index +
+    /// the (aborted) plan's effect summaries. ZERO effects were applied.
+    fn record_deny(
+        &self,
+        trigger: &TriggerDef,
+        verb: String,
+        driver: String,
+        rule: Option<usize>,
+        effects: Vec<String>,
+        audit: &AuditSink,
+    ) {
+        audit.record_fired(FiredPlanRecord {
+            handler: format!("trigger:{}", trigger.name),
+            policy: trigger.policy.clone().unwrap_or_default(),
+            decision: FiredDecision::Deny { verb, driver, rule },
+            effects,
+            ts: now_secs(),
+        });
+    }
+}
+
+/// The current epoch second (the receipt clock the t35 fired-plan audit record stamps).
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }

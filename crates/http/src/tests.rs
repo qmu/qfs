@@ -235,15 +235,30 @@ fn write_endpoint_is_allowed_when_a_policy_grants_it() {
         "/purge/:p_id",
         "REMOVE /mock/items WHERE id = p_id",
     );
+    // t35: an explicit `ALLOW REMOVE` grants the irreversible REMOVE the endpoint lowers to
+    // (a broad `ALLOW ALL` would NOT — irreversible strictness). The canonical rule string is
+    // what `CREATE POLICY … ALLOW REMOVE` desugars into the `allow` array.
     let policy = cfs_server::PolicyDef {
         name: "writer".to_string(),
         handler: "purge".to_string(),
-        allow: vec!["mock.write".to_string()],
+        allow: vec!["ALLOW REMOVE".to_string()],
     };
     let result = compile_endpoint(&def, &engine, Some(&policy));
     assert!(
         result.is_ok(),
         "a granting policy must open the write gate, got: {result:?}"
+    );
+
+    // Counter-case: a broad `ALLOW ALL` must NOT grant the irreversible REMOVE (it needs an
+    // explicit ALLOW REMOVE) — the t35 irreversible-strictness rule.
+    let broad = cfs_server::PolicyDef {
+        name: "broad".to_string(),
+        handler: "purge".to_string(),
+        allow: vec!["ALLOW ALL".to_string()],
+    };
+    assert!(
+        compile_endpoint(&def, &engine, Some(&broad)).is_err(),
+        "ALLOW ALL must not silently grant irreversible REMOVE"
     );
 }
 

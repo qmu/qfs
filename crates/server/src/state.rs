@@ -76,6 +76,11 @@ pub struct TriggerDef {
     pub predicate: StatementSource,
     /// The effect-plan to run when the trigger fires (`DO <plan>`), as source text.
     pub plan: StatementSource,
+    /// The attached `POLICY <name>` handle (t35): the `/server/policies` row the fired plan
+    /// commits under (least privilege). `None` = no policy attached ⇒ fail-closed default-deny
+    /// at fire time. Resolved against the live policy table when the trigger fires.
+    #[serde(default)]
+    pub policy: Option<String>,
 }
 
 /// A cron-job definition (`CREATE JOB name EVERY <interval> DO <plan>`). The t32 scheduler
@@ -93,6 +98,10 @@ pub struct JobDef {
     /// `None` until the first fire (boot is replay-safe — re-applying a config preserves
     /// this only if the row carries it; a fresh INSERT leaves it `None`).
     pub last_run: Option<i64>,
+    /// The attached `POLICY <name>` handle (t35): the `/server/policies` row the fired JOB plan
+    /// commits under. `None` = no policy ⇒ fail-closed default-deny at fire time.
+    #[serde(default)]
+    pub policy: Option<String>,
 }
 
 /// A view definition (`CREATE [MATERIALIZED] VIEW name AS <query>`). A materialized view

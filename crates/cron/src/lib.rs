@@ -44,7 +44,12 @@ pub mod scheduler;
 pub mod store;
 
 #[cfg(feature = "native")]
-pub use binding::{build_cron_binding, CronBinding, JobSetHandle};
+pub use binding::{build_cron_binding, CronBinding, JobSetHandle, PolicyTableHandle};
+// t35: re-export the cfs-server audit sink so the composition root wires one fired-plan ledger
+// without naming `cfs-server` directly (keeping the binary's dep-allowlist unchanged — cfs-cron
+// is already the legitimate cfs-server consumer for the JOB cause).
+#[cfg(feature = "native")]
+pub use cfs_server::{AuditSink, PolicyDef, PolicyTable};
 #[cfg(feature = "native")]
 pub use clock::SystemClock;
 pub use clock::{Clock, MockClock};

@@ -56,8 +56,8 @@ pub use cfs_driver::{
 };
 pub use cfs_plan::{
     commit, preview, Affected, AppliedEffect, ApplyError, CommitReport, EffectKind, EffectNode,
-    Plan, PlanApplier, PlanBuilder, PlanError, Preview, PreviewRow, RecordingApplier, ServerNode,
-    ServerWriteOp, Target, VfsPath,
+    NodeId, Plan, PlanApplier, PlanBuilder, PlanError, Preview, PreviewRow, ProcId,
+    RecordingApplier, ServerNode, ServerWriteOp, Target, VfsPath,
 };
 // The canonical type & schema model (t05), re-exported so consumers see one
 // `cfs_core::Schema` / `Value` / `TypeError` surface.

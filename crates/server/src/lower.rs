@@ -75,7 +75,7 @@ fn lower_ddl(ddl: &ServerDdl) -> Result<Plan, String> {
     // stores a POLICY row; the t31 core binding layer covers only the five frozen forms. So
     // POLICY is desugared here in the server adapter, not through the core binding layer.
     if matches!(ddl.kind, DdlKind::Policy) {
-        return Ok(lower_policy(ddl));
+        return lower_policy(ddl);
     }
     let binding = from_server_ddl(ddl).map_err(|e| e.to_string())?;
     let node = binding.node();
@@ -86,14 +86,22 @@ fn lower_ddl(ddl: &ServerDdl) -> Result<Plan, String> {
     Ok(server_write_plan(node, CREATE_WRITE_OP, args))
 }
 
-/// Desugar `CREATE POLICY <name>` to a `/server/policies` UPSERT (t30 behavior; the policy's
-/// `allow`/`handler` semantics are t34). The handler rides in the `ON` operand; `allow` is an
-/// empty array until t34 wires capability grants.
-fn lower_policy(ddl: &ServerDdl) -> Plan {
+/// Desugar `CREATE POLICY <name> ALLOW … DENY …` to a `/server/policies` UPSERT (t35). The
+/// `ALLOW`/`DENY` rules become the canonical rule strings in the `allow` array (so the CREATE
+/// sugar and an `INSERT INTO /server/policies` twin store the IDENTICAL rows, and rehydrate to
+/// an EQUAL `Policy` — the acceptance round-trip). The handler rides in the `ON` operand.
+fn lower_policy(ddl: &ServerDdl) -> Result<Plan, String> {
+    // Build the owned Policy from the parsed rules, then render the canonical rule strings.
+    let policy = crate::policy::policy_from_ddl(ddl)?;
+    let rule_strings = crate::policy::policy_to_rule_strings(&policy);
+
     let mut row = ConfigRow::default();
     row.set_text("name", ddl.name.clone());
     row.set_text("handler", ddl.on.clone().unwrap_or_default());
-    row.set("allow", Value::Array(Vec::new()));
+    row.set(
+        "allow",
+        Value::Array(rule_strings.into_iter().map(Value::Text).collect()),
+    );
     // config_row_batch is total for a schema-valid row; policies has name/handler/allow.
     let args = config_row_batch(ServerNode::Policies, &row).unwrap_or_else(|_| {
         // Unreachable: the row only sets declared columns. Build an empty-row fallback.
@@ -101,7 +109,11 @@ fn lower_policy(ddl: &ServerDdl) -> Plan {
             cfs_core::RowBatch::new(cfs_core::Schema::new(Vec::new()), Vec::new())
         })
     });
-    server_write_plan(ServerNode::Policies, CREATE_WRITE_OP, args)
+    Ok(server_write_plan(
+        ServerNode::Policies,
+        CREATE_WRITE_OP,
+        args,
+    ))
 }
 
 /// Lower an explicit `INSERT/UPSERT/UPDATE/REMOVE INTO /server/<node> …` to the canonical

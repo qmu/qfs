@@ -395,7 +395,9 @@ async fn s2_write_endpoint_opens_route_when_policy_grants() {
         PolicyDef {
             name: "writer".to_string(),
             handler: "purge".to_string(),
-            allow: vec!["mock.write".to_string()],
+            // t35: an explicit `ALLOW REMOVE` grants the irreversible REMOVE the endpoint
+            // lowers to (the canonical rule string `CREATE POLICY … ALLOW REMOVE` desugars to).
+            allow: vec!["ALLOW REMOVE".to_string()],
         },
     );
     binding.reconcile(&state).unwrap();

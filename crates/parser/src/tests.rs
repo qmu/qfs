@@ -364,6 +364,41 @@ fn ddl_webhook_and_policy() {
     let pol = parse_ok("CREATE POLICY leastpriv");
     let Statement::Ddl(d) = pol else { panic!() };
     assert_eq!(d.kind, DdlKind::Policy);
+    assert!(d.policy_rules.is_empty());
+}
+
+#[test]
+fn ddl_policy_allow_deny_rules() {
+    // The RFD §8 example: `ALLOW SELECT DENY INSERT,UPDATE,REMOVE,CALL`. `ALLOW`/`DENY` are
+    // contextual idents (NOT frozen keywords); verbs span keyword (SELECT/UPDATE/REMOVE/CALL)
+    // and ident (INSERT/UPSERT) lexer shapes.
+    let p = parse_ok("CREATE POLICY api ALLOW SELECT DENY INSERT,UPDATE,REMOVE,CALL");
+    let Statement::Ddl(d) = p else { panic!() };
+    assert_eq!(d.kind, DdlKind::Policy);
+    assert_eq!(d.policy_rules.len(), 2);
+    assert!(d.policy_rules[0].allow);
+    assert_eq!(d.policy_rules[0].verbs, vec!["SELECT"]);
+    assert!(!d.policy_rules[0].all_token);
+    assert!(!d.policy_rules[1].allow);
+    assert_eq!(
+        d.policy_rules[1].verbs,
+        vec!["INSERT", "UPDATE", "REMOVE", "CALL"]
+    );
+
+    // `ALLOW ALL ON mail` — bare ALL token + a per-rule driver glob.
+    let p = parse_ok("CREATE POLICY broad ALLOW ALL ON mail");
+    let Statement::Ddl(d) = p else { panic!() };
+    assert_eq!(d.policy_rules.len(), 1);
+    assert!(d.policy_rules[0].all_token);
+    assert_eq!(d.policy_rules[0].verbs, vec!["ALL"]);
+    assert_eq!(d.policy_rules[0].driver.as_deref(), Some("mail"));
+
+    // `ALLOW UPSERT ON 's3/*'` — INSERT/UPSERT bare-ident verbs + a quoted glob (a glob with
+    // `/` or `*` must be quoted, like the `ON 'GET /route'` endpoint operand).
+    let p = parse_ok("CREATE POLICY s3w ALLOW UPSERT ON 's3/*'");
+    let Statement::Ddl(d) = p else { panic!() };
+    assert_eq!(d.policy_rules[0].verbs, vec!["UPSERT"]);
+    assert_eq!(d.policy_rules[0].driver.as_deref(), Some("s3/*"));
 }
 
 // ---- plan wrappers --------------------------------------------------------
@@ -421,6 +456,8 @@ fn closed_core_variant_counts_are_locked() {
             where_pred: None,
             every: None,
             on: None,
+            policy_rules: vec![],
+            policy: None,
         }),
         Statement::Plan(PlanWrap {
             commit: false,

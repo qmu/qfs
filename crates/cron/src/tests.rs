@@ -84,10 +84,29 @@ fn job(name: &str, schedule: Schedule, do_src: &str, missed: MissedPolicy) -> Jo
         name: name.to_string(),
         schedule,
         plan: plan_spec(do_src),
-        policy: PolicyRef::default(),
+        // t35: a granting POLICY ref so the firing tests exercise the allow path (the bodies
+        // here are reversible INSERT/UPSERT; the test committer's table grants exactly those).
+        policy: PolicyRef::named("jobwriter"),
         missed,
         enabled: true,
     }
+}
+
+/// A `RecordingCommitter` wired with a permissive test policy table: `jobwriter` grants
+/// `INSERT,UPSERT` (the reversible writes the test DO bodies perform), so the firing tests
+/// exercise the t35 allow path. A JOB with no/other policy still default-denies.
+fn allowing_committer(engine: Engine) -> RecordingCommitter {
+    let mut table = cfs_server::PolicyTable::new();
+    table.insert(
+        "jobwriter".to_string(),
+        cfs_server::PolicyDef {
+            name: "jobwriter".to_string(),
+            handler: String::new(),
+            allow: vec!["ALLOW INSERT,UPSERT".to_string()],
+        },
+    );
+    let handle = Arc::new(std::sync::RwLock::new(Arc::new(table)));
+    RecordingCommitter::with_engine(engine).with_policies(handle)
 }
 
 const DO_INSERT: &str = "UPSERT INTO /mock/sink VALUES (1)";
@@ -204,7 +223,7 @@ fn dispatch_previews_plan_with_last_run_resolved() {
     let sched = Scheduler::new(
         store,
         MockClock::new(10_000),
-        RecordingCommitter::with_engine(engine_with_mock()),
+        allowing_committer(engine_with_mock()),
     );
     let d = sched.dispatch(&j, 7200);
     assert_eq!(d.status, RunStatus::Success);
@@ -227,7 +246,11 @@ fn retried_run_id_after_success_is_noop() {
         MissedPolicy::Coalesce,
     );
     store.put_binding(j.clone());
-    let sched = Scheduler::new(store, MockClock::new(10_000), RecordingCommitter::new());
+    let sched = Scheduler::new(
+        store,
+        MockClock::new(10_000),
+        allowing_committer(Engine::new()),
+    );
 
     let first = sched.dispatch(&j, 3600);
     assert!(first.committed);
@@ -266,7 +289,11 @@ fn concurrent_dispatch_same_due_commits_once() {
     assert!(lease_a.acquired);
 
     // Replica B dispatches the same due time -> lease lost -> no-op.
-    let sched_b = Scheduler::new(store, MockClock::new(10_000), RecordingCommitter::new());
+    let sched_b = Scheduler::new(
+        store,
+        MockClock::new(10_000),
+        allowing_committer(Engine::new()),
+    );
     let d_b = sched_b.dispatch(&j, 3600);
     assert!(
         !d_b.committed,
@@ -402,7 +429,11 @@ fn one_audit_entry_per_fire() {
         MissedPolicy::Coalesce,
     );
     store.put_binding(j.clone());
-    let sched = Scheduler::new(store, MockClock::new(10_000), RecordingCommitter::new());
+    let sched = Scheduler::new(
+        store,
+        MockClock::new(10_000),
+        allowing_committer(Engine::new()),
+    );
     sched.dispatch(&j, 3600);
     assert_eq!(sched.store().ledger().len(), 1);
 }
@@ -451,7 +482,11 @@ fn audit_record_carries_no_plan_payload() {
         MissedPolicy::Coalesce,
     );
     store.put_binding(j.clone());
-    let sched = Scheduler::new(store, MockClock::new(10_000), RecordingCommitter::new());
+    let sched = Scheduler::new(
+        store,
+        MockClock::new(10_000),
+        allowing_committer(Engine::new()),
+    );
     let d = sched.dispatch(&j, 3600);
     assert_eq!(d.status, RunStatus::Success);
     for record in sched.store().ledger() {
@@ -488,7 +523,11 @@ fn tick_dispatches_due_enabled_jobs() {
             ..RunState::default()
         },
     );
-    let sched = Scheduler::new(store, MockClock::new(3 * 3600), RecordingCommitter::new());
+    let sched = Scheduler::new(
+        store,
+        MockClock::new(3 * 3600),
+        allowing_committer(Engine::new()),
+    );
     let dispatched = sched.tick();
     assert_eq!(dispatched.len(), 1, "Coalesce folds the gap to one fire");
     assert!(dispatched[0].committed);

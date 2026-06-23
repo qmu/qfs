@@ -31,7 +31,12 @@ struct CountingCommitter {
 }
 
 impl Committer for CountingCommitter {
-    fn commit(&self, _stmt: &cfs_parser::Statement) -> Result<FireOutcome, FireError> {
+    fn commit(
+        &self,
+        _trigger: &str,
+        _stmt: &cfs_parser::Statement,
+        _policy: Option<&str>,
+    ) -> Result<FireOutcome, FireError> {
         let n = self
             .commits
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -39,6 +44,7 @@ impl Committer for CountingCommitter {
         Ok(FireOutcome {
             plan_summary: format!("commit#{n}"),
             affected: 1,
+            effects: vec![format!("INSERT log:/log#{n}")],
         })
     }
 }
@@ -61,6 +67,7 @@ fn trigger_def(src: &str) -> TriggerDef {
             row.get("predicate").and_then(text).unwrap_or_default(),
         ),
         plan: cfs_server::StatementSource::new(row.get("plan").and_then(text).unwrap_or_default()),
+        policy: row.get("policy").and_then(text),
     }
 }
 
@@ -362,6 +369,7 @@ fn reconcile_converges_webhook_routes_and_is_idempotent() {
             on: "/mail/inbox".to_string(), // a source path -> a watcher
             predicate: Default::default(),
             plan: Default::default(),
+            policy: None,
         },
     );
     wt.reconcile(&state).unwrap();
@@ -389,7 +397,12 @@ fn building_the_plan_and_guard_perform_no_commit() {
     // up to the COMMIT boundary: a GATED event never reaches commit.
     struct PanicCommitter;
     impl Committer for PanicCommitter {
-        fn commit(&self, _stmt: &cfs_parser::Statement) -> Result<FireOutcome, FireError> {
+        fn commit(
+            &self,
+            _trigger: &str,
+            _stmt: &cfs_parser::Statement,
+            _policy: Option<&str>,
+        ) -> Result<FireOutcome, FireError> {
             panic!("commit must not be called for a gated event");
         }
     }
@@ -420,12 +433,48 @@ fn building_the_plan_and_guard_perform_no_commit() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn recording_committer_builds_and_commits_a_values_effect() {
-    let committer = RecordingCommitter::with_engine(Engine::new());
+fn recording_committer_enforces_policy_default_deny_allow_and_atomic_abort() {
+    use std::sync::{Arc, RwLock};
+
     let stmt = cfs_exec::parse("INSERT INTO /log VALUES ('x')").expect("parse");
-    let outcome = committer.commit(&stmt).expect("commit");
+
+    // (1) Default-deny: NO policy table + NO bound policy ⇒ the INSERT is DENIED (fail closed),
+    //     and ZERO effects applied (atomic abort — total_applied stays 0).
+    let empty: Arc<RwLock<Arc<cfs_server::PolicyTable>>> =
+        Arc::new(RwLock::new(Arc::new(cfs_server::PolicyTable::new())));
+    let committer = RecordingCommitter::with_engine(Engine::new()).with_policies(empty.clone());
+    let denied = committer.commit("t", &stmt, None);
+    assert!(
+        matches!(denied, Err(FireError::PolicyDenied { .. })),
+        "no policy ⇒ default-deny, got {denied:?}"
+    );
+    assert_eq!(
+        committer.total_applied(),
+        0,
+        "a denied plan applies ZERO effects (atomic abort)"
+    );
+
+    // (2) A granting policy (`ALLOW INSERT`) in the table, bound by name ⇒ the INSERT commits.
+    let mut table = cfs_server::PolicyTable::new();
+    table.insert(
+        "writer".to_string(),
+        cfs_server::PolicyDef {
+            name: "writer".to_string(),
+            handler: String::new(),
+            allow: vec!["ALLOW INSERT".to_string()],
+        },
+    );
+    let handle: Arc<RwLock<Arc<cfs_server::PolicyTable>>> = Arc::new(RwLock::new(Arc::new(table)));
+    let committer = RecordingCommitter::with_engine(Engine::new()).with_policies(handle);
+    let outcome = committer
+        .commit("t", &stmt, Some("writer"))
+        .expect("granted ⇒ commit");
     assert!(outcome.affected >= 1);
     assert!(committer.total_applied() >= 1);
+    assert!(
+        !outcome.effects.is_empty(),
+        "the fired-plan record carries secret-free effect summaries"
+    );
 }
 
 // ---------------------------------------------------------------------------

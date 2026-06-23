@@ -63,11 +63,13 @@ pub use watcher::{MemWatcherStore, Watcher, WatcherCursor, WatcherStore};
 // dep-direction guard forbids for the terminal binary; it reaches them through this leaf).
 pub use cfs_parser::Statement;
 #[cfg(feature = "native")]
-pub use cfs_server::{AuditEntry, AuditSink, Binding, TriggerDef};
+pub use cfs_server::{
+    AuditEntry, AuditSink, Binding, FiredDecision, FiredPlanRecord, PolicyTable, TriggerDef,
+};
 
 // ---- Native re-exports ----
 #[cfg(feature = "native")]
-pub use binding::{WatcherSet, WatchtowerBinding};
+pub use binding::{PolicyTableHandle, WatcherSet, WatchtowerBinding};
 #[cfg(feature = "native")]
 pub use bus::LocalBus;
 #[cfg(feature = "native")]

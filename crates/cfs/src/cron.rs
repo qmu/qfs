@@ -149,12 +149,19 @@ pub struct PreviewCommitter {
 }
 
 impl PreviewCommitter {
-    /// Build a committer over a clone of the serve engine's registries (mounts + codecs), so a DO
-    /// body resolves against the same drivers the deployment registered.
+    /// Build a committer wired with the t35 policy gate: the live `/server/policies` table the
+    /// JOB's bound policy ref resolves against, and the fired-plan audit sink (one
+    /// `FiredPlanRecord` per fire). A denied JOB plan aborts atomically (zero effects).
     #[must_use]
-    pub fn new(engine: Engine) -> Self {
+    pub fn with_policy(
+        engine: Engine,
+        policies: cfs_cron::PolicyTableHandle,
+        audit: std::sync::Arc<cfs_cron::AuditSink>,
+    ) -> Self {
         Self {
-            inner: cfs_cron::RecordingCommitter::with_engine(engine),
+            inner: cfs_cron::RecordingCommitter::with_engine(engine)
+                .with_policies(policies)
+                .with_audit(audit),
         }
     }
 }

@@ -46,7 +46,12 @@ struct CountingCommitter {
 }
 
 impl Committer for CountingCommitter {
-    fn commit(&self, stmt: &cfs_watchtower::Statement) -> Result<FireOutcome, FireError> {
+    fn commit(
+        &self,
+        _trigger: &str,
+        stmt: &cfs_watchtower::Statement,
+        _policy: Option<&str>,
+    ) -> Result<FireOutcome, FireError> {
         let n = self.commits.fetch_add(1, Ordering::SeqCst) + 1;
         if let Ok(mut g) = self.last_stmt.lock() {
             *g = Some(format!("{stmt:?}"));
@@ -54,6 +59,7 @@ impl Committer for CountingCommitter {
         Ok(FireOutcome {
             plan_summary: format!("commit#{n}"),
             affected: 1,
+            effects: vec![format!("UPSERT log:/log#{n}")],
         })
     }
 }
@@ -71,7 +77,12 @@ impl CountingCommitter {
 /// Err, so the dispatcher does NOT ack, so the event stays in the bus spool for redelivery).
 struct FailingCommitter;
 impl Committer for FailingCommitter {
-    fn commit(&self, _stmt: &cfs_watchtower::Statement) -> Result<FireOutcome, FireError> {
+    fn commit(
+        &self,
+        _trigger: &str,
+        _stmt: &cfs_watchtower::Statement,
+        _policy: Option<&str>,
+    ) -> Result<FireOutcome, FireError> {
         Err(FireError::Apply("forced commit failure".into()))
     }
 }
@@ -164,6 +175,10 @@ fn trigger_def(src: &str) -> TriggerDef {
         on: text("on"),
         predicate: cfs_server::StatementSource::new(text("predicate")),
         plan: cfs_server::StatementSource::new(text("plan")),
+        policy: match row.get("policy") {
+            Some(Value::Text(s)) if !s.is_empty() => Some(s.clone()),
+            _ => None,
+        },
     }
 }
 
@@ -722,6 +737,7 @@ fn s6_reconcile_converges_routes_and_watchers_and_is_idempotent() {
             on: "/mail/inbox".to_string(),
             predicate: Default::default(),
             plan: Default::default(),
+            policy: None,
         },
     );
     state.triggers.insert(
@@ -731,6 +747,7 @@ fn s6_reconcile_converges_routes_and_watchers_and_is_idempotent() {
             on: "webhook".to_string(),
             predicate: Default::default(),
             plan: Default::default(),
+            policy: None,
         },
     );
     wt.reconcile(&state).unwrap();
@@ -828,14 +845,27 @@ fn s8_exactly_one_audit_record_per_fired_plan_with_event_trigger_outcome() {
         .handle(&event, &triggers, &committer, &audit)
         .unwrap();
     assert_eq!(audit.len(), 1);
-    // The single record names the event id + trigger + kind (outcome cause), per RFD §6.
+    assert_eq!(
+        audit.fired_count(),
+        1,
+        "exactly one FiredPlanRecord per fire"
+    );
+    // The single record is the t35 FiredPlan: handler (trigger), allow decision, secret-free
+    // effect summaries. NEVER the payload body ("hi" must not appear).
     let snap = audit.snapshot();
-    let AuditEntry::PlanFired { cause } = &snap[0] else {
-        panic!("expected a PlanFired audit entry")
+    let AuditEntry::FiredPlan(rec) = &snap[0] else {
+        panic!("expected a FiredPlan audit entry")
     };
-    assert!(cause.contains("trigger:t"), "audit names the trigger");
-    assert!(cause.contains("event:inbox#a1"), "audit names the event id");
-    assert!(cause.contains("kind:webhook"), "audit names the event kind");
+    assert_eq!(rec.handler, "trigger:t", "audit names the trigger handler");
+    assert!(
+        matches!(rec.decision, cfs_watchtower::FiredDecision::Allow),
+        "an allowed fire records an Allow decision"
+    );
+    let summary = rec.summary();
+    assert!(
+        !summary.contains("hi"),
+        "no payload value leaks into the audit"
+    );
 }
 
 #[test]
@@ -844,7 +874,12 @@ fn s8_build_and_guard_are_pure_no_commit_until_the_boundary() {
     // gated event (the COMMIT is the only effect; a gated event never reaches it).
     struct PanicCommitter;
     impl Committer for PanicCommitter {
-        fn commit(&self, _stmt: &cfs_watchtower::Statement) -> Result<FireOutcome, FireError> {
+        fn commit(
+            &self,
+            _trigger: &str,
+            _stmt: &cfs_watchtower::Statement,
+            _policy: Option<&str>,
+        ) -> Result<FireOutcome, FireError> {
             panic!("commit must not be called for a gated event");
         }
     }

@@ -34,6 +34,7 @@ pub mod driver;
 mod error;
 pub mod lower;
 pub mod mount;
+pub mod policy;
 pub mod runtime;
 mod state;
 
@@ -49,6 +50,13 @@ pub use driver::{
 };
 pub use error::ServerError;
 pub use lower::lower_statement;
+// The t35 policy engine: the owned DTOs, the pure enforcer, the fire-path gate helper, and the
+// fired-plan audit record.
+pub use policy::{
+    effect_summaries, evaluate, gate_plan, policy_from_ddl, policy_from_def,
+    policy_to_rule_strings, resolve_policy, DriverGlob, Effectivity, FiredDecision,
+    FiredPlanRecord, GateOutcome, Policy, PolicyDecision, PolicyTable, Rule, Verb, VerbSet,
+};
 // The canonical config-row / plan-build primitives now live in closed core (t31); re-export
 // them from `cfs-core` so the server's public surface is unchanged for consumers.
 pub use cfs_core::{config_row_batch, server_write_plan, ConfigRow};

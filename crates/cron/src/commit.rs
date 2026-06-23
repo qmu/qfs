@@ -14,6 +14,15 @@ use cfs_parser::Statement;
 
 use crate::store::PolicyRef;
 
+/// The current epoch second (the receipt clock the t35 fired-plan audit record stamps).
+#[cfg(feature = "native")]
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// The outcome of committing a JOB's DO plan: a secret-free fingerprint + the applied count. NO
 /// plan payload, NO secrets (RFD §10) — only what the audit ledger may keep.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +40,10 @@ pub enum CommitError {
     /// The DO body could not be lowered to a plan (resolve / capability / plan construction).
     #[error("plan build failed: {0}")]
     Build(String),
+    /// The fired plan was DENIED by the JOB's bound POLICY (t35). Atomic abort: ZERO effects
+    /// applied (the apply is never reached). The reason is secret-free (verb/driver/rule index).
+    #[error("policy denied: {0}")]
+    PolicyDenied(String),
     /// A leg of the plan failed to apply at commit (the reason is already secret-free).
     #[error("commit failed: {0}")]
     Apply(String),
@@ -61,6 +74,13 @@ pub struct RecordingCommitter {
     fail_reason: Option<String>,
     /// The engine the plan builds against (mounts the DO body resolves to).
     engine: cfs_core::Engine,
+    /// The live `/server/policies` table the bound policy ref resolves against (t35). When
+    /// `None` (the legacy/test path), enforcement still runs against a default-deny policy when
+    /// the JOB names one, but with an empty table the ref dangles ⇒ default-deny (fail-closed).
+    policies: Option<std::sync::Arc<std::sync::RwLock<std::sync::Arc<cfs_server::PolicyTable>>>>,
+    /// The fired-plan audit sink (t35): exactly one [`cfs_server::FiredPlanRecord`] per
+    /// evaluated plan (allow + deny). `None` in the bare test path (no audit assertion).
+    audit: Option<std::sync::Arc<cfs_server::AuditSink>>,
 }
 
 #[cfg(feature = "native")]
@@ -69,6 +89,8 @@ impl Default for RecordingCommitter {
         Self {
             fail_reason: None,
             engine: cfs_core::Engine::new(),
+            policies: None,
+            audit: None,
         }
     }
 }
@@ -87,6 +109,8 @@ impl RecordingCommitter {
         Self {
             fail_reason: None,
             engine,
+            policies: None,
+            audit: None,
         }
     }
 
@@ -96,19 +120,73 @@ impl RecordingCommitter {
         Self {
             fail_reason: Some(reason.into()),
             engine: cfs_core::Engine::new(),
+            policies: None,
+            audit: None,
+        }
+    }
+
+    /// Attach the live `/server/policies` table the bound policy ref resolves against (t35).
+    #[must_use]
+    pub fn with_policies(
+        mut self,
+        policies: std::sync::Arc<std::sync::RwLock<std::sync::Arc<cfs_server::PolicyTable>>>,
+    ) -> Self {
+        self.policies = Some(policies);
+        self
+    }
+
+    /// Attach the fired-plan audit sink (t35): one [`cfs_server::FiredPlanRecord`] per fire.
+    #[must_use]
+    pub fn with_audit(mut self, audit: std::sync::Arc<cfs_server::AuditSink>) -> Self {
+        self.audit = Some(audit);
+        self
+    }
+
+    /// Snapshot the live policy table (clones the inner `Arc`; the guard is dropped at once).
+    fn policy_snapshot(&self) -> cfs_server::PolicyTable {
+        match &self.policies {
+            Some(h) => h.read().map(|g| (**g).clone()).unwrap_or_default(),
+            None => cfs_server::PolicyTable::new(),
         }
     }
 }
 
 #[cfg(feature = "native")]
 impl Committer for RecordingCommitter {
-    fn commit(&self, stmt: &Statement, _policy: &PolicyRef) -> Result<CommitOutcome, CommitError> {
+    fn commit(&self, stmt: &Statement, policy: &PolicyRef) -> Result<CommitOutcome, CommitError> {
         if let Some(reason) = &self.fail_reason {
             return Err(CommitError::Apply(reason.clone()));
         }
         // Build the plan from the rewritten DO body (resolve + plan construction, no I/O).
         let plan = cfs_exec::build_plan(stmt, &self.engine)
             .map_err(|e| CommitError::Build(e.to_string()))?;
+
+        // t35 policy gate (RFD §10): resolve the JOB's bound policy ref against the live
+        // `/server/policies` table and run the PURE enforcer over the built plan BEFORE any
+        // apply. A handler with no policy / a dangling ref ⇒ fail-closed default-deny. Emit ONE
+        // FiredPlanRecord (allow + deny). On deny, RETURN before the apply (atomic abort: ZERO
+        // effects). When no policy is attached AND the plan is a pure read / has no write
+        // effects, evaluate returns Allow (a read JOB is permitted).
+        let table = self.policy_snapshot();
+        let bound = if policy.policy.is_empty() {
+            None
+        } else {
+            Some(policy.policy.as_str())
+        };
+        let resolved = cfs_server::resolve_policy(bound, &table);
+        let outcome = cfs_server::gate_plan(&resolved, &plan);
+        if let Some(audit) = &self.audit {
+            audit.record_fired(outcome.record(
+                format!("job-commit policy={}", policy.policy),
+                policy.policy.clone(),
+                now_secs(),
+            ));
+        }
+        if !outcome.is_allow() {
+            return Err(CommitError::PolicyDenied(
+                outcome.deny_reason().unwrap_or_default(),
+            ));
+        }
 
         // Fingerprint the plan structure deterministically (counts/hashes only — never payload).
         // The preview projection is a stable, secret-free description; hash its debug form.

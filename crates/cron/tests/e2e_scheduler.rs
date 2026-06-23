@@ -104,10 +104,27 @@ fn job(name: &str, schedule: Schedule, do_src: &str, missed: MissedPolicy) -> Jo
         name: name.to_string(),
         schedule,
         plan: plan_spec(do_src),
-        policy: PolicyRef::default(),
+        // t35: a granting POLICY ref so the firing scenarios exercise the allow path.
+        policy: PolicyRef::named("jobwriter"),
         missed,
         enabled: true,
     }
+}
+
+/// A `RecordingCommitter` wired with a permissive test policy table (`jobwriter` grants
+/// `INSERT,UPSERT`) so the firing scenarios exercise the t35 allow path (default-deny otherwise).
+fn allowing_committer(engine: Engine) -> RecordingCommitter {
+    let mut table = cfs_cron::PolicyTable::new();
+    table.insert(
+        "jobwriter".to_string(),
+        cfs_cron::PolicyDef {
+            name: "jobwriter".to_string(),
+            handler: String::new(),
+            allow: vec!["ALLOW INSERT,UPSERT".to_string()],
+        },
+    );
+    let handle = std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(table)));
+    RecordingCommitter::with_engine(engine).with_policies(handle)
 }
 
 const DO_INSERT: &str = "UPSERT INTO /mock/sink VALUES (1)";
@@ -244,7 +261,11 @@ fn s2_weekly_job_fires_on_first_eligibility_not_a_24h_window() {
         MissedPolicy::Coalesce,
     );
     store.put_binding(j);
-    let sched = Scheduler::new(store, MockClock::new(now), RecordingCommitter::new());
+    let sched = Scheduler::new(
+        store,
+        MockClock::new(now),
+        allowing_committer(Engine::new()),
+    );
     let out = sched.tick();
     assert_eq!(
         out.len(),
@@ -323,7 +344,11 @@ fn s2_anchored_future_cadence_does_not_fire_prematurely() {
         MissedPolicy::Coalesce,
     );
     store.put_binding(j);
-    let sched = Scheduler::new(store, MockClock::new(WEEK - 1), RecordingCommitter::new());
+    let sched = Scheduler::new(
+        store,
+        MockClock::new(WEEK - 1),
+        allowing_committer(Engine::new()),
+    );
     assert!(
         sched.tick().is_empty(),
         "future cadence: tick dispatches nothing"
@@ -357,7 +382,7 @@ fn s3_last_run_resolves_to_stored_boundary_and_previews() {
     let sched = Scheduler::new(
         store,
         MockClock::new(10_000),
-        RecordingCommitter::with_engine(engine_with_mock()),
+        allowing_committer(engine_with_mock()),
     );
     // Dispatch the boundary 7200: LAST_RUN() must resolve to the STORED high-water mark (1000),
     // not `now`, not scheduled_for.
@@ -425,7 +450,11 @@ fn s4_concurrent_dispatch_same_due_commits_exactly_once() {
     let lease_a = store.acquire_lease("j", &run_id, 300).expect("acquire");
     assert!(lease_a.acquired, "replica A holds the lease");
 
-    let sched_b = Scheduler::new(store, MockClock::new(10_000), RecordingCommitter::new());
+    let sched_b = Scheduler::new(
+        store,
+        MockClock::new(10_000),
+        allowing_committer(Engine::new()),
+    );
     let d_b = sched_b.dispatch(&j, 3600);
     assert!(!d_b.committed, "replica B no-ops on the held lease");
     let successes = sched_b
@@ -447,7 +476,11 @@ fn s4_retried_run_id_after_success_commits_nothing_further() {
         MissedPolicy::Coalesce,
     );
     store.put_binding(j.clone());
-    let sched = Scheduler::new(store, MockClock::new(10_000), RecordingCommitter::new());
+    let sched = Scheduler::new(
+        store,
+        MockClock::new(10_000),
+        allowing_committer(Engine::new()),
+    );
 
     let first = sched.dispatch(&j, 3600);
     assert!(first.committed, "first dispatch commits");
@@ -492,7 +525,11 @@ fn s4_attempt_force_double_commit_via_repeated_dispatch_and_tick() {
             ..RunState::default()
         },
     );
-    let sched = Scheduler::new(store, MockClock::new(8000), RecordingCommitter::new());
+    let sched = Scheduler::new(
+        store,
+        MockClock::new(8000),
+        allowing_committer(Engine::new()),
+    );
 
     // 10 direct re-dispatches of the same boundary.
     for _ in 0..10 {
@@ -624,7 +661,11 @@ fn s6_advance_only_on_success_to_scheduled_for() {
         },
     );
     // now is 10000, but a success dispatching boundary 7200 must advance to 7200 (NOT now).
-    let sched = Scheduler::new(store, MockClock::new(10_000), RecordingCommitter::new());
+    let sched = Scheduler::new(
+        store,
+        MockClock::new(10_000),
+        allowing_committer(Engine::new()),
+    );
     let d = sched.dispatch(&j, 7200);
     assert!(d.committed);
     assert_eq!(
@@ -699,7 +740,11 @@ fn s7_one_audit_entry_per_fire() {
         MissedPolicy::Coalesce,
     );
     store.put_binding(j.clone());
-    let sched = Scheduler::new(store, MockClock::new(10_000), RecordingCommitter::new());
+    let sched = Scheduler::new(
+        store,
+        MockClock::new(10_000),
+        allowing_committer(Engine::new()),
+    );
     let d = sched.dispatch(&j, 3600);
     assert!(d.committed);
     let ledger = sched.store().ledger();
@@ -726,7 +771,11 @@ fn s7_log_scrub_no_canary_in_ledger_or_log_line() {
         MissedPolicy::Coalesce,
     );
     store.put_binding(j.clone());
-    let sched = Scheduler::new(store, MockClock::new(10_000), RecordingCommitter::new());
+    let sched = Scheduler::new(
+        store,
+        MockClock::new(10_000),
+        allowing_committer(Engine::new()),
+    );
     let d = sched.dispatch(&j, 3600);
     assert_eq!(
         d.status,
