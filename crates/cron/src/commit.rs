@@ -47,6 +47,11 @@ pub enum CommitError {
     /// A leg of the plan failed to apply at commit (the reason is already secret-free).
     #[error("commit failed: {0}")]
     Apply(String),
+    /// t37: the JOB's plan carries an irreversible effect (REMOVE / declared-irreversible CALL)
+    /// and the scheduler is firing it UNATTENDED (`RunMode::Server`) without an explicit ack — so
+    /// it is refused, fail-closed. Atomic abort: ZERO effects applied. The reason is secret-free.
+    #[error("irreversible blocked: {0}")]
+    IrreversibleBlocked(String),
 }
 
 /// The injected commit seam. The scheduler calls `commit` with the **already-rewritten** DO
@@ -186,6 +191,17 @@ impl Committer for RecordingCommitter {
             return Err(CommitError::PolicyDenied(
                 outcome.deny_reason().unwrap_or_default(),
             ));
+        }
+
+        // t37 irreversible gate (RFD §6/§10): a JOB fires UNATTENDED (`RunMode::Server`), so an
+        // irreversible REMOVE / declared-irreversible CALL is refused fail-closed without an
+        // explicit ack — exactly like CI. Reversible JOB plans pass untouched.
+        if let Err(needs) = cfs_core::IrreversibleGuard::require_ack(
+            &plan,
+            cfs_core::RunMode::Server,
+            cfs_core::Ack::Absent,
+        ) {
+            return Err(CommitError::IrreversibleBlocked(needs.reason().to_string()));
         }
 
         // Fingerprint the plan structure deterministically (counts/hashes only — never payload).

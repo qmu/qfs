@@ -582,3 +582,64 @@ fn non_colliding_param_registers_and_serves() {
         resp.body_text()
     );
 }
+
+// ---- t37: HTTP eval-error hygiene hardening (the t32 carry-over) ----
+
+#[test]
+fn eval_error_non_allowlisted_class_drops_raw_message() {
+    use cfs_exec::{ErrorKind, ExecError};
+
+    // A driver that carelessly stuffed an upstream secret into an Auth-class error message. With
+    // the t37 hardening this NEVER reaches the caller-facing body: a non-allowlisted class is
+    // reduced to `code` + a generic detail, so hygiene is UNCONDITIONAL (not driver-dependent).
+    let leaky = ExecError::new(
+        ErrorKind::Auth,
+        "token_rejected",
+        "upstream said: Bearer sk-LEAK-7f9c-PLANTED is invalid",
+    );
+    let problem = crate::HttpError::Eval(leaky).problem();
+    assert_eq!(problem.error, "eval");
+    assert!(
+        !problem.detail.contains("sk-LEAK-7f9c-PLANTED"),
+        "non-allowlisted eval error must not echo the raw message: {}",
+        problem.detail
+    );
+    assert!(
+        !problem.detail.contains("Bearer"),
+        "the bearer token shape must be gone: {}",
+        problem.detail
+    );
+    // The stable structured code is still surfaced for the caller/agent to branch on.
+    assert!(
+        problem.detail.starts_with("token_rejected:"),
+        "the structured code is retained: {}",
+        problem.detail
+    );
+
+    // An Internal class is likewise reduced to code + a generic detail.
+    let internal = ExecError::new(
+        ErrorKind::Internal,
+        "bug",
+        "panic at /home/secret/path token=X",
+    );
+    let p2 = crate::HttpError::Eval(internal).problem();
+    assert!(!p2.detail.contains("token=X"), "{}", p2.detail);
+    assert_eq!(p2.detail, "bug: an internal error occurred");
+}
+
+#[test]
+fn eval_error_safe_class_keeps_structured_message() {
+    use cfs_exec::{ErrorKind, ExecError};
+
+    // The allowlisted/safe classes keep the executor's well-typed, secret-free message — these
+    // are the diagnostics an agent branches on (e.g. which verb is unsupported). They never carry
+    // a raw upstream string, so retaining them is safe.
+    let cap = ExecError::new(
+        ErrorKind::Capability,
+        "unsupported_verb",
+        "driver `mock` does not support REMOVE",
+    );
+    let problem = crate::HttpError::Eval(cap).problem();
+    assert_eq!(problem.error, "eval");
+    assert_eq!(problem.detail, "driver `mock` does not support REMOVE");
+}

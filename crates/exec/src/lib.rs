@@ -134,9 +134,10 @@ pub fn run_oneshot(
     ctx: &ExecCtx,
     fmt: OutputFormat,
     commit_flag: bool,
+    irreversible_ack: bool,
     streams: &mut Streams,
 ) -> ExitCode {
-    match run_oneshot_inner(source, ctx, fmt, commit_flag, streams) {
+    match run_oneshot_inner(source, ctx, fmt, commit_flag, irreversible_ack, streams) {
         Ok(code) => code,
         Err(err) => {
             let renderer = fmt.renderer();
@@ -151,6 +152,7 @@ fn run_oneshot_inner(
     ctx: &ExecCtx,
     fmt: OutputFormat,
     commit_flag: bool,
+    irreversible_ack: bool,
     streams: &mut Streams,
 ) -> Result<ExitCode, ExecError> {
     let src = source.text();
@@ -178,6 +180,31 @@ fn run_oneshot_inner(
         Statement::Effect(_) | Statement::Ddl(_) => {
             let plan = build_plan(inner, ctx.engine)?;
             if commit {
+                // The irreversible-effect gate (t37, RFD §6/§10). `cfs run … --commit` is a
+                // NON-INTERACTIVE one-shot (no TTY to confirm on), so an irreversible plan
+                // (REMOVE / declared-irreversible CALL) is refused unless the operator passed
+                // `--commit-irreversible`. We still rendered nothing yet, so a block is a clean
+                // fail-closed refusal that applies ZERO effects.
+                let ack = if irreversible_ack {
+                    cfs_core::Ack::Granted
+                } else {
+                    cfs_core::Ack::Absent
+                };
+                if let Err(needs) = cfs_core::IrreversibleGuard::require_ack(
+                    &plan,
+                    cfs_core::RunMode::CliOneShot,
+                    ack,
+                ) {
+                    // Render the PREVIEW so the operator sees exactly what would have applied,
+                    // then refuse on the commit-required exit class with the irreversible reason.
+                    let summary = plan_preview(&plan);
+                    renderer.plan(&summary, streams.out).map_err(io_err)?;
+                    return Err(ExecError::new(
+                        ErrorKind::CommitRequired,
+                        "irreversible_ack_required",
+                        needs.reason(),
+                    ));
+                }
                 let summary = apply_commit(&plan)?;
                 renderer.plan(&summary, streams.out).map_err(io_err)?;
                 Ok(ExitCode::Ok)

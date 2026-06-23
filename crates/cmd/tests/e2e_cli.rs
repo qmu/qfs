@@ -266,7 +266,7 @@ mod read_path {
                 out: &mut out,
                 err: &mut err,
             };
-            run_oneshot(&src, &ctx, OutputFormat::Json, false, &mut s).code()
+            run_oneshot(&src, &ctx, OutputFormat::Json, false, false, &mut s).code()
         };
         assert_eq!(code, 0);
         assert!(err.is_empty(), "rows go to stdout, never stderr");
@@ -410,20 +410,86 @@ fn destructive_set_without_commit_exits_four_but_still_previews() {
 }
 
 #[test]
-fn commit_flag_applies_against_in_memory_engine() {
+fn irreversible_commit_without_ack_fails_closed_exit_four() {
+    // t37: `cfs run … --commit` of an IRREVERSIBLE REMOVE in the non-interactive one-shot
+    // (`RunMode::CliOneShot`) now FAILS CLOSED (exit 4, commit_required) without the explicit
+    // `--commit-irreversible` ack — the IrreversibleGuard working as designed. The PREVIEW is
+    // still rendered (zero effects applied); the error names the irreversible-ack requirement.
     let o = cfs(&["run", "-e", "REMOVE /mail/inbox", "--json", "--commit"]);
-    assert_eq!(o.code, 0, "--commit applies the plan");
+    assert_eq!(
+        o.code, 4,
+        "an irreversible --commit without the ack fails closed (exit 4)"
+    );
+    let v = json(&o.stdout);
+    assert_eq!(v["committed"], false, "ZERO effects applied on the block");
+    let err = json(&o.stderr);
+    assert_eq!(err["error"]["kind"], "commit_required");
+    assert_eq!(err["error"]["code"], "irreversible_ack_required");
+}
+
+#[test]
+fn irreversible_commit_with_ack_applies_against_in_memory_engine() {
+    // t37: adding `--commit-irreversible` acknowledges the irreversible apply, so the same REMOVE
+    // now commits at exit 0 — the operator explicitly took responsibility for the destructive leg.
+    let o = cfs(&[
+        "run",
+        "-e",
+        "REMOVE /mail/inbox",
+        "--json",
+        "--commit",
+        "--commit-irreversible",
+    ]);
+    assert_eq!(
+        o.code, 0,
+        "--commit-irreversible applies the irreversible plan"
+    );
     let v = json(&o.stdout);
     assert_eq!(v["committed"], true);
 }
 
 #[test]
-fn trailing_commit_keyword_applies_without_the_flag() {
-    // The CLI adds zero keywords: a trailing COMMIT (the engine's keyword) applies on its own.
-    let o = cfs(&["run", "-e", "COMMIT REMOVE /mail/inbox", "--json"]);
-    assert_eq!(o.code, 0);
+fn reversible_commit_needs_no_irreversible_ack() {
+    // t37 (guard must NOT over-fire on reversible plans): a reversible INSERT commits with just
+    // `--commit` — no irreversible ack required, because the guard governs only REMOVE/CALL.
+    let o = cfs(&[
+        "run",
+        "-e",
+        "INSERT INTO /mail/inbox VALUES (9, 'x')",
+        "--json",
+        "--commit",
+    ]);
+    assert_eq!(o.code, 0, "a reversible --commit applies at exit 0, no ack");
     let v = json(&o.stdout);
     assert_eq!(v["committed"], true);
+}
+
+#[test]
+fn trailing_commit_keyword_irreversible_also_fails_closed() {
+    // The CLI adds zero keywords: a trailing COMMIT (the engine's keyword) drives the SAME commit
+    // path as `--commit`, so the t37 IrreversibleGuard applies identically. A trailing-COMMIT of
+    // an irreversible REMOVE therefore ALSO fails closed (exit 4) without the ack — the guard is a
+    // property of the commit seam, not of which switch requested it (no bypass via the keyword).
+    let blocked = cfs(&["run", "-e", "COMMIT REMOVE /mail/inbox", "--json"]);
+    assert_eq!(
+        blocked.code, 4,
+        "trailing COMMIT of an irreversible plan fails closed too (no keyword bypass)"
+    );
+    assert_eq!(json(&blocked.stdout)["committed"], false);
+    assert_eq!(
+        json(&blocked.stderr)["error"]["code"],
+        "irreversible_ack_required"
+    );
+
+    // With the ack, the trailing-COMMIT path commits at exit 0 (parity with --commit).
+    let ok = cfs(&[
+        "run",
+        "-e",
+        "COMMIT REMOVE /mail/inbox",
+        "--json",
+        "--commit-irreversible",
+    ]);
+    assert_eq!(ok.code, 0);
+    assert_eq!(json(&ok.stdout)["committed"], true);
 }
 
 // ===================================================================================

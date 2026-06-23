@@ -48,6 +48,11 @@ pub enum FireError {
     /// A leg of the plan failed to apply at commit (the reason is already secret-free).
     #[error("commit failed: {0}")]
     Apply(String),
+    /// t37: the fired plan carries an irreversible effect (REMOVE / declared-irreversible CALL)
+    /// and the server is firing it UNATTENDED (`RunMode::Server`) without an explicit ack — so it
+    /// is refused, fail-closed. Atomic abort: ZERO effects applied. The reason is secret-free.
+    #[error("irreversible blocked: {0}")]
+    IrreversibleBlocked(String),
 }
 
 /// The statement-level policy gate hook (RFD §10) retained from t34 for the dispatcher's
@@ -217,6 +222,17 @@ impl Committer for RecordingCommitter {
                 rule: *rule,
                 effects,
             });
+        }
+
+        // t37 irreversible gate (RFD §6/§10): the server fires handler plans UNATTENDED
+        // (`RunMode::Server`), so an irreversible REMOVE / declared-irreversible CALL is refused
+        // fail-closed without an explicit ack — exactly like CI. Reversible plans pass untouched.
+        if let Err(needs) = cfs_core::IrreversibleGuard::require_ack(
+            &plan,
+            cfs_core::RunMode::Server,
+            cfs_core::Ack::Absent,
+        ) {
+            return Err(FireError::IrreversibleBlocked(needs.reason().to_string()));
         }
 
         let preview = cfs_core::preview(&plan);

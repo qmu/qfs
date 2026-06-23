@@ -45,6 +45,11 @@ pub enum PolicyDecision {
         /// The matching rule index that denied it, or `None` if the default-deny fired (no
         /// rule matched at all).
         rule: Option<usize>,
+        /// t37 OBS-2: when a broad `ALLOW ALL` *would* have matched but was held back because the
+        /// verb is irreversible (REMOVE/CALL), this records the held-back rule index so the deny
+        /// reason reads as "a broad ALL does not grant irreversible verbs" rather than a generic
+        /// default-deny. `None` for an ordinary default-deny (no near-match). Secret-free.
+        held_by_broad_all: Option<usize>,
     },
 }
 
@@ -66,13 +71,25 @@ impl PolicyDecision {
                 verb,
                 driver,
                 rule,
-            } => Some(match rule {
-                Some(idx) => format!(
+                held_by_broad_all,
+            } => Some(match (rule, held_by_broad_all) {
+                // t37 OBS-2: a broad `ALLOW ALL` matched the driver/verb but is held back because
+                // the verb is irreversible — say so explicitly, so the operator does not read it
+                // as an ordinary default-deny and reach for an unrelated fix.
+                (None, Some(all_idx)) => format!(
+                    "policy denies {} on driver `{}` (node #{node}): a broad `ALLOW ALL` \
+                     (rule {all_idx}) does not grant the irreversible verb — add an explicit \
+                     `ALLOW {}` to permit it",
+                    verb.label(),
+                    driver,
+                    verb.label()
+                ),
+                (Some(idx), _) => format!(
                     "policy denies {} on driver `{}` (node #{node}, rule {idx})",
                     verb.label(),
                     driver
                 ),
-                None => format!(
+                (None, None) => format!(
                     "policy denies {} on driver `{}` (node #{node}, default-deny: no rule \
                      matched)",
                     verb.label(),
@@ -159,6 +176,7 @@ pub fn evaluate(policy: &Policy, plan: &Plan) -> PolicyDecision {
                     verb: Verb::Call,
                     driver,
                     rule: None,
+                    held_by_broad_all: None,
                 };
             }
         };
@@ -175,11 +193,26 @@ pub fn evaluate(policy: &Policy, plan: &Plan) -> PolicyDecision {
         let (effect, rule) = decided.unwrap_or((policy.default, None));
 
         if effect == Effectivity::Deny {
+            // t37 OBS-2: when this denial is a default-deny of an irreversible verb, detect a
+            // broad `ALLOW ALL` allow rule that matched the driver/verbset but was held back by
+            // the irreversible-strictness rule — so the reason can name that near-match instead
+            // of reading as a generic default-deny. Pure: scans the rules already in hand.
+            let held_by_broad_all = if rule.is_none() && verb.is_irreversible_class() {
+                policy.rules.iter().position(|r| {
+                    r.effect == Effectivity::Allow
+                        && r.is_broad_all()
+                        && r.verbs.contains(verb)
+                        && r.driver.matches(&driver, path)
+                })
+            } else {
+                None
+            };
             return PolicyDecision::Deny {
                 node: node.id.index(),
                 verb,
                 driver,
                 rule,
+                held_by_broad_all,
             };
         }
     }
@@ -278,9 +311,22 @@ mod tests {
         assert!(evaluate(&policy, &insert).is_allow(), "ALL grants INSERT");
 
         let remove = plan_of(vec![write_node(0, EffectKind::Remove, "log", "/log")]);
+        let decision = evaluate(&policy, &remove);
+        assert!(!decision.is_allow(), "ALL must NOT grant REMOVE");
+        // t37 OBS-2: the deny reason names the held-back broad ALL, not a generic default-deny.
+        match &decision {
+            PolicyDecision::Deny {
+                held_by_broad_all, ..
+            } => assert!(
+                held_by_broad_all.is_some(),
+                "an irreversible verb held back by a broad ALL must record the near-match rule"
+            ),
+            PolicyDecision::Allow => panic!("must deny"),
+        }
+        let reason = decision.deny_reason().unwrap();
         assert!(
-            !evaluate(&policy, &remove).is_allow(),
-            "ALL must NOT grant REMOVE"
+            reason.contains("broad `ALLOW ALL`") && reason.contains("ALLOW REMOVE"),
+            "OBS-2 reason should explain the broad-ALL hold-back: {reason}"
         );
 
         let call = plan_of(vec![write_node(

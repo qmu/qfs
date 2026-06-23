@@ -22,6 +22,8 @@ use std::path::PathBuf;
 use cfs_core::{CfsError, Engine, OutputMode, Session};
 use clap::{Parser, Subcommand};
 
+mod redact;
+
 /// The interactive-shell launcher the binary injects (t28). The shell's REAL local-FS read
 /// facet lives in the **binary** crate, not here: that adapter depends on `cfs-driver-local`,
 /// which is a `cfs-runtime` consumer, so a `cfs-cmd → cfs-driver-local` edge would make cfs-cmd
@@ -80,6 +82,12 @@ enum Command {
         /// same effect; this is only the apply switch (the CLI adds zero keywords).
         #[arg(long = "commit")]
         commit: bool,
+        /// Acknowledge applying an irreversible effect (a `REMOVE` / `CALL mail.send`) in this
+        /// non-interactive one-shot. Without it, a `--commit` of an irreversible plan fails
+        /// closed (t37, RFD §6/§10): a one-shot has no TTY to confirm on, so the ack must be
+        /// explicit. No effect on a reversible plan.
+        #[arg(long = "commit-irreversible")]
+        commit_irreversible: bool,
         /// Suppress progress output; never suppresses the error body.
         #[arg(long = "quiet", short = 'q')]
         quiet: bool,
@@ -177,6 +185,7 @@ where
         expr,
         format,
         commit,
+        commit_irreversible,
         quiet,
     }) = &cli.cmd
     {
@@ -188,6 +197,7 @@ where
                 format: format.clone(),
                 json: cli.json,
                 commit: *commit,
+                commit_irreversible: *commit_irreversible,
                 quiet: *quiet,
             },
         );
@@ -229,6 +239,7 @@ struct RunOpts {
     format: Option<String>,
     json: bool,
     commit: bool,
+    commit_irreversible: bool,
     quiet: bool,
 }
 
@@ -271,7 +282,15 @@ fn dispatch_run(engine: &Engine, opts: RunOpts) -> i32 {
         out: &mut out,
         err: &mut err,
     };
-    cfs_exec::run_oneshot(&source, &ctx, fmt, opts.commit, &mut streams).code()
+    cfs_exec::run_oneshot(
+        &source,
+        &ctx,
+        fmt,
+        opts.commit,
+        opts.commit_irreversible,
+        &mut streams,
+    )
+    .code()
 }
 
 /// Resolve the output format: an explicit `--format json|table` (or the `--json` alias) always
@@ -366,8 +385,53 @@ fn escape_json(s: &str) -> String {
     out
 }
 
+/// A `MakeWriter` that wraps stderr and runs every emitted log line through the t37
+/// [`redact::scrub`] defense-in-depth pass before it reaches the byte sink — so a secret SHAPE
+/// that slipped past the `Secret` type (the primary control) into ANY span/event, from ANY crate,
+/// is scrubbed at the one logging seam. See `redact.rs` for what it scans and why it is a backup.
+#[derive(Clone, Default)]
+struct ScrubMakeWriter;
+
+/// The per-write scrubbing sink. The fmt subscriber writes one fully-rendered event per `write`,
+/// so scrubbing each write buffer covers the whole line; partial writes are still individually
+/// scrubbed (conservative — it never corrupts a benign line).
+struct ScrubWriter;
+
+impl std::io::Write for ScrubWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // Render the buffer as text, scrub known secret shapes, and forward to stderr. Non-UTF-8
+        // bytes (never produced by the fmt layer) pass through unscrubbed rather than being lost.
+        match std::str::from_utf8(buf) {
+            Ok(text) => {
+                let scrubbed = redact::scrub(text);
+                std::io::stderr().write_all(scrubbed.as_bytes())?;
+            }
+            Err(_) => {
+                std::io::stderr().write_all(buf)?;
+            }
+        }
+        // Report the original length consumed (we wrote the whole logical line).
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stderr().flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for ScrubMakeWriter {
+    type Writer = ScrubWriter;
+    fn make_writer(&'a self) -> Self::Writer {
+        ScrubWriter
+    }
+}
+
 /// Initialise structured logging at the command boundary only. Idempotent: a second
 /// call is a no-op (the global subscriber is already set). Reads `RUST_LOG`.
+///
+/// The writer is the t37 [`ScrubMakeWriter`]: a defense-in-depth scrub of every emitted line. The
+/// PRIMARY secret-out-of-logs control is `cfs_secrets::Secret` (redacting `Debug`/`Display`, no
+/// `Serialize`) — a secret cannot be formatted in the first place; this scrubber is the backup.
 fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
@@ -375,7 +439,7 @@ fn init_tracing() {
     // repeated calls (e.g. in tests) do not panic.
     let _ = fmt()
         .with_env_filter(filter)
-        .with_writer(std::io::stderr)
+        .with_writer(ScrubMakeWriter)
         .try_init();
 }
 
@@ -411,6 +475,7 @@ mod tests {
                 format: Some("json".into()),
                 json: true,
                 commit: false,
+                commit_irreversible: false,
                 quiet: false,
             },
         );

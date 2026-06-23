@@ -1,10 +1,13 @@
 //! HTTP error mapping (t32): every structured engine error → an HTTP status + a
 //! machine-readable JSON **problem body** `{ "error", "detail", "param"? }`.
 //!
-//! ## Sanitisation (RFD §10)
-//! The body NEVER surfaces credentials or a raw upstream error. The executor's [`ExecError`]
-//! already carries secret-free messages; this layer maps the coarse `kind` to a status and
-//! copies only the sanitised `message`/`detail`. No token is ever placed in a body or logged.
+//! ## Sanitisation (RFD §10) — UNCONDITIONAL hygiene (t37)
+//! The body NEVER surfaces credentials or a raw upstream error. As of t37 this no longer relies
+//! on every driver emitting a secret-free `CfsError`: for the non-allowlisted eval classes
+//! (`Auth`/`Internal`), where a careless driver is most likely to embed upstream/credential text,
+//! the body renders only the stable structured `code` plus a generic per-class detail (the raw
+//! `message` is dropped — see [`eval_detail`]). The allowlisted/safe classes (the executor's own
+//! well-typed diagnostics) keep their message. No token is ever placed in a body or logged.
 
 use cfs_exec::{ErrorKind, ExecError};
 use serde::Serialize;
@@ -94,11 +97,18 @@ impl HttpError {
                 detail: "no endpoint matches this method and path".to_string(),
                 param: None,
             },
-            // The executor's message is already secret-free; copy only it (never an upstream
-            // raw error). Defence in depth: we do not interpolate any credential-bearing field.
+            // t37 carry-over (t32 HTTP eval-error hygiene): caller-facing hygiene is now
+            // UNCONDITIONAL, not driver-dependent. Previously the body copied `ExecError.message`
+            // verbatim, so a secret-free body relied on every driver emitting a secret-free
+            // `CfsError` — a single careless driver could leak an upstream token into the 4xx/5xx
+            // body. We instead render the STABLE structured `code` plus a GENERIC per-class detail
+            // for the non-allowlisted classes (Auth / Internal), where the message is most likely
+            // to carry driver/upstream text. The structured-but-safe classes (Parse / Usage /
+            // Capability / CommitRequired / CommitFailed) keep their message: these are the
+            // executor's own well-typed, secret-free diagnostics that an agent branches on.
             HttpError::Eval(e) => ProblemBody {
                 error: "eval".to_string(),
-                detail: e.message.clone(),
+                detail: eval_detail(e),
                 param: None,
             },
             HttpError::Oversize { max } => ProblemBody {
@@ -130,6 +140,36 @@ pub fn problem_body(problem: &ProblemBody) -> Vec<u8> {
     serde_json::to_vec(problem).unwrap_or_else(|_| {
         br#"{"error":"internal","detail":"failed to encode error body"}"#.to_vec()
     })
+}
+
+/// t37: render the caller-facing detail for an eval error with UNCONDITIONAL hygiene.
+///
+/// For the **allowlisted/safe** classes — the executor's own well-typed diagnostics
+/// (`Parse`/`Usage`/`Capability`/`CommitRequired`/`CommitFailed`) — we keep the structured
+/// `message`: it is the executor's secret-free, agent-facing text (and these never carry a raw
+/// upstream/driver string). For the **non-allowlisted** classes (`Auth`/`Internal`) — where the
+/// message is most likely to embed an upstream/driver error that a careless driver could fill
+/// with sensitive text — we DROP the message entirely and emit only the stable structured `code`
+/// plus a fixed generic per-class detail. Caller-facing hygiene therefore no longer depends on
+/// every driver emitting a secret-free `CfsError`.
+#[must_use]
+fn eval_detail(e: &ExecError) -> String {
+    match e.kind {
+        // Safe classes: the structured executor message is kept (secret-free by construction).
+        ErrorKind::Parse
+        | ErrorKind::Usage
+        | ErrorKind::Capability
+        | ErrorKind::CommitRequired
+        | ErrorKind::CommitFailed => e.message.clone(),
+        // Non-allowlisted: reduce to `code` + a generic detail; NEVER the raw message.
+        ErrorKind::Auth => {
+            format!(
+                "{}: a credential/authorization error occurred upstream",
+                e.code
+            )
+        }
+        ErrorKind::Internal => format!("{}: an internal error occurred", e.code),
+    }
 }
 
 /// Map an evaluation [`ExecError`] to an HTTP status. A capability denial (an unreadable

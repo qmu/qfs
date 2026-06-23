@@ -154,6 +154,15 @@ fn headline_json_envelope_is_rows_object() {
 // ---- One-shot orchestration: exit codes + renderers ----
 
 fn run(src: &str, fmt: OutputFormat, commit: bool) -> (i32, String, String) {
+    run_with_ack(src, fmt, commit, false)
+}
+
+fn run_with_ack(
+    src: &str,
+    fmt: OutputFormat,
+    commit: bool,
+    irreversible_ack: bool,
+) -> (i32, String, String) {
     let engine = engine_with_mail();
     let reads = reads_with_mail();
     let ctx = ExecCtx {
@@ -168,7 +177,7 @@ fn run(src: &str, fmt: OutputFormat, commit: bool) -> (i32, String, String) {
             out: &mut out,
             err: &mut err,
         };
-        run_oneshot(&source, &ctx, fmt, commit, &mut streams).code()
+        run_oneshot(&source, &ctx, fmt, commit, irreversible_ack, &mut streams).code()
     };
     (
         code,
@@ -251,8 +260,10 @@ fn oneshot_destructive_set_without_commit_exit_four() {
 
 #[test]
 fn oneshot_commit_applies_against_in_memory_engine() {
-    // With --commit the plan applies via the in-memory engine; the summary marks committed.
-    let (code, out, _err) = run("REMOVE /mail/inbox", OutputFormat::Json, true);
+    // With --commit AND the irreversible ack the plan applies via the in-memory engine; the
+    // summary marks committed. (`REMOVE` is irreversible, so the t37 one-shot gate requires the
+    // ack — see `oneshot_irreversible_commit_blocked_without_ack` for the fail-closed default.)
+    let (code, out, _err) = run_with_ack("REMOVE /mail/inbox", OutputFormat::Json, true, true);
     assert_eq!(code, 0);
     let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
     assert_eq!(v["committed"], true);
@@ -260,8 +271,47 @@ fn oneshot_commit_applies_against_in_memory_engine() {
 
 #[test]
 fn trailing_commit_keyword_applies_without_flag() {
-    // A trailing COMMIT wrapper applies even without --commit (the CLI adds zero keywords).
-    let (code, out, _err) = run("COMMIT REMOVE /mail/inbox", OutputFormat::Json, false);
+    // A trailing COMMIT wrapper applies even without --commit (the CLI adds zero keywords). The
+    // irreversible ack is still required for the irreversible REMOVE (t37): passed here.
+    let (code, out, _err) =
+        run_with_ack("COMMIT REMOVE /mail/inbox", OutputFormat::Json, false, true);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["committed"], true);
+}
+
+// ---- t37: the irreversible-effect one-shot gate (RFD §6/§10) ----
+
+#[test]
+fn oneshot_irreversible_commit_blocked_without_ack() {
+    // `cfs run … --commit` of an irreversible REMOVE in the NON-INTERACTIVE one-shot fails closed
+    // (exit 4, commit_required) without `--commit-irreversible`. Zero effects apply; the PREVIEW
+    // is still rendered so the operator sees what WOULD have applied. This is the t37 fail-closed
+    // default that protects unattended one-shots from a silent destructive apply.
+    let (code, out, err) = run_with_ack("REMOVE /mail/inbox", OutputFormat::Json, true, false);
+    assert_eq!(
+        code, 4,
+        "irreversible --commit without ack must fail closed"
+    );
+    // The PREVIEW (not a commit) is on stdout: not committed, with the irreversible effect listed.
+    let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["committed"], false);
+    assert!(!v["preview"]["irreversible"].as_array().unwrap().is_empty());
+    // The structured error names the irreversible-ack requirement.
+    let e: serde_json::Value = serde_json::from_str(err.trim()).unwrap();
+    assert_eq!(e["error"]["code"], "irreversible_ack_required");
+}
+
+#[test]
+fn oneshot_reversible_commit_needs_no_ack() {
+    // A REVERSIBLE single-row INSERT commits with no ack — the gate governs only irreversible
+    // effects, so the common case is unaffected.
+    let (code, out, _err) = run_with_ack(
+        "INSERT INTO /mail/inbox VALUES (9, 'x')",
+        OutputFormat::Json,
+        true,
+        false,
+    );
     assert_eq!(code, 0);
     let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
     assert_eq!(v["committed"], true);

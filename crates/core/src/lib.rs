@@ -29,6 +29,7 @@ mod eval;
 mod plan;
 mod registry;
 mod resolve;
+mod security;
 mod stdlib;
 
 pub use ddl::server::{
@@ -42,6 +43,7 @@ pub use eval::{call_proc_id, effect_kind_for, EvalError, EvalValue, Evaluator, P
 pub use plan::{plan_pipeline, plan_query, source_registry, PushdownError};
 pub use registry::{CodecRegistry, MountRegistry, ProcRegistry};
 pub use resolve::{capability_verb_for, write_verb_for, ResolveError, ResolvedCall, Resolver};
+pub use security::{Ack, IrreversibleGuard, NeedsPreview, RunMode};
 pub use stdlib::{
     AggregateFactory, AggregateKind, AggregateState, AliasDecl, BuiltinEval, BuiltinFn, EnvSource,
     EvalCtx, FnError, FnSig, MapEnv, NoEnv, PlanNode, PlanNodeKind, Prelude, PreludeError,

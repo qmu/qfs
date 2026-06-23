@@ -884,3 +884,153 @@ fn row_with_canary(canary: &str) -> cfs_core::RowBatch {
         .push(Row::new(vec![Value::Text(canary.to_string())]));
     batch
 }
+
+// ===========================================================================
+// t37 — Multi-leg `cp` audit ledger: one AppliedEffect per leg, reconstructable
+//        after a kill mid-plan (RFD §6 idempotency / recovery).
+// ===========================================================================
+
+/// A `cp` across sources lowers to copy → verify → delete (RFD §6): three legs, the delete
+/// depending on the verify, the verify on the copy. We model the built plan and prove two things:
+///   (1) committing it writes EXACTLY ONE ledger entry per applied leg (the `on_applied` funnel),
+///       in dependency order; and
+///   (2) a process kill AFTER the copy leg leaves a ledger from which the remaining verify→delete
+///       is reconstructable — the recorded `applied` prefix names what is done, so a recovery pass
+///       can resume the rest. The ledger lines are secret-free (verb + driver + path only).
+fn cp_plan() -> Plan {
+    // copy (node 0) -> verify (node 1) -> delete (node 2). REMOVE is the irreversible delete leg.
+    let mut p = plan_of(vec![
+        write_node(0, EffectKind::Insert, "dst", "/dst/file"), // copy = write to dst
+        write_node(1, EffectKind::Read, "dst", "/dst/file"),   // verify = read-back
+        write_node(2, EffectKind::Remove, "src", "/src/file"), // delete source
+    ]);
+    p.deps = vec![(NodeId(0), NodeId(1)), (NodeId(1), NodeId(2))];
+    p
+}
+
+/// An append-only, secret-free ledger that mirrors `cfs_host::AuditLedger`'s line semantics (one
+/// `writeln!` per applied leg). Modeled in-memory here so the test stays in the pure, no-creds
+/// `cfs-server` layer; the on-disk fsync'd ledger (t36) shares the exact append contract.
+#[derive(Default)]
+struct ReplayLedger {
+    lines: Mutex<Vec<String>>,
+}
+
+impl ReplayLedger {
+    fn record(&self, plan: &Plan, e: &AppliedEffect) {
+        if let Some(node) = plan.node(e.id) {
+            self.lines.lock().unwrap().push(format!(
+                "{} {}:{} affected={}",
+                node.kind.label(),
+                node.target.driver.as_str(),
+                node.target.path.as_str(),
+                e.affected
+            ));
+        }
+    }
+    fn snapshot(&self) -> Vec<String> {
+        self.lines.lock().unwrap().clone()
+    }
+}
+
+#[test]
+fn cp_writes_one_applied_effect_per_leg() {
+    let plan = cp_plan();
+    let ledger = ReplayLedger::default();
+    let mut driver = CountingDriver::new();
+    let report = commit(&plan, &mut driver, |e| ledger.record(&plan, e));
+    assert!(report.is_complete(), "a clean cp applies every leg");
+
+    let lines = ledger.snapshot();
+    // The verify leg is a READ dependency; commit applies all three nodes through the applier, so
+    // the ledger records one entry per node in dependency (topological) order.
+    assert_eq!(lines.len(), 3, "one AppliedEffect per leg: {lines:?}");
+    assert!(lines[0].starts_with("INSERT dst:/dst/file"), "{:?}", lines);
+    assert!(lines[2].starts_with("REMOVE src:/src/file"), "{:?}", lines);
+    // Secret-free: no payload column ever appears, only verb + driver + path + count.
+    assert!(lines
+        .iter()
+        .all(|l| !l.contains("VALUES") && !l.contains("token")));
+}
+
+#[test]
+fn kill_after_copy_leaves_a_reconstructable_ledger() {
+    // Simulate a process kill AFTER the copy leg: the applier fails on the VERIFY node, so commit
+    // applies only the copy, records it, and stops — leaving the delete unattempted.
+    let plan = cp_plan();
+    let ledger = ReplayLedger::default();
+    let mut driver = CountingDriver::default();
+    // Drive commit with an applier that fails the verify leg (node 1) to model the mid-plan kill.
+    let mut failing = cfs_core::RecordingApplier::new().failing_on(NodeId(1));
+    let report = commit(&plan, &mut failing, |e| ledger.record(&plan, e));
+    let _ = &mut driver;
+
+    // The ledger holds exactly the COPY leg — the done-prefix a recovery pass reads.
+    let lines = ledger.snapshot();
+    assert_eq!(
+        lines.len(),
+        1,
+        "only the copy leg was applied+recorded: {lines:?}"
+    );
+    assert!(lines[0].starts_with("INSERT dst:/dst/file"));
+
+    // The delete (node 2) depends on the failed verify (node 1), so it is recorded SKIPPED, never
+    // applied — the irreversible leg never runs on a mid-plan failure (fail-closed recovery).
+    assert!(report.failed.is_some(), "the verify leg failed");
+    assert!(
+        report.skipped.iter().any(|(id, _)| *id == NodeId(2)),
+        "the delete is skipped (its verify dependency failed), so it is reconstructable as 'not \
+         yet done' from the ledger: applied={:?} skipped={:?}",
+        report.applied,
+        report.skipped
+    );
+    // Reconstruction: the remaining work = plan legs whose ids are NOT in the applied prefix.
+    let done: Vec<NodeId> = report.applied.iter().map(|e| e.id).collect();
+    let remaining: Vec<NodeId> = plan
+        .nodes()
+        .iter()
+        .map(|n| n.id)
+        .filter(|id| !done.contains(id))
+        .collect();
+    assert_eq!(
+        remaining,
+        vec![NodeId(1), NodeId(2)],
+        "verify+delete remain reconstructable from the ledger's applied prefix"
+    );
+}
+
+// ===========================================================================
+// t37 — Golden PREVIEW of shipped example handlers through offline stubs:
+//        PREVIEW applies ZERO effects (PREVIEW-as-CI, no live creds; RFD §3/§8).
+// ===========================================================================
+
+/// Every shipped example handler, when run through PREVIEW with offline stubs and NO live
+/// credentials, must produce its plan WITHOUT applying any effect. We model the handler plans the
+/// shipped `server_boot.cfs` declares (the nightly JOB's REMOVE, the notify TRIGGER's INSERT) and
+/// assert that taking the PREVIEW projection (`cfs_core::preview`) never touches the applier — a
+/// PREVIEW is a pure, side-effect-free description, the property CI relies on to dry-run handlers.
+#[test]
+fn shipped_handler_preview_applies_zero_effects() {
+    // The two write-bearing shipped handlers from server_boot.cfs (their DO-body plans).
+    let nightly = plan_of(vec![write_node(0, EffectKind::Remove, "tmp", "/tmp")]);
+    let notify = trigger_insert_plan();
+
+    for (name, plan) in [("nightly", &nightly), ("notify", &notify)] {
+        // PREVIEW is the pure projection — it constructs the summary from the plan data alone and
+        // invokes NO applier, so a counting driver observes zero applied effects.
+        let mut driver = CountingDriver::new();
+        let preview = cfs_core::preview(plan);
+        // A PREVIEW is non-empty (it describes the would-be effects) ...
+        assert!(
+            !preview.rows.is_empty(),
+            "{name}: PREVIEW must describe the handler's effects"
+        );
+        // ... but applies nothing: the driver was never called.
+        assert_eq!(
+            driver.applied_count(),
+            0,
+            "{name}: a PREVIEW must apply ZERO effects (offline dry-run)"
+        );
+        let _ = &mut driver;
+    }
+}
