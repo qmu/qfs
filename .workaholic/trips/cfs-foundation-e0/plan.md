@@ -174,3 +174,10 @@ revision required):
 ### t17 ACCEPTED (Lead, 2026-06-23)
 - **[Constructor]** `cfs-driver-sql` (pg/mysql/sqlite behind Dialect, query→parameterized SQL pushdown truthful residual, injection-safe, ACID txn, view-write rejection, secret-safe URIs). +22 tests, 538 green. **[Architect]** Approve with observations (injection PASS, residual PASS, t23-reuse PASS). **[Planner]** E2E approved 15/15 (DROP TABLE stored as data, rollback verified).
 - **t23 reuse**: D1 = sqlite Dialect emitter + an HTTP `SqlBackend`; `commit_transaction(&[DmlOp])` maps to D1's batch endpoint (D1 has no interactive BEGIN/COMMIT — satisfy ACID via batch atomicity). Carry-overs: per-backend injection conformance test (HTTP backend must send params as structured bound array, not interpolate); mysql ON DUPLICATE KEY semantics note; keyless-write guard flattens to Terminal through bridge.
+
+### t23 ACCEPTED (Lead, 2026-06-23)
+- **[Constructor]** `cfs-driver-cf` (D1/KV/Queues at /cf); extracted `cfs-sql-core` pure leaf (Dialect/emit/compile shared by sql+cf drivers); D1 params as structured bound array (injection-safe HTTP path), batch atomicity, KV+Queues w/ idempotency, token-safe. +14 tests, 552 green. **[Architect]** Approve with minor suggestions (D1 injection CONFIRMED SAFE, cfs-sql-core CLEAN). **[Planner]** E2E approved 7/7.
+- **Carry-overs**: add a mechanical pure-leaf dep test for `cfs-sql-core` (mirror cfs-http-core); `describe_schema` hardcodes DriverId "sql" → thread real driver id; KV URL path/query needs encoding; idempotency derived-key is content-only (doc the escape hatch).
+
+### SESSION PAUSE (Lead, 2026-06-23) — user requested stop after t23
+Driver of work paused at t23 per user instruction. Trip remains at coding phase, NOT complete.
