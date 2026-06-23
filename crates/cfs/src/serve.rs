@@ -58,6 +58,17 @@ pub fn run_serve(config: &Path) -> i32 {
     let cron_store = crate::cron::LedgerJobStore::new(jobs_handle);
     let cron_committer = crate::cron::PreviewCommitter::new(clone_engine(&engine));
 
+    // t34 watchtower composition: build the watchtower binding + shared bus + the webhook ingest
+    // fallback the HTTP listener routes `/hooks/...` to. The binding is reconciled by the runtime
+    // from /server/{webhooks,triggers}; the dispatch loop drains the bus and fires matching
+    // triggers through the injected committer (PREVIEW path), acking only after a successful
+    // commit (at-least-once). The watchtower's own fire-audit sink is drained on shutdown.
+    let secrets: Arc<dyn cfs_secrets::Secrets> = Arc::new(cfs_secrets::InMemoryStore::new());
+    let (wt_binding, wt_rx, wt_bus, wt_fallback) =
+        crate::watchtower::build_watchtower(Arc::clone(&secrets));
+    let wt_triggers = wt_binding.triggers_handle();
+    let wt_audit = Arc::new(cfs_watchtower::AuditSink::new());
+
     let result = rt.block_on(async move {
         let scheduler = cfs_cron::Scheduler::new(cron_store, cfs_cron::SystemClock, cron_committer);
         // Spawn the daemon loop; it runs until the process exits (the serve future drives the
@@ -70,16 +81,32 @@ pub fn run_serve(config: &Path) -> i32 {
             )
             .await;
         });
-        let served = cfs_http::serve_config_with(
+        // Spawn the watchtower dispatch loop (drains the bus, fires matching triggers, acks on
+        // success). It runs until the bus is dropped (shutdown).
+        let dispatch = crate::watchtower::spawn_dispatch_loop(
+            wt_rx,
+            wt_bus,
+            wt_triggers,
+            Arc::clone(&wt_audit),
+            clone_engine(&engine),
+        );
+        // `cron_binding` is ALREADY a `Box<dyn Binding>` (from build_cron_binding); the watchtower
+        // binding is boxed here. Both are `cfs_server::Binding` (cfs-watchtower re-exports the same
+        // trait), so they share the one binding vector the runtime reconciles.
+        let bindings: Vec<Box<dyn cfs_watchtower::Binding>> =
+            vec![Box::new(wt_binding), cron_binding];
+        let served = cfs_http::serve_config_full(
             config,
             engine,
             reads,
             addr,
             SERVE_MAX_ROWS,
-            vec![cron_binding],
+            bindings,
+            Some(wt_fallback),
         )
         .await;
         daemon.abort();
+        dispatch.abort();
         served
     });
 

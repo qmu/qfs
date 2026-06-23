@@ -197,8 +197,11 @@ dependencies = [
  "cfs-exec",
  "cfs-http",
  "cfs-pushdown",
+ "cfs-secrets",
+ "cfs-watchtower",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -633,6 +636,25 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cfs-watchtower"
+version = "0.0.0"
+dependencies = [
+ "cfs-core",
+ "cfs-crypto-core",
+ "cfs-exec",
+ "cfs-parser",
+ "cfs-pushdown",
+ "cfs-secrets",
+ "cfs-server",
+ "cfs-types",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

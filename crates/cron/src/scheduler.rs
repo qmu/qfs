@@ -5,10 +5,10 @@
 
 use crate::clock::Clock;
 use crate::commit::{CommitError, Committer};
-use cfs_crypto_core::sha256_hex;
 use crate::lastrun::bind_last_run;
 use crate::schedule::Instant;
 use crate::store::{JobBinding, JobStore, RunRecord, RunStatus};
+use cfs_crypto_core::sha256_hex;
 
 /// The default single-flight lease TTL (seconds): long enough to cover a slow commit, short
 /// enough to self-heal a crashed holder.

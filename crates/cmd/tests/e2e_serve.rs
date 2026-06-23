@@ -364,7 +364,8 @@ fn describe_server_triggers_returns_schema_with_no_backend() {
         .iter()
         .map(|c| c.name.as_str())
         .collect();
-    assert_eq!(names, vec!["name", "on", "plan"]);
+    // t34 (CO-t31-4): the trigger schema now carries the optional `predicate` (`WHERE <pred>`).
+    assert_eq!(names, vec!["name", "on", "predicate", "plan"]);
 }
 
 /// A counting binding observable from outside the runtime.

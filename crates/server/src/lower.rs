@@ -223,6 +223,10 @@ fn is_body_column(node: ServerNode, col: &str) -> bool {
         (node, col),
         (ServerNode::Endpoints | ServerNode::Views, "query")
             | (ServerNode::Triggers | ServerNode::Jobs, "plan")
+            // t34 (CO-t31-4): the trigger `predicate` column holds a query-style StatementSpec
+            // (the `WHERE <pred>` wrapped over an empty VALUES source). An INSERT twin supplying
+            // the same parseable body canonicalises to the byte-identical stored spec.
+            | (ServerNode::Triggers, "predicate")
     )
 }
 

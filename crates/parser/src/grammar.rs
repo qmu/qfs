@@ -883,6 +883,7 @@ fn server_ddl(input: &mut Stream<'_>) -> ModalResult<ServerDdl> {
     let mut on = None;
     let mut every = None;
     let mut as_query = None;
+    let mut where_pred = None;
     let mut do_plan = None;
     loop {
         if on.is_none() {
@@ -900,6 +901,12 @@ fn server_ddl(input: &mut Stream<'_>) -> ModalResult<ServerDdl> {
         if as_query.is_none() {
             if let Some(v) = opt(as_clause).parse_next(input)? {
                 as_query = Some(Box::new(v));
+                continue;
+            }
+        }
+        if where_pred.is_none() {
+            if let Some(v) = opt(ddl_where_clause).parse_next(input)? {
+                where_pred = Some(Box::new(v));
                 continue;
             }
         }
@@ -922,9 +929,28 @@ fn server_ddl(input: &mut Stream<'_>) -> ModalResult<ServerDdl> {
         target,
         do_plan,
         as_query,
+        where_pred,
         every,
         on,
     })
+}
+
+/// `WHERE <pred>` — the optional TRIGGER guard (t34). `WHERE` is a frozen keyword, so this adds no
+/// new keyword. The predicate expression is wrapped as a `Statement::Query` over an EMPTY `VALUES`
+/// source plus a single `PipeOp::Where(pred)`, so it round-trips through the downstream
+/// `StatementSpec` (serde over the AST) with no new node kind: the dispatcher (t34) extracts the
+/// `Where` op's `Expr` and evaluates it over `NEW.*`. The empty source is a structural carrier only
+/// — it is never read; the dispatcher binds `NEW.*` into the predicate before evaluating it.
+fn ddl_where_clause(input: &mut Stream<'_>) -> ModalResult<Statement> {
+    let _ = kw(Keyword::Where).parse_next(input)?;
+    let pred = expr(input)?;
+    Ok(Statement::Query(Pipeline {
+        source: Source::Values(Values {
+            columns: None,
+            rows: Vec::new(),
+        }),
+        ops: vec![PipeOp::Where(pred)],
+    }))
 }
 
 fn ddl_kind(input: &mut Stream<'_>) -> ModalResult<DdlKind> {
@@ -992,12 +1018,17 @@ fn raw_token_text(input: &mut Stream<'_>) -> ModalResult<String> {
         Token::Str(s) => Some(s),
         Token::Int(i) => Some(i.to_string()),
         Token::Size { value, unit } => Some(format!("{value} {}", unit.text())),
-        Token::Path(segs) => Some(
+        // A `Token::Path` is a leading-slash mount path (`/mail/inbox`); the lexer drops the
+        // leading slash from the segments, so we re-prepend it. This is what lets a
+        // `CREATE TRIGGER … ON /mail/inbox …` round-trip to the `/mail/inbox` source path the
+        // watchtower (t34) re-queries — a slash-less `mail/inbox` would not resolve as a mount.
+        Token::Path(segs) => Some(format!(
+            "/{}",
             segs.into_iter()
                 .map(|s| s.name)
                 .collect::<Vec<_>>()
-                .join("/"),
-        ),
+                .join("/")
+        )),
         _ => None,
     })
     .parse_next(input)

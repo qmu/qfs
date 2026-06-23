@@ -314,6 +314,27 @@ fn ddl_trigger_do_plan() {
 }
 
 #[test]
+fn ddl_trigger_with_where_guard() {
+    // t34 (CO-t31-4): `CREATE TRIGGER … ON <event> WHERE <pred> DO <plan>` — the optional WHERE
+    // guard is captured in `where_pred` (a Query wrapping the predicate over an empty VALUES
+    // source), distinct from the DO body's own statement.
+    let stmt = parse_ok(
+        "CREATE TRIGGER notify ON inbox WHERE priority > 3 DO INSERT INTO /log VALUES ('fired')",
+    );
+    let Statement::Ddl(d) = stmt else { panic!() };
+    assert_eq!(d.kind, DdlKind::Trigger);
+    assert_eq!(d.on.as_deref(), Some("inbox"));
+    // The WHERE guard is surfaced as a Query whose single op is the predicate.
+    let Some(Statement::Query(p)) = d.where_pred.as_deref() else {
+        panic!("expected where_pred query")
+    };
+    assert_eq!(p.ops.len(), 1);
+    assert!(matches!(p.ops[0], PipeOp::Where(_)));
+    // The DO body is still the effect statement (its own clause, not the guard).
+    assert!(matches!(d.do_plan.as_deref(), Some(Statement::Effect(_))));
+}
+
+#[test]
 fn ddl_job_every() {
     let stmt = parse_ok("CREATE JOB nightly EVERY '1h' DO REMOVE /tmp WHERE age > 7");
     let Statement::Ddl(d) = stmt else { panic!() };
@@ -397,6 +418,7 @@ fn closed_core_variant_counts_are_locked() {
             target: vec![],
             do_plan: None,
             as_query: None,
+            where_pred: None,
             every: None,
             on: None,
         }),

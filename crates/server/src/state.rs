@@ -68,6 +68,12 @@ pub struct TriggerDef {
     pub name: String,
     /// The event this trigger fires on (raw, e.g. `inbox`); empty if unspecified.
     pub on: String,
+    /// The optional `WHERE <pred>` guard (t34, CO-t31-4), as the canonical StatementSpec source
+    /// (a query wrapping the predicate). Empty when the trigger declares no guard — the watchtower
+    /// dispatcher treats an empty predicate as "always fire". Rehydrated (no re-parse) + evaluated
+    /// over `NEW.*` at fire time.
+    #[serde(default)]
+    pub predicate: StatementSource,
     /// The effect-plan to run when the trigger fires (`DO <plan>`), as source text.
     pub plan: StatementSource,
 }
@@ -121,6 +127,12 @@ pub struct WebhookDef {
     pub name: String,
     /// The inbound route, e.g. `/hooks/x`; empty if unspecified.
     pub route: String,
+    /// The optional signing-secret HANDLE (t34, RFD §10) — a `cfs-secrets` account id the
+    /// watchtower resolves BY HANDLE to verify the inbound HMAC signature. NEVER an inline token,
+    /// NEVER logged. Empty for an unsigned (test/internal) webhook (ingest accepts without a
+    /// signature check — a documented less-secure mode, signed is the production path).
+    #[serde(default)]
+    pub secret: String,
 }
 
 /// The running server's whole configuration — the source of truth (RFD §6/§8). Each

@@ -321,6 +321,7 @@ fn insert_row(
                 TriggerDef {
                     name,
                     on: text("on"),
+                    predicate: StatementSource::new(text("predicate")),
                     plan: StatementSource::new(text("plan")),
                 },
             );
@@ -377,6 +378,7 @@ fn insert_row(
                 WebhookDef {
                     name,
                     route: text("route"),
+                    secret: text("secret"),
                 },
             );
         }

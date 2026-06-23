@@ -112,6 +112,37 @@ fn plan_spec_round_trips_through_serde_unchanged() {
 }
 
 #[test]
+fn trigger_where_guard_round_trips_into_the_predicate_spec() {
+    // t34 (CO-t31-4): `CREATE TRIGGER … ON <event> WHERE <pred> DO <plan>` parses the optional
+    // WHERE guard into `TriggerDecl.predicate` (a StatementSpec wrapping the predicate), and the
+    // desugar emits it into the `predicate` config column — round-tripping byte-identically.
+    let b = binding(
+        "CREATE TRIGGER hot ON inbox WHERE priority > 3 DO INSERT INTO /log VALUES ('fired')",
+    );
+    let ServerBindingDdl::Trigger(d) = &b else {
+        panic!("expected a trigger");
+    };
+    let pred = d.predicate.as_ref().expect("WHERE guard present");
+    // The guard spec rehydrates without a re-parse and is the `Query |> WHERE` carrier shape.
+    let canon = pred.canonical();
+    let rehydrated = StatementSpec::from_canonical(&canon).expect("rehydrate");
+    assert_eq!(rehydrated.canonical(), canon);
+
+    // The desugar emits the guard into the `predicate` config column (matching the canonical spec).
+    let row = binding_config_row(&b);
+    let predicate_col = row.get("predicate").expect("predicate column emitted");
+    assert_eq!(predicate_col, &cfs_types::Value::Text(canon));
+
+    // A guard-less trigger emits NO predicate column (stays byte-identical to a pre-t34 trigger).
+    let plain = binding("CREATE TRIGGER notify ON inbox DO INSERT INTO /log VALUES ('x')");
+    let plain_row = binding_config_row(&plain);
+    assert!(
+        plain_row.get("predicate").is_none(),
+        "a guard-less trigger emits no predicate column"
+    );
+}
+
+#[test]
 fn statement_spec_is_span_normalised_so_parse_origin_does_not_matter() {
     // The same body parsed standalone vs from a CREATE wrapper must produce an identical
     // canonical spec (spans differ by origin; the spec zeroes them).

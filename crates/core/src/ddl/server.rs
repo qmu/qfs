@@ -366,10 +366,15 @@ pub fn from_server_ddl(ddl: &ServerDdl) -> Result<ServerBindingDdl, DdlError> {
             Ok(ServerBindingDdl::Trigger(TriggerDecl {
                 name,
                 event,
-                // The optional `WHERE <pred>` is carried in t04 as part of the DO body shape;
-                // a standalone predicate clause is not separately surfaced by t04, so the
-                // predicate seam stays `None` here (parsed-now when t04 surfaces it).
-                predicate: None,
+                // t34 (CO-t31-4): `WHERE <pred>` is now surfaced by the t04 grammar as a
+                // `where_pred` clause (a `Statement::Query` wrapping the predicate over an empty
+                // VALUES source). Parsed + span-normalised into the `predicate` spec NOW, so it
+                // round-trips through the config row and the dispatcher evaluates it over `NEW.*`
+                // at fire time. `None` when the trigger declares no guard.
+                predicate: ddl
+                    .where_pred
+                    .as_deref()
+                    .map(StatementSpec::from_statement_ref),
                 plan: ddl.do_plan.as_deref().map(PlanSpec::from_statement_ref),
                 policy_ref: None,
             }))
@@ -508,6 +513,12 @@ pub fn binding_config_row(ddl: &ServerBindingDdl) -> ConfigRow {
         }
         ServerBindingDdl::Trigger(d) => {
             row.set_text("on", d.event.as_str());
+            // t34 (CO-t31-4): emit the WHERE guard's canonical spec when present. When `None`
+            // (no guard), the column is omitted so the row stays byte-identical to a guard-less
+            // trigger (the column fills with `Null`) — the CREATE ≡ INSERT equivalence holds.
+            if let Some(pred) = d.predicate.as_ref() {
+                row.set_text("predicate", pred.canonical());
+            }
             row.set_text(
                 "plan",
                 canonical_or_empty(d.plan.as_ref().map(PlanSpec::canonical)),
@@ -647,6 +658,11 @@ pub fn server_node_schema(node: ServerNode) -> Schema {
         ServerNode::Triggers => Schema::new(vec![
             col("name", ColumnType::Text, false),
             col("on", ColumnType::Text, true),
+            // t34 (CO-t31-4): the optional `WHERE <pred>` guard, stored as the canonical
+            // StatementSpec of the predicate (a `Statement::Query` wrapping the predicate over an
+            // empty VALUES source). `Null`/empty when the trigger declares no guard. Nullable so
+            // pre-t34 triggers round-trip unchanged.
+            col("predicate", ColumnType::Text, true),
             col("plan", ColumnType::Text, true),
         ]),
         ServerNode::Jobs => Schema::new(vec![
@@ -668,6 +684,11 @@ pub fn server_node_schema(node: ServerNode) -> Schema {
         ServerNode::Webhooks => Schema::new(vec![
             col("name", ColumnType::Text, false),
             col("route", ColumnType::Text, true),
+            // t34: the signing-secret HANDLE (a `cfs-secrets` account id, RFD §10) the watchtower
+            // resolves BY HANDLE to verify the inbound `X-Cfs-Signature` HMAC — never an inline
+            // token, never logged. `Null`/empty for an unsigned (test/internal) webhook. Nullable
+            // so a pre-t34 webhook row round-trips unchanged.
+            col("secret", ColumnType::Text, true),
         ]),
     }
 }

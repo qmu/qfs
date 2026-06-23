@@ -14,6 +14,7 @@
 mod cron;
 mod serve;
 mod shell;
+mod watchtower;
 
 fn main() {
     let code = cfs_cmd::run(

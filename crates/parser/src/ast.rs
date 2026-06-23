@@ -270,6 +270,11 @@ pub struct ServerDdl {
     pub do_plan: Option<Box<Statement>>,
     /// The optional `AS <query>` clause (the backing query for `ENDPOINT`/`VIEW`).
     pub as_query: Option<Box<Statement>>,
+    /// The optional `WHERE <pred>` clause (the trigger guard for `TRIGGER`, t34). `WHERE` is a
+    /// frozen keyword, so wiring `CREATE TRIGGER … ON <event> WHERE <pred> DO <plan>` adds NO new
+    /// keyword — the clause is captured here as a `Statement::Query` wrapping the predicate over an
+    /// empty `VALUES` source (so it round-trips through the downstream `StatementSpec`).
+    pub where_pred: Option<Box<Statement>>,
     /// The optional `EVERY <interval>` clause (cron interval for `JOB`).
     pub every: Option<String>,
     /// The optional `ON <event>` clause (trigger event / route).

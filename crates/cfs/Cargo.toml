@@ -36,9 +36,21 @@ cfs-http = { path = "../http" }
 # cfs-cron's feature-gated tokio dead-ends in the terminal binary and cfs-cmd stays off it. The
 # `native` feature (default-on) is required for the CronBinding + RecordingCommitter + daemon.
 cfs-cron = { path = "../cron" }
+# t34 serve composition root: the binary ALSO wires the watchtower binding (cfs-watchtower, a leaf
+# consuming cfs-server + cfs-exec, the watchtower sibling of cfs-http/cfs-cron). The binary builds
+# the WatchtowerBinding + the shared LocalBus + the injected Committer + the dispatch loop here, and
+# composes the webhook ingest into the cfs-http listener via a fallback closure (so cfs-watchtower
+# serves no HTTP itself and neither leaf depends on the other). cfs-watchtower's feature-gated tokio
+# (bus MPSC + watcher tasks) dead-ends in the terminal binary; cfs-cmd stays off it.
+cfs-watchtower = { path = "../watchtower" }
+# The shared secrets surface the watchtower resolves webhook signing secrets from (by handle).
+cfs-secrets = { path = "../secrets" }
 # The serve composition builds a tokio runtime to drive the async listener + supervised wait.
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "signal", "macros"] }
 async-trait = { workspace = true }
+# Secret-free structured logging for the watchtower dispatch loop (the same target the serve
+# bindings log under). No secrets ever logged (RFD §10).
+tracing = { workspace = true }
 
 [dev-dependencies]
 # Temp-dir fixtures for the shell's end-to-end local read tests (never touches user files).

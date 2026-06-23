@@ -194,6 +194,16 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // binary-local JobStore + the committer + the native daemon loop here, so cfs-cron's
         // feature-gated tokio dead-ends in the terminal sink. Same composition-root rationale.
         "cfs-cron",
+        // t34: the binary ALSO wires the watchtower binding (cfs-watchtower, the watchtower sibling
+        // of cfs-http/cfs-cron — a leaf consuming cfs-server + cfs-exec). It builds the
+        // WatchtowerBinding + the shared LocalBus + the injected Committer + the dispatch loop here
+        // and composes the webhook ingest into the cfs-http listener via a fallback closure, so
+        // cfs-watchtower's feature-gated tokio dead-ends in the terminal sink. Same rationale.
+        "cfs-watchtower",
+        // t34: the watchtower resolves webhook signing secrets BY HANDLE from cfs-secrets, which
+        // the binary's composition root builds + injects into the WatchtowerBinding. cfs-secrets is
+        // a pure leaf (confined to cfs-types) — depending on it adds no runtime/driver coupling.
+        "cfs-secrets",
     ];
     let workspace_prefixed: Vec<&String> =
         bin_deps.iter().filter(|d| d.starts_with("cfs")).collect();
@@ -584,15 +594,22 @@ fn exec_is_confined_above_the_spine_and_off_the_runtime() {
     // nothing depends on it except the terminal `cfs` binary (asserted by
     // `cron_binding_is_a_leaf_serve_consumer` below). Admitting it does not invert the layering; a
     // spine/lower crate reaching UP into cfs-exec still fails here.
-    let allowed_exec_consumers = ["cfs-cmd", "cfs", "cfs-http", "cfs-cron"];
+    // t34: `cfs-watchtower` (the event bus / webhook / watcher / trigger-dispatch binding) is a
+    // FIFTH admitted consumer. Like cfs-http/cfs-cron it is a LEAF integration consumer of the
+    // executor — its injected Committer builds a fired trigger's plan via `build_plan` and its
+    // watchers poll a source via `execute_read` — sitting ABOVE the spine alongside cfs-cmd, and
+    // nothing depends on it except the terminal `cfs` binary (asserted by
+    // `watchtower_binding_is_a_leaf_serve_consumer` below). Admitting it does not invert the
+    // layering; a spine/lower crate reaching UP into cfs-exec still fails here.
+    let allowed_exec_consumers = ["cfs-cmd", "cfs", "cfs-http", "cfs-cron", "cfs-watchtower"];
     for consumer in &exec_consumers {
         assert!(
             allowed_exec_consumers.contains(&consumer.as_str()),
             "topology violation: {consumer} depends on cfs-exec, but only cfs-cmd, the terminal \
              `cfs` binary (the t28 shell composition root), cfs-http (the t32 leaf HTTP serving \
-             binding), and cfs-cron (the t33 leaf JOB scheduler binding) may consume the \
-             integration layer. A spine/lower crate reaching UP into cfs-exec is a layer \
-             inversion (t29)."
+             binding), cfs-cron (the t33 leaf JOB scheduler binding), and cfs-watchtower (the t34 \
+             leaf watchtower binding) may consume the integration layer. A spine/lower crate \
+             reaching UP into cfs-exec is a layer inversion (t29)."
         );
     }
 }
@@ -656,6 +673,83 @@ fn cron_binding_is_a_leaf_serve_consumer() {
         !cron_deps.iter().any(|d| d == "cfs-runtime"),
         "t33: cfs-cron must NOT depend on cfs-runtime — the real commit path is the INJECTED \
          Committer the composition root builds, not the COMMIT interpreter. Deps were: {cron_deps:?}"
+    );
+}
+
+#[test]
+fn watchtower_binding_is_a_leaf_serve_consumer() {
+    // t34 (the watchtower binding topology): `cfs-watchtower` is the leaf binding crate that turns
+    // external change (webhooks + source watchers) into fired effect-plans. The placement decision
+    // (the watchtower sibling of the t32 cfs-http / t33 cfs-cron bindings) rests on four structural
+    // facts this guard pins so they cannot invert:
+    //
+    //   (a) cfs-watchtower consumes cfs-server (the Binding/ServerState/TriggerDef/WebhookDef
+    //       registry) AND cfs-exec (the build_plan + execute_read evaluator) — the one crate that
+    //       legitimately binds both for the watchtower cause, the reason it is a NEW leaf rather
+    //       than living in cfs-server (which must stay off cfs-exec and runtime-free, CO-t30-1) or
+    //       cfs-cmd (off cfs-exec/the binding crates). NOTE: cfs-server + cfs-exec are OPTIONAL
+    //       deps gated behind cfs-watchtower's default-on `native` feature so the PURE event/
+    //       dispatch core builds for wasm32; with default features active, both edges are present.
+    //   (b) cfs-watchtower is a LEAF: nothing depends on it except the terminal `cfs` binary (the
+    //       serve composition root). That keeps its feature-gated tokio (the LocalBus MPSC +
+    //       watcher tasks) dead-ended in the binary — the t28 runtime-leaf exemption precondition.
+    //   (c) cfs-watchtower does NOT depend on cfs-runtime. The real commit path is the INJECTED
+    //       Committer the binary builds; the dispatcher never drives the COMMIT interpreter, so the
+    //       runtime-leaf-confinement guard is untouched (cfs-watchtower never appears in its
+    //       allowlist).
+    //   (d) cfs-watchtower does NOT depend on cfs-http: the WebhookBinding serves no HTTP itself
+    //       (its `ingest` is a pure handler over owned request data the binary composes into the
+    //       cfs-http listener), so the two leaves stay independent (option b — neither depends on
+    //       the other).
+    let graph = load_graph();
+
+    // (a) cfs-watchtower depends on both cfs-server and cfs-exec (with default `native` on).
+    let wt_deps = graph
+        .direct_deps
+        .get("cfs-watchtower")
+        .expect("cfs-watchtower is a workspace package");
+    for required in ["cfs-server", "cfs-exec"] {
+        assert!(
+            wt_deps.iter().any(|d| d == required),
+            "t34: cfs-watchtower must depend on {required} (it binds the server registry to the \
+             build_plan/execute_read evaluator for the watchtower cause). Deps were: {wt_deps:?}"
+        );
+    }
+
+    // (b) cfs-watchtower is a leaf: only the terminal `cfs` binary may depend on it.
+    let wt_consumers: Vec<&String> = graph
+        .direct_deps
+        .iter()
+        .filter(|(pkg, deps)| {
+            pkg.as_str() != "cfs-watchtower" && deps.iter().any(|d| d == "cfs-watchtower")
+        })
+        .map(|(pkg, _)| pkg)
+        .collect();
+    for consumer in &wt_consumers {
+        assert_eq!(
+            consumer.as_str(),
+            "cfs",
+            "t34 leaf violation: {consumer} depends on cfs-watchtower, but only the terminal `cfs` \
+             binary (the serve composition root) may consume the watchtower binding. If something \
+             else depends on it, cfs-watchtower's tokio bus/watcher tasks no longer dead-end in the \
+             binary and the runtime-leaf exemption is unsound."
+        );
+    }
+
+    // (c) cfs-watchtower must NOT depend on cfs-runtime (the real applier is the injected Committer).
+    assert!(
+        !wt_deps.iter().any(|d| d == "cfs-runtime"),
+        "t34: cfs-watchtower must NOT depend on cfs-runtime — the real commit path is the INJECTED \
+         Committer the composition root builds, not the COMMIT interpreter. Deps were: {wt_deps:?}"
+    );
+
+    // (d) cfs-watchtower must NOT depend on cfs-http (it serves no HTTP; the binary composes the
+    // pure ingest handler into the cfs-http listener — option b, the two leaves stay independent).
+    assert!(
+        !wt_deps.iter().any(|d| d == "cfs-http"),
+        "t34: cfs-watchtower must NOT depend on cfs-http — its WebhookBinding::ingest is a pure \
+         handler over owned request data the `cfs` binary composes into the cfs-http listener, so \
+         the two serve leaves stay independent (option b). Deps were: {wt_deps:?}"
     );
 }
 

@@ -58,6 +58,14 @@ pub async fn serve_config(
     serve_config_with(config, engine, reads, addr, max_rows, Vec::new()).await
 }
 
+/// A request **fallback handler** (t34): a synchronous closure the listener invokes when the
+/// endpoint router has NO match for a request. The `cfs` binary wires the watchtower's webhook
+/// `ingest` here for `/hooks/...` paths — so `cfs-http` gains NO dependency on `cfs-watchtower`
+/// (they cross only through the owned [`HttpRequest`]/[`HttpResponse`] DTOs + this closure, option
+/// b of the t34 webhook-serving decision). `None` means "I don't handle this path" → the usual
+/// 404. The closure is `Fn` (re-entrant, shared across connections) + `Send + Sync`.
+pub type Fallback = Arc<dyn Fn(&HttpRequest) -> Option<HttpResponse> + Send + Sync>;
+
 /// Like [`serve_config`], but also registers `extra_bindings` (e.g. the t33 cron `CronBinding`)
 /// into the runtime alongside the HTTP binding. The binary's serve composition root builds the
 /// cron binding (a sibling leaf) and passes it here as a `Box<dyn cfs_server::Binding>` — so
@@ -73,6 +81,25 @@ pub async fn serve_config_with(
     addr: SocketAddr,
     max_rows: usize,
     extra_bindings: Vec<Box<dyn cfs_server::Binding>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    serve_config_full(config, engine, reads, addr, max_rows, extra_bindings, None).await
+}
+
+/// Like [`serve_config_with`], but ALSO accepts an optional request [`Fallback`] the listener
+/// invokes when the endpoint router has no match (t34: the watchtower webhook ingest for
+/// `/hooks/...`). The binary composes both routers into ONE listener here; `cfs-http` stays free of
+/// any `cfs-watchtower` dependency.
+///
+/// # Errors
+/// A boxed error if boot fails, the listener cannot bind, or the runtime wiring fails.
+pub async fn serve_config_full(
+    config: &Path,
+    engine: Arc<Engine>,
+    reads: Arc<ReadRegistry>,
+    addr: SocketAddr,
+    max_rows: usize,
+    extra_bindings: Vec<Box<dyn cfs_server::Binding>>,
+    fallback: Option<Fallback>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Construct the binding and capture its shared router handle BEFORE boxing it into the
     // runtime (the listener reads the same atomically-swapped table the runtime reconciles).
@@ -100,6 +127,7 @@ pub async fn serve_config_with(
         Ok(listener) => {
             tracing::info!(target: "cfs::http", %addr, "http listener bound");
             let mut rx = shutdown_rx;
+            let fallback = fallback.clone();
             Some(tokio::spawn(async move {
                 let wait_shutdown = async move {
                     while rx.changed().await.is_ok() {
@@ -108,7 +136,7 @@ pub async fn serve_config_with(
                         }
                     }
                 };
-                serve_on(listener, router, ctx, wait_shutdown).await;
+                serve_on_with(listener, router, ctx, fallback, wait_shutdown).await;
             }))
         }
         Err(e) => {
@@ -174,6 +202,21 @@ pub async fn serve_on<F>(
 ) where
     F: std::future::Future<Output = ()> + Send,
 {
+    serve_on_with(listener, router, ctx, None, shutdown).await;
+}
+
+/// Like [`serve_on`], but ALSO consults an optional request [`Fallback`] when the router has no
+/// match (t34: the watchtower webhook ingest). The fallback runs BEFORE the 404 — if it returns
+/// `Some(resp)`, that is the response; otherwise the request 404s as usual.
+pub async fn serve_on_with<F>(
+    listener: TcpListener,
+    router: Arc<RwLock<Arc<Router>>>,
+    ctx: EndpointCtx,
+    fallback: Option<Fallback>,
+    shutdown: F,
+) where
+    F: std::future::Future<Output = ()> + Send,
+{
     tokio::pin!(shutdown);
     loop {
         tokio::select! {
@@ -191,9 +234,10 @@ pub async fn serve_on<F>(
                 };
                 let router = Arc::clone(&router);
                 let ctx = ctx.clone();
+                let fallback = fallback.clone();
                 tokio::spawn(async move {
                     let resp = match read_request(&mut stream).await {
-                        Ok(Some(req)) => handle(&router, &ctx, &req).await,
+                        Ok(Some(req)) => handle_with(&router, &ctx, fallback.as_ref(), &req).await,
                         // A malformed / oversized / empty request → a minimal 400; never panic.
                         Ok(None) => HttpResponse::new(400, "application/json",
                             br#"{"error":"bind","detail":"malformed request"}"#.to_vec()),
@@ -210,9 +254,12 @@ pub async fn serve_on<F>(
 
 /// Dispatch one parsed request against the live router snapshot. Reads the router pointer by
 /// cloning the `Arc` under a momentary guard (never held across the `.await`).
-async fn handle(
+/// Dispatch one parsed request: a matched endpoint route always wins; on a router MISS the
+/// optional `fallback` (the t34 watchtower webhook ingest) gets a chance before the 404.
+async fn handle_with(
     router: &Arc<RwLock<Arc<Router>>>,
     ctx: &EndpointCtx,
+    fallback: Option<&Fallback>,
     req: &HttpRequest,
 ) -> HttpResponse {
     let snapshot = match router.read() {
@@ -227,7 +274,15 @@ async fn handle(
     };
     match snapshot.match_request(&req.method, &req.path) {
         Some((route, path_params)) => dispatch(route, path_params, req, ctx).await,
-        None => crate::error::HttpError::NotFound.into_response(),
+        None => {
+            // Router miss: give the fallback (the watchtower webhook ingest) a chance before 404.
+            if let Some(fb) = fallback {
+                if let Some(resp) = fb(req) {
+                    return resp;
+                }
+            }
+            crate::error::HttpError::NotFound.into_response()
+        }
     }
 }
 
