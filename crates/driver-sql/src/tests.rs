@@ -16,10 +16,12 @@ use cfs_types::{
     CmpOp, ColRef, Column, ColumnType, Literal, Predicate, Row, RowBatch, Schema, Value,
 };
 
-use crate::catalog::{Catalog, ColumnDef, RelationKind, TableCatalog};
+use cfs_sql_core::{
+    render_dml, render_select, Catalog, ColumnDef, Dialect, DmlOp, OrderTerm, Param, RelationKind,
+    SelectPlan, SqlPredicate, TableCatalog,
+};
+
 use crate::conn::{resolve_dialect, ConnHandle, ConnRegistry, SqlBackend};
-use crate::dialect::Dialect;
-use crate::emit::{render_dml, render_select, DmlOp, OrderTerm, Param, SelectPlan, SqlPredicate};
 use crate::{compile, QuerySpec, SqlApplier, SqlDriver, SqlError, SqlPath};
 
 // ----------------------------------------------------------------------------------------------
@@ -660,8 +662,11 @@ fn connection_credential_is_never_leaked_in_an_error() {
             SqlError::backend("postgres", "select", "constraint violated")
         ),
         SqlError::backend("postgres", "select", "constraint violated").to_string(),
-        format!("{:?}", SqlError::from(cfs_secrets::SecretError::Locked)),
-        SqlError::from(cfs_secrets::SecretError::Locked).to_string(),
+        format!(
+            "{:?}",
+            crate::credential_error(cfs_secrets::SecretError::Locked)
+        ),
+        crate::credential_error(cfs_secrets::SecretError::Locked).to_string(),
         // The Secret's own Debug/Display redact.
         format!("{secret:?}"),
         format!("{secret}"),

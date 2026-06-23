@@ -18,6 +18,10 @@ cfs-plan = { path = "../plan" }
 # The canonical typed row model + Schema/Predicate/Value/DriverId (t05) the describe schema,
 # the compiled query, and the bound params speak.
 cfs-types = { path = "../types" }
+# The pure SQL compile/emit core (dialect, emitter, compiler, catalog DTOs) extracted into a
+# pure leaf so both this driver and the Cloudflare D1 driver (t23) reuse ONE sqlite emitter
+# without either runtime-leaf driver depending on the other. Re-exported from this crate.
+cfs-sql-core = { path = "../sql-core" }
 # The async interpreter side: the ApplyDriver/DriverRegistry the bridge registers into and
 # the PlanApplierBridge that adapts this driver's synchronous applier. tokio is confined to
 # cfs-runtime + leaf driver-impl consumers (this crate), so cfs-plan's purity dep-closure

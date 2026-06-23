@@ -22,11 +22,11 @@ use cfs_plan::{AppliedEffect, ApplyError, EffectKind, EffectNode, PlanApplier};
 use cfs_runtime::{EffectError, EffectOutput, SharedApplier};
 use cfs_types::Value;
 
-use crate::catalog::TableCatalog;
 use crate::conn::ConnRegistry;
-use crate::emit::{DmlOp, Param, SqlPredicate};
 use crate::error::SqlError;
 use crate::path::SqlPath;
+use cfs_sql_core::TableCatalog;
+use cfs_sql_core::{DmlOp, Param, SqlPredicate};
 
 /// The synchronous SQL apply leg. Holds the connection registry (handles are behind `Arc`s, so
 /// the leg is cheap to clone and `&self`-apply). Stateless across calls.
@@ -265,7 +265,9 @@ fn build_key_where(
 
 impl SharedApplier for SqlApplier {
     fn apply_shared(&self, node: &EffectNode) -> Result<EffectOutput, EffectError> {
-        let affected = self.apply_node(node)?;
+        let affected = self
+            .apply_node(node)
+            .map_err(crate::error::sql_error_to_effect_error)?;
         Ok(EffectOutput::new(node.id, affected))
     }
 }

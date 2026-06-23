@@ -17,10 +17,8 @@ use std::sync::Arc;
 use cfs_secrets::{AccountId, CredentialKey, DriverId, Secret, Secrets};
 use cfs_types::Row;
 
-use crate::catalog::Catalog;
-use crate::dialect::Dialect;
-use crate::emit::{DmlOp, Param, SelectPlan};
 use crate::error::SqlError;
+use cfs_sql_core::{Catalog, Dialect, DmlOp, Param, SelectPlan};
 
 /// The driver-side credential lookup: fetch the connection secret for `<conn>` and parse its
 /// scheme into a [`Dialect`] — **without** rendering the credential anywhere.
@@ -37,7 +35,7 @@ pub fn resolve_dialect(secrets: &dyn Secrets, conn: &str) -> Result<(Dialect, Se
         conn: conn.to_string(),
     })?;
     let key = CredentialKey::new(DriverId::new("sql"), account);
-    let secret = secrets.get(&key)?;
+    let secret = secrets.get(&key).map_err(crate::error::credential_error)?;
     // Read ONLY the scheme prefix from the exposed value; do not retain or log the rest.
     let scheme = secret
         .expose_str()
@@ -69,7 +67,7 @@ pub trait SqlBackend: Send + Sync {
     fn introspect(&self) -> Result<Catalog, SqlError>;
 
     /// Execute a compiled, **parameterized** SELECT and return owned rows (RFD §6). The `(sql,
-    /// params)` come from [`crate::emit::render_select`]; the backend binds `params` positionally
+    /// params)` come from [`cfs_sql_core::render_select`]; the backend binds `params` positionally
     /// — never interpolating a value into `sql`.
     ///
     /// # Errors
@@ -133,7 +131,7 @@ impl ConnHandle {
     /// # Errors
     /// [`SqlError::Backend`] on execution failure.
     pub fn execute_read(&self, plan: &SelectPlan) -> Result<Vec<Row>, SqlError> {
-        let (sql, params) = crate::emit::render_select(self.dialect(), plan);
+        let (sql, params) = cfs_sql_core::render_select(self.dialect(), plan);
         self.backend.execute_read(&sql, &params)
     }
 }

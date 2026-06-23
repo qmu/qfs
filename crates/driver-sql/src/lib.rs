@@ -58,11 +58,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-pub mod catalog;
-pub mod compile;
 pub mod conn;
-mod dialect;
-pub mod emit;
 mod error;
 mod path;
 
@@ -77,13 +73,18 @@ use cfs_plan::PlanApplier;
 use cfs_runtime::PlanApplierBridge;
 
 pub use applier::SqlApplier;
-pub use catalog::{Catalog, ColumnDef, RelationKind, TableCatalog};
-pub use compile::{compile, CompileResult, QuerySpec};
 pub use conn::{resolve_dialect, ConnHandle, ConnRegistry, SqlBackend};
-pub use dialect::Dialect;
-pub use emit::{render_dml, render_select, DmlOp, OrderTerm, Param, SelectPlan, SqlPredicate};
-pub use error::SqlError;
+pub use error::{credential_error, sql_error_to_effect_error, SqlError};
 pub use path::{SqlPath, MOUNT};
+
+// The pure SQL compile/emit core (dialect, emitter, compiler, catalog DTOs) now lives in the
+// pure-leaf `cfs-sql-core` crate (extracted for the t23 Cloudflare D1 reuse — see its crate
+// docs). Re-export it so existing `cfs_driver_sql::{Dialect, render_dml, compile, ...}` paths and
+// downstream consumers are unchanged.
+pub use cfs_sql_core::{
+    compile, render_dml, render_select, Catalog, ColumnDef, CompileResult, Dialect, DmlOp,
+    OrderTerm, Param, QuerySpec, RelationKind, SelectPlan, SqlPredicate, TableCatalog,
+};
 
 /// The SQL databases driver (RFD §5). Owns the [`SqlApplier`] the contract returns from
 /// `applier()`, the connection registry it reads catalogs from, and the declared pushdown profile.
@@ -193,7 +194,7 @@ impl SqlDriver {
             .ok_or(SqlError::UnknownTable {
                 table: table.clone(),
             })?;
-        let result = compile::compile(&schema, table_cat, spec)?;
+        let result = compile(&schema, table_cat, spec)?;
         let rows = handle.execute_read(&result.plan)?;
         Ok((rows, result.residual))
     }

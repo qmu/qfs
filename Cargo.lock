@@ -242,6 +242,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfs-driver-cf"
+version = "0.0.0"
+dependencies = [
+ "cfs-driver",
+ "cfs-http-core",
+ "cfs-plan",
+ "cfs-runtime",
+ "cfs-secrets",
+ "cfs-sql-core",
+ "cfs-types",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cfs-driver-ga"
 version = "0.0.0"
 dependencies = [
@@ -335,6 +353,7 @@ dependencies = [
  "cfs-plan",
  "cfs-runtime",
  "cfs-secrets",
+ "cfs-sql-core",
  "cfs-types",
  "rusqlite",
  "serde_json",
@@ -447,6 +466,15 @@ name = "cfs-server"
 version = "0.0.0"
 dependencies = [
  "cfs-core",
+]
+
+[[package]]
+name = "cfs-sql-core"
+version = "0.0.0"
+dependencies = [
+ "cfs-types",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
