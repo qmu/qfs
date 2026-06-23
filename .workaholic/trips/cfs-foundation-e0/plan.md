@@ -170,3 +170,7 @@ revision required):
 - **[Constructor]** `cfs-driver-ga` (GA4 read-only relational, runReport mapping, WHERE→filter pushdown truthful residual, read-only enforced at gate+applier, multi-account, token-safe). +25 tests, 516 green. **[Architect]** Approve with minor suggestions (residual truthful, read-only genuine). **[Planner]** E2E approved (no mutation possible, no token leak).
 - **Carry-over**: single-sided `date >= x` bound → empty endDate (GA 400) — validate range / fill open side + structured error. IN→inListFilter documented but residual (not emitted).
 - **E4 progress**: done t16,t18,t19,t20,t21,t41. Remaining: t17 sql, t22 s3, t23 d1, t24 github, t25 slack, t26 git.
+
+### t17 ACCEPTED (Lead, 2026-06-23)
+- **[Constructor]** `cfs-driver-sql` (pg/mysql/sqlite behind Dialect, query→parameterized SQL pushdown truthful residual, injection-safe, ACID txn, view-write rejection, secret-safe URIs). +22 tests, 538 green. **[Architect]** Approve with observations (injection PASS, residual PASS, t23-reuse PASS). **[Planner]** E2E approved 15/15 (DROP TABLE stored as data, rollback verified).
+- **t23 reuse**: D1 = sqlite Dialect emitter + an HTTP `SqlBackend`; `commit_transaction(&[DmlOp])` maps to D1's batch endpoint (D1 has no interactive BEGIN/COMMIT — satisfy ACID via batch atomicity). Carry-overs: per-backend injection conformance test (HTTP backend must send params as structured bound array, not interpolate); mysql ON DUPLICATE KEY semantics note; keyless-write guard flattens to Terminal through bridge.
