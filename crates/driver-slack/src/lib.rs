@@ -64,7 +64,12 @@ pub mod dto;
 pub mod effect;
 mod error;
 pub mod events;
-pub mod hmac;
+/// The crypto primitives `parse_event` verifies the `X-Slack-Signature` with (HMAC-SHA256 over
+/// `v0:timestamp:body` + a constant-time compare, RFD §10). t34 single-sourced these into the
+/// shared pure leaf `cfs-crypto-core` (deleting this crate's former private `src/hmac.rs` copy);
+/// this re-export keeps the public `cfs_driver_slack::hmac::*` path stable while the one
+/// implementation now lives in — and is vector-pinned by — the shared leaf.
+pub use cfs_crypto_core as hmac;
 pub mod path;
 pub mod procs;
 pub mod pushdown;

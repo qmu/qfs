@@ -249,6 +249,7 @@ name = "cfs-cron"
 version = "0.0.0"
 dependencies = [
  "cfs-core",
+ "cfs-crypto-core",
  "cfs-exec",
  "cfs-parser",
  "cfs-server",
@@ -258,6 +259,10 @@ dependencies = [
  "tokio",
  "tracing",
 ]
+
+[[package]]
+name = "cfs-crypto-core"
+version = "0.0.0"
 
 [[package]]
 name = "cfs-driver"
@@ -410,6 +415,7 @@ dependencies = [
 name = "cfs-driver-objstore"
 version = "0.0.0"
 dependencies = [
+ "cfs-crypto-core",
  "cfs-driver",
  "cfs-http-core",
  "cfs-plan",
@@ -427,6 +433,7 @@ dependencies = [
 name = "cfs-driver-slack"
 version = "0.0.0"
 dependencies = [
+ "cfs-crypto-core",
  "cfs-driver",
  "cfs-http-core",
  "cfs-plan",

@@ -5,7 +5,7 @@
 
 use crate::clock::Clock;
 use crate::commit::{CommitError, Committer};
-use crate::hash::sha256_hex;
+use cfs_crypto_core::sha256_hex;
 use crate::lastrun::bind_last_run;
 use crate::schedule::Instant;
 use crate::store::{JobBinding, JobStore, RunRecord, RunStatus};

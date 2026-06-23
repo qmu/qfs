@@ -24,7 +24,7 @@
 use cfs_http_core::HttpRequest;
 use cfs_secrets::Secret;
 
-use crate::sha256::{hex_lower, hmac_sha256, sha256_hex};
+use cfs_crypto_core::{hex_lower, hmac_sha256, sha256_hex};
 
 /// The literal payload hash for an unsigned (streamed) body — a sanctioned SigV4 mode that lets a
 /// large/streamed object be signed without buffering its bytes.

@@ -1,26 +1,44 @@
-//! A self-contained, dependency-free **SHA-256** + **HMAC-SHA256** + **constant-time compare** —
-//! the crypto primitives [`parse_event`](crate::events::parse_event) needs to verify the
-//! `X-Slack-Signature` (RFD-0001 §9 "thin client, no vendor SDK"; RFD §10 replay defense).
+//! cfs shared pure crypto leaf (t34): the **single source of truth** for the dependency-free,
+//! wasm-clean crypto primitives the workspace needs — **SHA-256** (FIPS 180-4), **HMAC-SHA256**
+//! (RFC 2104 / RFC 4231), lowercase-hex, and a **constant-time** byte compare.
 //!
-//! ## Why hand-rolled (a recorded engineering choice, mirroring t22)
-//! The trip host's cargo cache does not carry `sha2`/`hmac`/`ring`, and **the wasm32 target must
-//! build** — `parse_event` is the genuinely-wasm-required Workers `WEBHOOK` ingress (RFD §8). A
-//! pure-`core`/`alloc` SHA-256 (FIPS 180-4) has no native-link hazard on `wasm32-unknown-unknown`
-//! (unlike `ring`/openssl). t22's `cfs-driver-objstore` already carries an identical private
-//! SHA-256/HMAC-SHA256 for SigV4, but it lives in that crate's *private* module (no shared crypto
-//! leaf exists yet), so reusing it would mean a crate-dep on the runtime-bearing objstore driver —
-//! a leaf-confinement violation. The ticket explicitly permits reimplementing minimally rather
-//! than pulling a native-only crypto crate that breaks wasm; this module is that minimal pure
-//! reimplementation, pinned to the same RFC vectors.
+//! ## Why this crate exists (the t34 single-sourcing)
+//! Before it, an identical SHA-256 (and, in two cases, HMAC-SHA256 / constant_time_eq) was
+//! independently vendored THREE times:
+//!   * `cfs-driver-objstore::sha256` — SigV4 request signing,
+//!   * `cfs-driver-slack::hmac` — `X-Slack-Signature` verification (+ `constant_time_eq`),
+//!   * `cfs-cron::hash` — the deterministic `hash(job, scheduled_for)` run-id.
 //!
-//! ## Constant-time compare (the addition t22 did not need)
-//! Unlike SigV4 signing — which never *compares* a secret — verifying an inbound Slack signature
-//! **is** a secret comparison, so [`constant_time_eq`] is timing-safe (no early return on the
-//! first mismatching byte). This is the replay-defense primitive the ticket calls out.
+//! No shared crypto leaf existed, and depending on any of those crates would have pulled a
+//! runtime/driver coupling into the consumer (each is a `cfs-runtime` leaf or a binding crate),
+//! so each crate re-vendored the routine. t34's webhook HMAC verification would have been a
+//! FOURTH copy; instead this crate is created first so all four share ONE pinned implementation.
+//!
+//! ## Why pure-std + hand-rolled (a recorded engineering choice, inherited from t22/t25/t33)
+//! The trip host's cargo cache does not carry `sha2`/`hmac`/`ring`, and the **wasm32 target must
+//! build** (the CF Workers `WEBHOOK` ingress, RFD §8). A pure-`std` SHA-256 (FIPS 180-4) is
+//! ~80 lines, has NO native-link hazard on `wasm32-unknown-unknown` (unlike `ring`/openssl), and
+//! is pinned to the canonical FIPS 180-4 + RFC 4231 known-answer vectors below (the same vectors
+//! the three former copies pinned, plus the AWS SigV4 end-to-end vectors in objstore).
+//!
+//! ## Purity / dependency stance
+//! This is a **TRUE pure leaf**: it depends on NOTHING — no workspace crate and no vendor crate,
+//! `std`-only by construction. That is what makes it safe for every consumer, including the
+//! off-runtime watchtower and the wasm32 ingress, to depend on it without inheriting any
+//! runtime/native coupling. The pure-leaf dep guard in `crates/cmd/tests/dep_direction.rs`
+//! mechanically enforces the empty dependency set.
+//!
+//! ## Constant-time discipline
+//! SHA-256 / HMAC-SHA256 here are NOT constant-time and must be used ONLY to compute a digest or
+//! signature over (public) material, never to *compare* secret bytes directly. The one secret
+//! comparison the workspace performs — verifying an inbound webhook/Slack signature — MUST route
+//! through [`constant_time_eq`], which never short-circuits on the first mismatching byte (RFD §10
+//! replay defense).
 
 #![allow(clippy::many_single_char_names)]
 
-/// SHA-256 round constants (FIPS 180-4 §4.2.2).
+/// SHA-256 round constants (FIPS 180-4 §4.2.2): the first 32 bits of the fractional parts of the
+/// cube roots of the first 64 primes.
 const K: [u32; 64] = [
     0x428a_2f98,
     0x7137_4491,
@@ -88,7 +106,8 @@ const K: [u32; 64] = [
     0xc671_78f2,
 ];
 
-/// The SHA-256 initial hash value (FIPS 180-4 §5.3.3).
+/// The SHA-256 initial hash value (FIPS 180-4 §5.3.3): the first 32 bits of the fractional parts
+/// of the square roots of the first 8 primes.
 const H0: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -100,11 +119,12 @@ const H0: [u32; 8] = [
     0x5be0_cd19,
 ];
 
-/// The SHA-256 digest of `data` (32 bytes).
+/// The SHA-256 digest of `data` (32 bytes), FIPS 180-4.
 #[must_use]
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     let mut h = H0;
 
+    // Pre-process (pad): append 0x80, then zeros, then the 64-bit big-endian bit length.
     let bit_len = (data.len() as u64).wrapping_mul(8);
     let mut msg = data.to_vec();
     msg.push(0x80);
@@ -113,6 +133,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     }
     msg.extend_from_slice(&bit_len.to_be_bytes());
 
+    // Process each 512-bit (64-byte) chunk.
     for chunk in msg.chunks_exact(64) {
         let mut w = [0u32; 64];
         for (i, word) in w.iter_mut().enumerate().take(16) {
@@ -170,6 +191,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 #[must_use]
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     const BLOCK: usize = 64;
+    // Keys longer than the block size are first hashed.
     let mut k = if key.len() > BLOCK {
         sha256(key).to_vec()
     } else {
@@ -195,7 +217,7 @@ pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     sha256(&outer)
 }
 
-/// Lowercase-hex encode a byte slice (the `v0=<hex>` Slack signature rendering).
+/// Lowercase-hex encode a byte slice (the `v0=<hex>` / SigV4 / run-id rendering).
 #[must_use]
 pub fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -207,10 +229,18 @@ pub fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
-/// **Constant-time** byte-slice equality — the timing-safe compare verifying a Slack signature
-/// (RFD §10 replay defense). Always scans every byte of the longer input; never short-circuits on
-/// the first mismatch, so the comparison's duration does not leak how many leading bytes matched.
-/// Differing lengths compare unequal but still in constant time over the max length.
+/// The lowercase-hex SHA-256 of `data` — the form SigV4 puts in the canonical request, and the
+/// form the scheduler renders into run-ids / plan fingerprints.
+#[must_use]
+pub fn sha256_hex(data: &[u8]) -> String {
+    hex_lower(&sha256(data))
+}
+
+/// **Constant-time** byte-slice equality — the timing-safe compare verifying an inbound webhook /
+/// Slack signature (RFD §10 replay defense). Always scans every byte of the longer input; never
+/// short-circuits on the first mismatch, so the comparison's duration does not leak how many
+/// leading bytes matched. Differing lengths compare unequal but still in constant time over the
+/// max length.
 #[must_use]
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     // Fold the length difference into the accumulator so unequal lengths are never equal, while
@@ -231,13 +261,18 @@ mod tests {
 
     #[test]
     fn sha256_matches_fips_vectors() {
+        // The canonical FIPS 180-4 known-answer vectors.
         assert_eq!(
-            hex_lower(&sha256(b"")),
+            sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
         assert_eq!(
-            hex_lower(&sha256(b"abc")),
+            sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
         );
     }
 
@@ -249,6 +284,21 @@ mod tests {
             hex_lower(&tag),
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
         );
+    }
+
+    #[test]
+    fn hmac_handles_keys_longer_than_the_block() {
+        // The >64-byte key path (RFC 4231 Test Case 4 shape): assert it runs and is deterministic.
+        let key = vec![0xaau8; 131];
+        let a = hmac_sha256(&key, b"Test Using Larger Than Block-Size Key");
+        let b = hmac_sha256(&key, b"Test Using Larger Than Block-Size Key");
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 32);
+    }
+
+    #[test]
+    fn hex_lower_is_zero_padded() {
+        assert_eq!(hex_lower(&[0x00, 0x0f, 0xff]), "000fff");
     }
 
     #[test]

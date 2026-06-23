@@ -37,7 +37,6 @@ pub mod clock;
 pub mod commit;
 #[cfg(feature = "native")]
 pub mod daemon;
-mod hash;
 pub mod lastrun;
 pub mod policy;
 pub mod schedule;

@@ -44,6 +44,11 @@ cfs-runtime = { path = "../runtime", optional = true }
 # The single secrets surface (t27): the bot token + signing secret are cfs_secrets::Secrets,
 # resolved only at commit/verify time, never in a DTO, Debug, error, or log.
 cfs-secrets = { path = "../secrets" }
+# The shared pure crypto leaf (t34): SHA-256 + HMAC-SHA256 + constant_time_eq that parse_event
+# verifies X-Slack-Signature with (re-exported as `cfs_driver_slack::hmac`). A TRUE pure leaf
+# (zero deps, std-only) so it adds no runtime/native coupling and stays wasm-clean for the Workers
+# WEBHOOK ingress — replacing this crate's former private src/hmac.rs copy.
+cfs-crypto-core = { path = "../crypto-core" }
 # The shared pure HTTP DTO + redaction leaf (t19): the single source of truth for
 # HttpMethod/HttpRequest/HttpResponse and the SENSITIVE_HEADERS redaction set. This driver trades
 # ONLY in these DTOs across the local HttpTransport seam — no hand-rolled HTTP DTO (the t19

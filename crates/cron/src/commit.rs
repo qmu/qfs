@@ -113,7 +113,7 @@ impl Committer for RecordingCommitter {
         // Fingerprint the plan structure deterministically (counts/hashes only — never payload).
         // The preview projection is a stable, secret-free description; hash its debug form.
         let preview = cfs_core::preview(&plan);
-        let plan_hash = crate::hash::sha256_hex(format!("{preview:?}").as_bytes());
+        let plan_hash = cfs_crypto_core::sha256_hex(format!("{preview:?}").as_bytes());
 
         // Commit over a recording applier (no creds, no network — the PREVIEW path).
         let mut applier = cfs_core::RecordingApplier::new();

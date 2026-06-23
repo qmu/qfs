@@ -31,6 +31,11 @@ cfs-http-core = { path = "../http-core" }
 # The single secrets surface (t27): the AWS/R2 secret-access-key (+ optional session token) is
 # a cfs_secrets::Secret exposed only inside the SigV4 signer, never logged, never in an error.
 cfs-secrets = { path = "../secrets" }
+# The shared pure crypto leaf (t34): SHA-256 (FIPS 180-4) + HMAC-SHA256 the SigV4 signer derives
+# keys / hashes canonical material with. A TRUE pure leaf (zero deps, std-only), so depending on
+# it adds no runtime/native coupling and keeps the wasm build clean. Replaces this crate's former
+# private src/sha256.rs copy — one source for the three former vendorings.
+cfs-crypto-core = { path = "../crypto-core" }
 # Owned DTOs (de)serialize for the ls/DESCRIBE rows; no vendor type ever crosses the boundary.
 serde = { workspace = true }
 serde_json = { workspace = true }

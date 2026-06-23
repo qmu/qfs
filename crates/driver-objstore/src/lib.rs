@@ -61,7 +61,6 @@ pub mod multipart;
 pub mod path;
 pub mod registry;
 mod schema;
-mod sha256;
 mod sigv4;
 mod xml;
 

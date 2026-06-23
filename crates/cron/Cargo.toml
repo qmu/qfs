@@ -31,6 +31,12 @@ cfs-core = { path = "../core" }
 # The parser AST (Statement/Expr/FnRef/Literal) the injection-safe LAST_RUN() rewrite walks and
 # the PlanSpec rehydrates into. Reached directly for the AST node types only. tokio-free.
 cfs-parser = { path = "../parser" }
+# The shared pure crypto leaf (t34): the wasm-clean SHA-256 (FIPS 180-4) the deterministic
+# hash(job, scheduled_for) run-id and the last_plan_hash fingerprint derive from. A TRUE pure leaf
+# (zero deps, std-only) used in the PURE scheduler core, so it is NON-optional (always present) and
+# carries no native/runtime coupling into the wasm32 build — replacing this crate's former private
+# src/hash.rs copy.
+cfs-crypto-core = { path = "../crypto-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

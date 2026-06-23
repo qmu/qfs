@@ -834,3 +834,53 @@ fn http_core_is_a_pure_leaf_single_sourcing_the_redaction_set() {
          {google_auth_deps:?}"
     );
 }
+
+#[test]
+fn crypto_core_is_a_pure_leaf_single_sourcing_the_three_vendored_copies() {
+    // t34: cfs-crypto-core is the SINGLE SOURCE OF TRUTH for the dependency-free, wasm-clean
+    // crypto primitives — SHA-256 (FIPS 180-4), HMAC-SHA256 (RFC 4231), lowercase-hex, and a
+    // constant-time byte compare. Before it, an identical SHA-256 (and in two cases HMAC /
+    // constant_time_eq) was independently vendored THREE times: cfs-driver-objstore::sha256
+    // (SigV4), cfs-driver-slack::hmac (signature verification), and cfs-cron::hash (run-id). No
+    // shared crypto leaf existed, and depending on any of those crates would have pulled a
+    // runtime/binding coupling into the consumer, so each re-vendored the routine. t34's webhook
+    // HMAC verification would have been a FOURTH copy; instead this crate single-sources all of
+    // them. This test mirrors `http_core_is_a_pure_leaf_...` but enforces a STRICTER property:
+    //
+    //   (a) cfs-crypto-core is a TRUE pure leaf — it depends on NOTHING (no workspace crate AND no
+    //       vendor crate; std-only by construction). That maximal purity is what makes it safe for
+    //       EVERY consumer, including the off-runtime watchtower webhook verifier and the wasm32
+    //       Workers WEBHOOK ingress, to depend on it without inheriting any coupling. (Unlike
+    //       cfs-http-core, which legitimately depends on cfs-secrets for the REDACTED marker, the
+    //       crypto leaf needs no such marker — so its allowed dep set is EMPTY.)
+    //   (b) the three former copy-holders all depend on the shared leaf now — so none keeps a
+    //       second SHA-256/HMAC copy; the leaf is the only place they are defined.
+    let graph = load_graph();
+
+    // (a) TRUE pure leaf: cfs-crypto-core has ZERO dependencies of any kind.
+    let crypto_core_deps = graph
+        .direct_deps
+        .get("cfs-crypto-core")
+        .expect("cfs-crypto-core is a workspace package");
+    assert!(
+        crypto_core_deps.is_empty(),
+        "purity violation: cfs-crypto-core must be a TRUE pure leaf with ZERO dependencies \
+         (no workspace crate, no vendor crate — std-only), so depending on it adds no coupling to \
+         any consumer, including the off-runtime watchtower verifier and the wasm32 WEBHOOK \
+         ingress. Deps were: {crypto_core_deps:?}"
+    );
+
+    // (b) the three former vendorings all depend on the shared leaf — single source, no copy left.
+    for crate_name in ["cfs-driver-objstore", "cfs-driver-slack", "cfs-cron"] {
+        let deps = graph
+            .direct_deps
+            .get(crate_name)
+            .unwrap_or_else(|| panic!("{crate_name} is a workspace package"));
+        assert!(
+            deps.iter().any(|d| d == "cfs-crypto-core"),
+            "single-source violation: {crate_name} must depend on cfs-crypto-core for the shared \
+             SHA-256/HMAC-SHA256/constant_time_eq (t34) rather than vendoring a private copy. \
+             Deps were: {deps:?}"
+        );
+    }
+}
