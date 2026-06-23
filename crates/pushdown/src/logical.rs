@@ -122,6 +122,10 @@ pub enum LogicalPlan {
     Scan {
         /// Which source/driver this scan reads.
         source: SourceId,
+        /// The full addressed VFS path the `FROM` named (`/driver/seg/seg`), retained so a
+        /// read driver scan can navigate to the exact node, not just the mount root (t28). The
+        /// `source` keys the registry/pushdown profile; `path` is the concrete address.
+        path: String,
         /// The node's output schema (from the driver's pure `describe`, t07).
         schema: Schema,
     },
@@ -245,9 +249,24 @@ impl LogicalPlan {
         }
     }
 
-    /// Convenience constructor for a base scan.
+    /// Convenience constructor for a base scan with an empty address (callers that have no
+    /// concrete path — e.g. an inline `VALUES` synthetic source).
     #[must_use]
     pub fn scan(source: SourceId, schema: Schema) -> Self {
-        LogicalPlan::Scan { source, schema }
+        LogicalPlan::Scan {
+            source,
+            path: String::new(),
+            schema,
+        }
+    }
+
+    /// Convenience constructor for a base scan carrying the concrete addressed VFS path (t28).
+    #[must_use]
+    pub fn scan_at(source: SourceId, path: impl Into<String>, schema: Schema) -> Self {
+        LogicalPlan::Scan {
+            source,
+            path: path.into(),
+            schema,
+        }
     }
 }

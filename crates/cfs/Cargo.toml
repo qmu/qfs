@@ -14,6 +14,22 @@ path = "src/main.rs"
 
 [dependencies]
 cfs-cmd = { path = "../cmd" }
+# t28 interactive shell: the binary is the ONE place that owns the runtime-coupled local read
+# facet. It is an allowlisted `cfs-runtime` consumer AND a leaf (nothing depends on it), so the
+# `cfs → cfs-driver-local → cfs-runtime` edge keeps tokio confined (it dead-ends in the leaf).
+# Putting the adapter here — rather than in cfs-cmd — is what keeps cfs-cmd off both the runtime
+# and the driver crates (the runtime-leaf-confinement guard would fire on a `cfs-cmd →
+# cfs-driver-local` edge). The pure shell LOGIC stays in cfs-exec; the binary only wires the
+# registries + REPL driver and injects them via cfs_cmd's ShellLauncher.
+cfs-core = { path = "../core" }
+cfs-exec = { path = "../exec" }
+cfs-driver-local = { path = "../driver-local" }
+cfs-pushdown = { path = "../pushdown" }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+# Temp-dir fixtures for the shell's end-to-end local read tests (never touches user files).
+tempfile = "3"
 
 [lints]
 workspace = true

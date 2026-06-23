@@ -108,12 +108,18 @@ fn nothing_depends_on_cmd() {
 }
 
 #[test]
-fn binary_depends_only_on_cmd_among_workspace_crates() {
+fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
+    // The `cfs` binary forwards argv to `cfs-cmd` and, since t28, ALSO hosts the interactive
+    // shell's composition root: the runtime-coupled local read facet (`cfs-driver-local`) and the
+    // registry wiring it injects into `cfs-cmd` via the `ShellLauncher`. That adapter cannot live
+    // in cfs-cmd (a `cfs-cmd → cfs-driver-local` edge would make cfs-cmd a non-leaf runtime
+    // consumer, tripping the runtime-confinement guard) nor in cfs-exec (confined off the driver
+    // crates), so it lives in the binary — the leaf sink where tokio dead-ends. We therefore pin
+    // the binary's workspace deps to an EXACT allowed set (cfs-cmd + the shell-composition crates),
+    // so an UNINTENDED new binary dep still fails, while the deliberate t28 set is permitted.
     let graph = load_graph();
     let bin_deps = graph.direct_deps.get("cfs").expect("cfs binary package");
-    let workspace_crates = [
-        "cfs-cmd",
-        "cfs-core",
+    let lower_spine = [
         "cfs-server",
         "cfs-lang",
         "cfs-plan",
@@ -121,15 +127,39 @@ fn binary_depends_only_on_cmd_among_workspace_crates() {
         "cfs-codec",
         "cfs-parser",
         "cfs-types",
+        "cfs-runtime",
     ];
-    let ws_deps: Vec<&String> = bin_deps
-        .iter()
-        .filter(|d| workspace_crates.contains(&d.as_str()))
-        .collect();
-    assert_eq!(
-        ws_deps,
-        vec![&"cfs-cmd".to_string()],
-        "the cfs binary must depend on cfs-cmd only (thin entrypoint)"
+    // The binary must NOT reach directly into the lower spine / the runtime: it composes only
+    // through cfs-cmd, cfs-exec (the integration layer's read seam), cfs-core (Engine), and the
+    // concrete leaf driver it wires (cfs-driver-local) + cfs-pushdown (ScanNode for the adapter).
+    for f in lower_spine {
+        assert!(
+            !bin_deps.iter().any(|d| d == f),
+            "spine violation: the cfs binary must not depend directly on {f}; it composes the \
+             shell through cfs-cmd / cfs-exec / cfs-core / cfs-driver-local only. Deps: {bin_deps:?}"
+        );
+    }
+    let allowed = [
+        "cfs-cmd",
+        "cfs-core",
+        "cfs-exec",
+        "cfs-driver-local",
+        "cfs-pushdown",
+    ];
+    let workspace_prefixed: Vec<&String> =
+        bin_deps.iter().filter(|d| d.starts_with("cfs")).collect();
+    for d in &workspace_prefixed {
+        assert!(
+            allowed.contains(&d.as_str()),
+            "the cfs binary gained an unexpected workspace dep {d} (allowed: {allowed:?}). If this \
+             is intended shell-composition wiring, extend the allowlist; otherwise route it through \
+             cfs-cmd. Deps: {bin_deps:?}"
+        );
+    }
+    // It must still depend on cfs-cmd (the dispatch front door).
+    assert!(
+        bin_deps.iter().any(|d| d == "cfs-cmd"),
+        "the cfs binary must still depend on cfs-cmd (the argv dispatch front door)"
     );
 }
 
@@ -303,7 +333,15 @@ fn runtime_is_confined_to_plan_and_types() {
             .direct_deps
             .iter()
             .find(|(other, od)| {
-                other.as_str() != consumer.as_str() && od.iter().any(|d| d == *consumer)
+                other.as_str() != consumer.as_str()
+                    && od.iter().any(|d| d == *consumer)
+                    // The `cfs` BINARY is the workspace's composition root — a true sink that
+                    // nothing depends on. Since t28 it wires the local read facet
+                    // (cfs-driver-local, a runtime consumer) into the shell, so it depends on a
+                    // runtime consumer. This does NOT widen tokio's reach: the binary is the
+                    // terminal node, so tokio still dead-ends (it cannot transit THROUGH the
+                    // binary back into the spine — nothing depends on the binary). Exempt it.
+                    && other.as_str() != "cfs"
             })
             .map(|(other, _)| other.clone());
         assert!(
@@ -311,7 +349,7 @@ fn runtime_is_confined_to_plan_and_types() {
             "confinement violation: {consumer} depends on cfs-runtime but is NOT a leaf — \
              {dependent:?} depends back onto it, so tokio could transit out of the runtime, \
              through {consumer}, and back into the spine. A cfs-runtime consumer MUST be a \
-             leaf (no workspace crate may depend onto it)."
+             leaf (no workspace crate other than the terminal `cfs` binary may depend onto it)."
         );
     }
 
@@ -471,20 +509,26 @@ fn exec_is_confined_above_the_spine_and_off_the_runtime() {
         );
     }
 
-    // (b) Only cfs-cmd may depend on cfs-exec — no spine/lower crate may reach UP into it.
+    // (b) Only cfs-cmd and the terminal `cfs` binary may depend on cfs-exec — no spine/lower
+    // crate may reach UP into it. Since t28 the binary consumes cfs-exec directly too: it hosts
+    // the interactive shell's composition root (the local ReadDriver adapter + the
+    // `Session`/`VfsPath`/`ReadRegistry` wiring) and injects the wired shell into cfs-cmd via the
+    // `ShellLauncher`. The binary is a terminal sink (nothing depends on it), so this is not a
+    // layer inversion — it is the composition root consuming the integration layer, exactly as
+    // cfs-cmd does. A SPINE/LOWER crate reaching up into cfs-exec still fails here.
     let exec_consumers: Vec<&String> = graph
         .direct_deps
         .iter()
         .filter(|(pkg, deps)| pkg.as_str() != "cfs-exec" && deps.iter().any(|d| d == "cfs-exec"))
         .map(|(pkg, _)| pkg)
         .collect();
+    let allowed_exec_consumers = ["cfs-cmd", "cfs"];
     for consumer in &exec_consumers {
-        assert_eq!(
-            consumer.as_str(),
-            "cfs-cmd",
-            "topology violation: {consumer} depends on cfs-exec, but only cfs-cmd (and \
-             transitively the `cfs` binary) may consume the integration layer. A spine/lower \
-             crate reaching UP into cfs-exec is a layer inversion (t29)."
+        assert!(
+            allowed_exec_consumers.contains(&consumer.as_str()),
+            "topology violation: {consumer} depends on cfs-exec, but only cfs-cmd and the terminal \
+             `cfs` binary (the t28 shell composition root) may consume the integration layer. A \
+             spine/lower crate reaching UP into cfs-exec is a layer inversion (t29)."
         );
     }
 }

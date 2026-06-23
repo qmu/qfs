@@ -18,7 +18,11 @@ use cfs_driver::{CfsError, Driver, ProcSig};
 
 /// Registry of path mounts → drivers (RFD-0001 §3, "paths"). Keyed by mount string
 /// (`/mail`, `/s3`, …).
-#[derive(Default)]
+///
+/// `Clone` is cheap (the map holds `Arc<dyn Driver>`), enabling the t28 shell completer to
+/// hand an owned snapshot to a timeout-bounded scan thread without holding a borrow across the
+/// thread boundary.
+#[derive(Default, Clone)]
 pub struct MountRegistry {
     mounts: BTreeMap<String, Arc<dyn Driver>>,
 }

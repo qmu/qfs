@@ -22,6 +22,15 @@ use std::path::PathBuf;
 use cfs_core::{CfsError, Engine, OutputMode, Session};
 use clap::{Parser, Subcommand};
 
+/// The interactive-shell launcher the binary injects (t28). The shell's REAL local-FS read
+/// facet lives in the **binary** crate, not here: that adapter depends on `cfs-driver-local`,
+/// which is a `cfs-runtime` consumer, so a `cfs-cmd → cfs-driver-local` edge would make cfs-cmd
+/// a non-leaf runtime consumer and (correctly) fail the runtime-confinement guard. Injecting the
+/// launcher keeps cfs-cmd off both the runtime and the driver crates: cfs-cmd only knows "no
+/// subcommand → call the launcher", and the leaf binary (an allowlisted runtime consumer)
+/// supplies the registry wiring + REPL driver. Returns the process exit code.
+pub type ShellLauncher<'a> = dyn Fn() -> i32 + 'a;
+
 /// cfs — one binary that is both a CLI and a server, exposing every external
 /// service through one uniform, filesystem-shaped, pipe-SQL DSL (RFD-0001 §1).
 #[derive(Parser, Debug)]
@@ -119,10 +128,11 @@ enum AccountVerb {
 /// and maps the outcome to a process exit code (`0` on success, `1` on a structured
 /// error, `2` on argv/usage errors from clap). Never panics.
 ///
-/// Returns the intended process exit code; the binary forwards it to
-/// `std::process::exit`.
+/// The no-subcommand interactive shell is launched via the injected [`ShellLauncher`] (the
+/// binary supplies the runtime-coupled local read facet + REPL driver). Returns the intended
+/// process exit code; the binary forwards it to `std::process::exit`.
 #[must_use]
-pub fn run<I, T>(args: I) -> i32
+pub fn run<I, T>(args: I, shell: &ShellLauncher) -> i32
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -175,12 +185,19 @@ where
         );
     }
 
+    // No subcommand → the interactive shell, run by the injected launcher (which owns the
+    // runtime-coupled local read facet + REPL driver; see [`ShellLauncher`]). It returns the
+    // process exit code directly.
+    if cli.cmd.is_none() {
+        tracing::debug!(target: "cfs::cmd", "dispatch interactive shell via launcher");
+        return shell();
+    }
+
     let outcome = match cli.cmd {
         // Handled above; unreachable here but kept total.
-        Some(Command::Run { .. }) => Ok(()),
+        Some(Command::Run { .. }) | None => Ok(()),
         Some(Command::Serve { config }) => cfs_server::serve(&config),
         Some(Command::Account { verb }) => dispatch_account(&engine, &session, &verb),
-        None => dispatch_shell(&engine, &session),
     };
 
     match outcome {
@@ -278,12 +295,6 @@ fn read_stdin() -> String {
     buf
 }
 
-/// Dispatch the interactive shell. E0: structured not-implemented (no domain logic).
-fn dispatch_shell(_engine: &Engine, _session: &Session) -> Result<(), CfsError> {
-    tracing::debug!(target: "cfs::cmd", "dispatch interactive shell (stub)");
-    Err(CfsError::NotImplemented { feature: "shell" })
-}
-
 /// Dispatch `cfs account <verb>` (t27). The credential store + resolver substrate this
 /// drives lives in `cfs-secrets` (consumed via [`cfs_core::Secrets`]); the verb surface
 /// is declared here and the credential-bearing I/O (prompt → keyring/passphrase →
@@ -359,6 +370,21 @@ fn init_tracing() {
 mod tests {
     use super::*;
 
+    /// A no-op shell launcher for the dispatch tests (the real REPL is tested in the binary
+    /// crate's `shell` module). Returns exit 0, standing in for an immediate EOF.
+    fn noop_shell() -> i32 {
+        0
+    }
+
+    /// Run with the no-op shell launcher (every non-shell test path ignores it).
+    fn run_t<I, T>(args: I) -> i32
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        run(args, &noop_shell)
+    }
+
     #[test]
     fn run_dispatch_resolves_single_statement_source() {
         // t29: `cfs run` now dispatches into the execution layer. Resolving exactly one
@@ -379,24 +405,33 @@ mod tests {
     }
 
     #[test]
-    fn shell_dispatch_is_not_implemented() {
-        let engine = Engine::new();
-        let session = Session::new();
-        let err = dispatch_shell(&engine, &session).unwrap_err();
-        assert!(matches!(err, CfsError::NotImplemented { feature: "shell" }));
+    fn no_subcommand_invokes_the_shell_launcher() {
+        // The shell is now implemented (t28) and launched via the injected ShellLauncher: with
+        // no subcommand, `run` calls the launcher and returns its exit code. The real REPL +
+        // local read facet are tested in the binary crate's `shell` module.
+        let launched = std::cell::Cell::new(false);
+        let code = run(["cfs"], &|| {
+            launched.set(true);
+            0
+        });
+        assert!(
+            launched.get(),
+            "no subcommand must invoke the shell launcher"
+        );
+        assert_eq!(code, 0);
     }
 
     #[test]
     fn run_bad_syntax_is_parse_error_exit_two() {
         // `cfs run -e 'anything'` reaches a structured parse error (exit 2), not a panic.
-        let code = run(["cfs", "run", "-e", "anything"]);
+        let code = run_t(["cfs", "run", "-e", "anything"]);
         assert_eq!(code, 2);
     }
 
     #[test]
     fn run_relative_path_is_usage_error_exit_two() {
         // A relative-path address in one-shot mode is rejected with a usage error (exit 2).
-        let code = run(["cfs", "run", "-e", "FROM mail/inbox |> LIMIT 1"]);
+        let code = run_t(["cfs", "run", "-e", "FROM mail/inbox |> LIMIT 1"]);
         assert_eq!(code, 2);
     }
 
@@ -404,13 +439,13 @@ mod tests {
     fn run_unknown_source_is_capability_exit_three() {
         // With no read driver registered, an absolute `FROM /x` resolves to a structured
         // capability error (exit 3) — never a panic.
-        let code = run(["cfs", "run", "-e", "FROM /mail/inbox |> LIMIT 1", "--json"]);
+        let code = run_t(["cfs", "run", "-e", "FROM /mail/inbox |> LIMIT 1", "--json"]);
         assert_eq!(code, 3);
     }
 
     #[test]
     fn serve_returns_exit_code_one_on_not_implemented() {
-        let code = run(["cfs", "serve", "x.cfs"]);
+        let code = run_t(["cfs", "serve", "x.cfs"]);
         assert_eq!(code, 1);
     }
 
@@ -454,19 +489,13 @@ mod tests {
     #[test]
     fn account_subcommand_parses_and_exits_one() {
         // `cfs account list` parses cleanly and reaches the structured stub (exit 1).
-        assert_eq!(run(["cfs", "account", "list"]), 1);
-        assert_eq!(run(["cfs", "account", "add", "mail", "work"]), 1);
-    }
-
-    #[test]
-    fn no_subcommand_runs_shell_stub_exit_one() {
-        let code = run(["cfs"]);
-        assert_eq!(code, 1);
+        assert_eq!(run_t(["cfs", "account", "list"]), 1);
+        assert_eq!(run_t(["cfs", "account", "add", "mail", "work"]), 1);
     }
 
     #[test]
     fn help_exits_zero_without_panic() {
-        let code = run(["cfs", "--help"]);
+        let code = run_t(["cfs", "--help"]);
         assert_eq!(code, 0);
     }
 

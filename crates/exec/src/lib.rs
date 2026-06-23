@@ -28,6 +28,7 @@ mod error;
 mod exec;
 mod output;
 mod read;
+pub mod shell;
 
 pub use dto::{PlanPreview, RowSet};
 pub use error::{ErrorKind, ExecError, ExitCode};
@@ -36,6 +37,7 @@ pub use exec::{
 };
 pub use output::{JsonRenderer, OutputFormat, Renderer, TableRenderer};
 pub use read::{ReadDriver, ReadRegistry};
+pub use shell::{Builtin, Completer, Outcome, Session, VfsPath};
 
 use std::io::Write;
 

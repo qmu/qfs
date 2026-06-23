@@ -150,15 +150,33 @@ fn push_chain(
         return Err(PlanError::capability_denied(source, "SELECT"));
     }
 
-    let mut acc = Acc::new(source.clone(), profile);
+    let mut acc = Acc::new(source.clone(), scan_path(plan), profile);
     let schema = walk_chain(plan, &mut acc);
     Ok(acc.finish(schema))
+}
+
+/// The concrete addressed VFS path of the single `Scan` leaf at the bottom of a unary chain
+/// (t28). Empty if the chain bottoms out in a non-path source.
+fn scan_path(plan: &LogicalPlan) -> String {
+    match plan {
+        LogicalPlan::Scan { path, .. } => path.clone(),
+        LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Project { input, .. }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Distinct { input }
+        | LogicalPlan::Aggregate { input, .. }
+        | LogicalPlan::Expand { input, .. } => scan_path(input),
+        LogicalPlan::Join { .. } | LogicalPlan::SetOp { .. } => String::new(),
+    }
 }
 
 /// The accumulator threaded down a single-source chain: the growing [`PushedQuery`] plus
 /// the residual local ops (built innermost-first, applied outermost-last).
 struct Acc<'p> {
     source: SourceId,
+    /// The concrete addressed VFS path of the scan leaf (t28).
+    path: String,
     profile: &'p PushdownProfile,
     pushed: PushedQuery,
     /// Residual ops, innermost first. Once a stage is forced local, every later
@@ -168,9 +186,10 @@ struct Acc<'p> {
 }
 
 impl<'p> Acc<'p> {
-    fn new(source: SourceId, profile: &'p PushdownProfile) -> Self {
+    fn new(source: SourceId, path: String, profile: &'p PushdownProfile) -> Self {
         Self {
             source,
+            path,
             profile,
             pushed: PushedQuery::default(),
             residual: Vec::new(),
@@ -190,6 +209,7 @@ impl<'p> Acc<'p> {
     fn finish(self, schema: Schema) -> PhysicalPlan {
         let mut node = PhysicalPlan::Scan(ScanNode {
             source: self.source,
+            path: self.path,
             pushed: self.pushed,
             schema,
         });
@@ -344,7 +364,11 @@ fn federate(plan: &LogicalPlan, reg: &SourceRegistry) -> Result<PhysicalPlan, Pl
         )),
         // A bare scan is a single-source chain, routed through `push_chain`, so this is
         // unreachable in practice; handled defensively (no partial scan).
-        LogicalPlan::Scan { source, schema } => {
+        LogicalPlan::Scan {
+            source,
+            path,
+            schema,
+        } => {
             reg.profile(source)
                 .ok_or_else(|| PlanError::unknown_source(source))?;
             if reg.readable(source) == Some(false) {
@@ -352,6 +376,7 @@ fn federate(plan: &LogicalPlan, reg: &SourceRegistry) -> Result<PhysicalPlan, Pl
             }
             Ok(PhysicalPlan::Scan(ScanNode {
                 source: source.clone(),
+                path: path.clone(),
                 pushed: PushedQuery::default(),
                 schema: schema.clone(),
             }))

@@ -98,6 +98,9 @@ impl PushedQuery {
 pub struct ScanNode {
     /// The source/driver that executes this scan.
     pub source: SourceId,
+    /// The full addressed VFS path the `FROM` named (`/driver/seg/seg`), so a read driver scans
+    /// the exact node, not just the mount root (t28). Empty for a synthetic source (`(values)`).
+    pub path: String,
     /// The owned description of the pushed work.
     pub pushed: PushedQuery,
     /// The scan's output schema (after the pushed projection/aggregate).

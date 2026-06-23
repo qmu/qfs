@@ -38,6 +38,7 @@ mod applier;
 mod effect;
 mod error;
 pub mod fs_core;
+pub mod read;
 mod row;
 
 use std::path::PathBuf;
@@ -51,6 +52,7 @@ pub use applier::{blob_write_args, copy_move_args, LocalApplier};
 pub use effect::{LocalEffect, CONTENT_COL, SRC_COL};
 pub use error::LocalError;
 pub use fs_core::Sandbox;
+pub use read::scan_rows;
 pub use row::LocalRow;
 
 /// The local-filesystem driver (RFD §5). Owns the sandbox `root` (the least-privilege

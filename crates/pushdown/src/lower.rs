@@ -146,7 +146,10 @@ fn lower_source(
             let segs: Vec<String> = path.segments.iter().map(|s| s.name.clone()).collect();
             let src = source_of(&segs);
             let schema = schema_of(&src);
-            Ok(LogicalPlan::scan(src, schema))
+            // Retain the full addressed VFS path (`/seg/seg`) so a read driver can navigate to
+            // the exact node (t28), not just the mount root.
+            let vfs = format!("/{}", segs.join("/"));
+            Ok(LogicalPlan::scan_at(src, vfs, schema))
         }
         Source::Subquery(inner) => lower_query(inner, source_of, schema_of),
         Source::Values(_) => {
