@@ -80,6 +80,25 @@ pub struct MailDraft {
     pub attachments: Vec<Attachment>,
 }
 
+impl MailDraft {
+    /// A test-only constructor for a [`MailDraft`] with the given recipients/subject/body and the
+    /// rest defaulted (no `id`, no `cc`, no attachments). Lets a downstream consumer fabricate the
+    /// otherwise `#[non_exhaustive]` DTO directly in their own tests. Gated behind `cfg(test)` or
+    /// the `test-util` feature so it never widens the production surface.
+    #[cfg(any(test, feature = "test-util"))]
+    #[must_use]
+    pub fn for_test(to: Vec<String>, subject: &str, body: &str) -> Self {
+        Self {
+            id: None,
+            to,
+            cc: Vec::new(),
+            subject: subject.to_string(),
+            body: body.to_string(),
+            attachments: Vec::new(),
+        }
+    }
+}
+
 impl MailMessage {
     /// The canonical message listing [`Schema`] — the typed columns `DESCRIBE /mail/<label>`
     /// reports and a label scan's rows conform to. Stable column order powers golden snapshots.
@@ -116,6 +135,27 @@ impl MailMessage {
             Column::new("mime", ColumnType::Text, false),
             Column::new("size", ColumnType::Int, false),
         ])
+    }
+
+    /// A test-only constructor for a [`MailMessage`] with the salient identity/header fields
+    /// set and the rest defaulted (no labels, no attachments, `date` 0, empty `snippet`). Lets a
+    /// downstream consumer fabricate the otherwise `#[non_exhaustive]` DTO to seed
+    /// [`MockGmailClient::with_message`](crate::MockGmailClient::with_message) in their own tests.
+    /// Gated behind `cfg(test)` (the crate's own tests) or the `test-util` feature so it never
+    /// widens the production surface.
+    #[cfg(any(test, feature = "test-util"))]
+    #[must_use]
+    pub fn for_test(id: &str, thread_id: &str, from: &str, subject: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            thread_id: thread_id.to_string(),
+            label_ids: Vec::new(),
+            date: 0,
+            from: from.to_string(),
+            subject: subject.to_string(),
+            snippet: String::new(),
+            attachments: Vec::new(),
+        }
     }
 
     /// Project this message onto the canonical [`MailMessage::schema`] column order as a typed

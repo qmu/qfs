@@ -36,6 +36,18 @@
 //! the `Plan` carry zero google types. The HTTP client is behind the mockable [`GmailClient`]
 //! trait so it mocks in tests (no live Gmail, no network) and `reqwest` stays in
 //! `cfs-driver-http` — this crate rides the t19 `HttpExchange` seam.
+//!
+//! ## Deferred for t20 (named parks)
+//! - **Attachment bytes fetch — parked.** A listing row carries attachment *metadata* only
+//!   ([`AttachmentMeta`]); the on-demand bytes fetch is **not implemented** in this crate. The
+//!   [`GmailClient`] trait has **no** `get_attachment` method and the
+//!   [`MailPath::Attachment`](path::MailPath) parse + its `Select` capability exist with no
+//!   client method behind them yet. Decoding the bytes into an [`Attachment`] (the read path) is
+//!   deferred to a follow-up; until then an attachment read has no backing call.
+//! - **`historyId` / `@version` incremental sync — parked.** [`VersionSupport::None`]; deferred
+//!   to the E7 trigger sibling.
+//! - **Live create→send→trash smoke test — parked.** The suite is mock-only (no env-gated live
+//!   Gmail test); the opt-in smoke test is tracked as a follow-up acceptance item.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]

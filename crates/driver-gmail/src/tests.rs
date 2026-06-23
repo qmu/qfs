@@ -163,19 +163,25 @@ fn prelude_ships_send_alias_desugaring_to_mail_send() {
 #[test]
 fn where_lowers_to_gmail_query_with_residual_kept_local() {
     use cfs_types::{CmpOp, ColRef, Literal, Predicate};
-    // from = 'x@y' AND subject = 'hello' AND is_unread = true  → fully pushed down.
+    // from = 'x@y' AND subject = 'hello' AND is_unread = true.
+    // All three q= terms are pushed as a pre-filter, but `from`/`subject` are LOSSY (Gmail's
+    // `from:`/`subject:` are address/substring matches, looser than SQL `=`), so they must be
+    // KEPT as residual for exact local re-checking. Only the exact `is_unread` (→ is:unread)
+    // drops out of the residual. Over-fetch then filter — never wrong rows (RFD §6).
+    let from_eq = Predicate::Cmp(
+        ColRef::col("from"),
+        CmpOp::Eq,
+        Literal::Text("x@y".to_string()),
+    );
+    let subject_eq = Predicate::Cmp(
+        ColRef::col("subject"),
+        CmpOp::Eq,
+        Literal::Text("hello".to_string()),
+    );
     let pred = Predicate::And(
-        Box::new(Predicate::Cmp(
-            ColRef::col("from"),
-            CmpOp::Eq,
-            Literal::Text("x@y".to_string()),
-        )),
+        Box::new(from_eq.clone()),
         Box::new(Predicate::And(
-            Box::new(Predicate::Cmp(
-                ColRef::col("subject"),
-                CmpOp::Eq,
-                Literal::Text("hello".to_string()),
-            )),
+            Box::new(subject_eq.clone()),
             Box::new(Predicate::Cmp(
                 ColRef::col("is_unread"),
                 CmpOp::Eq,
@@ -185,7 +191,13 @@ fn where_lowers_to_gmail_query_with_residual_kept_local() {
     );
     let res = query::build_query(Some("INBOX"), Some(&pred));
     assert_eq!(res.query, "label:INBOX from:x@y subject:hello is:unread");
-    assert!(res.residual.is_none(), "every term pushed down");
+    // The residual re-checks the two lossy conjuncts (from = 'x@y' AND subject = 'hello'); the
+    // exact `is_unread` is fully expressed by `is:unread` and is not re-checked.
+    assert_eq!(
+        res.residual,
+        Some(Predicate::And(Box::new(from_eq), Box::new(subject_eq),)),
+        "lossy from/subject equality is kept as residual; only exact is_unread drops out"
+    );
 
     // An OR stays residual (Gmail term-ANDing cannot express it) — combined locally.
     let or_pred = Predicate::Or(
@@ -209,6 +221,94 @@ fn where_lowers_to_gmail_query_with_residual_kept_local() {
     assert!(d.pushdown().supports_where());
     assert!(d.pushdown().supports_limit());
     assert!(!d.pushdown().supports_order());
+}
+
+#[test]
+fn exact_predicates_push_fully_with_no_residual() {
+    use cfs_types::{CmpOp, ColRef, Literal, Predicate};
+    // label = 'INBOX' AND is_unread = false: both map to Gmail terms that mean EXACTLY the SQL
+    // predicate (exact label membership / exact read-state), so the whole predicate is pushed
+    // and NOTHING is left to re-check locally — residual is None.
+    let pred = Predicate::And(
+        Box::new(Predicate::Cmp(
+            ColRef::col("label"),
+            CmpOp::Eq,
+            Literal::Text("INBOX".to_string()),
+        )),
+        Box::new(Predicate::Cmp(
+            ColRef::col("is_unread"),
+            CmpOp::Eq,
+            Literal::Bool(false),
+        )),
+    );
+    let res = query::build_query(None, Some(&pred));
+    assert_eq!(res.query, "label:INBOX is:read");
+    assert!(
+        res.residual.is_none(),
+        "exact label/is_unread mappings leave no residual to re-check"
+    );
+}
+
+#[test]
+fn lossy_predicate_returns_residual_so_engine_refilters() {
+    use cfs_types::{CmpOp, ColRef, Literal, Pattern, Predicate};
+
+    // A lossy `from = 'x@y'` pushes the loose `from:x@y` pre-filter but MUST return the exact
+    // predicate as residual, because Gmail `from:x@y` also matches e.g. "bob@x@y-domain" / a
+    // `From` header of `"Alice <x@y>"` that is not equal to 'x@y' under SQL `=`. Without the
+    // residual the engine would emit those over-fetched, non-exact rows — the t20 defect.
+    let from_eq = Predicate::Cmp(
+        ColRef::col("from"),
+        CmpOp::Eq,
+        Literal::Text("x@y".to_string()),
+    );
+    let res = query::build_query(None, Some(&from_eq));
+    assert_eq!(
+        res.query, "from:x@y",
+        "the loose q= pre-filter is still pushed"
+    );
+    assert_eq!(
+        res.residual,
+        Some(from_eq),
+        "the exact from = 'x@y' is kept as residual so the engine re-filters substring over-fetch"
+    );
+
+    // A lossy `subject = 'hello'` likewise — `subject:hello` matches "hello world".
+    let subject_eq = Predicate::Cmp(
+        ColRef::col("subject"),
+        CmpOp::Eq,
+        Literal::Text("hello".to_string()),
+    );
+    let res = query::build_query(None, Some(&subject_eq));
+    assert_eq!(res.query, "subject:hello");
+    assert_eq!(
+        res.residual,
+        Some(subject_eq),
+        "subject = 'hello' kept as residual; subject:hello also matches 'hello world'"
+    );
+
+    // `LIKE` and the `date` bounds are lossy too: pushed as a pre-filter, kept as residual.
+    let like = Predicate::Like(ColRef::col("subject"), Pattern("weekly".to_string()));
+    let res = query::build_query(None, Some(&like));
+    assert_eq!(res.query, "subject:weekly");
+    assert_eq!(
+        res.residual,
+        Some(like),
+        "LIKE has no Gmail operator — kept residual"
+    );
+
+    let date_gt = Predicate::Cmp(
+        ColRef::col("date"),
+        CmpOp::Gt,
+        Literal::Int(1_700_000_500_000),
+    );
+    let res = query::build_query(None, Some(&date_gt));
+    assert_eq!(res.query, "after:1700000500", "ms→s truncated bound");
+    assert_eq!(
+        res.residual,
+        Some(date_gt),
+        "date bound is date-granular/truncated — kept residual for the exact ms comparison"
+    );
 }
 
 // ---- search pushdown reaches the client as q= --------------------------------------------
