@@ -46,6 +46,7 @@ mod ids;
 mod node;
 mod plan;
 mod preview;
+mod server;
 mod topo;
 
 pub use apply::{
@@ -55,6 +56,7 @@ pub use ids::{Affected, DriverId, NodeId, ProcId, Target, VfsPath};
 pub use node::{EffectKind, EffectNode};
 pub use plan::{depends_on, Plan, PlanBuilder, PlanError};
 pub use preview::{preview, Preview, PreviewRow};
+pub use server::{ServerNode, ServerWriteOp};
 pub use topo::topo_order;
 
 /// The four AST effect verbs, mirrored here so the E1 evaluator can translate

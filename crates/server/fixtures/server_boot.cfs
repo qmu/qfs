@@ -1,0 +1,28 @@
+# cfs server boot config (RFD-0001 §8).
+# Booting this file is equivalent to replaying these statements as writes to the
+# /server/... self-config registry. CREATE ... DDL is sugar over INSERT INTO /server/...;
+# both forms appear here to exercise the same ServerConfigWrite COMMIT path.
+# No network and no live credentials are required to boot.
+
+# A cron job, written as the frozen CREATE DDL sugar.
+CREATE JOB nightly EVERY '1h' DO REMOVE /tmp WHERE age > 7;
+
+# An HTTP endpoint (sugar), backed by a read query.
+CREATE ENDPOINT recent ON 'GET /recent' AS FROM /mail/inbox |> LIMIT 5;
+
+# An event trigger (sugar).
+CREATE TRIGGER notify ON inbox DO INSERT INTO /log VALUES ('fired');
+
+# A view and a materialized view (sugar).
+CREATE VIEW recent_view AS FROM /mail/inbox;
+CREATE MATERIALIZED VIEW cached_view AS FROM /mail/inbox;
+
+# A least-privilege policy (sugar). Stored now; ENFORCED in t34 (capability gating).
+CREATE POLICY leastpriv;
+
+# A webhook route (sugar).
+CREATE WEBHOOK inbound ON '/hooks/x';
+
+# The explicit /server write the sugar desugars to — a second job, added by INSERT.
+# Demonstrates that boot is "replay INSERT INTO /server/...".
+UPSERT INTO /server/jobs VALUES (name, every, plan) ('weekly', '7d', 'noop');

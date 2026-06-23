@@ -5,6 +5,7 @@ use cfs_types::RowBatch;
 use serde::Serialize;
 
 use crate::ids::{Affected, NodeId, ProcId, Target};
+use crate::server::{ServerNode, ServerWriteOp};
 
 /// The kind of an effect — a **closed set** mirroring the frozen core write verbs
 /// (RFD §3). A new backend adds **zero** variants here; it routes through a `Target`
@@ -34,6 +35,19 @@ pub enum EffectKind {
     /// `CALL <driver>.<action>(...)` — an irreducible namespaced procedure (§3). The
     /// [`ProcId`] is the registry name; irreversibility is carried per-node.
     Call(ProcId),
+    /// A write to the `/server/...` self-config registry (RFD §6/§8): *which* config
+    /// node ([`ServerNode`]) and *which* write op ([`ServerWriteOp`]). The config payload
+    /// (the owned DTO) rides in the node's [`RowBatch`] `args` — `cfs-plan` stays free of
+    /// server-shaped DTOs (purity invariant), and the COMMIT-time apply that mutates
+    /// `ServerState` under its `RwLock` lives in `cfs-server`. `irreversible = false`
+    /// (config writes are reversible; a `Remove` is undone by re-inserting), and the op is
+    /// idempotent under [`ServerWriteOp::Upsert`] so boot/replay converge (RFD §6).
+    ServerConfigWrite {
+        /// The `/server/...` config collection being written.
+        node: ServerNode,
+        /// The write op applied to it.
+        op: ServerWriteOp,
+    },
 }
 
 impl EffectKind {
@@ -57,6 +71,34 @@ impl EffectKind {
             EffectKind::Update => "UPDATE",
             EffectKind::Remove => "REMOVE",
             EffectKind::Call(_) => "CALL",
+            // A stable per-node label so coalescing groups distinct `/server` collections
+            // separately (each is a different node + op pairing).
+            EffectKind::ServerConfigWrite { node, op } => match (node, op) {
+                (ServerNode::Endpoints, ServerWriteOp::Insert) => "SERVER_ENDPOINTS_INSERT",
+                (ServerNode::Endpoints, ServerWriteOp::Upsert) => "SERVER_ENDPOINTS_UPSERT",
+                (ServerNode::Endpoints, ServerWriteOp::Update) => "SERVER_ENDPOINTS_UPDATE",
+                (ServerNode::Endpoints, ServerWriteOp::Remove) => "SERVER_ENDPOINTS_REMOVE",
+                (ServerNode::Triggers, ServerWriteOp::Insert) => "SERVER_TRIGGERS_INSERT",
+                (ServerNode::Triggers, ServerWriteOp::Upsert) => "SERVER_TRIGGERS_UPSERT",
+                (ServerNode::Triggers, ServerWriteOp::Update) => "SERVER_TRIGGERS_UPDATE",
+                (ServerNode::Triggers, ServerWriteOp::Remove) => "SERVER_TRIGGERS_REMOVE",
+                (ServerNode::Jobs, ServerWriteOp::Insert) => "SERVER_JOBS_INSERT",
+                (ServerNode::Jobs, ServerWriteOp::Upsert) => "SERVER_JOBS_UPSERT",
+                (ServerNode::Jobs, ServerWriteOp::Update) => "SERVER_JOBS_UPDATE",
+                (ServerNode::Jobs, ServerWriteOp::Remove) => "SERVER_JOBS_REMOVE",
+                (ServerNode::Views, ServerWriteOp::Insert) => "SERVER_VIEWS_INSERT",
+                (ServerNode::Views, ServerWriteOp::Upsert) => "SERVER_VIEWS_UPSERT",
+                (ServerNode::Views, ServerWriteOp::Update) => "SERVER_VIEWS_UPDATE",
+                (ServerNode::Views, ServerWriteOp::Remove) => "SERVER_VIEWS_REMOVE",
+                (ServerNode::Policies, ServerWriteOp::Insert) => "SERVER_POLICIES_INSERT",
+                (ServerNode::Policies, ServerWriteOp::Upsert) => "SERVER_POLICIES_UPSERT",
+                (ServerNode::Policies, ServerWriteOp::Update) => "SERVER_POLICIES_UPDATE",
+                (ServerNode::Policies, ServerWriteOp::Remove) => "SERVER_POLICIES_REMOVE",
+                (ServerNode::Webhooks, ServerWriteOp::Insert) => "SERVER_WEBHOOKS_INSERT",
+                (ServerNode::Webhooks, ServerWriteOp::Upsert) => "SERVER_WEBHOOKS_UPSERT",
+                (ServerNode::Webhooks, ServerWriteOp::Update) => "SERVER_WEBHOOKS_UPDATE",
+                (ServerNode::Webhooks, ServerWriteOp::Remove) => "SERVER_WEBHOOKS_REMOVE",
+            },
         }
     }
 }

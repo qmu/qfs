@@ -307,3 +307,41 @@ fn upsert_is_distinct_from_insert() {
     // Idempotency: Upsert modelled distinctly so retry-safe effects are first-class.
     assert_ne!(EffectKind::Insert, EffectKind::Upsert);
 }
+
+#[test]
+fn server_config_write_is_pure_data_and_reversible() {
+    // t30: the /server self-config write is a closed-set EffectKind variant carrying only
+    // vendor-free coordinates (which node + which op); the config DTO rides in the node's
+    // RowBatch args. It is NOT inherently irreversible (a config write is undoable).
+    use crate::{ServerNode, ServerWriteOp};
+    let kind = EffectKind::ServerConfigWrite {
+        node: ServerNode::Jobs,
+        op: ServerWriteOp::Upsert,
+    };
+    assert!(!kind.is_inherently_irreversible());
+    assert_eq!(kind.label(), "SERVER_JOBS_UPSERT");
+
+    // Distinct collections / ops are distinct kinds (so coalescing groups them separately).
+    assert_ne!(
+        kind,
+        EffectKind::ServerConfigWrite {
+            node: ServerNode::Triggers,
+            op: ServerWriteOp::Upsert
+        }
+    );
+    assert_ne!(
+        kind,
+        EffectKind::ServerConfigWrite {
+            node: ServerNode::Jobs,
+            op: ServerWriteOp::Remove
+        }
+    );
+
+    // The node coordinate maps to its /server path + segment (single source of truth).
+    assert_eq!(ServerNode::Jobs.path(), "/server/jobs");
+    assert_eq!(
+        ServerNode::from_segment("materialized_views"),
+        Some(ServerNode::Views)
+    );
+    assert_eq!(ServerWriteOp::Remove.label(), "REMOVE");
+}

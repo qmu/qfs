@@ -95,6 +95,19 @@ pub enum CfsError {
         /// The verbs the node does support, as stable labels (for AI recovery).
         supported: Vec<&'static str>,
     },
+
+    /// A server boot / hot-reconfigure failure (E7, `cfs serve`). Carries a stable,
+    /// secret-free machine code and a line-located message produced by `cfs-server`;
+    /// `cfs-driver` cannot name `cfs_server::ServerError` (that crate is far above it in
+    /// the spine), so the structured fields are flattened into owned data here. The server
+    /// runtime maps its own `ServerError` into this arm at the `serve` boundary.
+    #[error("server config error: {message}")]
+    Server {
+        /// The originating server error's stable code (e.g. `config_parse`).
+        server_code: String,
+        /// The line-located, secret-free message.
+        message: String,
+    },
 }
 
 impl CfsError {
@@ -113,6 +126,9 @@ impl CfsError {
             Self::Encode { .. } => "encode_error",
             Self::InvalidPath { .. } => "invalid_path",
             Self::UnsupportedVerb { .. } => "unsupported_verb",
+            // The granular server error code lives in `server_code`; the workspace-level
+            // code is the stable family label.
+            Self::Server { .. } => "server_config",
         }
     }
 }
