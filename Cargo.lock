@@ -631,6 +631,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfs-test"
+version = "0.0.0"
+dependencies = [
+ "cfs-core",
+ "cfs-http-core",
+ "cfs-parser",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cfs-txn"
 version = "0.0.0"
 dependencies = [
