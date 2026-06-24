@@ -8,6 +8,13 @@ authors.workspace = true
 repository.workspace = true
 description = "cfs: the single binary (CLI + server) for the AI-driven, DSL-programmable multi-service control plane (RFD-0001)."
 
+# The library facet (t40): the composition-root code reused by both the `cfs` binary and the
+# `xtask` build tool. xtask links this to call `cfs::docs::gen_docs` over the binary's OWN
+# describe registry (anti-drift). The binary stays the product; the lib ships no extra weight.
+[lib]
+name = "cfs"
+path = "src/lib.rs"
+
 [[bin]]
 name = "cfs"
 path = "src/main.rs"

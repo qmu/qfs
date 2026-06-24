@@ -27,11 +27,13 @@
 pub mod error;
 pub mod keywords;
 pub mod lex;
+pub mod reference;
 pub mod span;
 pub mod token;
 
 pub use error::{LexError, LexErrorKind};
 pub use keywords::{Keyword, KEYWORDS, OPERATORS};
 pub use lex::lex;
+pub use reference::{grammar_ebnf, RESERVED_KEYWORDS};
 pub use span::{Span, Spanned};
 pub use token::{LitType, PathSeg, SizeUnit, Token};

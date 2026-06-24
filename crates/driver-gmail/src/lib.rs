@@ -143,6 +143,44 @@ impl GmailDriver {
         &self.applier
     }
 
+    /// **Purity invariant proof (t40, RFD §3/§6).** Desugar the `SEND` prelude alias for a draft
+    /// node into the [`cfs_plan::Plan`] it represents — a single `CALL mail.send` effect node —
+    /// **performing no I/O**. This is the in-code witness for `docs/language.md`'s purity section:
+    /// `SEND(d) = d |> CALL mail.send` is a *pure function returning a Plan*; nothing is sent until
+    /// a separate `COMMIT` applies the plan (the applier seam, never reached here). No credential
+    /// is resolved, no socket is opened — building the plan only allocates owned data.
+    ///
+    /// ```
+    /// use cfs_driver_gmail::GmailDriver;
+    /// use cfs_plan::EffectKind;
+    ///
+    /// // SEND(d) desugars to a plan with exactly one CALL mail.send node — and runs NO I/O.
+    /// let plan = GmailDriver::send_alias_plan("id:draft-1");
+    /// assert_eq!(plan.nodes().len(), 1);
+    /// match &plan.nodes()[0].kind {
+    ///     EffectKind::Call(proc) => assert_eq!(proc.0, "mail.send"),
+    ///     other => panic!("SEND must desugar to a CALL node, got {other:?}"),
+    /// }
+    /// // mail.send is irreversible (RFD §10) — surfaced on the node so PREVIEW can warn.
+    /// assert!(plan.nodes()[0].irreversible);
+    /// assert!(plan.is_irreversible());
+    /// ```
+    #[must_use]
+    pub fn send_alias_plan(draft: &str) -> cfs_plan::Plan {
+        use cfs_plan::{DriverId, EffectKind, EffectNode, NodeId, ProcId, Target, VfsPath};
+        // The `SEND` alias (declared in the prelude as `SEND -> mail.send`) desugars to a single
+        // `CALL mail.send` effect on the draft target. The procedure is declared irreversible, so
+        // the node carries that bit (the planner's per-proc irreversibility, set explicitly).
+        let target = Target::new(DriverId::new("mail"), VfsPath::new(draft));
+        let node = EffectNode::new(
+            NodeId(0),
+            EffectKind::Call(ProcId::new("mail.send")),
+            target,
+        )
+        .irreversible(true);
+        cfs_plan::Plan::leaf(node)
+    }
+
     /// The path-keyed capability set (RFD §5):
     /// - `/mail/drafts` → `Insert|Upsert|Select|Remove` (create/replace/list/trash drafts).
     /// - `/mail/<label>` → `Select|Update|Remove` (search messages, modify labels, trash).

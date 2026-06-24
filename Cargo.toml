@@ -3,7 +3,10 @@ resolver = "2"
 # `crates/*` are production members. `spikes/*` are THROWAWAY t02 comparison
 # evidence (publish = false), kept in the workspace so they build/fmt/clippy with
 # the rest but never ship. See docs/adr/0001-parser-library.md.
-members = ["crates/*", "spikes/*"]
+# `xtask` is the cargo-xtask build tool (t40): gen-docs + dist. `publish = false`, NOT
+# shipped in the binary; it builds/fmt/clippy with the workspace. Invoke it with
+# `cargo run -p xtask -- <cmd>` (or the `cargo xtask` alias from `.cargo/config.toml`).
+members = ["crates/*", "spikes/*", "xtask"]
 
 [workspace.package]
 edition = "2021"

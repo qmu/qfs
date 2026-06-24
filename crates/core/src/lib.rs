@@ -54,10 +54,16 @@ pub use stdlib::{
 
 // Re-export the trait seams and shared types so consumers depend on `cfs-core` only.
 pub use cfs_codec::Codec;
+// t40: the frozen language reference (RESERVED_KEYWORDS + grammar_ebnf) and the builtin codec
+// set, re-exported through cfs-core so the doc generator (in the `cfs` binary) reads them via
+// `cfs-core` ONLY — it must not take a direct `cfs-lang` / `cfs-codec` edge (the lower-spine
+// dep-direction guard). cfs-core already depends on both, so this adds no new edge.
+pub use cfs_codec::builtin_codecs;
 pub use cfs_driver::{
     check_capability, resolve_proc, AliasFn, Archetype, Capabilities, CfsError, Driver, NodeDesc,
     Param, Path, ProcSig, PushdownProfile, Verb, VersionSupport,
 };
+pub use cfs_lang::{grammar_ebnf, RESERVED_KEYWORDS};
 pub use cfs_plan::{
     commit, preview, Affected, AppliedEffect, ApplyError, CommitReport, EffectKind, EffectNode,
     NodeId, Plan, PlanApplier, PlanBuilder, PlanError, Preview, PreviewRow, ProcId,

@@ -129,20 +129,41 @@ fn nothing_depends_on_the_cfs_binary_so_it_is_a_terminal_sink() {
     // a Cargo.toml today — making a real violation hard to construct. We assert the property
     // anyway as fail-closed documentation: should the binary ever gain a lib target (or a future
     // crate find a way to depend on it), this guard fires immediately.
+    // t40: `xtask` is the SOLE permitted dependent of the `cfs` lib facet. It is build-only
+    // tooling (`publish = false`, NOT shipped in any artifact) and is itself a terminal leaf —
+    // NOTHING depends on xtask — so tokio reaching xtask through the `cfs` lib STILL dead-ends in
+    // a leaf; it never transits back into the spine. The soundness precondition the two t28
+    // relaxations rely on is "no SPINE crate depends on the binary", and xtask is not a spine
+    // crate. We exempt xtask explicitly (a documented composition-root consumer of `cfs`'s pure
+    // doc-generation surface) and keep the invariant for every other package. See ADR-0007.
     let graph = load_graph();
     for (pkg, deps) in &graph.direct_deps {
-        if pkg == "cfs" {
+        if pkg == "cfs" || pkg == "xtask" {
             continue;
         }
         assert!(
             !deps.iter().any(|d| d == "cfs"),
             "terminal-sink violation: {pkg} depends on the `cfs` binary. The binary MUST remain a \
-             terminal sink (nothing depends on it) — that is the precondition that makes the t28 \
-             runtime-leaf exemption sound (tokio dead-ends in the binary) and the binary's \
-             reach-up into cfs-exec/cfs-core a composition root rather than a layer inversion. If \
-             this fires, the two t28 guard relaxations are no longer safe and must be revisited."
+             terminal sink (only the build-only `xtask` leaf may depend on its lib facet) — that \
+             is the precondition that makes the t28 runtime-leaf exemption sound (tokio dead-ends \
+             in the binary / the xtask leaf) and the binary's reach-up into cfs-exec/cfs-core a \
+             composition root rather than a layer inversion. If this fires for a spine crate, the \
+             two t28 guard relaxations are no longer safe and must be revisited."
         );
     }
+    // Assert the ONLY dependent of `cfs` is `xtask` (fail-closed: a new dependent must be a
+    // conscious decision, re-reviewed against the soundness argument above).
+    let cfs_dependents: Vec<&String> = graph
+        .direct_deps
+        .iter()
+        .filter(|(pkg, deps)| *pkg != "cfs" && deps.iter().any(|d| d == "cfs"))
+        .map(|(pkg, _)| pkg)
+        .collect();
+    assert_eq!(
+        cfs_dependents,
+        vec!["xtask"],
+        "the only permitted dependent of the `cfs` lib is the build-only `xtask` leaf; got {cfs_dependents:?}"
+    );
 }
 
 #[test]
@@ -436,6 +457,14 @@ fn runtime_is_confined_to_plan_and_types() {
                     // cfs-skill carries no normal runtime edge; its driver edges dead-end in tests.
                     // Exempt it for the same "tokio dead-ends here" reason as the `cfs` binary.
                     && other.as_str() != "cfs-skill"
+                    // t40: `xtask` (build-only tooling, `publish = false`) depends on the `cfs`
+                    // lib facet to reuse its doc generator. It pulls cfs-runtime transitively
+                    // through `cfs`, but xtask is ITSELF a terminal leaf — nothing depends on
+                    // xtask — so tokio reaching xtask STILL dead-ends and cannot transit back into
+                    // the spine. Exempt it for the same "tokio dead-ends here" reason as `cfs`.
+                    // See ADR-0007 and the terminal-sink guard above (which pins xtask as the sole
+                    // permitted dependent of `cfs`).
+                    && other.as_str() != "xtask"
             })
             .map(|(other, _)| other.clone());
         assert!(

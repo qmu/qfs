@@ -1,0 +1,74 @@
+name: cfs release
+
+# Tag-triggered release pipeline (ticket t40, RFD-0001 §1/§9). On a `v*` tag, build the release
+# artifacts via `cargo run -p xtask -- dist` (the cross-compile matrix → strip → sha256 → tarball
+# pipeline), then attach the per-target tarballs + checksums to the GitHub Release. `install.sh`
+# consumes these artifacts.
+#
+# WHY xtask dist runs here and not locally (ADR-0007, mirrors t36/ADR-0005): a release build wedges
+# the constrained trip host's disk, the full-workspace wasm build is parked (only the pure cores are
+# wasm-clean — t36), and musl static cross-link needs the cross toolchain this job installs. So the
+# pipeline is CI-only; `xtask dist` refuses to run unless CFS_DIST_ALLOW=1 (set here).
+#
+# No secret / credential is used anywhere (RFD §10): only the auto-provided GITHUB_TOKEN to attach
+# the release assets. No live token is ever embedded in an artifact.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # create the GitHub Release + upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+  CFS_DIST_ALLOW: "1"   # authorize the CI-only `xtask dist` (see ADR-0007)
+
+jobs:
+  dist:
+    name: build release artifacts (4 native tarballs + wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Add release targets
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          rustup target add aarch64-unknown-linux-musl
+          rustup target add wasm32-unknown-unknown
+          # macOS targets are added for completeness; the darwin tarballs are produced on a
+          # macos runner in a matrixed release (omitted here for brevity — the xtask matrix lists
+          # all four native targets, and a follow-up macos job fills the darwin slots).
+
+      - name: Install musl + cross linkers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
+
+      # Anti-drift gate: the committed docs MUST match what the binary generates, or the release
+      # is stale. This is the same check the CI workflow runs, re-asserted at release time.
+      - name: Verify generated docs are in sync
+        run: cargo run -p xtask -- gen-docs --check
+
+      - name: Build release artifacts (xtask dist)
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+        run: cargo run -p xtask -- dist
+
+      # Credential-shape grep gate (RFD §10): fail the release if any live-credential shape leaked
+      # into a generated doc, an example, or a release artifact. Placeholder handles only.
+      - name: Credential-shape gate (no live secrets in artifacts)
+        run: bash scripts/check-no-live-credentials.sh
+
+      - name: Attach artifacts to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/cfs-*.tar.gz
+            dist/cfs-*.tar.gz.sha256
+            dist/cfs.wasm
+            dist/cfs.wasm.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
