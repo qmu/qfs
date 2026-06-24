@@ -219,6 +219,7 @@ pub fn run<I, T>(
     describe: &DescribeProvider,
     skill: &SkillProvider,
     account: &AccountLauncher,
+    apply: &qfs_exec::WorldApply,
 ) -> i32
 where
     I: IntoIterator<Item = T>,
@@ -277,6 +278,7 @@ where
                 commit_irreversible: *commit_irreversible,
                 quiet: *quiet,
             },
+            apply,
         );
     }
 
@@ -379,7 +381,7 @@ struct RunOpts {
 /// stdin), choose the output format (explicit flag wins; else `table` on a TTY, `json` when
 /// piped), and hand off to the execution layer, which renders the result and returns the
 /// stable exit code. Logic-free: all execution lives in `qfs-exec`.
-fn dispatch_run(engine: &Engine, opts: RunOpts) -> i32 {
+fn dispatch_run(engine: &Engine, opts: RunOpts, apply: &qfs_exec::WorldApply) -> i32 {
     use std::io::IsTerminal;
 
     // Resolve the statement source. A positional `-` means "read from stdin".
@@ -404,6 +406,8 @@ fn dispatch_run(engine: &Engine, opts: RunOpts) -> i32 {
     let ctx = qfs_exec::ExecCtx {
         engine,
         reads: &reads,
+        // The binary injects the real interpreter-backed commit; qfs-cmd stays off qfs-runtime.
+        world_apply: Some(apply),
     };
 
     let _ = opts.quiet; // `--quiet` suppresses progress; the renderers emit no progress yet.
@@ -656,6 +660,12 @@ mod tests {
         7
     }
 
+    /// A no-op world-apply: a `--commit` in a unit test "succeeds" without touching the World
+    /// (the real interpreter-backed applier lives in the binary crate).
+    fn noop_apply(_plan: &qfs_core::Plan) -> Result<(), qfs_exec::ExecError> {
+        Ok(())
+    }
+
     /// Run with the no-op shell + serve launchers + empty describe + stub skill + stub account
     /// providers (every non-shell/serve/describe/skill/account test path ignores them).
     fn run_t<I, T>(args: I) -> i32
@@ -670,6 +680,7 @@ mod tests {
             &empty_describe,
             &stub_skill,
             &stub_account,
+            &noop_apply,
         )
     }
 
@@ -689,6 +700,7 @@ mod tests {
                 commit_irreversible: false,
                 quiet: false,
             },
+            &noop_apply,
         );
         assert_eq!(code, 2, "no statement source is a usage error (exit 2)");
     }
@@ -709,6 +721,7 @@ mod tests {
             &empty_describe,
             &stub_skill,
             &stub_account,
+            &noop_apply,
         );
         assert!(
             launched.get(),
@@ -755,6 +768,7 @@ mod tests {
             &empty_describe,
             &stub_skill,
             &stub_account,
+            &noop_apply,
         );
         assert!(
             launched.get(),
@@ -833,7 +847,8 @@ mod tests {
                 &|_| 0,
                 &empty_describe,
                 &provider,
-                &stub_account
+                &stub_account,
+                &noop_apply
             ),
             0
         );
@@ -845,7 +860,8 @@ mod tests {
                 &|_| 0,
                 &empty_describe,
                 &provider,
-                &stub_account
+                &stub_account,
+                &noop_apply
             ),
             0
         );

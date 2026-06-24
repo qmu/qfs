@@ -11,7 +11,7 @@
 //! binary is that leaf, so it builds the wired shell and injects it into `qfs-cmd` via the
 //! [`qfs_cmd::ShellLauncher`]. The shell LOGIC itself lives in `qfs-exec`; this only wires it.
 
-use qfs::{account, describe, serve, shell, version};
+use qfs::{account, commit, describe, serve, shell, version};
 
 fn main() {
     // t40: the binary owns the build metadata (semver + git sha + target triple baked in by
@@ -43,6 +43,9 @@ fn main() {
         // binary owns the encrypted `qfs-secrets` LocalStore; qfs-cmd stays off the concrete
         // backend). The secret is read from stdin, never argv; the store is `0600` + AEAD.
         &account::run_account,
+        // The REAL `qfs run --commit` apply path: drives the qfs-runtime interpreter over the live
+        // driver registry (local-fs today). qfs-cmd/qfs-exec stay off qfs-runtime; this is the leaf.
+        &commit::apply_plan,
     );
     std::process::exit(code);
 }

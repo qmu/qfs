@@ -20,6 +20,7 @@
 
 pub mod account;
 pub mod catalog;
+pub mod commit;
 pub mod cron;
 pub mod describe;
 pub mod docs;

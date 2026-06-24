@@ -173,7 +173,10 @@ mod tests {
     fn salt_and_active_sidecars_sit_beside_the_vault() {
         let cred = std::path::Path::new("/x/qfs/credentials");
         assert_eq!(salt_path(cred), PathBuf::from("/x/qfs/credentials.salt"));
-        assert_eq!(active_path(cred), PathBuf::from("/x/qfs/credentials.active"));
+        assert_eq!(
+            active_path(cred),
+            PathBuf::from("/x/qfs/credentials.active")
+        );
     }
 
     #[test]
@@ -198,9 +201,15 @@ mod tests {
         let body = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = body.lines().collect();
         assert_eq!(lines.len(), 2, "one line per driver: {lines:?}");
-        assert!(lines.contains(&"mail\tpersonal"), "mail replaced: {lines:?}");
+        assert!(
+            lines.contains(&"mail\tpersonal"),
+            "mail replaced: {lines:?}"
+        );
         assert!(lines.contains(&"s3\tprod"), "s3 kept: {lines:?}");
-        assert!(!lines.contains(&"mail\twork"), "old mail line gone: {lines:?}");
+        assert!(
+            !lines.contains(&"mail\twork"),
+            "old mail line gone: {lines:?}"
+        );
 
         #[cfg(unix)]
         {
