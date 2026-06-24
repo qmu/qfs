@@ -3,11 +3,13 @@
 
 # qfs language reference
 
-qfs is **one small pipe-SQL grammar** — a *closed core* plus three open registries (paths, functions/procedures, codecs). A new backend adds **zero** keywords: a new service is a new mount, a new action a registered procedure, a new format a registered codec (RFD-0001 §3). This page is generated from the binary's own frozen vocabulary, so it cannot drift from the lexer.
+qfs is **one small pipe-SQL language** that works on every service. You write a query as a source followed by stages joined by `|>` (a pipe), and the same grammar reads mail, queries a database, joins across services, transforms formats, and writes changes.
 
-## Reserved keywords (frozen — RFD §3)
+The grammar is **fixed and small** — adding a new service never adds new keywords. A new service is just a new path; a new action is a `CALL`; a new format is a `DECODE`/`ENCODE`. This page is generated from the binary itself, so it always matches the version you have installed.
 
-The keyword set is **frozen**: it has exactly 38 entries and changing it requires editing the one committed source slice (`crates/lang/src/keywords.rs`) and regenerating this doc. Adding a keyword without updating this table fails CI by design.
+## Reserved keywords
+
+These 38 words make up the whole language. Because the set is fixed, anything you learn here keeps working as new services are added.
 
 | # | keyword |
 |---|---------|
@@ -54,7 +56,7 @@ The keyword set is **frozen**: it has exactly 38 entries and changing it require
 
 The pipe-SQL grammar. Every UPPERCASE terminal is a frozen reserved keyword above.
 
-```ebnf
+```text
 (* qfs pipe-SQL grammar (EBNF) — RFD-0001 §2/§3.                                  *)
 (* The closed core: every UPPERCASE terminal is a frozen reserved keyword         *)
 (* (see RESERVED_KEYWORDS); a new backend adds ZERO terminals here.               *)
@@ -124,17 +126,17 @@ policy        = "POLICY" , name , predicate ;
 (* driver_id, name, event, interval, literal) are E1's lexical/structural detail.   *)
 ```
 
-## Purity invariant (RFD §3/§6)
+## Nothing happens until you commit
 
-Every qfs function and prelude alias is **pure**: it produces a `Plan` (an effect-plan node), it performs no I/O. `SEND(d)` does not send mail — it desugars to a `CALL mail.send` node in a `Plan`. Nothing happens until `COMMIT` applies the plan; `PREVIEW` (the default) shows the plan without touching the World. This is what makes the agent loop safe: **DESCRIBE → write a statement → PREVIEW → COMMIT**.
+Writing a statement never acts on its own. A statement *plans* an effect; `PREVIEW` (the default) shows you that plan without touching anything, and `COMMIT` applies it. Even a convenience alias like `SEND(...)` doesn't send — it just adds a `CALL mail.send` step to the plan you preview first. This is what makes the whole loop safe: **describe → write → preview → commit**.
 
-## Open-registry governance (RFD §3)
+## Extending qfs
 
-The closed core (the frozen keywords + operators above) is the *only* part of qfs that is not extensible. Everything a new backend needs is a registry entry:
+The language never grows new keywords. Everything new a service needs is one of three things:
 
-- **paths** — a new mount (e.g. `/mail`, `/s3`); see [drivers.md](drivers.md).
-- **functions / procedures** — a registered `CALL driver.action(..)` + pure prelude aliases.
-- **codecs** — a registered `DECODE`/`ENCODE` format; see [drivers.md](drivers.md).
+- **a path** — a new service mounted at a new prefix (e.g. `/mail`, `/s3`); see the [driver catalog](drivers.md).
+- **an action** — a `CALL service.action(..)` procedure (and optional alias).
+- **a format** — a `DECODE`/`ENCODE` codec; see the [driver catalog](drivers.md).
 
-Because the core is frozen, the AI learns the grammar **once** and every backend speaks it.
+Because the language stays fixed, you learn it once and every service speaks it.
 

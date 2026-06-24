@@ -1,29 +1,42 @@
-# qfs documentation index
+# Documentation
 
-The `qfs` workspace (the Rust rebuild of this repo, RFD-0001) documents itself in three places:
+Welcome to the qfs docs. Here's the map.
 
-## Architecture & rationale
-- **RFD-0001 — qfs architecture**: [`.workaholic/RFDs/0001-qfs-architecture.md`](../.workaholic/RFDs/0001-qfs-architecture.md)
-  — the closed core, the three open registries, the effect-plan / PREVIEW→COMMIT model, the driver
-  contract, federation/pushdown, and the ticket epics (§11).
-- **ADRs** ([`docs/adr/`](adr/)) — the recorded technical decisions (parser library, local combine
-  engine, git object access, HTTP serving, deployment hosts, test harness).
-- **Security** ([`docs/security/`](security/)) — the threat model.
+## Start here
 
-## AI operating procedure (the payoff — RFD §1, epic E8)
-`qfs` exists **for AI**: an agent learns *one* small grammar and *one* loop instead of N SDKs. The
-loop is **DESCRIBE `<path>` → write a qfs statement → PREVIEW → COMMIT**.
+- **[Why qfs?](/guide/introduction)** — the idea, and why one query language for every service is
+  worth it.
+- **[Installation](/guide/installation)** — get the binary (no credentials needed to start).
+- **[Your first queries](/guide/getting-started)** — the describe → preview → commit loop, with
+  real output.
 
-- **The agent skill**: [`crates/skill/assets/SKILL.md`](../crates/skill/assets/SKILL.md) — the
-  authored operating procedure: the four-step loop, the four archetypes, the rules (respect the
-  closed core; always PREVIEW before COMMIT; least privilege; idempotency/recovery), and one worked
-  example per driver (mail, drive, github, slack, sql, git, and a `/server/...` binding), each using
-  the identical four steps. Embedded in the single `qfs` binary via `include_str!` so it ships with
-  the tool.
-- **Discover a node's contract**: `qfs describe <path> [-json]` emits the stable `DescribeReport`
-  (archetype, columns, supported verbs, `CALL` procedures, prelude aliases, pushdown) the agent
-  reads as step 1. `DESCRIBE` is pure — no creds, no I/O, no network.
-- **The golden corpus**: [`crates/skill/tests/golden_corpus.rs`](../crates/skill/tests/golden_corpus.rs)
-  proves every skill example parses → evaluates → its PREVIEW matches a checked-in golden, with no
-  COMMIT and no live credentials, plus a negative golden (an unsupported verb fails with a
-  structured error). The uniformity of those four steps across drivers IS the deliverable.
+## Learn it
+
+- **[Core concepts](/guide/concepts)** — paths, the four archetypes, the pipe-SQL language,
+  preview vs. commit, and cross-service joins.
+- **[Showcase](/showcase)** — a tour of real problems and the single statement that solves each:
+  inbox triage, database queries, cross-service joins, format conversion, file backup, automation,
+  and more.
+
+## Use it
+
+- **[CLI reference](/guide/cli)** — every command and flag (`run`, `describe`, `account`, `skill`,
+  `serve`).
+- **[Interactive shell](/guide/shell)** — explore your services like a filesystem.
+- **[Accounts & credentials](/guide/accounts)** — store credentials safely and scope access.
+
+## Reference
+
+These pages are **generated from the binary**, so they always match the version you have installed:
+
+- **[Language reference](/language)** — the full grammar, keywords, and codecs.
+- **[Driver catalog](/drivers)** — every service, its archetype, and exactly which verbs it
+  supports.
+- **[Server guide](/server)** — the `CREATE …` binding forms (triggers, jobs, endpoints, views,
+  policies) and deployment targets.
+
+## Deeper
+
+- **Architecture Decisions** — the recorded technical choices behind qfs (see the ADR pages in the
+  sidebar).
+- **[Security](/security/threat-model)** — the threat model.

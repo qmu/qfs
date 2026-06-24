@@ -3,7 +3,7 @@
 
 # qfs driver catalog
 
-Each backend is a **mount** in the paths registry (RFD §3). Every node maps onto one of four archetypes (Blob / Relational / Append / ObjectGraph) and declares which universal verbs it supports — **unsupported verbs are rejected at parse time** (RFD §5), so the AI never plans a rejected op. This catalog is generated from the binary's describe surface; it cannot drift from the drivers.
+Every service is mounted at a path prefix (e.g. `/mail`, `/s3`). Each one has a shape — one of four archetypes (Blob, Relational, Append, ObjectGraph) — that decides which verbs it supports. A path only offers the verbs that make sense for it; using an unsupported verb is **rejected immediately with a clear error**, never half-applied. The catalog below is generated from your installed binary, so it always matches what you have.
 
 ## Drivers
 
@@ -229,7 +229,7 @@ Prelude aliases: `POST` → `slack.post`
 
 Pushdown: where=true project=false limit=true order=false join=false aggregate=false distinct=false group_by=false
 
-## Codecs (the shared `DECODE`/`ENCODE` registry, RFD §4)
+## Codecs (DECODE / ENCODE formats)
 
 Codecs bridge blob ↔ relational independent of driver identity. Builtin formats:
 

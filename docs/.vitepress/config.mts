@@ -6,26 +6,53 @@ import { defineConfig } from 'vitepress'
 // `cargo run -p xtask -- gen-docs` from the binary's own registries — do not hand-edit them.
 export default defineConfig({
   title: 'qfs',
-  description: 'One small grammar for every external service.',
-  // Generated reference docs cross-link each other relatively; don't fail the build on a link
+  description: 'One query language for every service you use — mail, databases, GitHub, Slack, files, git, the cloud.',
+  // The generated reference docs cross-link each other relatively; don't fail the build on a link
   // VitePress can't statically resolve.
   ignoreDeadLinks: true,
   themeConfig: {
     nav: [
-      { text: 'Home', link: '/' },
-      { text: 'Language', link: '/language' },
-      { text: 'Drivers', link: '/drivers' },
-      { text: 'Server', link: '/server' },
-      { text: 'ADRs', link: '/adr/0001-parser-library' },
-    ],
-    sidebar: [
+      { text: 'Guide', link: '/guide/introduction' },
+      { text: 'Showcase', link: '/showcase' },
       {
         text: 'Reference',
         items: [
-          { text: 'Docs index', link: '/README' },
           { text: 'Language', link: '/language' },
-          { text: 'Drivers', link: '/drivers' },
+          { text: 'Driver catalog', link: '/drivers' },
           { text: 'Server', link: '/server' },
+          { text: 'CLI', link: '/guide/cli' },
+        ],
+      },
+    ],
+    sidebar: [
+      {
+        text: 'Getting started',
+        items: [
+          { text: 'Why qfs?', link: '/guide/introduction' },
+          { text: 'Installation', link: '/guide/installation' },
+          { text: 'Your first queries', link: '/guide/getting-started' },
+          { text: 'Core concepts', link: '/guide/concepts' },
+        ],
+      },
+      {
+        text: 'Showcase',
+        items: [{ text: 'What it can do', link: '/showcase' }],
+      },
+      {
+        text: 'Using qfs',
+        items: [
+          { text: 'CLI reference', link: '/guide/cli' },
+          { text: 'Interactive shell', link: '/guide/shell' },
+          { text: 'Accounts & credentials', link: '/guide/accounts' },
+        ],
+      },
+      {
+        text: 'Reference (generated)',
+        items: [
+          { text: 'Language', link: '/language' },
+          { text: 'Driver catalog', link: '/drivers' },
+          { text: 'Server guide', link: '/server' },
+          { text: 'Docs map', link: '/README' },
         ],
       },
       {
@@ -46,5 +73,6 @@ export default defineConfig({
       },
     ],
     socialLinks: [{ icon: 'github', link: 'https://github.com/qmu/qfs' }],
+    search: { provider: 'local' },
   },
 })

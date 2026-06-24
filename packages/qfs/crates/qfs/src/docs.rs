@@ -46,19 +46,20 @@ pub fn render_language() -> String {
     let _ = writeln!(s, "# qfs language reference\n");
     let _ = writeln!(
         s,
-        "qfs is **one small pipe-SQL grammar** — a *closed core* plus three open registries \
-         (paths, functions/procedures, codecs). A new backend adds **zero** keywords: a new \
-         service is a new mount, a new action a registered procedure, a new format a registered \
-         codec (RFD-0001 §3). This page is generated from the binary's own frozen vocabulary, so \
-         it cannot drift from the lexer.\n"
+        "qfs is **one small pipe-SQL language** that works on every service. You write a query as a \
+         source followed by stages joined by `|>` (a pipe), and the same grammar reads mail, \
+         queries a database, joins across services, transforms formats, and writes changes.\n\n\
+         The grammar is **fixed and small** — adding a new service never adds new keywords. A new \
+         service is just a new path; a new action is a `CALL`; a new format is a `DECODE`/`ENCODE`. \
+         This page is generated from the binary itself, so it always matches the version you have \
+         installed.\n"
     );
 
-    let _ = writeln!(s, "## Reserved keywords (frozen — RFD §3)\n");
+    let _ = writeln!(s, "## Reserved keywords\n");
     let _ = writeln!(
         s,
-        "The keyword set is **frozen**: it has exactly {} entries and changing it requires \
-         editing the one committed source slice (`crates/lang/src/keywords.rs`) and regenerating \
-         this doc. Adding a keyword without updating this table fails CI by design.\n",
+        "These {} words make up the whole language. Because the set is fixed, anything you learn \
+         here keeps working as new services are added.\n",
         RESERVED_KEYWORDS.len()
     );
     let _ = writeln!(s, "| # | keyword |");
@@ -73,29 +74,28 @@ pub fn render_language() -> String {
         s,
         "The pipe-SQL grammar. Every UPPERCASE terminal is a frozen reserved keyword above.\n"
     );
-    let _ = writeln!(s, "```ebnf\n{}```\n", grammar_ebnf());
+    let _ = writeln!(s, "```text\n{}```\n", grammar_ebnf());
 
-    let _ = writeln!(s, "## Purity invariant (RFD §3/§6)\n");
+    let _ = writeln!(s, "## Nothing happens until you commit\n");
     let _ = writeln!(
         s,
-        "Every qfs function and prelude alias is **pure**: it produces a `Plan` (an effect-plan \
-         node), it performs no I/O. `SEND(d)` does not send mail — it desugars to a \
-         `CALL mail.send` node in a `Plan`. Nothing happens until `COMMIT` applies the plan; \
-         `PREVIEW` (the default) shows the plan without touching the World. This is what makes \
-         the agent loop safe: **DESCRIBE → write a statement → PREVIEW → COMMIT**.\n"
+        "Writing a statement never acts on its own. A statement *plans* an effect; `PREVIEW` (the \
+         default) shows you that plan without touching anything, and `COMMIT` applies it. Even a \
+         convenience alias like `SEND(...)` doesn't send — it just adds a `CALL mail.send` step to \
+         the plan you preview first. This is what makes the whole loop safe: \
+         **describe → write → preview → commit**.\n"
     );
 
-    let _ = writeln!(s, "## Open-registry governance (RFD §3)\n");
+    let _ = writeln!(s, "## Extending qfs\n");
     let _ = writeln!(
         s,
-        "The closed core (the frozen keywords + operators above) is the *only* part of qfs that \
-         is not extensible. Everything a new backend needs is a registry entry:\n\n\
-         - **paths** — a new mount (e.g. `/mail`, `/s3`); see [drivers.md](drivers.md).\n\
-         - **functions / procedures** — a registered `CALL driver.action(..)` + pure prelude \
-           aliases.\n\
-         - **codecs** — a registered `DECODE`/`ENCODE` format; see [drivers.md](drivers.md).\n\n\
-         Because the core is frozen, the AI learns the grammar **once** and every backend speaks \
-         it.\n"
+        "The language never grows new keywords. Everything new a service needs is one of three \
+         things:\n\n\
+         - **a path** — a new service mounted at a new prefix (e.g. `/mail`, `/s3`); see the \
+           [driver catalog](drivers.md).\n\
+         - **an action** — a `CALL service.action(..)` procedure (and optional alias).\n\
+         - **a format** — a `DECODE`/`ENCODE` codec; see the [driver catalog](drivers.md).\n\n\
+         Because the language stays fixed, you learn it once and every service speaks it.\n"
     );
 
     s
@@ -178,11 +178,11 @@ pub fn render_drivers() -> String {
     let _ = writeln!(s, "# qfs driver catalog\n");
     let _ = writeln!(
         s,
-        "Each backend is a **mount** in the paths registry (RFD §3). Every node maps onto one of \
-         four archetypes (Blob / Relational / Append / ObjectGraph) and declares which universal \
-         verbs it supports — **unsupported verbs are rejected at parse time** (RFD §5), so the AI \
-         never plans a rejected op. This catalog is generated from the binary's describe surface; \
-         it cannot drift from the drivers.\n"
+        "Every service is mounted at a path prefix (e.g. `/mail`, `/s3`). Each one has a shape — \
+         one of four archetypes (Blob, Relational, Append, ObjectGraph) — that decides which verbs \
+         it supports. A path only offers the verbs that make sense for it; using an unsupported \
+         verb is **rejected immediately with a clear error**, never half-applied. The catalog \
+         below is generated from your installed binary, so it always matches what you have.\n"
     );
 
     let _ = writeln!(s, "## Drivers\n");
@@ -190,10 +190,7 @@ pub fn render_drivers() -> String {
         render_driver(&mut s, d);
     }
 
-    let _ = writeln!(
-        s,
-        "## Codecs (the shared `DECODE`/`ENCODE` registry, RFD §4)\n"
-    );
+    let _ = writeln!(s, "## Codecs (DECODE / ENCODE formats)\n");
     let _ = writeln!(
         s,
         "Codecs bridge blob ↔ relational independent of driver identity. Builtin formats:\n"
@@ -205,20 +202,21 @@ pub fn render_drivers() -> String {
     s
 }
 
-/// Render `docs/server.md` from the frozen server-DDL keyword set + the t36 deployment mapping.
+/// Render `docs/server.md` from the server binding forms + deployment targets.
 #[must_use]
 pub fn render_server() -> String {
-    let mut s = generated_banner("the frozen server-DDL keyword set + the t36 deployment mapping");
+    let mut s = generated_banner("the server binding forms + deployment targets");
     let _ = writeln!(s, "# qfs server guide\n");
     let _ = writeln!(
         s,
-        "`qfs serve <config.qfs>` boots the server (RFD §8). A server config is a set of frozen \
-         `CREATE …` bindings — sugar over the same write surface the CLI uses. The DDL keywords \
-         are part of the closed core (see [language.md](language.md)); a new binding form cannot \
-         be invented.\n"
+        "`qfs serve <config.qfs>` runs the server from a config file. A config is just a list of \
+         `CREATE …` bindings — each one takes a query you already know and runs it on an event, a \
+         schedule, or an HTTP request. Bindings use the same language as everything else (see the \
+         [language reference](language.md)), so you can preview exactly what a binding would do \
+         before installing it.\n"
     );
 
-    let _ = writeln!(s, "## Bindings (`CREATE …`, RFD §8)\n");
+    let _ = writeln!(s, "## Bindings (`CREATE …`)\n");
     let _ = writeln!(s, "| binding | shape | what causes the plan to run |");
     let _ = writeln!(s, "|---------|-------|-----------------------------|");
     let _ = writeln!(
@@ -247,7 +245,7 @@ pub fn render_server() -> String {
     );
     s.push('\n');
 
-    let _ = writeln!(s, "## Policy & least privilege (RFD §10)\n");
+    let _ = writeln!(s, "## Policy & least privilege\n");
     let _ = writeln!(
         s,
         "`CREATE POLICY` gates writes by verb / path / irreversibility — an irreversible effect \
@@ -258,14 +256,15 @@ pub fn render_server() -> String {
     );
     let _ = writeln!(
         s,
-        "```qfs\n\
-         CREATE POLICY no_send POLICY deny CALL mail.send\n\
-         CREATE ENDPOINT daily DO FROM /mail/inbox |> SELECT subject |> LIMIT 10\n\
-         CREATE JOB digest EVERY 1h DO FROM /mail/inbox |> SELECT subject |> COMMIT\n\
+        "```text\n\
+         CREATE ENDPOINT recent ON 'GET /recent' AS FROM /mail/inbox |> LIMIT 5\n\
+         CREATE TRIGGER notify ON /mail/inbox DO INSERT INTO /slack/acme/general/messages VALUES (NEW.subject)\n\
+         CREATE JOB nightly EVERY '1h' DO REMOVE /tmp/scratch WHERE age > 7\n\
+         CREATE POLICY api ALLOW SELECT DENY INSERT, UPDATE, REMOVE, CALL\n\
          ```\n"
     );
 
-    let _ = writeln!(s, "## Deployment mapping (t36, RFD §8)\n");
+    let _ = writeln!(s, "## Deployment targets\n");
     let _ = writeln!(
         s,
         "The same bindings deploy onto two production hosts behind the `RuntimeHost` seam \
@@ -414,8 +413,11 @@ mod tests {
                 "keyword {kw} in language.md"
             );
         }
-        assert!(doc.contains("```ebnf"), "grammar fence present");
-        assert!(doc.contains("DESCRIBE → write a statement → PREVIEW → COMMIT"));
+        assert!(
+            doc.contains("(* qfs pipe-SQL grammar"),
+            "EBNF grammar block present"
+        );
+        assert!(doc.contains("describe → write → preview → commit"));
     }
 
     /// The drivers doc renders unsupported verbs explicitly (a `✗` row), never by omission.
@@ -446,7 +448,7 @@ mod tests {
         ] {
             assert!(doc.contains(kw), "{kw} documented in server.md");
         }
-        assert!(doc.contains("Deployment mapping"));
+        assert!(doc.contains("Deployment targets"));
         assert!(doc.contains("RuntimeHost"));
     }
 
