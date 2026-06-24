@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use cfs_core::{Driver, EffectKind, EvalValue, Evaluator, MountRegistry};
+use cfs_core::{Driver, EffectKind, EvalError, EvalValue, Evaluator, MountRegistry, ResolveError};
 use cfs_parser::parse_statement;
 use cfs_test::{assert_plan, preview_handler};
 
@@ -328,5 +328,23 @@ fn negative_unsupported_verb_fails_structurally() {
     assert_eq!(
         code, "unsupported_verb",
         "expected a structured unsupported_verb error, got code `{code}`: {err:?}"
+    );
+    // The error is genuinely AGENT-LEGIBLE (RFD §5) WITHOUT string-parsing: its structured fields
+    // name the rejected verb AND carry the `supported` set the agent picks a valid verb from (the
+    // SKILL.md quick-ref promise "Unsupported verb = structured error … pick from it"). UPDATE is
+    // rejected on the slack append-log node; INSERT is offered as a supported alternative.
+    let EvalError::Resolve(ResolveError::UnsupportedVerb {
+        verb, supported, ..
+    }) = &err
+    else {
+        panic!("expected EvalError::Resolve(UnsupportedVerb {{ .. }}), got: {err:?}");
+    };
+    assert_eq!(
+        *verb, "UPDATE",
+        "the rejected verb is named for agent recovery"
+    );
+    assert!(
+        supported.contains(&"INSERT"),
+        "the supported-verb set must offer INSERT for agent recovery, got: {supported:?}"
     );
 }
