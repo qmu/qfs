@@ -40,7 +40,12 @@ jobs:
           workspaces: packages/qfs
       - name: Install toolchain (from rust-toolchain.toml)
         run: rustup show
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # NOT `--all-features`: qfs-host's `host-daemon` and `host-workers` are mutually exclusive
+      # (a compile_error fires if both are on), so `--all-features` can never compile. Lint the
+      # default feature set across the workspace, then each host deployment feature on its own.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy -p qfs-host --all-targets --features host-daemon -- -D warnings
+      - run: cargo clippy -p qfs-host --all-targets --features host-workers -- -D warnings
 
   build-test:
     name: build + test (native)

@@ -119,7 +119,7 @@ The reference docs under [`docs/`](../../docs/) are **generated from the binary'
 
 Releases are tag-triggered (`.github/workflows/release.yml`): on a `v*` tag, CI runs
 `cargo run -p xtask -- dist`, which cross-compiles the four native targets (static musl Linux +
-macOS, both arches) and the `wasm32-unknown-unknown` artifact, strips, checksums (`sha256`), and
+macOS, both arches), strips, checksums (`sha256`), and
 tarballs them into `dist/`; the workflow attaches the tarballs + checksums to the GitHub Release.
 `install.sh` consumes those artifacts.
 

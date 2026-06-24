@@ -66,30 +66,15 @@ jobs:
             packages/qfs/dist/qfs-${{ matrix.target }}.tar.gz.sha256
           if-no-files-found: error
 
-  # The size-optimized wasm artifact (Ubuntu).
-  wasm:
-    name: build wasm
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: packages/qfs
-      - run: rustup target add wasm32-unknown-unknown
-      - name: Build wasm artifact
-        run: cargo run -p xtask -- dist --wasm
-      - uses: actions/upload-artifact@v4
-        with:
-          name: qfs-wasm
-          path: |
-            packages/qfs/dist/qfs.wasm
-            packages/qfs/dist/qfs.wasm.sha256
-          if-no-files-found: error
+  # Note: there is no wasm artifact yet. The Cloudflare Workers entrypoint (a wasm cdylib) is
+  # parked — qfs-host builds as a wasm-clean *library* (verified in ci.yml) but does not yet
+  # produce a deployable `.wasm`. `install.sh` installs a native binary, so releases ship the
+  # four native tarballs below; the wasm artifact will be added when the Workers host lands.
 
   # Collect every artifact and publish the GitHub Release.
   release:
     name: publish release
-    needs: [build, wasm]
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
