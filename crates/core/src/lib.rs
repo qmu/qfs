@@ -25,6 +25,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod ddl;
+mod describe;
 mod eval;
 mod plan;
 mod registry;
@@ -39,6 +40,7 @@ pub use ddl::server::{
     JobDecl, PlanSpec, PolicyRef, Route, ServerBindingDdl, StatementSpec, TriggerDecl, ViewDecl,
     WebhookDecl, CREATE_WRITE_OP,
 };
+pub use describe::{archetype_hint, DescribeReport, PushdownSummary};
 pub use eval::{call_proc_id, effect_kind_for, EvalError, EvalValue, Evaluator, PlanSource};
 pub use plan::{plan_pipeline, plan_query, source_registry, PushdownError};
 pub use registry::{CodecRegistry, MountRegistry, ProcRegistry};

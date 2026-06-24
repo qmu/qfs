@@ -24,6 +24,20 @@ cfs-cmd = { path = "../cmd" }
 cfs-core = { path = "../core" }
 cfs-exec = { path = "../exec" }
 cfs-driver-local = { path = "../driver-local" }
+# t39 `cfs describe` composition root: the binary owns the **describe-only** driver registry the
+# subcommand consults. DESCRIBE is PURE (no creds, no I/O, no network), so each driver is built
+# with its public, cred-free mock client (gmail/gdrive/github/slack/ga) or an empty registry
+# (s3/r2 ObjRegistry) — only the introspective half (describe/capabilities/procedures/prelude/
+# pushdown) is ever called. These are path-deps already in the workspace (no new external crates),
+# and the binary is the allowlisted leaf that may carry the `cfs-driver-*` edges (cfs-cmd stays off
+# them). sql/git/cf need a registered catalog/repo for describe (a registration requirement, not a
+# cred one) and are covered by the cfs-skill golden corpus instead.
+cfs-driver-gmail = { path = "../driver-gmail" }
+cfs-driver-gdrive = { path = "../driver-gdrive" }
+cfs-driver-github = { path = "../driver-github" }
+cfs-driver-slack = { path = "../driver-slack" }
+cfs-driver-ga = { path = "../driver-ga" }
+cfs-driver-objstore = { path = "../driver-objstore" }
 cfs-pushdown = { path = "../pushdown" }
 # t32 serve composition root: the binary (the terminal sink, the HTTP sibling of the t28 shell
 # composition root) wires the HTTP serving binding (cfs-http). cfs-http is a LEAF that consumes

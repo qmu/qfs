@@ -36,6 +36,14 @@ pub trait Renderer {
     /// The underlying writer's `io::Error`.
     fn plan(&self, plan: &PlanPreview, w: &mut dyn Write) -> std::io::Result<()>;
 
+    /// Render a `DESCRIBE <path>` report — the agent's first loop step (ticket t39). The JSON
+    /// form is the stable machine contract; the table form is the human projection.
+    ///
+    /// # Errors
+    /// The underlying writer's `io::Error`.
+    fn describe(&self, report: &cfs_core::DescribeReport, w: &mut dyn Write)
+        -> std::io::Result<()>;
+
     /// Render a structured error (always to stderr by the caller).
     ///
     /// # Errors
@@ -80,6 +88,17 @@ impl Renderer for JsonRenderer {
         writeln!(w, "{json}")
     }
 
+    fn describe(
+        &self,
+        report: &cfs_core::DescribeReport,
+        w: &mut dyn Write,
+    ) -> std::io::Result<()> {
+        // The DescribeReport is the stable agent-facing contract; serialize it as-is. A
+        // serialization failure is impossible for these owned DTOs, but never panic.
+        let json = serde_json::to_string(report).unwrap_or_else(|_| "{}".to_string());
+        writeln!(w, "{json}")
+    }
+
     fn error(&self, err: &ExecError, w: &mut dyn Write) -> std::io::Result<()> {
         writeln!(w, "{}", error_envelope(err))
     }
@@ -110,6 +129,14 @@ impl Renderer for TableRenderer {
             writeln!(w, "COMMITTED:")?;
         }
         writeln!(w, "{}", plan.preview)
+    }
+
+    fn describe(
+        &self,
+        report: &cfs_core::DescribeReport,
+        w: &mut dyn Write,
+    ) -> std::io::Result<()> {
+        render_describe_table(report, w)
     }
 
     fn error(&self, err: &ExecError, w: &mut dyn Write) -> std::io::Result<()> {
@@ -175,6 +202,147 @@ fn display_value(v: &cfs_core::Value) -> String {
         }
         // Value is #[non_exhaustive]: an unmodeled future variant renders via serde.
         _ => serde_json::to_string(v).unwrap_or_else(|_| "?".to_string()),
+    }
+}
+
+/// Render a `DESCRIBE <path>` report as a readable human block (ticket t39): the archetype +
+/// native-verb hint, a columns table, the supported universal verbs, the `CALL` procedures, the
+/// prelude aliases, and the pushdown summary — everything an agent (or operator) reads to write
+/// the next statement. Secret-free by construction (the report carries schema + capabilities
+/// only).
+fn render_describe_table(
+    report: &cfs_core::DescribeReport,
+    w: &mut dyn Write,
+) -> std::io::Result<()> {
+    writeln!(w, "path:      {}", report.path)?;
+    writeln!(
+        w,
+        "archetype: {} ({})",
+        archetype_label(report.archetype),
+        report.native_verbs
+    )?;
+
+    // Columns table (name + type + nullability).
+    writeln!(w, "columns:")?;
+    if report.columns.is_empty() {
+        writeln!(w, "  (none — schema filled by the engine at query time)")?;
+    } else {
+        let headers = vec!["name".to_string(), "type".to_string(), "null".to_string()];
+        let cells: Vec<Vec<String>> = report
+            .columns
+            .iter()
+            .map(|c| {
+                vec![
+                    c.name.clone(),
+                    column_type_label(&c.ty),
+                    if c.nullable { "yes" } else { "no" }.to_string(),
+                ]
+            })
+            .collect();
+        let mut indented = Vec::new();
+        render_table(&headers, &cells, &mut indented)?;
+        for line in String::from_utf8_lossy(&indented).lines() {
+            writeln!(w, "  {line}")?;
+        }
+    }
+
+    // Supported universal verbs (the parse-time gate set).
+    let verbs = report.verbs.supported_labels();
+    let verbs = if verbs.is_empty() {
+        "(none)".to_string()
+    } else {
+        verbs.join(" ")
+    };
+    writeln!(w, "verbs:     {verbs}")?;
+
+    // CALL procedures.
+    if report.procedures.is_empty() {
+        writeln!(w, "procedures: (none)")?;
+    } else {
+        writeln!(w, "procedures:")?;
+        for p in &report.procedures {
+            let params: Vec<String> = p
+                .params
+                .iter()
+                .map(|param| format!("{}:{}", param.name, column_type_label(&param.ty)))
+                .collect();
+            let irr = if p.irreversible {
+                "  [irreversible]"
+            } else {
+                ""
+            };
+            writeln!(w, "  CALL {}({}){irr}", p.name, params.join(", "))?;
+        }
+    }
+
+    // Prelude aliases.
+    if report.aliases.is_empty() {
+        writeln!(w, "aliases:   (none)")?;
+    } else {
+        let aliases: Vec<String> = report
+            .aliases
+            .iter()
+            .map(|a| format!("{} -> {}", a.name, a.desugars_to))
+            .collect();
+        writeln!(w, "aliases:   {}", aliases.join(", "))?;
+    }
+
+    // Pushdown summary.
+    let pd = &report.pushdown;
+    if pd.is_local_only() {
+        writeln!(w, "pushdown:  (local-only — filter/project run in cfs)")?;
+    } else {
+        let mut flags = Vec::new();
+        for (on, label) in [
+            (pd.where_, "where"),
+            (pd.project, "project"),
+            (pd.limit, "limit"),
+            (pd.order, "order"),
+            (pd.join, "join"),
+            (pd.aggregate, "aggregate"),
+            (pd.distinct, "distinct"),
+            (pd.group_by, "group_by"),
+        ] {
+            if on {
+                flags.push(label);
+            }
+        }
+        writeln!(w, "pushdown:  {}", flags.join(" "))?;
+    }
+    Ok(())
+}
+
+/// The human label for an [`Archetype`] (a stable, readable name).
+fn archetype_label(archetype: cfs_core::Archetype) -> &'static str {
+    use cfs_core::Archetype;
+    match archetype {
+        Archetype::BlobNamespace => "blob",
+        Archetype::RelationalTable => "relational",
+        Archetype::AppendLog => "append",
+        Archetype::ObjectGraphWorkflow => "object-graph",
+        _ => "node",
+    }
+}
+
+/// The human label for a [`ColumnType`]: the serde tag for scalars (`Text`/`Int`/…), and a
+/// compact shape for nested types (`Array<…>` / `Struct{…}` / `Json`) so a deeply-nested column
+/// stays one readable token instead of a full JSON blob in the table cell.
+fn column_type_label(ty: &cfs_core::ColumnType) -> String {
+    match serde_json::to_value(ty).ok() {
+        Some(serde_json::Value::String(s)) => s,
+        Some(serde_json::Value::Object(map)) => {
+            // A single-key tagged object: `{"Array": …}` / `{"Struct": …}`.
+            if let Some((tag, _)) = map.into_iter().next() {
+                match tag.as_str() {
+                    "Array" => "Array<…>".to_string(),
+                    "Struct" => "Struct{…}".to_string(),
+                    other => other.to_string(),
+                }
+            } else {
+                "?".to_string()
+            }
+        }
+        _ => "?".to_string(),
     }
 }
 

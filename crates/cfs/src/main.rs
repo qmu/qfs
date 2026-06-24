@@ -12,6 +12,7 @@
 //! [`cfs_cmd::ShellLauncher`]. The shell LOGIC itself lives in `cfs-exec`; this only wires it.
 
 mod cron;
+mod describe;
 mod host;
 mod serve;
 mod serve_builtins;
@@ -23,6 +24,10 @@ fn main() {
         std::env::args_os(),
         &shell::run_interactive_shell,
         &serve::run_serve,
+        // t39: the describe-only driver registry (cred-free; only the pure introspective half is
+        // ever called). Built here in the binary composition root; cfs-cmd stays off the driver
+        // crates and consults it through the injected DescribeProvider.
+        &describe::describe_registry,
     );
     std::process::exit(code);
 }

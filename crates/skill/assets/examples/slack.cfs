@@ -1,0 +1,3 @@
+-- slack (append_log). DESCRIBE /slack/acme/general/messages -> insert(append) only.
+-- Step 2: append a message (reversible INSERT). A bare channel name is a valid ChannelRef.
+INSERT INTO /slack/acme/general/messages VALUES ('Deploy finished')

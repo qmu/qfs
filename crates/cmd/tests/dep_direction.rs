@@ -211,6 +211,19 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // AuditLedger. cfs-host's feature-gated coupling dead-ends in the terminal binary; cfs-cmd
         // stays off it. Same composition-root rationale as the t32/t33/t34 binding leaves.
         "cfs-host",
+        // t39: the binary is the `cfs describe` composition root — it builds the DESCRIBE-only
+        // driver registry from each driver's PURE introspective facet (cred-free mock client /
+        // empty registry) and injects it into cfs-cmd via the DescribeProvider. DESCRIBE reaches
+        // only the introspective half (never the applier), so these driver crates add no runtime
+        // I/O coupling to the terminal binary; cfs-cmd stays off the concrete driver crates. Same
+        // composition-root rationale as the t28 shell's cfs-driver-local edge — the binary is the
+        // allowlisted leaf that may carry the `cfs-driver-*` describe edges.
+        "cfs-driver-gmail",
+        "cfs-driver-gdrive",
+        "cfs-driver-github",
+        "cfs-driver-slack",
+        "cfs-driver-ga",
+        "cfs-driver-objstore",
     ];
     let workspace_prefixed: Vec<&String> =
         bin_deps.iter().filter(|d| d.starts_with("cfs")).collect();
@@ -408,6 +421,13 @@ fn runtime_is_confined_to_plan_and_types() {
                     // terminal node, so tokio still dead-ends (it cannot transit THROUGH the
                     // binary back into the spine — nothing depends on the binary). Exempt it.
                     && other.as_str() != "cfs"
+                    // t39: `cfs-skill` is a DEV-ONLY assets crate (`publish = false`) — its edges
+                    // onto the describe-facet driver crates are dev-dependencies (the golden
+                    // corpus), which `cargo metadata` lumps into this view. A dev-dep can never
+                    // transit tokio into a SHIPPED artifact (compiled only for tests), and nothing
+                    // depends on cfs-skill (it is a terminal sink). Exempt it for the same "tokio
+                    // dead-ends here" reason as the `cfs` binary.
+                    && other.as_str() != "cfs-skill"
             })
             .map(|(other, _)| other.clone());
         assert!(

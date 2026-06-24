@@ -41,6 +41,17 @@ pub type ShellLauncher<'a> = dyn Fn() -> i32 + 'a;
 /// + listener and returns the process exit code.
 pub type ServeLauncher<'a> = dyn Fn(&std::path::Path) -> i32 + 'a;
 
+/// The injected **describe-registry provider** (t39): the binary supplies the
+/// [`cfs_core::MountRegistry`] of **describe-only drivers** (each driver's pure introspective
+/// facet, constructed cred-free) that `cfs describe <path>` consults. It lives in the binary
+/// composition root — NOT in cfs-cmd, which must stay off the concrete driver crates (the
+/// dep_direction guard forbids cfs-cmd a `cfs-driver-*` edge; the binary is the allowlisted leaf
+/// that may carry them). cfs-cmd only knows "the `describe` subcommand → build the registry via
+/// this provider, then hand it + the path to `cfs_exec::run_describe`". DESCRIBE is PURE (no
+/// creds, no I/O, no network), so the registry holds describe-only drivers and the applier seam
+/// is never reached.
+pub type DescribeProvider<'a> = dyn Fn() -> cfs_core::MountRegistry + 'a;
+
 /// cfs — one binary that is both a CLI and a server, exposing every external
 /// service through one uniform, filesystem-shaped, pipe-SQL DSL (RFD-0001 §1).
 #[derive(Parser, Debug)]
@@ -91,6 +102,19 @@ enum Command {
         /// Suppress progress output; never suppresses the error body.
         #[arg(long = "quiet", short = 'q')]
         quiet: bool,
+    },
+    /// Describe a node: its archetype, columns, supported verbs, `CALL` procedures, prelude
+    /// aliases, and pushdown — the agent's first loop step (t39, RFD §5).
+    ///
+    /// `DESCRIBE` is PURE: no credentials, no I/O, no network. It reads only the driver's
+    /// introspective contract, so `cfs describe /mail/drafts -json` resolves offline. The agent
+    /// reads this report, writes a cfs statement, PREVIEWs it, then COMMITs.
+    Describe {
+        /// The node to describe, e.g. `/mail/drafts`. Absolute path or `id:` form (no cwd).
+        path: String,
+        /// Output format: `json` or `table`. Default: `table` on a TTY, `json` when piped.
+        #[arg(long = "format", value_name = "FORMAT")]
+        format: Option<String>,
     },
     /// Start the server from a `.cfs` config file (RFD-0001 §8).
     Serve {
@@ -148,12 +172,23 @@ enum AccountVerb {
 /// binary supplies the runtime-coupled local read facet + REPL driver). Returns the intended
 /// process exit code; the binary forwards it to `std::process::exit`.
 #[must_use]
-pub fn run<I, T>(args: I, shell: &ShellLauncher, serve: &ServeLauncher) -> i32
+pub fn run<I, T>(
+    args: I,
+    shell: &ShellLauncher,
+    serve: &ServeLauncher,
+    describe: &DescribeProvider,
+) -> i32
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
     init_tracing();
+
+    // Accept the RFD/ticket shorthand `-json` (single dash) as an alias for the canonical global
+    // `--json` flag. Clap would otherwise lex `-json` as the bundled short flags `-j -s -o -n`;
+    // rewriting the single, exact token `-json` → `--json` keeps the documented surface
+    // (`cfs describe /mail/drafts -json`) working without inventing single-char flags.
+    let args = normalize_json_alias(args);
 
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
@@ -203,6 +238,14 @@ where
         );
     }
 
+    // `cfs describe` owns its own exit-code contract (t39, same as `cfs run`): it renders the
+    // DescribeReport / structured error directly through the t29 output layer and returns the
+    // stable exit code. The describe-only driver registry is built by the injected provider (the
+    // binary composition root that owns the concrete driver crates); cfs-cmd stays off them.
+    if let Some(Command::Describe { path, format }) = &cli.cmd {
+        return dispatch_describe(path, format.as_deref(), cli.json, describe);
+    }
+
     // No subcommand → the interactive shell, run by the injected launcher (which owns the
     // runtime-coupled local read facet + REPL driver; see [`ShellLauncher`]). It returns the
     // process exit code directly.
@@ -213,7 +256,7 @@ where
 
     let outcome = match cli.cmd {
         // Handled above; unreachable here but kept total.
-        Some(Command::Run { .. }) | None => Ok(()),
+        Some(Command::Run { .. }) | Some(Command::Describe { .. }) | None => Ok(()),
         // `serve` is dispatched through the injected launcher (the binary composition root that
         // wires the HTTP binding); it returns the process exit code directly.
         Some(Command::Serve { config }) => {
@@ -230,6 +273,37 @@ where
             1
         }
     }
+}
+
+/// Rewrite the exact argv token `-json` (single dash) to the canonical `--json` flag, leaving
+/// every other argument untouched. The RFD and the t39 ticket write `cfs … -json`; clap's lexer
+/// treats `-json` as bundled single-char flags (`-j -s -o -n`), so this one-token normalization
+/// preserves the documented surface without adding spurious short flags. Only the standalone,
+/// exact `-json` token is rewritten — `--json`, `-j`-style bundles a user actually typed, and any
+/// value equal to `-json` after a `--` separator are left as-is (we stop at the first `--`).
+fn normalize_json_alias<I, T>(args: I) -> Vec<OsString>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    let mut out = Vec::new();
+    let mut passthrough = false;
+    for arg in args {
+        let os: OsString = arg.into();
+        if passthrough {
+            out.push(os);
+            continue;
+        }
+        if os == *"--" {
+            passthrough = true;
+            out.push(os);
+        } else if os == *"-json" {
+            out.push(OsString::from("--json"));
+        } else {
+            out.push(os);
+        }
+    }
+    out
 }
 
 /// The resolved options for one `cfs run` invocation.
@@ -291,6 +365,52 @@ fn dispatch_run(engine: &Engine, opts: RunOpts) -> i32 {
         &mut streams,
     )
     .code()
+}
+
+/// Dispatch `cfs describe <path>` (t39): build the describe-only driver registry via the injected
+/// provider, resolve the output format (explicit flag wins; else table on a TTY, json when
+/// piped), and hand off to `cfs_exec::run_describe`, which folds the driver's introspective half
+/// into a [`cfs_core::DescribeReport`] and renders it. Logic-free: all execution lives in
+/// `cfs-exec`; the driver wiring lives in the binary (via `describe`).
+fn dispatch_describe(
+    path: &str,
+    format: Option<&str>,
+    json: bool,
+    describe: &DescribeProvider,
+) -> i32 {
+    use std::io::IsTerminal;
+
+    let stdout_is_tty = std::io::stdout().is_terminal();
+    let fmt = resolve_describe_format(json, format, stdout_is_tty);
+
+    // Build the describe-only registry from the injected provider (the binary composition root).
+    let registry = describe();
+
+    let mut out = std::io::stdout();
+    let mut err = std::io::stderr();
+    let mut streams = cfs_exec::Streams {
+        out: &mut out,
+        err: &mut err,
+    };
+    cfs_exec::run_describe(path, &registry, fmt, &mut streams).code()
+}
+
+/// Resolve the describe output format (mirrors `cfs run`): `--json` / `--format json|table` wins;
+/// else `table` on a TTY, `json` when piped (deterministic for an agent's scripted pipe).
+fn resolve_describe_format(
+    json: bool,
+    format: Option<&str>,
+    stdout_is_tty: bool,
+) -> cfs_exec::OutputFormat {
+    if json {
+        return cfs_exec::OutputFormat::Json;
+    }
+    match format {
+        Some("json") => cfs_exec::OutputFormat::Json,
+        Some("table") => cfs_exec::OutputFormat::Table,
+        _ if stdout_is_tty => cfs_exec::OutputFormat::Table,
+        _ => cfs_exec::OutputFormat::Json,
+    }
 }
 
 /// Resolve the output format: an explicit `--format json|table` (or the `--json` alias) always
@@ -453,13 +573,21 @@ mod tests {
         0
     }
 
-    /// Run with the no-op shell + serve launchers (every non-shell/serve test path ignores them).
+    /// An empty describe registry for the dispatch tests (the real describe-only drivers are
+    /// wired + tested in the binary crate). With no driver registered, `cfs describe /x` resolves
+    /// to a structured `unknown_mount` capability error (exit 3) — never a panic.
+    fn empty_describe() -> cfs_core::MountRegistry {
+        cfs_core::MountRegistry::new()
+    }
+
+    /// Run with the no-op shell + serve launchers + empty describe provider (every non-shell/
+    /// serve/describe test path ignores them).
     fn run_t<I, T>(args: I) -> i32
     where
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        run(args, &noop_shell, &|_cfg| 0)
+        run(args, &noop_shell, &|_cfg| 0, &empty_describe)
     }
 
     #[test]
@@ -495,6 +623,7 @@ mod tests {
                 0
             },
             &|_cfg| 0,
+            &empty_describe,
         );
         assert!(
             launched.get(),
@@ -531,10 +660,15 @@ mod tests {
         // binary composition root that wires the HTTP binding). cfs-cmd only routes to it with
         // the config path and returns its exit code — here a noop launcher returning 0.
         let launched = std::cell::Cell::new(false);
-        let code = run(["cfs", "serve", "x.cfs"], &noop_shell, &|cfg| {
-            launched.set(cfg.ends_with("x.cfs"));
-            0
-        });
+        let code = run(
+            ["cfs", "serve", "x.cfs"],
+            &noop_shell,
+            &|cfg| {
+                launched.set(cfg.ends_with("x.cfs"));
+                0
+            },
+            &empty_describe,
+        );
         assert!(
             launched.get(),
             "serve must invoke the serve launcher with the config path"

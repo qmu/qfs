@@ -47,6 +47,23 @@ pub fn validate(src: &str) -> Result<(), ExecError> {
     Ok(())
 }
 
+/// Validate a single node address (e.g. the argument of `cfs describe <path>`): it must be an
+/// absolute (`/…`) or `id:`-prefixed path in one-shot mode. A relative path is a `usage` error.
+///
+/// # Errors
+/// [`ExecError`] (kind `usage`, exit 2) if `path` is relative or empty.
+pub fn validate_path(path: &str) -> Result<(), ExecError> {
+    if is_addressed(path) {
+        Ok(())
+    } else {
+        Err(ExecError::usage(format!(
+            "relative path `{path}` is not allowed in one-shot mode; use an absolute path \
+             (`/driver/...`) or an `id:` form"
+        ))
+        .with_path(path))
+    }
+}
+
 /// Whether a path token is an accepted one-shot address: absolute (`/…`) or `id:`-prefixed.
 fn is_addressed(token: &str) -> bool {
     token.starts_with('/') || token.starts_with("id:")

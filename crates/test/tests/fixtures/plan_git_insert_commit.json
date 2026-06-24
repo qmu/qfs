@@ -1,0 +1,24 @@
+{
+  "deps": [],
+  "nodes": [
+    {
+      "args": {
+        "rows": [],
+        "schema": {
+          "columns": []
+        }
+      },
+      "est_affected": {
+        "exact": 1
+      },
+      "id": 0,
+      "irreversible": false,
+      "kind": "insert",
+      "target": {
+        "driver": "git",
+        "path": "/git/myrepo/commits"
+      }
+    }
+  ],
+  "returning": null
+}

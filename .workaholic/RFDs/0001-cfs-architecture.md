@@ -182,3 +182,11 @@ earn their keep.
 
 E0 Foundations · E1 Language core · E2 Effect-plan & runtime · E3 Federation & data ·
 E4 Drivers · E5 Auth/credentials · E6 CLI · E7 Server · E8 Cross-cutting (security, test, docs, AI procedure).
+
+**E8 — AI operating procedure (t39).** The single operating procedure an AI agent follows to
+drive every service through cfs is the uniform loop **DESCRIBE `<path>` → write a cfs statement →
+PREVIEW → COMMIT**. It is authored as a discoverable, binary-embedded agent skill at
+[`crates/skill/assets/SKILL.md`](../../crates/skill/assets/SKILL.md) (RFD §1/§5/§9), backed by the
+`cfs describe <path> [-json]` subcommand (the `DescribeReport` contract in `cfs-core::describe`)
+and a no-creds golden corpus (`crates/skill/tests/golden_corpus.rs`) proving the loop is identical
+across mail/drive/github/slack/sql/git and a `/server/...` binding.

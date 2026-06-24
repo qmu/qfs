@@ -193,7 +193,13 @@ dependencies = [
  "cfs-cmd",
  "cfs-core",
  "cfs-cron",
+ "cfs-driver-ga",
+ "cfs-driver-gdrive",
+ "cfs-driver-github",
+ "cfs-driver-gmail",
  "cfs-driver-local",
+ "cfs-driver-objstore",
+ "cfs-driver-slack",
  "cfs-exec",
  "cfs-host",
  "cfs-http",
@@ -619,6 +625,23 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "cfs-skill"
+version = "0.0.0"
+dependencies = [
+ "cfs-core",
+ "cfs-driver-gdrive",
+ "cfs-driver-git",
+ "cfs-driver-github",
+ "cfs-driver-gmail",
+ "cfs-driver-local",
+ "cfs-driver-slack",
+ "cfs-driver-sql",
+ "cfs-parser",
+ "cfs-test",
+ "serde_json",
 ]
 
 [[package]]

@@ -39,6 +39,8 @@ pub use output::{JsonRenderer, OutputFormat, Renderer, TableRenderer};
 pub use read::{ReadDriver, ReadRegistry};
 pub use shell::{Builtin, Completer, Outcome, Session, VfsPath};
 
+// `run_describe` (ticket t39) is defined below in this module; re-export is implicit (pub fn).
+
 use std::io::Write;
 
 use cfs_core::{Engine, Plan};
@@ -228,6 +230,59 @@ fn run_oneshot_inner(
         // kept total (no panic) by treating it as a pure preview.
         Statement::Plan(_) => Ok(ExitCode::Ok),
     }
+}
+
+/// Execute `cfs describe <path>` (ticket t39): resolve `path` to its driver in the describe
+/// registry, fold the driver's pure introspective half into a [`cfs_core::DescribeReport`], and
+/// render it via the t29 output layer (human table / JSON). Returns the process [`ExitCode`].
+///
+/// DESCRIBE is **pure** — no creds, no I/O, no network: the registry holds describe-only drivers
+/// and only the introspective half is touched (the applier seam is never reached). An
+/// unresolvable path or a non-describable node renders a structured error (exit 2/3) — the
+/// agent-legible failure path — never a panic.
+pub fn run_describe(
+    path: &str,
+    describe: &cfs_core::MountRegistry,
+    fmt: OutputFormat,
+    streams: &mut Streams,
+) -> ExitCode {
+    match run_describe_inner(path, describe, fmt, streams) {
+        Ok(code) => code,
+        Err(err) => {
+            let renderer = fmt.renderer();
+            let _ = renderer.error(&err, streams.err);
+            err.exit_code()
+        }
+    }
+}
+
+fn run_describe_inner(
+    path: &str,
+    describe: &cfs_core::MountRegistry,
+    fmt: OutputFormat,
+    streams: &mut Streams,
+) -> Result<ExitCode, ExecError> {
+    // Addressing gate: DESCRIBE addresses an absolute path (no cwd in one-shot mode), same as
+    // `cfs run`. A relative path is a usage error (exit 2).
+    addressing::validate_path(path)?;
+
+    // Resolve the path to its describe-only driver (longest-mount-prefix match).
+    let (driver, _rest) = describe.resolve_path(path).ok_or_else(|| {
+        ExecError::new(
+            ErrorKind::Capability,
+            "unknown_mount",
+            format!("no driver is mounted for `{path}` (describe registry)"),
+        )
+        .with_path(path)
+    })?;
+
+    // Fold the introspective half into the report — pure, no I/O, no creds.
+    let report = cfs_core::DescribeReport::from_driver(driver.as_ref(), &cfs_core::Path::new(path))
+        .map_err(|e| ExecError::from_cfs(&e))?;
+
+    let renderer = fmt.renderer();
+    renderer.describe(&report, streams.out).map_err(io_err)?;
+    Ok(ExitCode::Ok)
 }
 
 /// Unwrap a `PREVIEW`/`COMMIT` plan wrapper, returning the inner statement and whether to commit
