@@ -1,3 +1,3 @@
 # Branch Stories
 
-- [work-20260620-200140](work-20260620-200140.md) — Create gmail-ftp (FTP-style Gmail CLI, sibling of gdrive-ftp) via a three-agent trip, plus v1.1 send-with-attachments.
+- [work-20260622-230954](work-20260622-230954.md) — Rebuild the repo as **qfs**: a single Rust binary exposing every service through one pipe-SQL query language (41-ticket trip), then rename/restructure to a packages/ monorepo, erase gmail-ftp, write user docs + a VitePress/Docker site, ship a working v0.0.1 release, and add the Claude Code plugin.

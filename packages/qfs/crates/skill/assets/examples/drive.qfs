@@ -1,0 +1,4 @@
+-- drive (blob_namespace). DESCRIBE /drive/my/Reports -> cp/ls/mv/rm + universal upsert.
+-- Shell surface: cp /local/report.pdf /drive/my/Reports/ (copy -> verify -> delete; cp keeps source).
+-- Closed-core form the cp builtin lowers to: a retry-safe UPSERT blob write.
+UPSERT INTO /drive/my/Reports/report.pdf VALUES ('report-bytes')

@@ -1,0 +1,3 @@
+-- git (multi-archetype). DESCRIBE /git/myrepo/commits -> relational/append; worktree versioned blob.
+-- Step 2: record a commit (reversible INSERT; history append-only).
+INSERT INTO /git/myrepo/commits VALUES ('add feature', 'main')

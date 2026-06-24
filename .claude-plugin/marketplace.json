@@ -1,24 +1,24 @@
 {
-  "name": "gmail-ftp",
-  "version": "1.0.0",
-  "description": "FTP-style CLI for Gmail, plus a skill teaching coding agents to drive it",
+  "name": "qfs",
+  "version": "0.1.0",
+  "description": "One pipe-SQL query language for every service, plus a skill teaching coding agents to drive it",
   "owner": {
     "name": "tamurayoshiya",
     "email": "a@qmu.jp"
   },
   "plugins": [
     {
-      "name": "gmail-ftp",
-      "description": "Use when a task needs to read or modify the user's Gmail from the command line — list/navigate labels, list/search messages, download messages and attachments, create drafts, create labels, trash messages — via the gmail-ftp CLI.",
-      "version": "1.0.0",
+      "name": "qfs",
+      "description": "Use when a task needs to read or modify any service the user has connected — mail, files, databases, GitHub, Slack, git, cloud storage — through the qfs pipe-SQL query language and the qfs CLI.",
+      "version": "0.1.0",
       "author": {
         "name": "tamurayoshiya",
         "email": "a@qmu.jp"
       },
-      "source": "./plugins/gmail-ftp",
+      "source": "./plugins/qfs",
       "category": "development",
       "skills": [
-        "./skills/gmail-ftp"
+        "./skills/qfs"
       ]
     }
   ]

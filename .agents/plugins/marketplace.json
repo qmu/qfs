@@ -1,14 +1,14 @@
 {
-  "name": "gmail-ftp",
+  "name": "qfs",
   "interface": {
-    "displayName": "gmail-ftp"
+    "displayName": "qfs"
   },
   "plugins": [
     {
-      "name": "gmail-ftp",
+      "name": "qfs",
       "source": {
         "source": "local",
-        "path": "./plugins/gmail-ftp"
+        "path": "./plugins/qfs"
       },
       "policy": {
         "installation": "AVAILABLE",
