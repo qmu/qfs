@@ -11,6 +11,34 @@ depends_on: []
 
 # Wire the real execution + auth path into the binary (commit, credentials, account)
 
+## STATUS (2026-06-25): slices 1–3 + the github/slack family SHIPPED (v0.0.4)
+
+Done and on `main` (PRs #4, #5, tag `v0.0.4`):
+- **Slice 1 — local-fs execution** ✅ `qfs run "UPSERT/REMOVE … /local/…" --commit` writes/deletes
+  for real; `FROM /local/<dir>` lists a real directory. (`commit.rs` `apply_plan` over the
+  `qfs-runtime` interpreter + local apply driver; `shell.rs` `run_engine_and_reads` local read facet.)
+- **Slice 2 — credential resolver / env-var auth** ✅ commit resolves the store + account; missing
+  creds fail closed (no fake success).
+- **Slice 3 — `qfs account add/list/use/remove`** ✅ real encrypted `LocalStore` (argon2id, 0600);
+  secret read from stdin; `.active` sidecar for `use`. (`account.rs`.)
+- **Slice 4 (partial) — github + slack live commit** ✅ the ONE real reqwest `HttpTransport`
+  (`crates/qfs/src/transport.rs`, loopback-unit-tested) bridges `qfs-driver-http`'s `ReqwestClient`
+  onto both drivers' transport seams; `commit.rs` registers real `RestGitHubClient`/`RestSlackClient`
+  with the credential resolved from the same store. Verified: a `/slack` commit reaches the real
+  `SlackApplier` (not the old `RecordingApplier` fake).
+
+**Remaining slice-4 families are split into their own tickets** (the production clients all EXIST —
+this is wiring + config + live verification, not new client code):
+- gmail / gdrive / ga — Google OAuth (`GoogleApiClient` built; needs OAuth-app config + consent flow
+  in `account add`).
+- s3 / r2 — objstore SigV4 (`HttpBackend` built; needs region/endpoint config + SigV4 keys).
+- sql — connection layer (needs DSN config + a live DB).
+- git / cf — gix execution; cf worker crate parked (offline).
+- networked **read** facets (github/slack/google/objstore `FROM`/`CALL`-via-`FROM`).
+
+This ticket stays as the umbrella; the per-family tickets carry the exact seams. The original plan
+below is kept for context.
+
 ## Overview
 
 The qfs binary today is **describe + preview only**. Verified against the binary:
