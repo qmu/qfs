@@ -45,7 +45,7 @@ pub use error::CfsError;
 pub use path::Path;
 
 use qfs_plan::{Plan, PlanApplier};
-use qfs_types::{ColumnType, DriverId, Schema};
+use qfs_types::{ColumnType, DriverId, RowBatch, Schema};
 use serde::Serialize;
 
 /// How a node maps onto qfs's uniform model (RFD-0001 §5, "Four archetypes").
@@ -615,6 +615,28 @@ pub trait Driver: Send + Sync {
     /// sub-paths and not others). Defaults to no versioning.
     fn version_support(&self, _path: &Path) -> VersionSupport {
         VersionSupport::None
+    }
+
+    /// **Optional driver-specific WRITE lowering.** When a driver returns `Some(plan)`, the
+    /// evaluator uses that effect [`Plan`] **instead of** building the generic single-node write
+    /// `(driver, path, row)`. This exists for the one driver shape whose applier consumes a
+    /// planner-**encoded** multi-node effect plan that the generic node cannot express: **git**, an
+    /// `INSERT INTO /git/<repo>/commits` must lower to `blob → tree → commit → ref → reflog`
+    /// effects (each carrying an `effect_kind` discriminator its applier decodes). The default
+    /// `None` keeps the generic path — sql / slack / github / mail / drive map the row directly in
+    /// their appliers and need no override.
+    ///
+    /// **Purity (RFD §3):** like every contract method this is pure — the driver reads only its
+    /// already-loaded describe/repo *snapshot* (e.g. the current branch tip) and constructs a
+    /// `Plan`; it performs no network/disk I/O (COMMIT remains the sole impure seam). `args` is the
+    /// write's evaluated row payload (the `VALUES` rows, positional per the node's write contract).
+    fn plan_write(
+        &self,
+        _path: &Path,
+        _verb: Verb,
+        _args: &RowBatch,
+    ) -> Option<Result<Plan, CfsError>> {
+        None
     }
 
     /// The **only** impure seam: the [`PlanApplier`] (t09) the runtime uses under

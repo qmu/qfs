@@ -109,6 +109,18 @@ fn live_registry() -> DriverRegistry {
         );
     }
 
+    // Git: the real on-disk repositories driven by the `git` CLI, when at least one `QFS_GIT_<repo>`
+    // is configured. The engine's plan_write seam lowers `INSERT INTO /git/<repo>/commits` to the
+    // encoded blob→tree→commit→ref→reflog plan; this applies it (real objects + branch CAS). An
+    // unconfigured `/git` commit fails closed.
+    if crate::git::has_connections() {
+        let git_driver = crate::git::git_driver();
+        reg = reg.with(
+            DriverId::new("git"),
+            Arc::new(qfs_driver_git::git_apply_driver(&git_driver)),
+        );
+    }
+
     // Slack: same shape (the shared reqwest transport, Slack's body-error rule on).
     if let Some((sl_store, sl_cred)) = networked_credential("slack") {
         let sl_client = Arc::new(qfs_driver_slack::RestSlackClient::new(

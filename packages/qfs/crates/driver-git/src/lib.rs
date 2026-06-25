@@ -86,8 +86,9 @@ use std::sync::Arc;
 use qfs_driver::{
     Archetype, Capabilities, Driver, NodeDesc, Path, ProcSig, PushdownProfile, Verb, VersionSupport,
 };
-use qfs_plan::PlanApplier;
+use qfs_plan::{Plan, PlanApplier};
 use qfs_runtime::PlanApplierBridge;
+use qfs_types::{RowBatch, Value};
 
 pub use applier::{object_oid, GitApplier, RepoStore};
 pub use dto::{BlameRow, ChangeRow, CommitRow, RefRow, ReflogRow};
@@ -243,8 +244,81 @@ impl Driver for GitDriver {
         }
     }
 
+    /// Driver-specific WRITE lowering (RFD §6): an `INSERT INTO /git/<repo>/commits` lowers to the
+    /// `blob → tree → commit → ref → reflog` effect plan via [`plan_insert_commit`] — the encoded
+    /// effects the git applier decodes — instead of the generic single-node write the engine cannot
+    /// express for git. Other git writes fall through to the generic path (`None`). Pure: reads the
+    /// repo's already-loaded ref snapshot, builds a `Plan`, performs no I/O.
+    fn plan_write(
+        &self,
+        path: &Path,
+        verb: Verb,
+        args: &RowBatch,
+    ) -> Option<Result<Plan, qfs_driver::CfsError>> {
+        let gp = GitPath::parse(path.as_str()).ok()?;
+        match (gp.node, verb) {
+            (GitNode::Commits, Verb::Insert) => Some(
+                self.plan_commit_insert(&gp.repo, args)
+                    .map_err(|e| e.into_qfs(path.as_str())),
+            ),
+            // Other nodes/verbs keep the generic path (which their non-encoded shapes need, or which
+            // surfaces the right structural rejection).
+            _ => None,
+        }
+    }
+
     fn applier(&self) -> &dyn PlanApplier {
         &self.applier
+    }
+}
+
+/// The identity stamped on a qfs-authored commit (the `VALUES` write contract carries only the
+/// message + branch). A fixed, honest placeholder until the surface grows an author column / the
+/// composition root injects a configured identity.
+const QFS_COMMIT_IDENTITY: &str = "qfs <qfs@localhost>";
+
+impl GitDriver {
+    /// Lower `INSERT INTO /git/<repo>/commits VALUES ('<message>'[, '<branch>'])` into the encoded
+    /// commit effect plan. The row is **positional** per the node's write contract (the describe
+    /// schema is the *read* shape — `sha,tree,…` — so column names do not apply to the write):
+    /// value 0 is the commit message; value 1 is the target branch (default `main`). The branch is
+    /// qualified to `refs/heads/<branch>` so the planner's ref read + the apply CAS address the
+    /// real ref.
+    fn plan_commit_insert(&self, repo_name: &str, args: &RowBatch) -> Result<Plan, GitError> {
+        let malformed = |reason: &str| GitError::MalformedEffect {
+            verb: "INSERT",
+            path: format!("/git/{repo_name}/commits"),
+            reason: reason.to_string(),
+        };
+        let row = args
+            .rows
+            .first()
+            .ok_or_else(|| malformed("requires a VALUES row (the commit message)"))?;
+        let message =
+            row.values.first().and_then(value_text).ok_or_else(|| {
+                malformed("the commit message (the first VALUES column) is required")
+            })?;
+        let branch_raw = row
+            .values
+            .get(1)
+            .and_then(value_text)
+            .unwrap_or_else(|| "main".to_string());
+        let branch = if branch_raw.starts_with("refs/") {
+            branch_raw
+        } else {
+            format!("refs/heads/{branch_raw}")
+        };
+        let repo = self.repos.repo(repo_name)?;
+        let input = CommitInput::new(branch, QFS_COMMIT_IDENTITY, QFS_COMMIT_IDENTITY, message);
+        Ok(plan_insert_commit(repo_name, repo, &input)?.plan)
+    }
+}
+
+/// Extract the owned text of a [`Value`] cell (the git write contract carries text message/branch).
+fn value_text(v: &Value) -> Option<String> {
+    match v {
+        Value::Text(s) => Some(s.clone()),
+        _ => None,
     }
 }
 

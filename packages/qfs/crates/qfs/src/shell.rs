@@ -166,6 +166,11 @@ pub fn run_engine_and_reads() -> (Engine, ReadRegistry) {
     if crate::sql::has_connections() {
         let _ = engine.mounts.register(Arc::new(crate::sql::sql_driver()));
     }
+    // Git: register the live git mount when configured, so `/git/<repo>/...` statements PLAN against
+    // the real repository's refs and the engine's plan_write seam lowers commit INSERTs.
+    if crate::git::has_connections() {
+        let _ = engine.mounts.register(Arc::new(crate::git::git_driver()));
+    }
     (engine, reads)
 }
 

@@ -28,7 +28,7 @@
 //! / `EffectVerb` mirror is intentional (the t06 Architect note): `qfs-plan` mirrors the
 //! four verbs so it stays parser-free (acyclic spine), and the evaluator bridges the two.
 
-use qfs_driver::{Driver, Path};
+use qfs_driver::{Driver, Path, Verb};
 use qfs_parser::{
     EffectBody, EffectStmt, EffectVerb, Expr, Literal, PipeOp, Pipeline, PlanWrap, Projection,
     Source, Statement, Values,
@@ -206,6 +206,13 @@ pub enum EvalError {
         /// A machine-facing description of the offending expression form.
         detail: String,
     },
+    /// A driver's own write lowering ([`Driver::plan_write`](qfs_driver::Driver::plan_write))
+    /// rejected the statement (e.g. a malformed `INSERT INTO /git/<repo>/commits`). Carries the
+    /// driver's secret-free reason.
+    DriverWrite {
+        /// A machine-facing description of why the driver could not lower the write.
+        detail: String,
+    },
 }
 
 impl EvalError {
@@ -218,6 +225,7 @@ impl EvalError {
             EvalError::Fn(e) => e.code(),
             EvalError::UnroutedPath { .. } => "unrouted_path",
             EvalError::NonLiteralValues { .. } => "non_literal_values",
+            EvalError::DriverWrite { .. } => "driver_write",
         }
     }
 }
@@ -515,7 +523,8 @@ impl<'r> Evaluator<'r> {
                 .map(|s| s.name.clone())
                 .collect::<Vec<_>>(),
         );
-        let (driver, vfs) = match self.mounts.resolve_path(&full) {
+        let routed = self.mounts.resolve_path(&full);
+        let (driver, vfs) = match &routed {
             Some((driver, sub)) => (driver.id(), format!("/{}/{}", driver.id().as_str(), sub)),
             // An unrouted target is a path/mount concern; we still build a plan against
             // the literal path so the verb/irreversible semantics are testable without a
@@ -553,6 +562,21 @@ impl<'r> Evaluator<'r> {
             EffectBody::SetWhere { set, filter } => Some(setwhere_row_batch(set, filter.as_ref())?),
             EffectBody::Pipeline(_) => None,
         };
+
+        // **Driver-specific write lowering** (RFD §6): if the routed driver supplies its own encoded
+        // effect plan for this `(path, verb, row)` write — the git case, whose applier consumes a
+        // `blob→tree→commit→ref→reflog` plan the generic single node cannot express — use it. Only
+        // for VALUES/SET writes (a `FROM`-pipeline write has no literal row to hand the driver); a
+        // driver that declines returns `None` and the generic node below is used (sql/slack/github/…).
+        if let (Some((driver, _)), Some(args)) = (routed.as_ref(), values_args.as_ref()) {
+            if let Some(result) =
+                driver.plan_write(&Path::new(full.clone()), driver_verb(effect.verb), args)
+            {
+                return result.map_err(|e| EvalError::DriverWrite {
+                    detail: format!("{e:?}"),
+                });
+            }
+        }
 
         // The write node itself. `REMOVE` is inherently irreversible (set in `new`). The row
         // payload is attached FIRST, then the honest affected estimate LAST: `INSERT … VALUES` is
@@ -825,6 +849,17 @@ fn collect_eq_constants(expr: &Expr) -> Vec<(String, Value)> {
             _ => Vec::new(),
         },
         _ => Vec::new(),
+    }
+}
+
+/// Map a parser [`EffectVerb`] to the driver-contract [`Verb`] — the form
+/// [`Driver::plan_write`](qfs_driver::Driver::plan_write) matches on (the write verbs only).
+fn driver_verb(verb: EffectVerb) -> Verb {
+    match verb {
+        EffectVerb::Insert => Verb::Insert,
+        EffectVerb::Upsert => Verb::Upsert,
+        EffectVerb::Update => Verb::Update,
+        EffectVerb::Remove => Verb::Remove,
     }
 }
 

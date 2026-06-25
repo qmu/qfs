@@ -273,13 +273,20 @@ mod git_fixture {
 
     #[test]
     fn git_insert_commit_previews_plan_no_io() {
-        // INSERT INTO /git/myrepo/commits — record a commit (history is append-only). Built purely;
-        // nothing is committed, no .git is touched.
+        // INSERT INTO /git/myrepo/commits — record a commit (history is append-only). The git
+        // driver's `plan_write` seam lowers this into the real encoded effect plan: an empty-tree
+        // object + the commit object (both `Insert` = WriteLooseObject), then the branch ref move +
+        // the reflog entry (both `Update`). Built purely; nothing is committed, no `.git` is touched.
         assert_plan(
             "INSERT INTO /git/myrepo/commits VALUES ('add feature', 'main')",
             &git_registry(),
         )
-        .nodes(&[EffectKind::Insert])
+        .nodes(&[
+            EffectKind::Insert,
+            EffectKind::Insert,
+            EffectKind::Update,
+            EffectKind::Update,
+        ])
         .no_io_performed()
         .snapshot("plan_git_insert_commit");
     }
