@@ -48,16 +48,24 @@ jobs:
           workspaces: packages/qfs
       - name: Add target
         run: rustup target add ${{ matrix.target }}
-      - name: Install Linux cross/musl toolchain
+      # The bundled SQLite (rusqlite `bundled`) compiles libsqlite3.c with a C compiler that must
+      # target the SAME libc we link against. For musl that requires a real *musl* cross C compiler
+      # — the stock glibc `gcc-aarch64-linux-gnu` makes sqlite3.c reference glibc-only symbols
+      # (`open64`/`stat64`/`__memset_chk`/…) that don't exist in musl, so the static link fails.
+      # This action installs the correct musl cross toolchain and exports the target-scoped
+      # `CC_<triple>` / `AR_<triple>` / `CARGO_TARGET_<triple>_LINKER` env the `cc` crate + linker use.
+      - name: Set up cross toolchain (Linux musl)
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
       - name: Build tarball
-        env:
-          # Used only for the aarch64 musl target; harmless for the others.
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-        run: cargo run -p xtask -- dist --target ${{ matrix.target }}
+        # The action also sets CARGO_BUILD_TARGET (so plain `cargo` cross-builds); unset it here so
+        # the OUTER `cargo run -p xtask` still builds + runs xtask on the HOST, while xtask's inner
+        # `cargo build --target <triple>` picks up the action's target-scoped CC/linker env.
+        run: |
+          unset CARGO_BUILD_TARGET
+          cargo run -p xtask -- dist --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: qfs-${{ matrix.target }}
