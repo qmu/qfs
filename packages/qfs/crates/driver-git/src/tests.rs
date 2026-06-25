@@ -448,6 +448,83 @@ fn cli_backend_writes_a_real_commit_to_an_on_disk_repo() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The engine seam end-to-end at the driver level: `GitDriver::plan_write` (what the evaluator
+/// calls for `INSERT INTO /git/<repo>/commits VALUES ('<msg>', '<branch>')`) lowers the positional
+/// row into the encoded commit plan, which the real CLI-backed applier persists — verified by the
+/// `git` CLI. This is the seam that makes `qfs run "INSERT INTO /git/…" --commit` work.
+#[test]
+fn plan_write_seam_lowers_a_values_row_and_commits_via_cli() {
+    use qfs_driver::{Driver, Path, Verb};
+    use qfs_runtime::SharedApplier;
+    use qfs_types::{Row, RowBatch, Schema, Value};
+    use std::process::Command;
+
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("qfs-git-seam-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "initial"]);
+    let parent = Oid::parse(&git(&["rev-parse", "refs/heads/main"])).unwrap();
+
+    // A GitDriver wired exactly as the binary wires it: a planning repo seeded with the real ref,
+    // and a real CLI-backed applier.
+    let mut planning = Repo::new(Arc::new(LooseObjectDb::new()));
+    planning.set_ref("refs/heads/main", parent.clone());
+    planning.set_ref("main", parent); // the bare form the VALUES branch uses
+    let resolver = RepoResolver::new().with_repo("r", planning);
+    let applier = GitApplier::new().with_store("r", RepoStore::at_path(&dir));
+    let driver = GitDriver::new(resolver, applier);
+
+    // The evaluator hands plan_write the positional VALUES row: (message, branch).
+    let args = RowBatch::new(
+        Schema::new(vec![]),
+        vec![Row::new(vec![
+            Value::Text("seam commit".to_string()),
+            Value::Text("main".to_string()),
+        ])],
+    );
+    let plan = driver
+        .plan_write(&Path::new("/git/r/commits"), Verb::Insert, &args)
+        .expect("git lowers a commits INSERT")
+        .expect("the row is well-formed");
+
+    // The lowered plan is the encoded effect DAG (tree+commit inserts, ref+reflog updates).
+    assert!(
+        plan.nodes().len() >= 3,
+        "encoded blob/tree→commit→ref(→reflog)"
+    );
+    let app = driver.git_applier().clone();
+    for node in plan.nodes() {
+        app.apply_shared(node).expect("real apply succeeds");
+    }
+    // git confirms the real commit landed on main.
+    assert_eq!(git(&["log", "-1", "--pretty=%s"]), "seam commit");
+    assert_ne!(
+        git(&["rev-parse", "refs/heads/main"]),
+        git(&["rev-parse", "HEAD@{1}"])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn stale_old_oid_cas_is_rejected_not_clobbered() {
     use qfs_runtime::SharedApplier;

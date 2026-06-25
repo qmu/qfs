@@ -278,6 +278,10 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // stay a leaf — only the binary may depend on it. A binary-only edge; qfs-cmd/qfs-exec stay
         // off it, and rusqlite dead-ends in the terminal binary.
         "qfs-driver-sql",
+        // t-exec git live commit: the binary wires the real git driver (CLI-backed apply over
+        // on-disk repos; the engine's plan_write seam runs the driver's commit planner). Binary-only
+        // edge; qfs-cmd/qfs-exec stay off it, and the `git` process dead-ends in the terminal binary.
+        "qfs-driver-git",
         // t39 CO-t39-1: the binary links the embedded agent skill so `qfs skill` ships SKILL.md in
         // the artifact (the NORMAL dep edge that keeps the `include_str!` consts from being
         // dead-stripped). qfs-skill's own `[dependencies]` is EMPTY — it carries no runtime/driver

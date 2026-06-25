@@ -1,6 +1,6 @@
 [package]
 name = "qfs"
-version = "0.0.6"
+version = "0.0.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -92,6 +92,11 @@ qfs-driver-http = { path = "../driver-http" }
 # crate depending back onto it. So rusqlite (the real engine + its libsqlite3 C build) dead-ends
 # HERE in the terminal binary, exactly like tokio + the reqwest transport.
 qfs-driver-sql = { path = "../driver-sql" }
+# t-exec git live commit: the binary wires the real git driver over on-disk repositories driven by
+# the `git` CLI (ADR-0003's CLI backend — no gix). The driver's write planner lowers INSERT INTO
+# commits via the engine's plan_write seam; the apply leg shells to git, confined to the terminal
+# binary like the local driver's filesystem writes. Built from QFS_GIT_<repo> env config.
+qfs-driver-git = { path = "../driver-git" }
 # The real in-process SQLite engine, confined to this terminal binary. `bundled` compiles
 # libsqlite3 from source (no system-lib dependency) — the same dep+feature qfs-driver-sql uses for
 # its in-memory test backend, so the artifact already builds in this workspace.

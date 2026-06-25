@@ -11,7 +11,30 @@ depends_on: []
 
 # git live execution (real RepoStore) + cloudflare (cf) status
 
-## STATUS (2026-06-25): real CLI apply backend BUILT + verified; blocked on an ENGINE bridge
+## STATUS (2026-06-25, UPDATED): git commit WORKS end-to-end (v0.0.7) — engine bridge built
+
+The engine bridge landed: a `Driver::plan_write(path, verb, args)` seam — `eval_write` asks the
+routed driver to supply its own encoded effect plan, defaulting to the generic node. `GitDriver`
+overrides it: `INSERT INTO /git/<repo>/commits VALUES ('<msg>', '<branch>')` (positional row — the
+describe schema is the read shape, so column names don't apply) lowers via `plan_insert_commit` to
+the encoded `tree→commit→ref→reflog` plan. The binary's `git.rs` wires real repos from
+`QFS_GIT_<repo>=<path>` (refs snapshot for planning + `RepoStore::at_path` for apply).
+
+**Verified end-to-end** (binary, against a temp repo): `qfs run "INSERT INTO /git/myrepo/commits
+VALUES ('add feature via qfs','main')" --commit` writes a real commit — `git log` confirms it on
+`main`. Automated regression: `plan_write_seam_lowers_a_values_row_and_commits_via_cli` (driver-git,
+the seam + CLI apply) + the git golden corpus (now asserts the 4-node encoded plan) +
+`cli_backend_writes_a_real_commit_to_an_on_disk_repo`. 1250 tests green.
+
+Residual (follow-ups, not blockers): the commit identity is a fixed `qfs <qfs@localhost>` + time 0
+(no author column / no clock at the pure plan stage — inject a configured identity / add an author
+VALUES column later); only `INSERT INTO commits` is lowered (refs UPDATE, `CALL git.merge/checkout/
+tag/rebase` still fall through the generic path → ticket); git **reads** (`FROM /git/...`) still need
+a real ObjectDb (the read facet). cf remains parked.
+
+---
+
+## (historical) earlier status: real CLI apply backend BUILT + verified; blocked on an ENGINE bridge
 
 The apply half is done: `RepoStore::at_path(<path>)` + `apply_effect_cli` (driver-git) persist a
 real commit to an on-disk repo via the `git` CLI — `hash-object -w` for loose objects, the atomic

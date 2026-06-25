@@ -1071,7 +1071,7 @@ dependencies = [
 
 [[package]]
 name = "qfs"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "async-trait",
  "qfs-cmd",
@@ -1079,6 +1079,7 @@ dependencies = [
  "qfs-cron",
  "qfs-driver-ga",
  "qfs-driver-gdrive",
+ "qfs-driver-git",
  "qfs-driver-github",
  "qfs-driver-gmail",
  "qfs-driver-http",

@@ -213,6 +213,8 @@ fn map_eval_error(err: qfs_core::EvalError) -> ExecError {
         EvalError::UnroutedPath { .. } => ErrorKind::Capability,
         // A type error in the query is a usage-class problem.
         EvalError::Type(_) | EvalError::Fn(_) => ErrorKind::Usage,
+        // A non-constant VALUES cell or a driver write-lowering rejection are usage problems.
+        EvalError::NonLiteralValues { .. } | EvalError::DriverWrite { .. } => ErrorKind::Usage,
         _ => ErrorKind::Internal,
     };
     // EvalError has no Display; its owned, secret-free Debug is the machine-facing message.
