@@ -84,6 +84,11 @@ pub fn describe_registry() -> MountRegistry {
                 )),
             ),
         )),
+        // t53 administration: the `/sys/*` admin surface. DESCRIBE is PURE — SysDriver owns NO
+        // backend and NO creds (its read source + applier are injected from the binary), so it
+        // describes `/sys/users`, `/sys/audit`, … cred-free, exactly like the other introspective
+        // facets. This is what makes `/sys/*` appear in the generated `docs/drivers.md`.
+        Arc::new(qfs_driver_sys::SysDriver::new()),
     ];
 
     for driver in drivers {

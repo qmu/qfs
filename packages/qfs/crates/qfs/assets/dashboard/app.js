@@ -69,3 +69,28 @@ wire(
   (form) => ({ statement: form.elements.statement.value.trim(), mode: "preview" }),
   "/api/run"
 );
+
+// t53 admin views: each /sys quick-link fills the describe + preview forms with the chosen admin
+// path and runs BOTH through the SAME bridge — no new endpoint, no admin capability the CLI lacks.
+// Administration is also "everything is a path": the admin view is just describe/preview over a
+// /sys/* path.
+function wireAdminLinks() {
+  const buttons = document.querySelectorAll(".sys-link");
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const path = btn.getAttribute("data-path");
+      const describePath = document.getElementById("describe-path");
+      const statement = document.getElementById("run-statement");
+      if (describePath) {
+        describePath.value = path;
+        document.getElementById("describe-form").requestSubmit();
+      }
+      if (statement) {
+        statement.value = "FROM " + path + " |> SELECT *";
+        document.getElementById("run-form").requestSubmit();
+      }
+    });
+  });
+}
+
+wireAdminLinks();

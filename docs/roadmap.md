@@ -40,8 +40,12 @@ Before any feature, two rules decide whether it is allowed to exist.
    > binary (`GET /`, `GET /assets/*`) that the in-house listener serves over loopback, plus a thin JSON
    > bridge (`POST /api/describe`, `POST /api/run`) that drives the **same** injected engine the MCP face
    > uses. It serves **describe + preview only** (pure introspection and a zero-effect dry-run); there is
-   > **no commit path in the shell yet** — the preview→commit approval cards 🧭 (t52) and the `/sys/*`
-   > admin views 🧭 (t53) are still proposed. The shell is loopback-only and not yet session-gated.
+   > **no commit path in the shell yet** — the preview→commit approval cards 🧭 (t52) are still proposed.
+   > The first `/sys/*` admin views ✅ (t53) have landed: the deployment's own state (`/sys/users`,
+   > `/sys/projects`, `/sys/audit`, `/sys/connections`, `/sys/policies`) is now an ordinary set of qfs
+   > paths backed by the System DB, readable from every face and writable via a gated
+   > `INSERT INTO /sys/policies` (default-deny, audited). The shell is loopback-only and not yet
+   > session-gated; the super-admin vs. project-admin split is still open (§3.4).
 
 ## The confirmed architecture (decision ledger)
 
@@ -611,7 +615,7 @@ or hand to Claude over MCP — same statement, same preview, same commit.
   Triggers (managed) fire a `qfs run` / saved plan on schedule — qfs runs no scheduler of its own, so
   exactly-once and distribution are the platform's job, not a qfs leader election.
 
-### 3.4 The admin page 🧭
+### 3.4 The admin page
 
 A team needs administration, so the dashboard has an **admin area**: manage members and invites, view
 and grant `POLICY`, add/rotate `connections`, review the audit log, watch migrations, and (on the
@@ -623,9 +627,17 @@ surface is a view over the deployment's own `/sys/...` paths — `/sys/users`, `
 dashboard rendering the same engine over the same grammar; a super-admin can do every administrative
 action as a qfs statement too, preserving the one-engine-three-faces constraint.
 
+The **first slice is shipped ✅ (t53):** the `/sys/*` paths are real — a `qfs-driver-sys` driver backs
+them on the System DB, every face can read them (`FROM /sys/audit |> WHERE …`), `/sys/connections`
+projects names + metadata only (never secrets), `/sys/audit` is append-only and every `/sys` mutation
+appends to it, and a gated `INSERT INTO /sys/policies` (default-deny policy gate, transactional +
+audited) is the one write. The dashboard renders the first thin admin views over those paths through
+the same `/api/describe` + `/api/run` bridge — no admin capability the CLI lacks. What remains open
+(🧭) is the breadth of views and the local-super-admin vs. project-admin split (below).
+
 ```qfs
-# 🧭 proposed — granting access from the admin surface is itself a previewable, committable statement
-insert into /sys/policies values (name => 'analysts', allow => 'select', on => /sql/*)
+# the first gated admin write — granting access is itself a previewable, committable, audited statement
+insert into /sys/policies values (name => 'analysts', allow => 'select', target => '/sql/*')
 ```
 
 ::: info The admin page is planned; its implementation is open

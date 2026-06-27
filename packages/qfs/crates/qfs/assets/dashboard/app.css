@@ -136,6 +136,19 @@ button:hover {
   color: var(--err);
 }
 
+/* t53 admin panel: the /sys quick-link buttons (thin describe/preview shortcuts). */
+.admin-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.sys-link {
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
 footer {
   padding: 1rem 2rem 2rem;
   border-top: 1px solid var(--border);

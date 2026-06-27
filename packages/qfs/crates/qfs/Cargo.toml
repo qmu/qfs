@@ -113,6 +113,13 @@ qfs-driver-sql = { path = "../driver-sql" }
 # commits via the engine's plan_write seam; the apply leg shells to git, confined to the terminal
 # binary like the local driver's filesystem writes. Built from QFS_GIT_<repo> env config.
 qfs-driver-git = { path = "../driver-git" }
+# t53 administration driver: the binary wires the `/sys/*` admin surface (describe + the live read
+# facet + the policy-grant apply). qfs-driver-sys is the vendor-free driver (pure introspective half
+# + the SysApplier over the SysBackend seam) and a qfs-runtime consumer, so the dep-direction guard
+# requires it be a LEAF — only the terminal binary may depend on it. The production `SysBackend`
+# (rusqlite over the System DB + the Project DB's connection registry) lives in the binary
+# (src/sys.rs); rusqlite dead-ends HERE like the SQL backend. qfs-cmd/qfs-exec stay off it.
+qfs-driver-sys = { path = "../driver-sys" }
 # The real in-process SQLite engine, confined to this terminal binary. `bundled` compiles
 # libsqlite3 from source (no system-lib dependency) — the same dep+feature qfs-driver-sql uses for
 # its in-memory test backend, so the artifact already builds in this workspace.

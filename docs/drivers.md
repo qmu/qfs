@@ -231,6 +231,31 @@ Prelude aliases: `POST` → `slack.post`
 
 Pushdown: where=true project=false limit=true order=false join=false aggregate=false distinct=false group_by=false
 
+### `/sys` — RelationalTable
+
+- example node: `/sys/users`
+- native verbs: SELECT JOIN INSERT UPDATE UPSERT
+
+Universal verbs (✓ supported / ✗ rejected at parse time):
+
+| verb | supported |
+|------|-----------|
+| `SELECT` | ✓ |
+| `INSERT` | ✗ |
+| `UPSERT` | ✗ |
+| `UPDATE` | ✗ |
+| `REMOVE` | ✗ |
+| `LS` | ✗ |
+| `CP` | ✗ |
+| `MV` | ✗ |
+| `RM` | ✗ |
+
+Procedures: _none_
+
+Prelude aliases: _none_
+
+Pushdown: where=false project=false limit=false order=false join=false aggregate=false distinct=false group_by=false
+
 ## Codecs (DECODE / ENCODE formats)
 
 Codecs bridge blob ↔ relational independent of driver identity. Builtin formats:

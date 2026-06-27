@@ -106,6 +106,12 @@ fn emit_audit(plan: &qfs_core::Plan, outcome: &qfs_runtime::Outcome) {
         if !committed && !attempted_irreversible {
             continue;
         }
+        // t53: a `/sys/*` mutation already appended its OWN audit row TRANSACTIONALLY with the
+        // write (administration observes itself, at the source of truth). Skip it here so the
+        // best-effort emitter does not double-write the chain for the same effect.
+        if entry.driver.as_str() == "sys" {
+            continue;
+        }
 
         // The path lives on the plan node (the ledger entry carries driver + kind, not the path).
         let path = plan
@@ -194,6 +200,19 @@ fn live_registry() -> DriverRegistry {
         reg = reg.with(
             DriverId::new("git"),
             Arc::new(qfs_driver_git::git_apply_driver(&git_driver)),
+        );
+    }
+
+    // Sys (t53): the `/sys/*` administration applier — `INSERT INTO /sys/policies` lands a grant
+    // row and appends its own t76 audit row TRANSACTIONALLY (administration observes itself). Wired
+    // only when a System DB resolves; an unconfigured `/sys` commit fails closed (no driver). The
+    // rusqlite-backed SysBackend lives in the binary (src/sys.rs); the driver crate stays
+    // tokio-free, with its applier bridged here like every other runtime leaf.
+    if let Some(backend) = crate::sys::SystemDbBackend::open_default() {
+        let applier = qfs_driver_sys::SysApplier::new(std::sync::Arc::new(backend));
+        reg = reg.with(
+            DriverId::new("sys"),
+            Arc::new(qfs_driver_sys::sys_apply_driver(&applier)),
         );
     }
 

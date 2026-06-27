@@ -171,6 +171,21 @@ pub fn run_engine_and_reads() -> (Engine, ReadRegistry) {
     if crate::git::has_connections() {
         let _ = engine.mounts.register(Arc::new(crate::git::git_driver()));
     }
+    // Sys (t53): register the `/sys/*` administration mount (its PURE describe/capabilities/pushdown
+    // facet, so `FROM /sys/users |> …` and `INSERT INTO /sys/policies …` resolve + plan + gate) plus
+    // the live read facet (so a `/sys` scan returns real rows). The read source is the binary's
+    // injected System-DB backend; when no System DB resolves the mount still plans (describe is
+    // cred-free) but a scan over an unwired `/sys` surfaces a structured read error.
+    let _ = engine
+        .mounts
+        .register(Arc::new(qfs_driver_sys::SysDriver::new()));
+    if let Some(backend) = crate::sys::SystemDbBackend::open_default() {
+        let reads = reads.with(
+            DriverId::new("sys"),
+            Arc::new(crate::sys::SysReadDriver::new(std::sync::Arc::new(backend))),
+        );
+        return (engine, reads);
+    }
     (engine, reads)
 }
 

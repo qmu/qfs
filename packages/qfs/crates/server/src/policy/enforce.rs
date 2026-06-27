@@ -365,6 +365,34 @@ mod tests {
     }
 
     #[test]
+    fn sys_policies_write_is_default_denied_then_granted() {
+        // t53: a `/sys/*` write is high-privilege and routes through the SAME default-deny policy
+        // engine as any other driver (the path is the authorization subject). An empty/default
+        // policy denies `INSERT INTO /sys/policies`; an explicit `ALLOW INSERT on driver sys`
+        // grants it. This is what "policy-gated" means for the admin surface — no special case.
+        let plan = plan_of(vec![write_node(
+            0,
+            EffectKind::Insert,
+            "sys",
+            "/sys/policies",
+        )]);
+        // Default-deny: a super-admin grant is NOT implicit.
+        match evaluate(&Policy::default(), &plan) {
+            PolicyDecision::Deny { verb, driver, .. } => {
+                assert_eq!(verb, Verb::Insert);
+                assert_eq!(driver, "sys");
+            }
+            PolicyDecision::Allow => panic!("/sys writes must be default-denied"),
+        }
+        // An explicit grant scoped to the `sys` driver permits the policy-grant insert.
+        let granted = Policy::new("admin").with_rule(Rule::allow(
+            VerbSet::one(Verb::Insert),
+            DriverGlob::new("sys"),
+        ));
+        assert!(evaluate(&granted, &plan).is_allow());
+    }
+
+    #[test]
     fn first_denial_is_returned() {
         let policy = Policy::new("api")
             .with_rule(Rule::allow(VerbSet::one(Verb::Insert), DriverGlob::any()));

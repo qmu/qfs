@@ -255,6 +255,15 @@ pub const SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "system_oauth_clients",
         sql: include_str!("schema/system_oauth_clients.sql"),
     },
+    // t53 (roadmap §3.4 / M3): the `/sys/policies` grant rows the administration driver reads and
+    // (gated) writes. Appended as a NEW version (#7) — migrations #1–#6 stay frozen (the checksum
+    // guard forbids editing a shipped migration). The rusqlite read/write that fills these columns
+    // lives in the binary-injected `SysBackend` (`crates/qfs/src/sys.rs`); this declares the shape.
+    Migration {
+        version: 7,
+        name: "system_policies",
+        sql: include_str!("schema/system_policies.sql"),
+    },
 ];
 
 /// The Project DB's ordered migration set (forward-only; append, never edit a shipped entry).
@@ -321,11 +330,12 @@ mod tests {
     fn migrate_is_forward_only_and_idempotent() {
         let mut db = Db::open(&MemorySource).unwrap();
         // First call applies the whole System set (v1 skeleton + v2 audit chain t76 + v3 identity
-        // t45 + v4 sessions t46 + v5 oauth keys t48 + v6 oauth flow clients/codes t49).
+        // t45 + v4 sessions t46 + v5 oauth keys t48 + v6 oauth flow clients/codes t49 + v7
+        // /sys/policies t53).
         let applied = migrate(&mut db, SYSTEM_MIGRATIONS).unwrap();
         assert_eq!(
             applied,
-            vec![1, 2, 3, 4, 5, 6],
+            vec![1, 2, 3, 4, 5, 6, 7],
             "first migrate applies every pending version"
         );
         // Second call on the SAME db is a verified no-op (re-verifies the checksum, re-applies none).
@@ -425,7 +435,9 @@ mod tests {
         assert!(table_exists(sys.db(), "oauth_clients"));
         assert!(table_exists(sys.db(), "oauth_codes"));
         assert!(table_exists(sys.db(), "oauth_refresh_tokens"));
-        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 6);
+        // t53 migration #7: the /sys/policies grant rows.
+        assert!(table_exists(sys.db(), "sys_policies"));
+        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 7);
     }
 
     #[test]
@@ -494,6 +506,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "data persisted across reopen");
-        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 6);
+        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 7);
     }
 }

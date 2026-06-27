@@ -282,6 +282,11 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // on-disk repos; the engine's plan_write seam runs the driver's commit planner). Binary-only
         // edge; qfs-cmd/qfs-exec stay off it, and the `git` process dead-ends in the terminal binary.
         "qfs-driver-git",
+        // t53 administration: the binary wires the `/sys/*` admin driver (describe + the live read
+        // facet + the policy-grant apply). qfs-driver-sys is a qfs-runtime consumer that must stay a
+        // LEAF — only the terminal binary may depend on it — so the production rusqlite-backed
+        // SysBackend lives IN the binary (src/sys.rs) and dead-ends here like the SQL backend.
+        "qfs-driver-sys",
         // t39 CO-t39-1: the binary links the embedded agent skill so `qfs skill` ships SKILL.md in
         // the artifact (the NORMAL dep edge that keeps the `include_str!` consts from being
         // dead-stripped). qfs-skill's own `[dependencies]` is EMPTY — it carries no runtime/driver
@@ -554,6 +559,10 @@ fn runtime_is_confined_to_plan_and_types() {
         "qfs-driver-github",
         "qfs-driver-slack",
         "qfs-driver-git",
+        // t53: the `/sys/*` administration driver bridges its SysApplier into the runtime via
+        // qfs-runtime's PlanApplierBridge (like every other driver leaf). It is a leaf — only the
+        // terminal binary depends on it — so tokio still dead-ends in the binary.
+        "qfs-driver-sys",
         "qfs",
     ];
     for consumer in &runtime_consumers {

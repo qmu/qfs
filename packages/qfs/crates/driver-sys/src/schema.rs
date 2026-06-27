@@ -1,0 +1,143 @@
+//! The `/sys/*` node model: the [`SysNode`] sum type, its path↔segment mapping, the
+//! single-source-of-truth [`sys_node_schema`], and the per-node [`sys_node_capabilities`].
+//!
+//! This is the **pure, credential-free** introspective surface (RFD-0001 §3 purity / §5). It
+//! mirrors the closed-core `server_node_schema(node)` pattern: `DESCRIBE /sys/users` returns a
+//! stable typed [`Schema`] with **no DB and no secrets**, so describe (and the parse-time
+//! capability gate) read one source of truth that can never drift from the rows the backend
+//! later scans. NOTHING here opens a connection or reads the vault.
+//!
+//! ## Redaction is structural (roadmap §3.2)
+//! `/sys/connections` declares ONLY `driver` / `connection` / `created_at` — names + metadata.
+//! There is **no column** for a secret, a nonce, or a ciphertext, so a credential cannot surface
+//! through this path even by accident: the schema is the boundary.
+
+use qfs_types::{Column, ColumnType, Schema};
+
+/// One administrative `/sys/<node>` relation — the deployment's own state surfaced as a path
+/// (roadmap §3.4 / M3). A **closed set**; a new admin view adds a variant here, never a
+/// side-channel API (the one-engine constraint).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SysNode {
+    /// `/sys/users` — the human identities (t45 `users`), READ-only metadata.
+    Users,
+    /// `/sys/projects` — the host's projects (t42 `projects`), READ-only metadata.
+    Projects,
+    /// `/sys/audit` — the hash-chained audit live tail (t76 `audit_tail`). APPEND-ONLY: read
+    /// only, never `UPDATE`/`REMOVE` — every `/sys` mutation appends here, so administration
+    /// observes itself.
+    Audit,
+    /// `/sys/connections` — the connection **registry**: names + metadata ONLY (driver +
+    /// connection label + created_at), NEVER secret material (the vault is never read here).
+    Connections,
+    /// `/sys/policies` — the policy grants (the path façade over the policy model). The one
+    /// gated WRITE in this slice: `INSERT INTO /sys/policies`.
+    Policies,
+}
+
+impl SysNode {
+    /// Resolve a path segment (`users`/`projects`/`audit`/`connections`/`policies`) to its node.
+    #[must_use]
+    pub fn from_segment(seg: &str) -> Option<Self> {
+        match seg {
+            "users" => Some(Self::Users),
+            "projects" => Some(Self::Projects),
+            "audit" => Some(Self::Audit),
+            "connections" => Some(Self::Connections),
+            "policies" => Some(Self::Policies),
+            _ => None,
+        }
+    }
+
+    /// The path segment naming this node (`users`, `audit`, …).
+    #[must_use]
+    pub fn segment(self) -> &'static str {
+        match self {
+            Self::Users => "users",
+            Self::Projects => "projects",
+            Self::Audit => "audit",
+            Self::Connections => "connections",
+            Self::Policies => "policies",
+        }
+    }
+
+    /// The full mount-qualified path of this node (`/sys/users`, …).
+    #[must_use]
+    pub fn path(self) -> String {
+        format!("{SYS_MOUNT}/{}", self.segment())
+    }
+
+    /// Whether this node is the append-only audit log (read-only; no `UPDATE`/`REMOVE`).
+    #[must_use]
+    pub fn is_append_log(self) -> bool {
+        matches!(self, Self::Audit)
+    }
+}
+
+/// The reserved mount point for the administration-as-a-driver (roadmap §3.4 / decision P:
+/// `/sys` is a closed singleton realm).
+pub const SYS_MOUNT: &str = "/sys";
+
+/// Resolve a `/sys/...` path to its [`SysNode`], if the path names a known admin relation.
+/// `/sys/audit` and `/sys/audit/<x>` both resolve to [`SysNode::Audit`]. Returns `None` for
+/// `/sys` itself or an unknown segment.
+#[must_use]
+pub fn node_for_path(path: &str) -> Option<SysNode> {
+    let rest = path
+        .strip_prefix("/sys/")
+        .or_else(|| path.strip_prefix("sys/"))?;
+    let segment = rest.split('/').next().unwrap_or(rest);
+    SysNode::from_segment(segment)
+}
+
+/// The typed [`Schema`] of a `/sys/<node>` relation — the **canonical** source of truth
+/// `DESCRIBE /sys/<node>` and the backend scan both read. Pure data; no live backend, no creds.
+///
+/// `/sys/connections` carries ONLY name/metadata columns — there is structurally **no** column
+/// for a secret (the redaction contract, roadmap §3.2).
+#[must_use]
+pub fn sys_node_schema(node: SysNode) -> Schema {
+    let col = |name: &str, ty: ColumnType, nullable: bool| Column::new(name, ty, nullable);
+    match node {
+        // t45 `users`: the human identity (authentication handle), metadata only.
+        SysNode::Users => Schema::new(vec![
+            col("id", ColumnType::Int, false),
+            col("primary_email", ColumnType::Text, false),
+            col("status", ColumnType::Text, false),
+            col("created_at", ColumnType::Text, true),
+        ]),
+        // t42 `projects`: the host's projects.
+        SysNode::Projects => Schema::new(vec![
+            col("id", ColumnType::Int, false),
+            col("slug", ColumnType::Text, false),
+            col("created_at", ColumnType::Text, true),
+        ]),
+        // t76 `audit_tail`: the hash-chained live tail — METADATA ONLY (actor/connection/verb/
+        // path/committed/ts), the same boundary `describe` enforces. Never a secret, never a row
+        // payload, so it is safe to render as a relation.
+        SysNode::Audit => Schema::new(vec![
+            col("seq", ColumnType::Int, false),
+            col("actor", ColumnType::Text, false),
+            col("connection", ColumnType::Text, false),
+            col("verb", ColumnType::Text, false),
+            col("path", ColumnType::Text, false),
+            col("committed", ColumnType::Bool, false),
+            col("ts", ColumnType::Text, false),
+        ]),
+        // The connection REGISTRY: names + metadata ONLY (roadmap §3.2). Reads the registry, not
+        // the vault — there is no `nonce`/`ciphertext`/`secret` column here BY DESIGN.
+        SysNode::Connections => Schema::new(vec![
+            col("driver", ColumnType::Text, false),
+            col("connection", ColumnType::Text, false),
+            col("created_at", ColumnType::Text, true),
+        ]),
+        // The policy grants — the path façade over the policy model. `allow` is the granted verb
+        // (e.g. `SELECT`); `target` is the driver/path glob the grant applies to.
+        SysNode::Policies => Schema::new(vec![
+            col("name", ColumnType::Text, false),
+            col("allow", ColumnType::Text, true),
+            col("target", ColumnType::Text, true),
+            col("created_at", ColumnType::Text, true),
+        ]),
+    }
+}

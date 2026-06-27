@@ -74,6 +74,10 @@ fn representative_path(mount: &str) -> String {
         "/ga" => "/ga/123456789".to_string(),
         "/s3" => "/s3/bucket/key".to_string(),
         "/r2" => "/r2/bucket/key".to_string(),
+        // t53 administration: a representative admin relation. `/sys/users` describes cred-free
+        // (the read source + applier are injected; describe is pure), so the `/sys` mount folds
+        // into the generated driver catalog like any other introspective facet.
+        "/sys" => "/sys/users".to_string(),
         // Any future mount: describe its root; if that is not describable the entry is skipped.
         other => other.to_string(),
     }

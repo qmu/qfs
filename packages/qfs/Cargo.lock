@@ -1228,6 +1228,7 @@ dependencies = [
  "qfs-driver-objstore",
  "qfs-driver-slack",
  "qfs-driver-sql",
+ "qfs-driver-sys",
  "qfs-exec",
  "qfs-host",
  "qfs-http",
@@ -1513,6 +1514,17 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "qfs-driver-sys"
+version = "0.0.0"
+dependencies = [
+ "qfs-driver",
+ "qfs-plan",
+ "qfs-runtime",
+ "qfs-types",
+ "thiserror",
 ]
 
 [[package]]
