@@ -47,6 +47,9 @@ pub use session_store::SqliteSessionStore;
 mod oauth_key_store;
 pub use oauth_key_store::{OauthKeyStore, StoredSigningKey};
 
+mod oauth_store;
+pub use oauth_store::{RedeemedCode, RegisteredClient, SqliteOauthFlowStore};
+
 mod migrate;
 pub use migrate::{applied_migrations, migrate, AppliedMigration, Migration, MigrationError};
 
@@ -240,6 +243,18 @@ pub const SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "system_oauth_keys",
         sql: include_str!("schema/system_oauth_keys.sql"),
     },
+    // t49 (roadmap M2): the OAuth authorization-server FLOW state — `oauth_clients` (RFC 7591
+    // dynamically-registered clients with their exact redirect-URI allowlist), `oauth_codes`
+    // (short-lived, single-use authorization codes keyed by a HASH, bound to client + redirect +
+    // PKCE challenge + user), and the `oauth_refresh_tokens` handle skeleton (issued here, enforced
+    // in t50). Appended as a NEW version (#6) — migrations #1–#5 stay frozen (the checksum guard
+    // forbids editing a shipped migration). The rusqlite `SqliteOauthFlowStore` impl that fills these
+    // lives in `oauth_store.rs`. Codes/handles/secrets are stored ONLY as hashes (RFD §10).
+    Migration {
+        version: 6,
+        name: "system_oauth_clients",
+        sql: include_str!("schema/system_oauth_clients.sql"),
+    },
 ];
 
 /// The Project DB's ordered migration set (forward-only; append, never edit a shipped entry).
@@ -306,11 +321,11 @@ mod tests {
     fn migrate_is_forward_only_and_idempotent() {
         let mut db = Db::open(&MemorySource).unwrap();
         // First call applies the whole System set (v1 skeleton + v2 audit chain t76 + v3 identity
-        // t45 + v4 sessions t46 + v5 oauth keys t48).
+        // t45 + v4 sessions t46 + v5 oauth keys t48 + v6 oauth flow clients/codes t49).
         let applied = migrate(&mut db, SYSTEM_MIGRATIONS).unwrap();
         assert_eq!(
             applied,
-            vec![1, 2, 3, 4, 5],
+            vec![1, 2, 3, 4, 5, 6],
             "first migrate applies every pending version"
         );
         // Second call on the SAME db is a verified no-op (re-verifies the checksum, re-applies none).
@@ -406,7 +421,11 @@ mod tests {
         // t48 migration #5: the OAuth signing keys + the wrapped-DEK envelope meta.
         assert!(table_exists(sys.db(), "oauth_keys"));
         assert!(table_exists(sys.db(), "oauth_key_meta"));
-        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 5);
+        // t49 migration #6: the OAuth flow tables (clients + codes + refresh handles).
+        assert!(table_exists(sys.db(), "oauth_clients"));
+        assert!(table_exists(sys.db(), "oauth_codes"));
+        assert!(table_exists(sys.db(), "oauth_refresh_tokens"));
+        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 6);
     }
 
     #[test]
@@ -475,6 +494,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "data persisted across reopen");
-        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 5);
+        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 6);
     }
 }

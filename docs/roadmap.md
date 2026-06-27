@@ -414,14 +414,18 @@ The connection follows the standard remote-MCP authorization handshake — no qf
 4. The client calls MCP tools with a **bearer token**; a **refresh token** keeps the session alive — the
    "recurring authentication" a managed identity is meant to provide.
 
-> **Implementation status (t48).** Steps 1–2 are live: a qfs server now serves its **Protected Resource
+> **Implementation status (t49).** Steps 1–3 are live: a qfs server serves its **Protected Resource
 > Metadata** (`/.well-known/oauth-protected-resource`), its **AS metadata**
-> (`/.well-known/oauth-authorization-server`, advertising only `issuer` + `jwks_uri` + the static
-> `response_types_supported` / `code_challenge_methods_supported=["S256"]`), and its **JWKS**
-> (`/jwks.json`) backed by an envelope-encrypted ES256 signing key. The AS metadata deliberately does
-> **not** advertise the token / authorization / dynamic-registration endpoints yet — those (step 3, the
-> auth-code/PKCE + DCR flow) land in **t49**, and guarding the MCP endpoint with the issued bearer token
-> is **t50**. So **no tokens are issued yet and Claude cannot complete the handshake** until t49/t50.
+> (`/.well-known/oauth-authorization-server`, now advertising `authorization_endpoint` / `token_endpoint`
+> / `registration_endpoint` + `grant_types_supported` including `authorization_code`, alongside
+> `code_challenge_methods_supported=["S256"]`), and its **JWKS** (`/jwks.json`) backed by an
+> envelope-encrypted ES256 signing key. A client now **registers dynamically** (`POST /register`, RFC
+> 7591), runs the **authorization-code flow with PKCE (S256)** — the human signs in to the qfs identity
+> (t45) over a t46 session and consents at `/authorize` — and **exchanges the code for a signed ES256
+> access token** at `POST /token` (plus a refresh-token handle, stored hashed). So **the AS issues tokens
+> now.** What remains: the MCP endpoint is **still UNAUTHENTICATED** — guarding it with the issued bearer
+> token (so Claude's tool calls actually require the token) is **t50**. Until then the handshake completes
+> and a token is minted, but the resource server does not yet require it.
 
 **text-to-SQL is client-side (decision K).** qfs does **not** host or call a model. The MCP tools it
 exposes *are* the surface a client LLM uses to turn natural language into qfs:

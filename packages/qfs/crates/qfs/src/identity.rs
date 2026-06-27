@@ -41,7 +41,7 @@ pub fn run_identity(action: &IdentityAction) -> i32 {
 /// Open the System DB at the default path and build the identity store over its owned, migrated
 /// connection (the t45 seam — `SystemDb::into_db().into_connection()`). The identity migration (v3)
 /// is applied by `SystemDb::open`.
-fn open_identity_store() -> Result<SqliteIdentityStore, String> {
+pub(crate) fn open_identity_store() -> Result<SqliteIdentityStore, String> {
     let sys = crate::store::open_system_db()
         .map_err(|e| format!("opening the system database: {e}"))?
         .ok_or("cannot determine the system database path (set HOME or XDG_CONFIG_HOME)")?;

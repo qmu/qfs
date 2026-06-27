@@ -7,12 +7,11 @@
 //!
 //! - [`ProtectedResourceMetadata`] — **RFC 9728** Protected Resource Metadata: the MCP endpoint
 //!   (`resource`) points a client at the authorization server(s) that guard it.
-//! - [`AuthorizationServerMetadata`] — **RFC 8414** Authorization Server Metadata. Per the t48
-//!   honesty rule (option (a)), this advertises ONLY what is live this milestone: `issuer`,
-//!   `jwks_uri`, and the static `response_types_supported` / `code_challenge_methods_supported`
-//!   (`["S256"]`). The `token_endpoint` / `authorization_endpoint` / `registration_endpoint`
-//!   fields exist as `Option`s that stay `None` (omitted from the JSON) until **t49** serves them —
-//!   advertising a dead endpoint would mislead a client.
+//! - [`AuthorizationServerMetadata`] — **RFC 8414** Authorization Server Metadata. t48 advertised
+//!   only `issuer` + `jwks_uri` + the static `response_types_supported` /
+//!   `code_challenge_methods_supported` (`["S256"]`); **t49 makes the flow live**, so the builder now
+//!   ALSO advertises `authorization_endpoint` / `token_endpoint` / `registration_endpoint` (derived
+//!   from the issuer) and `grant_types_supported` (`authorization_code` + `refresh_token`).
 //! - [`Jwks`] — the JSON Web Key Set: each active/retiring public key rendered as a [`Jwk`]
 //!   (`kty=EC` / `crv=P-256` / `use=sig` / `alg=ES256` / `kid`). Multiple keys are publishable so a
 //!   future rotation can overlap an `active` and a `retiring` key (the rotation *trigger* is a
@@ -42,17 +41,37 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod client_reg;
+mod flow;
 mod jwks;
 mod key;
 mod metadata;
+mod pkce;
 mod sign;
 
+pub use client_reg::{
+    validate_registration, ClientRegistrationRequest, ClientRegistrationResponse,
+    RegistrationError, AUTH_METHOD_NONE,
+};
+pub use flow::{
+    access_token_claims, error_json, redirect_uri_is_registered, validate_authorize_request,
+    validate_token_request, AuthorizeRequest, OAuthFlowError, TokenRequest, TokenResponse,
+    GRANT_AUTHORIZATION_CODE,
+};
 pub use jwks::{Jwk, Jwks};
 pub use key::{OauthError, SigningKey};
 pub use metadata::{AuthorizationServerMetadata, ProtectedResourceMetadata};
+pub use pkce::{pkce_challenge_s256, verify_pkce_s256, PKCE_METHOD_S256};
 pub use sign::{sign_jws, verify_jws, Claims};
 
 /// The fixed JWS/JWK algorithm this AS signs with: **ES256** (ECDSA using NIST P-256 + SHA-256).
 /// A single, vetted choice (decision C: smaller keys + simpler encoding than RS256, pure-Rust
 /// `p256`). The `kid` selects the concrete key; the `alg` is constant.
 pub const ALG_ES256: &str = "ES256";
+
+/// The dynamic-client-registration endpoint path (RFC 7591), advertised as `registration_endpoint`.
+pub const REGISTER_PATH: &str = "/register";
+/// The authorization endpoint path (the auth-code flow), advertised as `authorization_endpoint`.
+pub const AUTHORIZE_PATH: &str = "/authorize";
+/// The token endpoint path (code→token exchange), advertised as `token_endpoint`.
+pub const TOKEN_PATH: &str = "/token";
