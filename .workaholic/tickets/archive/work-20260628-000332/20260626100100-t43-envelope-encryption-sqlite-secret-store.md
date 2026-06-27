@@ -3,9 +3,9 @@ created_at: 2026-06-26T10:01:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Infrastructure]
-effort:
-commit_hash:
-category:
+effort: L
+commit_hash: 0fe5c93
+category: Changed
 depends_on: [20260626100000-t42-persistence-sqlite-system-project-db.md]
 ---
 
