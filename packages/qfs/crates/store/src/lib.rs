@@ -44,6 +44,9 @@ pub use identity_store::SqliteIdentityStore;
 mod session_store;
 pub use session_store::SqliteSessionStore;
 
+mod oauth_key_store;
+pub use oauth_key_store::{OauthKeyStore, StoredSigningKey};
+
 mod migrate;
 pub use migrate::{applied_migrations, migrate, AppliedMigration, Migration, MigrationError};
 
@@ -224,6 +227,19 @@ pub const SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "system_sessions",
         sql: include_str!("schema/system_sessions.sql"),
     },
+    // t48 (roadmap M2): the OAuth authorization-server signing keys — `oauth_keys` (one row per AS
+    // signing keypair, keyed by its RFC 7638 `kid`; the PRIVATE key envelope-encrypted at rest under
+    // a System-DB data-key, the PUBLIC JWK stored in the clear for `/jwks.json`) + the single-row
+    // `oauth_key_meta` wrapped-DEK envelope (mirroring the Project DB's `secret_meta`, t43). Appended
+    // as a NEW version (#5) — migrations #1–#4 stay frozen (the checksum guard forbids editing a
+    // shipped migration). The rusqlite `OauthKeyStore` impl that fills these lives in
+    // `oauth_key_store.rs`. KEY PUBLICATION ONLY: t48 publishes the discovery docs + JWKS and issues
+    // NO tokens yet (token minting is t49/t50).
+    Migration {
+        version: 5,
+        name: "system_oauth_keys",
+        sql: include_str!("schema/system_oauth_keys.sql"),
+    },
 ];
 
 /// The Project DB's ordered migration set (forward-only; append, never edit a shipped entry).
@@ -252,6 +268,10 @@ pub enum StoreError {
     /// A migration was malformed or tampered (see [`MigrationError`]).
     #[error(transparent)]
     Migration(#[from] MigrationError),
+    /// An envelope-encrypted store (t48 OAuth keys) could not be unlocked — the passphrase is wrong
+    /// or the wrapped-DEK metadata was tampered. Value-free: it names no key material (RFD §10).
+    #[error("the encrypted store could not be unlocked (wrong passphrase or tampered metadata)")]
+    Locked,
     /// An underlying SQLite error (schema, query, transaction).
     #[error("sqlite: {0}")]
     Sqlite(String),
@@ -286,11 +306,11 @@ mod tests {
     fn migrate_is_forward_only_and_idempotent() {
         let mut db = Db::open(&MemorySource).unwrap();
         // First call applies the whole System set (v1 skeleton + v2 audit chain t76 + v3 identity
-        // t45 + v4 sessions t46).
+        // t45 + v4 sessions t46 + v5 oauth keys t48).
         let applied = migrate(&mut db, SYSTEM_MIGRATIONS).unwrap();
         assert_eq!(
             applied,
-            vec![1, 2, 3, 4],
+            vec![1, 2, 3, 4, 5],
             "first migrate applies every pending version"
         );
         // Second call on the SAME db is a verified no-op (re-verifies the checksum, re-applies none).
@@ -383,7 +403,10 @@ mod tests {
         assert!(table_exists(sys.db(), "accounts"));
         // t46 migration #4: the sessions table (keyed by the token hash, never the plaintext).
         assert!(table_exists(sys.db(), "sessions"));
-        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 4);
+        // t48 migration #5: the OAuth signing keys + the wrapped-DEK envelope meta.
+        assert!(table_exists(sys.db(), "oauth_keys"));
+        assert!(table_exists(sys.db(), "oauth_key_meta"));
+        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 5);
     }
 
     #[test]
@@ -452,6 +475,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "data persisted across reopen");
-        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 4);
+        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 5);
     }
 }

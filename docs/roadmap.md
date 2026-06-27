@@ -414,6 +414,15 @@ The connection follows the standard remote-MCP authorization handshake — no qf
 4. The client calls MCP tools with a **bearer token**; a **refresh token** keeps the session alive — the
    "recurring authentication" a managed identity is meant to provide.
 
+> **Implementation status (t48).** Steps 1–2 are live: a qfs server now serves its **Protected Resource
+> Metadata** (`/.well-known/oauth-protected-resource`), its **AS metadata**
+> (`/.well-known/oauth-authorization-server`, advertising only `issuer` + `jwks_uri` + the static
+> `response_types_supported` / `code_challenge_methods_supported=["S256"]`), and its **JWKS**
+> (`/jwks.json`) backed by an envelope-encrypted ES256 signing key. The AS metadata deliberately does
+> **not** advertise the token / authorization / dynamic-registration endpoints yet — those (step 3, the
+> auth-code/PKCE + DCR flow) land in **t49**, and guarding the MCP endpoint with the issued bearer token
+> is **t50**. So **no tokens are issued yet and Claude cannot complete the handshake** until t49/t50.
+
 **text-to-SQL is client-side (decision K).** qfs does **not** host or call a model. The MCP tools it
 exposes *are* the surface a client LLM uses to turn natural language into qfs:
 

@@ -23,6 +23,12 @@ qfs-identity = { path = "../identity" }
 # (`SqliteSessionStore`) over the System DB — a `qfs-store -> qfs-session` edge (acyclic: qfs-store is
 # consumed only by the terminal binary, qfs-session is a pure-ish leaf carrying no rusqlite/tokio).
 qfs-session = { path = "../session" }
+# t48: the envelope-encryption primitive (t43) + the redacting `Secret`. qfs-store's `OauthKeyStore`
+# envelope-encrypts the AS PRIVATE signing key at rest under a System-DB data-key (the SAME mechanism
+# that protects connection secrets, decision E) and hands the decrypted scalar out only inside a
+# `Secret`. This `qfs-store -> qfs-secrets` edge is acyclic (qfs-secrets is a pure leaf confined to
+# qfs-types; the `secrets_is_confined_*` guard constrains qfs-secrets' OWN deps, not its dependents).
+qfs-secrets = { path = "../secrets" }
 # The in-process SQLite engine. `bundled` compiles libsqlite3 from source (no system-lib
 # dependency) — the SAME dep+feature qfs-driver-sql's test backend and the `qfs` binary already use,
 # so there is ONE libsqlite3 build in the artifact. SYNC: tokio must not enter this crate.

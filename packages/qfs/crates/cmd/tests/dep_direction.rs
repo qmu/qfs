@@ -320,6 +320,15 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // also re-exports the qfs-http-core / qfs-server types the binary adapts onto, so the binary
         // needs NO direct edge to either lower-spine crate (its thin-entrypoint pin stays intact).
         "qfs-mcp",
+        // t48 serve composition root: the binary ALSO wires the OAuth authorization-server discovery
+        // routes (qfs-oauth, a pure-ish leaf — RFC 8414/9728/JWKS builders + ES256 JWS sign/verify
+        // over p256, NO tokio/rusqlite). The binary loads/generates the active signing key over the
+        // System-DB-backed `OauthKeyStore` (qfs-store), mints the key entropy from the OS CSPRNG it
+        // owns, envelope-decrypts the private key into a `Secret`, and composes the three GET routes
+        // into the qfs-http listener via the SAME Fallback seam t47 uses for `POST /mcp`. qfs-oauth
+        // carries no tokio and is a leaf (asserted by `oauth_is_a_pure_domain_leaf` below), so the
+        // edge adds no runtime/driver coupling to the terminal binary.
+        "qfs-oauth",
     ];
     let workspace_prefixed: Vec<&String> =
         bin_deps.iter().filter(|d| d.starts_with("qfs")).collect();
@@ -1347,6 +1356,106 @@ fn session_is_a_pure_domain_leaf() {
         "qfs-store must depend on qfs-session (it provides the injected rusqlite SessionStore impl \
          over the System DB, t46). Deps were: {store_deps:?}"
     );
+}
+
+#[test]
+fn oauth_is_a_pure_domain_leaf() {
+    // t48: qfs-oauth is the OAuth authorization-server DOMAIN core (RFC 8414 AS-metadata + RFC 9728
+    // PRM + JWKS document builders, and the ES256 JWS sign/verify primitives over the vetted
+    // pure-Rust `p256` ECDSA). It is a pure-ish leaf — its key PERSISTENCE is INJECTED (the rusqlite
+    // `OauthKeyStore` lives in qfs-store) and its key ENTROPY is injected from the binary — so the
+    // domain stays off rusqlite/tokio/rand and the lower spine, mirroring qfs-identity (t45) /
+    // qfs-session (t46). This guard pins two facts:
+    //
+    //   (a) qfs-oauth's ONLY workspace deps are {qfs-secrets, qfs-crypto-core} — the redacting
+    //       `Secret` wrapper for the private key + the SHA-256 backing the RFC 7638 `kid` thumbprint.
+    //       It does NOT depend on lang/plan/driver/codec/parser (no query/engine logic), on
+    //       qfs-store/rusqlite (key I/O is injected), or on qfs-http/tokio (the async route serving is
+    //       the binary's qfs-http listener via the Fallback seam).
+    //   (b) it carries no tokio/async runtime and no rusqlite (it is sync, pure domain logic). NOTE:
+    //       unlike t45/t46, qfs-store does NOT depend on qfs-oauth — the binary bridges qfs-oauth ↔
+    //       the qfs-store `OauthKeyStore` (which trades only opaque bytes + the public JWK string), so
+    //       no `qfs-store -> qfs-oauth` edge exists and none is asserted.
+    let graph = load_graph();
+
+    let workspace_crates = [
+        "qfs-cmd",
+        "qfs-core",
+        "qfs-server",
+        "qfs-lang",
+        "qfs-plan",
+        "qfs-driver",
+        "qfs-codec",
+        "qfs-parser",
+        "qfs-types",
+        "qfs-runtime",
+        "qfs-txn",
+        "qfs-pushdown",
+        "qfs-secrets",
+        "qfs-crypto-core",
+        "qfs-store",
+        "qfs-http",
+        "qfs-oauth",
+    ];
+
+    // (a) qfs-oauth's workspace deps are exactly {qfs-secrets, qfs-crypto-core}.
+    let oauth_deps = graph
+        .direct_deps
+        .get("qfs-oauth")
+        .expect("qfs-oauth is a workspace package");
+    let allowed = ["qfs-secrets", "qfs-crypto-core"];
+    for d in oauth_deps
+        .iter()
+        .filter(|d| workspace_crates.contains(&d.as_str()))
+    {
+        assert!(
+            allowed.contains(&d.as_str()),
+            "confinement violation: qfs-oauth must depend only on {allowed:?} among workspace crates \
+             (it is a pure-ish domain leaf; key I/O is injected via qfs-store, entropy + route serving \
+             via the binary), but depends on {d}. Deps were: {oauth_deps:?}"
+        );
+    }
+    // The defining absences: no tokio/async runtime, no rusqlite, no http listener, no lower-spine /
+    // driver / query crates (per the ticket: oauth must NOT depend on tokio/lang/plan/driver/codec/
+    // parser/runtime).
+    for forbidden in [
+        "tokio",
+        "futures",
+        "async-trait",
+        "rusqlite",
+        "qfs-store",
+        "qfs-http",
+        "qfs-lang",
+        "qfs-plan",
+        "qfs-driver",
+        "qfs-codec",
+        "qfs-parser",
+        "qfs-runtime",
+    ] {
+        assert!(
+            !oauth_deps.iter().any(|d| d == forbidden),
+            "confinement violation: qfs-oauth must NOT depend on {forbidden} (it is a pure-ish leaf; \
+             tokio/rusqlite/http/query logic stay out — key I/O is injected via qfs-store, route \
+             serving via the binary's qfs-http listener). Deps were: {oauth_deps:?}"
+        );
+    }
+
+    // (b) qfs-oauth is a leaf consumed only by the terminal `qfs` binary (the serve composition
+    // root); no spine/lower crate may reach up into it.
+    let oauth_consumers: Vec<&String> = graph
+        .direct_deps
+        .iter()
+        .filter(|(pkg, deps)| pkg.as_str() != "qfs-oauth" && deps.iter().any(|d| d == "qfs-oauth"))
+        .map(|(pkg, _)| pkg)
+        .collect();
+    for consumer in &oauth_consumers {
+        assert_eq!(
+            consumer.as_str(),
+            "qfs",
+            "t48 leaf violation: {consumer} depends on qfs-oauth, but only the terminal `qfs` binary \
+             (the serve composition root) may consume the OAuth-AS domain leaf."
+        );
+    }
 }
 
 #[test]

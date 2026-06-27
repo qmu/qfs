@@ -115,10 +115,26 @@ pub fn run_serve(config: &Path) -> i32 {
     let mcp_engine: Arc<dyn qfs_mcp::McpEngine> =
         Arc::new(crate::mcp::ServeMcpEngine::new(Arc::clone(&engine)));
     let mcp_binding = Arc::new(qfs_mcp::McpBinding::new(mcp_engine));
+
+    // t48 OAuth-AS composition: load/generate the active ES256 signing key over the System DB
+    // (unlocked via QFS_PASSPHRASE) and pre-render the three public discovery documents
+    // (`/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`,
+    // `/jwks.json`) for the listener's issuer. Best-effort + INERT this milestone — no tokens are
+    // issued (t49/t50) and no endpoint is gated; without a passphrase / System DB the routes are
+    // simply not served. The handler is composed into the SAME Fallback seam as `POST /mcp`.
+    let oauth_routes = crate::oauth::boot_oauth(addr);
+
     let combined_fallback: qfs_http::Fallback = {
         let mcp = Arc::clone(&mcp_binding);
         let wt = wt_fallback;
+        let oauth = oauth_routes.clone();
         Arc::new(move |req: &qfs_http::HttpRequest| {
+            // The three read-only OAuth discovery routes win first (public, cacheable, no creds).
+            if let Some(routes) = &oauth {
+                if let Some(resp) = routes.handle(req) {
+                    return Some(resp);
+                }
+            }
             if req.path == qfs_mcp::MCP_PATH {
                 return Some(crate::mcp::serve_mcp_request(&mcp, req));
             }

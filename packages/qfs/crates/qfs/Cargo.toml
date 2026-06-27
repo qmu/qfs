@@ -79,7 +79,15 @@ qfs-watchtower = { path = "../watchtower" }
 # HTTP itself, needs no tokio, and stays off qfs-runtime (the apply is the injected closure that
 # dead-ends the COMMIT interpreter in this terminal binary). Same composition-root rationale.
 qfs-mcp = { path = "../mcp" }
-# The shared secrets surface the watchtower resolves webhook signing secrets from (by handle).
+# t48 serve composition root: the binary ALSO wires the OAuth authorization-server discovery routes.
+# qfs-oauth is a pure-ish leaf (RFC 8414 / RFC 9728 / JWKS builders + the ES256 JWS sign/verify
+# primitives over p256) with NO tokio/rusqlite; the binary loads/generates the active signing key
+# over the System-DB-backed `OauthKeyStore` (qfs-store), mints the key entropy from the OS CSPRNG it
+# owns, and composes the three GET routes into the qfs-http listener via the same Fallback seam t47
+# uses for `POST /mcp`. The private key is envelope-decrypted into a `Secret` here and never escapes.
+qfs-oauth = { path = "../oauth" }
+# The shared secrets surface the watchtower resolves webhook signing secrets from (by handle); also
+# the redacting `Secret` wrapper the binary carries the OAuth passphrase + decrypted signing key in.
 qfs-secrets = { path = "../secrets" }
 # t-exec wiring: the binary owns the REAL `qfs run --commit` apply path — it drives the qfs-runtime
 # interpreter over a live driver registry (local-fs today) and injects it into qfs-cmd as the
