@@ -82,6 +82,11 @@ pub fn bind_new(stmt: &mut Statement, binds: &NewBindings) {
             }
         }
         Statement::Plan(PlanWrap { inner, .. }) => bind_new(inner, binds),
+        // A `LET` program (M6, t60): bind through both the bound value and the body.
+        Statement::Let { value, body, .. } => {
+            bind_new(value, binds);
+            bind_new(body, binds);
+        }
     }
 }
 
@@ -97,6 +102,8 @@ fn rewrite_source(s: &mut Source, binds: &NewBindings) {
         Source::Path(_) => {}
         Source::Values(v) => rewrite_values(v, binds),
         Source::Subquery(p) => rewrite_pipeline(p, binds),
+        // A bare `LET`-bound name (M6, t60) carries no `NEW.<col>` reference to rewrite.
+        Source::Name(_) => {}
     }
 }
 

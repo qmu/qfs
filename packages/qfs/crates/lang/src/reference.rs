@@ -49,12 +49,17 @@ pub const fn grammar_ebnf() -> &'static str {
 (* The closed core: every UPPERCASE terminal is a frozen reserved keyword         *)
 (* (see RESERVED_KEYWORDS); a new backend adds ZERO terminals here.               *)
 
+(* A program is zero or more LET bindings (M6 functional core, ticket t60) in       *)
+(* scope for the statements that follow them — one statement per line, no `;`.       *)
+program       = { binding } , statement ;
+binding       = \"LET\" , name , \"=\" , pipeline ;
+
 statement     = pipeline , [ plan_op ] ;
 
 (* A pipeline is a source threaded through |> stages. *)
 pipeline      = [ \"FROM\" ] , source , { \"|>\" , stage } ;
 
-source        = path | id_ref ;
+source        = path | id_ref | name ;   (* name = a LET-bound relation *)
 path          = \"/\" , segment , { \"/\" , segment } ;   (* absolute only, no cwd *)
 id_ref        = \"id:\" , token ;
 
@@ -137,8 +142,8 @@ mod tests {
         // keyword smuggled in anywhere fails here too).
         assert_eq!(
             RESERVED_KEYWORDS.len(),
-            38,
-            "the closed-core reserved-word set is frozen at 38 entries (RFD §3)"
+            39,
+            "the closed-core reserved-word set is frozen at 39 entries (RFD §3 + the t60 `LET` addition)"
         );
     }
 

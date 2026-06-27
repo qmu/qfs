@@ -9,7 +9,7 @@ The grammar is **fixed and small** — adding a new service never adds new keywo
 
 ## Reserved keywords
 
-These 38 words make up the whole language. Because the set is fixed, anything you learn here keeps working as new services are added.
+These 39 words make up the whole language. Because the set is fixed, anything you learn here keeps working as new services are added.
 
 | # | keyword |
 |---|---------|
@@ -29,28 +29,29 @@ These 38 words make up the whole language. Because the set is fixed, anything yo
 | 14 | `INTERSECT` |
 | 15 | `AS` |
 | 16 | `EXPAND` |
-| 17 | `INSERT INTO` |
-| 18 | `UPSERT INTO` |
-| 19 | `UPDATE` |
-| 20 | `REMOVE` |
-| 21 | `VALUES` |
-| 22 | `RETURNING` |
-| 23 | `CALL` |
-| 24 | `DECODE` |
-| 25 | `ENCODE` |
-| 26 | `PREVIEW` |
-| 27 | `COMMIT` |
-| 28 | `CREATE` |
-| 29 | `ENDPOINT` |
-| 30 | `TRIGGER` |
-| 31 | `JOB` |
-| 32 | `VIEW` |
-| 33 | `MATERIALIZED VIEW` |
-| 34 | `WEBHOOK` |
-| 35 | `POLICY` |
-| 36 | `DO` |
-| 37 | `EVERY` |
-| 38 | `ON` |
+| 17 | `LET` |
+| 18 | `INSERT INTO` |
+| 19 | `UPSERT INTO` |
+| 20 | `UPDATE` |
+| 21 | `REMOVE` |
+| 22 | `VALUES` |
+| 23 | `RETURNING` |
+| 24 | `CALL` |
+| 25 | `DECODE` |
+| 26 | `ENCODE` |
+| 27 | `PREVIEW` |
+| 28 | `COMMIT` |
+| 29 | `CREATE` |
+| 30 | `ENDPOINT` |
+| 31 | `TRIGGER` |
+| 32 | `JOB` |
+| 33 | `VIEW` |
+| 34 | `MATERIALIZED VIEW` |
+| 35 | `WEBHOOK` |
+| 36 | `POLICY` |
+| 37 | `DO` |
+| 38 | `EVERY` |
+| 39 | `ON` |
 
 ## Grammar (EBNF)
 
@@ -61,12 +62,17 @@ The pipe-SQL grammar. Every UPPERCASE terminal is a frozen reserved keyword abov
 (* The closed core: every UPPERCASE terminal is a frozen reserved keyword         *)
 (* (see RESERVED_KEYWORDS); a new backend adds ZERO terminals here.               *)
 
+(* A program is zero or more LET bindings (M6 functional core, ticket t60) in       *)
+(* scope for the statements that follow them — one statement per line, no `;`.       *)
+program       = { binding } , statement ;
+binding       = "LET" , name , "=" , pipeline ;
+
 statement     = pipeline , [ plan_op ] ;
 
 (* A pipeline is a source threaded through |> stages. *)
 pipeline      = [ "FROM" ] , source , { "|>" , stage } ;
 
-source        = path | id_ref ;
+source        = path | id_ref | name ;   (* name = a LET-bound relation *)
 path          = "/" , segment , { "/" , segment } ;   (* absolute only, no cwd *)
 id_ref        = "id:" , token ;
 

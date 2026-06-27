@@ -63,9 +63,12 @@ where
 /// semantic phase (E2), never grammar (RFD §3).
 pub type Ident = String;
 
-/// The top-level statement sum type (RFD §3). **Closed core**: exactly these four
+/// The top-level statement sum type (RFD §3). **Closed core**: exactly these five
 /// forms. Not `#[non_exhaustive]` — the governance test locks this variant set so a
-/// later ticket cannot smuggle in a per-driver statement form.
+/// later ticket cannot smuggle in a per-driver statement form. The fifth form,
+/// [`Statement::Let`], is the **deliberate** M6 functional-core addition (ticket t60):
+/// it is gated by exactly the same governance tripwire as the keyword freeze (the
+/// variant-count lock in `tests`), updated in step so the addition is reviewed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Statement {
     /// `FROM <source> |> op |> op …` — a pure read pipeline.
@@ -76,6 +79,26 @@ pub enum Statement {
     Ddl(ServerDdl),
     /// `PREVIEW <stmt>` / `COMMIT <stmt>` — a plan wrapper (RFD §6).
     Plan(PlanWrap),
+    /// `LET <name> = <pipeline>` — a relation binding (M6 functional core, ticket t60).
+    ///
+    /// The program model the roadmap settled on (§1.2): a program is a sequence of
+    /// statements with **no terminator**, and a `LET` names an intermediate relation that
+    /// stays in scope for everything after it. This is encoded as a **let-in nesting**: the
+    /// `body` is the rest of the program (the next `LET`, or the final statement that uses
+    /// the binding). Scoping is therefore lexical and conservative — a binding is visible to
+    /// its `body` only, shadowing is allowed (an inner `LET` of the same name wins for its
+    /// own `body`), and there are no recursive/forward references (`value` is resolved
+    /// without `name` in scope). `value` is restricted by the grammar to a **relation**
+    /// (a `Statement::Query` pipeline), never an effect — so a `LET` can never smuggle a
+    /// write into a pure context (the safety floor holds trivially).
+    Let {
+        /// The bound name, referenced later as a bare-identifier [`Source::Name`].
+        name: Ident,
+        /// The bound relation — always a [`Statement::Query`] (grammar-enforced).
+        value: Box<Statement>,
+        /// The rest of the program, with `name` in scope.
+        body: Box<Statement>,
+    },
 }
 
 /// A `PREVIEW`/`COMMIT` wrapper around an inner statement (RFD §3 plan keywords).
@@ -112,6 +135,10 @@ pub enum Source {
     Values(Values),
     /// `FROM ( <pipeline> )` — a sub-query.
     Subquery(Box<Pipeline>),
+    /// `FROM <name>` — a bare identifier naming a `LET`-bound relation (M6, ticket t60).
+    /// Unresolved here (the parser validates shape only); a name with no matching binding
+    /// in scope is a structured resolve/eval error, never a silent empty relation.
+    Name(Ident),
 }
 
 /// One pipe operation following `|>` (RFD §3 query/transform + codec + call).

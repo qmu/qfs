@@ -73,6 +73,11 @@ pub fn bind_params(stmt: &mut Statement, args: &QueryArgs) {
             }
         }
         Statement::Plan(PlanWrap { inner, .. }) => bind_params(inner, args),
+        // A `LET` program (M6, t60): bind params through both the bound value and the body.
+        Statement::Let { value, body, .. } => {
+            bind_params(value, args);
+            bind_params(body, args);
+        }
     }
 }
 
@@ -89,6 +94,8 @@ fn rewrite_source(s: &mut Source, args: &QueryArgs) {
         Source::Path(_) => {}
         Source::Values(v) => rewrite_values(v, args),
         Source::Subquery(p) => rewrite_pipeline(p, args),
+        // A bare `LET`-bound name (M6, t60) is a structural reference, never a value slot.
+        Source::Name(_) => {}
     }
 }
 
@@ -239,6 +246,11 @@ fn collect_stmt(stmt: &Statement, out: &mut std::collections::BTreeSet<String>) 
             }
         }
         Statement::Plan(PlanWrap { inner, .. }) => collect_stmt(inner, out),
+        // A `LET` program (M6, t60): collect referenced columns from value + body.
+        Statement::Let { value, body, .. } => {
+            collect_stmt(value, out);
+            collect_stmt(body, out);
+        }
     }
 }
 
@@ -254,6 +266,8 @@ fn collect_source(s: &Source, out: &mut std::collections::BTreeSet<String>) {
         Source::Path(_) => {}
         Source::Values(v) => collect_values(v, out),
         Source::Subquery(p) => collect_pipeline(p, out),
+        // A bare `LET`-bound name (M6, t60) references no declared column.
+        Source::Name(_) => {}
     }
 }
 
@@ -377,6 +391,11 @@ fn collect_src_paths_stmt(stmt: &Statement, out: &mut Vec<String>) {
             }
         }
         Statement::Plan(PlanWrap { inner, .. }) => collect_src_paths_stmt(inner, out),
+        // A `LET` program (M6, t60): collect source paths from value + body.
+        Statement::Let { value, body, .. } => {
+            collect_src_paths_stmt(value, out);
+            collect_src_paths_stmt(body, out);
+        }
     }
 }
 
@@ -398,6 +417,8 @@ fn collect_src_paths_source(s: &Source, out: &mut Vec<String>) {
         Source::Path(p) => out.push(path_string(p)),
         Source::Values(_) => {}
         Source::Subquery(p) => collect_src_paths_pipeline(p, out),
+        // A bare `LET`-bound name (M6, t60) is not a mount path — nothing to collect.
+        Source::Name(_) => {}
     }
 }
 

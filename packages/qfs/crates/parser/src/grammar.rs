@@ -539,12 +539,16 @@ fn order_key(input: &mut Stream<'_>) -> ModalResult<OrderKey> {
 
 // ---- sources --------------------------------------------------------------
 
-/// A pipeline source: `VALUES …`, `( <pipeline> )`, or a `/driver/...` path.
+/// A pipeline source: `VALUES …`, `( <pipeline> )`, a `/driver/...` path, or a bare
+/// identifier naming a `LET`-bound relation (M6, ticket t60). The bare-identifier form is
+/// tried **last** so it never shadows a keyword/path/values form; a reserved keyword is
+/// already a `Token::Keyword` (not an `Ident`), so it cannot be mistaken for a name source.
 fn source(input: &mut Stream<'_>) -> ModalResult<Source> {
     alt((
         values.map(Source::Values),
         subquery_source,
         path_expr.map(Source::Path),
+        ident.map(|s| Source::Name(s.node)),
     ))
     .parse_next(input)
 }
@@ -1144,9 +1148,36 @@ fn plan_wrap(input: &mut Stream<'_>) -> ModalResult<Statement> {
     }))
 }
 
-/// The top-level statement parser: one statement, then end-of-input.
+/// A `LET <name> = <pipeline>` binding followed by the rest of the program (M6, ticket
+/// t60). Once `LET` is consumed we are committed (`cut_err`), so a malformed binding is a
+/// crisp error pointing *inside* the binding. The `value` is restricted to a `pipeline`
+/// (a relation) — never an effect — so a `LET` cannot smuggle a write into a pure context;
+/// the `body` is the rest of the program, with `name` in scope.
+fn let_binding(input: &mut Stream<'_>) -> ModalResult<Statement> {
+    let _ = kw(Keyword::Let).parse_next(input)?;
+    let name = cut_err(ident).parse_next(input)?;
+    let _ = cut_err(punct(Token::Eq)).parse_next(input)?;
+    let value = cut_err(pipeline).parse_next(input)?;
+    let body = cut_err(program_seq).parse_next(input)?;
+    Ok(Statement::Let {
+        name: name.node,
+        value: Box::new(Statement::Query(value)),
+        body: Box::new(body),
+    })
+}
+
+/// One program: zero or more `LET` bindings in scope for the final statement (RFD §1.2 —
+/// statements with no terminator). Encoded as a let-in nesting (see [`Statement::Let`]).
+/// A bare (non-`LET`) statement is the program's terminal statement; the top-level
+/// `eof` then rejects a second non-binding statement (`FROM a` `FROM b`) as trailing input.
+fn program_seq(input: &mut Stream<'_>) -> ModalResult<Statement> {
+    alt((let_binding, inner_statement)).parse_next(input)
+}
+
+/// The top-level program parser: a `LET`-binding sequence then a final statement, then
+/// end-of-input (one statement per line, `;`-free — RFD §1.2 statement model).
 fn statement(input: &mut Stream<'_>) -> ModalResult<Statement> {
-    let stmt = inner_statement(input)?;
+    let stmt = program_seq(input)?;
     winnow::combinator::eof(input)?;
     Ok(stmt)
 }

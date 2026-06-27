@@ -181,7 +181,10 @@ fn run_oneshot_inner(
 
     let renderer = fmt.renderer();
 
-    match inner {
+    // Classify by the program's *terminal* statement: a `LET` program (M6, t60) is a read or a
+    // write according to the statement its bindings lead into. The full `inner` (bindings and
+    // all) is handed to the read/effect path — the evaluator folds the bindings through it.
+    match terminal_statement(inner) {
         // 4. Read path: the t20 carry-over closure.
         Statement::Query(_) => {
             let rows = block_on_read(inner, &ctx.engine.mounts, ctx.reads)?;
@@ -236,9 +239,20 @@ fn run_oneshot_inner(
                 Ok(ExitCode::Ok)
             }
         }
-        // A nested PlanWrap is already unwrapped by `unwrap_plan`; this arm is unreachable but
-        // kept total (no panic) by treating it as a pure preview.
-        Statement::Plan(_) => Ok(ExitCode::Ok),
+        // `terminal_statement` descends through PlanWrap/LET to a leaf, so these arms are
+        // unreachable; kept total (no panic) by treating them as a pure preview.
+        Statement::Plan(_) | Statement::Let { .. } => Ok(ExitCode::Ok),
+    }
+}
+
+/// The terminal statement a program leads into, descending through `LET` bindings (M6, t60) and
+/// `PREVIEW`/`COMMIT` wrappers to the underlying read/effect/DDL leaf. Used to route a `LET`
+/// program to the read or effect path — the leaf is never a `LET` or a `Plan`.
+fn terminal_statement(stmt: &Statement) -> &Statement {
+    match stmt {
+        Statement::Let { body, .. } => terminal_statement(body),
+        Statement::Plan(PlanWrap { inner, .. }) => terminal_statement(inner),
+        other => other,
     }
 }
 

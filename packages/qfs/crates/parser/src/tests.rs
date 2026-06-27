@@ -425,7 +425,8 @@ fn preview_and_commit_wrappers() {
 /// deliberate, reviewed change-control event.
 #[test]
 fn closed_core_variant_counts_are_locked() {
-    // 4 statement forms (Query, Effect, Ddl, Plan).
+    // 5 statement forms (Query, Effect, Ddl, Plan, Let). `Let` is the deliberate M6
+    // functional-core addition (ticket t60), gated by exactly this lock + the keyword freeze.
     let statement_variants = [
         Statement::Query(Pipeline {
             source: Source::Values(Values {
@@ -434,6 +435,23 @@ fn closed_core_variant_counts_are_locked() {
             }),
             ops: vec![],
         }),
+        Statement::Let {
+            name: String::new(),
+            value: Box::new(Statement::Query(Pipeline {
+                source: Source::Values(Values {
+                    columns: None,
+                    rows: vec![],
+                }),
+                ops: vec![],
+            })),
+            body: Box::new(Statement::Query(Pipeline {
+                source: Source::Values(Values {
+                    columns: None,
+                    rows: vec![],
+                }),
+                ops: vec![],
+            })),
+        },
         Statement::Effect(EffectStmt {
             verb: EffectVerb::Insert,
             target: PathExpr {
@@ -473,8 +491,8 @@ fn closed_core_variant_counts_are_locked() {
     ];
     assert_eq!(
         statement_variants.len(),
-        4,
-        "Statement is closed at 4 forms (RFD §3)"
+        5,
+        "Statement is closed at 5 forms (RFD §3 + the t60 `LET` functional-core addition)"
     );
 
     // 18 closed-core pipe ops — each maps to a frozen query/transform keyword or a
@@ -539,6 +557,94 @@ fn closed_core_variant_counts_are_locked() {
         18,
         "PipeOp is closed at 18 variants — no per-driver/per-action variant (RFD §3)"
     );
+}
+
+// ---- LET binding + multi-statement program (M6, ticket t60) ---------------
+
+#[test]
+fn let_binding_binds_a_relation_and_threads_body() {
+    // A single LET binding followed by the statement that uses it (one per line, `;`-free).
+    let stmt = parse_ok(
+        "LET active = FROM /sql/pg/customers |> WHERE status = 'active'\n\
+         FROM active |> SELECT id",
+    );
+    let Statement::Let { name, value, body } = stmt else {
+        panic!("expected a LET binding, got {stmt:?}")
+    };
+    assert_eq!(name, "active");
+    // The bound value is always a relation (a Query pipeline), never an effect.
+    let Statement::Query(v) = *value else {
+        panic!("LET value must be a Query")
+    };
+    let Source::Path(p) = v.source else {
+        panic!("expected a path source")
+    };
+    assert_eq!(p.segments[0].name, "sql");
+    // The body references the bound name as a bare-identifier source.
+    let Statement::Query(b) = *body else {
+        panic!("LET body must be the using statement")
+    };
+    assert_eq!(b.source, Source::Name("active".to_string()));
+}
+
+#[test]
+fn multiple_let_bindings_nest_left_to_right() {
+    // Two `;`-free LET lines stay in scope for the final statement (lexical, nested).
+    let stmt = parse_ok(
+        "LET a = FROM /sql/pg/x\n\
+         LET b = FROM /sql/pg/y\n\
+         FROM a |> UNION FROM b",
+    );
+    let Statement::Let { name, body, .. } = stmt else {
+        panic!("expected outer LET a")
+    };
+    assert_eq!(name, "a");
+    let Statement::Let {
+        name: inner,
+        body: inner_body,
+        ..
+    } = *body
+    else {
+        panic!("expected nested LET b")
+    };
+    assert_eq!(inner, "b");
+    let Statement::Query(q) = *inner_body else {
+        panic!("expected the final query")
+    };
+    assert_eq!(q.source, Source::Name("a".to_string()));
+}
+
+#[test]
+fn bare_identifier_is_a_valid_source() {
+    // `FROM products` (no leading slash) is a bound-name source — shape-only at parse time.
+    let stmt = parse_ok("FROM products |> LIMIT 5");
+    let Statement::Query(p) = stmt else {
+        panic!("expected Query")
+    };
+    assert_eq!(p.source, Source::Name("products".to_string()));
+}
+
+#[test]
+fn let_value_may_not_be_an_effect() {
+    // A LET binds a relation only; an effect value is a crisp parse error (`cut_err` after
+    // the `=`), never a smuggled write into a pure context.
+    let err = parse_err("LET x = INSERT INTO /sql/pg/t VALUES (1)\nFROM x");
+    assert!(!err.expected.is_empty());
+}
+
+#[test]
+fn lowercase_let_is_rejected_as_unknown_keyword() {
+    // `LET` is now a frozen keyword: the lowercase form is flagged, like every other keyword.
+    let err = parse_err("let x = FROM /sql/pg/t\nFROM x");
+    assert_eq!(err.code, ParseErrorCode::UnknownKeyword);
+}
+
+#[test]
+fn two_bare_statements_without_a_binding_are_rejected() {
+    // The program model is `LET* <final-statement>`; two non-binding statements in a row is
+    // trailing input, not a silent split.
+    let err = parse_err("FROM /sql/pg/a\nFROM /sql/pg/b");
+    assert!(!err.expected.is_empty());
 }
 
 // ---- governance: rejection cases ------------------------------------------

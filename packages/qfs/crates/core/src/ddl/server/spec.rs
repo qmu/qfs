@@ -164,6 +164,12 @@ pub fn normalize_spans(stmt: &mut Statement) {
             *span = ZERO;
             normalize_spans(inner);
         }
+        // A `LET` binding (M6, t60): normalise both the bound value and the body so a
+        // `LET`-carrying body round-trips identically regardless of where it was parsed.
+        Statement::Let { value, body, .. } => {
+            normalize_spans(value);
+            normalize_spans(body);
+        }
     }
 }
 
@@ -179,6 +185,8 @@ fn normalize_source(s: &mut Source) {
         Source::Path(path) => normalize_path(path),
         Source::Values(v) => normalize_values(v),
         Source::Subquery(p) => normalize_pipeline(p),
+        // A bare `LET`-bound name (M6, t60) carries no span to normalise.
+        Source::Name(_) => {}
     }
 }
 

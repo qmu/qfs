@@ -478,3 +478,69 @@ fn unwired_evaluator_keeps_functions_late_bound() {
     let schema = v.as_relation().unwrap().schema();
     assert_eq!(schema.column("u").unwrap().ty, ColumnType::Unknown);
 }
+
+// ---- LET binding evaluation (M6, ticket t60) ------------------------------
+
+/// A `LET`-bound name substitutes its folded relation in the body: the bound scan's real
+/// schema threads through the body's projection (the `id` column keeps its `Int` type — an
+/// empty/late-bound schema would not), proving the binding is the *same* relation, reused.
+#[test]
+fn let_substitutes_bound_relation_with_its_schema() {
+    let v = eval(
+        "LET u = FROM /db/users\n\
+         FROM u |> SELECT id, name",
+    )
+    .unwrap();
+    let rel = v
+        .as_relation()
+        .expect("a LET program ending in a query is a relation");
+    assert!(matches!(rel, PlanSource::Project { .. }));
+    let schema = rel.schema();
+    assert_eq!(
+        schema.column_names(),
+        vec!["id".to_string(), "name".to_string()]
+    );
+    assert_eq!(
+        schema.column("id").unwrap().ty,
+        ColumnType::Int,
+        "the bound relation's real schema threaded into the body"
+    );
+}
+
+/// A `LET`-bound relation flows into a set operation in the body (referenced as a source on
+/// both sides) — the binding is reusable, not single-use.
+#[test]
+fn let_bound_relation_is_reusable() {
+    let v = eval(
+        "LET u = FROM /db/users\n\
+         FROM u |> UNION FROM u",
+    )
+    .unwrap();
+    assert!(matches!(v.as_relation().unwrap(), PlanSource::SetOp { .. }));
+}
+
+/// An unbound bare-identifier source fails evaluation with the structured `UnknownBinding`
+/// resolve error (resolution runs first) — never a silent empty relation.
+#[test]
+fn unbound_name_fails_evaluation() {
+    let err = eval("FROM ghost |> SELECT id").unwrap_err();
+    assert_eq!(err.code(), "unknown_binding");
+}
+
+/// Shadowing: the innermost binding wins. The body sees `/db/users` (3 columns), not the
+/// outer `/mail/inbox` (2 columns), so `SELECT *` yields the inner relation's schema.
+#[test]
+fn shadowing_uses_the_innermost_binding() {
+    let v = eval(
+        "LET x = FROM /mail/inbox\n\
+         LET x = FROM /db/users\n\
+         FROM x |> SELECT *",
+    )
+    .unwrap();
+    let schema = v.as_relation().unwrap().schema();
+    assert_eq!(
+        schema.columns.len(),
+        3,
+        "the inner /db/users binding (3 cols) shadows the outer /mail/inbox (2 cols)"
+    );
+}

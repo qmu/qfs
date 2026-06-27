@@ -59,6 +59,11 @@ pub fn bind_last_run(stmt: &mut Statement, boundary: Instant) {
             }
         }
         Statement::Plan(PlanWrap { inner, .. }) => bind_last_run(inner, boundary),
+        // A `LET` program (M6, t60): rewrite `LAST_RUN()` through value + body.
+        Statement::Let { value, body, .. } => {
+            bind_last_run(value, boundary);
+            bind_last_run(body, boundary);
+        }
     }
 }
 
@@ -82,6 +87,8 @@ fn rewrite_source(s: &mut Source, boundary: Instant) {
         Source::Path(_) => {}
         Source::Values(v) => rewrite_values(v, boundary),
         Source::Subquery(p) => rewrite_pipeline(p, boundary),
+        // A bare `LET`-bound name (M6, t60) carries no `LAST_RUN()` call to rewrite.
+        Source::Name(_) => {}
     }
 }
 
@@ -232,6 +239,11 @@ fn detect_stmt(stmt: &Statement, found: &mut bool) {
             }
         }
         Statement::Plan(PlanWrap { inner, .. }) => detect_stmt(inner, found),
+        // A `LET` program (M6, t60): a `LAST_RUN()` may live in value or body.
+        Statement::Let { value, body, .. } => {
+            detect_stmt(value, found);
+            detect_stmt(body, found);
+        }
     }
 }
 
@@ -246,6 +258,8 @@ fn detect_pipeline(p: &Pipeline, found: &mut bool) {
             }
         }
         Source::Path(_) => {}
+        // A bare `LET`-bound name (M6, t60) is not a `LAST_RUN()` site.
+        Source::Name(_) => {}
     }
     for op in &p.ops {
         match op {

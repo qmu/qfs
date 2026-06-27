@@ -350,22 +350,45 @@ impl<'r> Evaluator<'r> {
     /// [`EvalError`] for any unresolvable name, capability denial, ill-typed stage, or
     /// unrouted path.
     pub fn eval(&self, stmt: &Statement) -> Result<EvalValue, EvalError> {
-        // Resolve-time gate first (RFD §5): denied verbs / unknown procs fail before a
-        // plan exists.
+        // Resolve-time gate first (RFD §5): denied verbs / unknown procs / unbound names
+        // fail before a plan exists.
         self.resolver.resolve_statement(stmt)?;
-        self.eval_inner(stmt)
+        let env = Env::default();
+        self.eval_inner(stmt, &env)
     }
 
-    fn eval_inner(&self, stmt: &Statement) -> Result<EvalValue, EvalError> {
+    fn eval_inner(&self, stmt: &Statement, env: &Env) -> Result<EvalValue, EvalError> {
         match stmt {
-            Statement::Query(pipeline) => Ok(EvalValue::Relation(self.fold_query(pipeline)?)),
-            Statement::Effect(effect) => Ok(EvalValue::Plan(self.eval_write(effect)?)),
+            Statement::Query(pipeline) => Ok(EvalValue::Relation(self.fold_query(pipeline, env)?)),
+            Statement::Effect(effect) => Ok(EvalValue::Plan(self.eval_write(effect, env)?)),
             // PREVIEW/COMMIT are transparent to evaluation: the plan they wrap is the
             // inner statement's plan (the dry-run/apply distinction is t10's interpreter).
-            Statement::Plan(PlanWrap { inner, .. }) => self.eval_inner(inner),
+            Statement::Plan(PlanWrap { inner, .. }) => self.eval_inner(inner, env),
+            // A `LET` binding (M6, t60): fold the bound relation once, bind it for the body's
+            // scope (lexical, shadowing allowed — `with` returns a child env), then evaluate
+            // the body. The binding flows in as a `PlanSource` (a selector/relation), never a
+            // secret — so the purity floor holds: a `LET` introduces no I/O and no effect node.
+            Statement::Let { name, value, body } => {
+                let rel = self.eval_relation(value, env)?;
+                let inner = env.with(name, rel);
+                self.eval_inner(body, &inner)
+            }
             // Server DDL desugars to `/server/...` effects in a later epic; here it
             // evaluates to an empty plan (no effect node to construct yet, ticket scope).
             Statement::Ddl(_) => Ok(EvalValue::Plan(Plan::pure())),
+        }
+    }
+
+    /// Evaluate a `LET` binding's value to its relation [`PlanSource`]. The grammar restricts
+    /// a binding value to a relation (a `Statement::Query` pipeline), so this always folds a
+    /// query; the non-relation arm is unreachable in practice (an effect value fails to parse)
+    /// and is mapped to a structured error rather than panicking (lib code stays panic-free).
+    fn eval_relation(&self, stmt: &Statement, env: &Env) -> Result<PlanSource, EvalError> {
+        match self.eval_inner(stmt, env)? {
+            EvalValue::Relation(rel) => Ok(rel),
+            EvalValue::Plan(_) => Err(EvalError::NonLiteralValues {
+                detail: "a LET binds a relation, not an effect".to_string(),
+            }),
         }
     }
 
@@ -374,17 +397,24 @@ impl<'r> Evaluator<'r> {
     /// Left-fold a read pipeline into a [`PlanSource`], threading the output schema
     /// through each `|>` stage (RFD §2.2). The source schema comes from the driver's
     /// pure `describe`; each op transforms it via the t05 schema algebra.
-    fn fold_query(&self, pipeline: &Pipeline) -> Result<PlanSource, EvalError> {
-        let mut src = self.eval_source(&pipeline.source)?;
+    fn fold_query(&self, pipeline: &Pipeline, env: &Env) -> Result<PlanSource, EvalError> {
+        let mut src = self.eval_source(&pipeline.source, env)?;
         for op in &pipeline.ops {
-            src = self.fold_op(src, op)?;
+            src = self.fold_op(src, op, env)?;
         }
         Ok(src)
     }
 
-    /// Evaluate a pipeline source into the base [`PlanSource`] (RFD §2.2).
-    fn eval_source(&self, source: &Source) -> Result<PlanSource, EvalError> {
+    /// Evaluate a pipeline source into the base [`PlanSource`] (RFD §2.2). A bare-identifier
+    /// source (`FROM <name>`) resolves to its `LET`-bound relation in `env` (M6, t60) — the
+    /// stored selector flows in, never re-reading a mount.
+    fn eval_source(&self, source: &Source, env: &Env) -> Result<PlanSource, EvalError> {
         match source {
+            // A `LET`-bound name substitutes its stored relation (t60). Resolution already
+            // validated the name; a miss here is still a structured error, never a panic.
+            Source::Name(name) => env.get(name).cloned().ok_or_else(|| {
+                EvalError::Resolve(ResolveError::UnknownBinding { name: name.clone() })
+            }),
             Source::Path(path) => {
                 let full = render_path(
                     &path
@@ -408,12 +438,12 @@ impl<'r> Evaluator<'r> {
             Source::Values(values) => Ok(PlanSource::Values {
                 schema: values_schema(values),
             }),
-            Source::Subquery(inner) => self.fold_query(inner),
+            Source::Subquery(inner) => self.fold_query(inner, env),
         }
     }
 
     /// Fold one pipe op onto the current relation, computing its output schema (RFD §3).
-    fn fold_op(&self, input: PlanSource, op: &PipeOp) -> Result<PlanSource, EvalError> {
+    fn fold_op(&self, input: PlanSource, op: &PipeOp, env: &Env) -> Result<PlanSource, EvalError> {
         match op {
             // Schema-preserving filter.
             PipeOp::Where(_) => Ok(PlanSource::Filter {
@@ -470,7 +500,7 @@ impl<'r> Evaluator<'r> {
             }),
             // Set operations: unify the two sides' schemas column-wise (RFD §4).
             PipeOp::Union(p) | PipeOp::Except(p) | PipeOp::Intersect(p) => {
-                let rhs = self.fold_query(p)?;
+                let rhs = self.fold_query(p, env)?;
                 let schema = Schema::unify(input.schema(), rhs.schema())?;
                 Ok(PlanSource::SetOp {
                     lhs: Box::new(input),
@@ -479,7 +509,7 @@ impl<'r> Evaluator<'r> {
                 })
             }
             PipeOp::Join(join) => {
-                let rhs = self.eval_source(&join.source)?;
+                let rhs = self.eval_source(&join.source, env)?;
                 let mut cols = input.schema().columns.clone();
                 cols.extend(rhs.schema().columns.clone());
                 let schema = Schema::new(cols);
@@ -514,7 +544,7 @@ impl<'r> Evaluator<'r> {
     /// pipeline (no `_` arm). The effect node depends on any input relation (an
     /// `INSERT … FROM <query>` body), `REMOVE` is flagged inherently irreversible, and the
     /// optional `RETURNING` projection schema is attached.
-    fn eval_write(&self, effect: &EffectStmt) -> Result<Plan, EvalError> {
+    fn eval_write(&self, effect: &EffectStmt, env: &Env) -> Result<Plan, EvalError> {
         let full = render_path(
             &effect
                 .target
@@ -543,7 +573,7 @@ impl<'r> Evaluator<'r> {
         // dependency the write hangs off (the `INSERT … FROM <query>` case).
         let dep: Option<NodeId> = match &effect.body {
             EffectBody::Pipeline(p) => {
-                let rel = self.fold_query(p)?;
+                let rel = self.fold_query(p, env)?;
                 let read =
                     EffectNode::new(builder.next_id(), EffectKind::Read, source_target(&rel))
                         .with_affected(Affected::Unknown);
@@ -558,7 +588,7 @@ impl<'r> Evaluator<'r> {
         // in order (the applier maps the row's named columns onto the backend columns). WITHOUT
         // this, an `INSERT … VALUES` reaches the applier with an empty payload — a silent no-op.
         let values_args: Option<RowBatch> = match &effect.body {
-            EffectBody::Values(v) => Some(self.values_row_batch(effect, v)?),
+            EffectBody::Values(v) => Some(self.values_row_batch(effect, v, env)?),
             EffectBody::SetWhere { set, filter } => Some(setwhere_row_batch(set, filter.as_ref())?),
             EffectBody::Pipeline(_) => None,
         };
@@ -598,7 +628,7 @@ impl<'r> Evaluator<'r> {
 
         // The RETURNING projection schema, computed against the effect's input schema.
         if let Some(returning) = &effect.returning {
-            let input_schema = self.effect_input_schema(effect)?;
+            let input_schema = self.effect_input_schema(effect, env)?;
             let schema = self.project_schema(&input_schema, returning, false)?;
             plan = plan.returning(schema);
         }
@@ -616,6 +646,7 @@ impl<'r> Evaluator<'r> {
         &self,
         effect: &EffectStmt,
         values: &Values,
+        env: &Env,
     ) -> Result<RowBatch, EvalError> {
         let width = values.rows.first().map_or(0, Vec::len);
         // Column names: explicit list, else the target's described columns in order.
@@ -630,7 +661,7 @@ impl<'r> Evaluator<'r> {
                 // than the row — so a PREVIEW works with no mount (mirroring `values_schema`), never
                 // erroring just because the row payload is being built.
                 let described = self
-                    .effect_input_schema(effect)
+                    .effect_input_schema(effect, env)
                     .map(|s| s.columns)
                     .unwrap_or_default();
                 (0..width)
@@ -657,9 +688,9 @@ impl<'r> Evaluator<'r> {
     /// The schema the effect reads/writes against — the sub-pipeline's output schema for a
     /// `FROM`-bodied effect, otherwise the target node's described schema. Used to type a
     /// `RETURNING` projection.
-    fn effect_input_schema(&self, effect: &EffectStmt) -> Result<Schema, EvalError> {
+    fn effect_input_schema(&self, effect: &EffectStmt, env: &Env) -> Result<Schema, EvalError> {
         if let EffectBody::Pipeline(p) = &effect.body {
-            return Ok(self.fold_query(p)?.schema().clone());
+            return Ok(self.fold_query(p, env)?.schema().clone());
         }
         let full = render_path(
             &effect
@@ -737,6 +768,31 @@ impl<'r> Evaluator<'r> {
             }
         }
         Ok(Schema::new(out))
+    }
+}
+
+/// The lexical binding environment for `LET` (M6, ticket t60): a bound name → its evaluated
+/// relation [`PlanSource`]. A bare-identifier source (`FROM <name>`) substitutes the stored
+/// relation rather than re-reading a mount, so a `LET`-bound relation is folded **once** and
+/// reused. Cheap to extend by value ([`Env::with`]) so each `LET` body gets its own immutable
+/// child env — shadowing is a plain re-insert and the parent env is never mutated. A bound
+/// value is a relation description (a selector), never a secret, so the purity floor holds.
+#[derive(Debug, Clone, Default)]
+struct Env {
+    bindings: std::collections::HashMap<String, PlanSource>,
+}
+
+impl Env {
+    /// A child env with `name` bound to `rel` (shadowing any same-named outer binding).
+    fn with(&self, name: &str, rel: PlanSource) -> Self {
+        let mut bindings = self.bindings.clone();
+        bindings.insert(name.to_string(), rel);
+        Self { bindings }
+    }
+
+    /// The relation bound to `name`, if it is in scope.
+    fn get(&self, name: &str) -> Option<&PlanSource> {
+        self.bindings.get(name)
     }
 }
 

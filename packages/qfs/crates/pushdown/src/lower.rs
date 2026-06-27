@@ -158,6 +158,13 @@ fn lower_source(
             let src = SourceId::new("(values)");
             Ok(LogicalPlan::scan(src, Schema::empty()))
         }
+        Source::Name(name) => {
+            // A `LET`-bound relation (M6, t60) is not a driver mount; the binding is folded
+            // upstream by the evaluator. Model it as a synthetic local source so the
+            // partitioner treats it as a local leaf with nothing to push into a driver.
+            let src = SourceId::new(format!("(let:{name})"));
+            Ok(LogicalPlan::scan(src, Schema::empty()))
+        }
     }
 }
 

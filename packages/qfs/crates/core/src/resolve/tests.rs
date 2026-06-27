@@ -372,6 +372,7 @@ fn error_codes_are_distinct_and_stable() {
         }
         .code(),
         ResolveError::UnknownReceiver { name: "X".into() }.code(),
+        ResolveError::UnknownBinding { name: "X".into() }.code(),
         ResolveError::UnsupportedVerb {
             path: "/x".into(),
             verb: "UPDATE",
@@ -389,4 +390,52 @@ fn plan_wrapper_resolves_inner() {
     let calls = resolve("PREVIEW FROM /mail/inbox |> CALL mail.send(to => 'a@b.c')").unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].qualified, "mail.send");
+}
+
+// ---- LET binding resolution (M6, ticket t60) ------------------------------
+
+/// A `LET`-bound name resolves as a source in scope for the body — no unbound error, and
+/// the body's `CALL` (against a qualified driver namespace) still resolves.
+#[test]
+fn let_bound_name_resolves_in_body() {
+    let calls = resolve(
+        "LET inbox = FROM /mail/inbox\n\
+         FROM inbox |> CALL mail.send(to => 'a@b.c')",
+    )
+    .unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].qualified, "mail.send");
+}
+
+/// A bare-identifier source with no matching binding is a structured `UnknownBinding`
+/// error — a typo'd name is never a silent empty relation (RFD §5).
+#[test]
+fn unbound_name_is_structured_error() {
+    let err = resolve("FROM ghost |> LIMIT 1").unwrap_err();
+    assert_eq!(err.code(), "unknown_binding");
+    assert!(matches!(err, ResolveError::UnknownBinding { name } if name == "ghost"));
+}
+
+/// Shadowing is allowed: an inner `LET` of the same name wins for the statements after it.
+#[test]
+fn shadowing_is_allowed() {
+    resolve(
+        "LET x = FROM /mail/inbox\n\
+         LET x = FROM /git/repo\n\
+         FROM x |> LIMIT 1",
+    )
+    .expect("a re-bound name resolves");
+}
+
+/// A binding's value resolves in the OUTER scope — there is no forward/recursive reference,
+/// so a value that names a not-yet-bound sibling is a structured `UnknownBinding` error.
+#[test]
+fn binding_value_has_no_forward_reference() {
+    let err = resolve(
+        "LET a = FROM b |> LIMIT 1\n\
+         LET b = FROM /mail/inbox\n\
+         FROM a",
+    )
+    .unwrap_err();
+    assert!(matches!(err, ResolveError::UnknownBinding { name } if name == "b"));
 }

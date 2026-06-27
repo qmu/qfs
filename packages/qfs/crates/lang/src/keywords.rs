@@ -34,6 +34,13 @@ pub enum Keyword {
     Intersect,
     As,
     Expand,
+    // -- Functional core (M6, ticket t60) --
+    // `LET` is a *deliberate* addition to the frozen RFD §3 vocabulary — one of only two
+    // new keywords the whole roadmap permits (decision H; the other is `TRANSACTION`, t62).
+    // It names an intermediate relation so it can be referenced more than once. The freeze
+    // tests below are updated in step (38 → 39) precisely so this addition is reviewed, not
+    // smuggled in.
+    Let,
     // -- Effects (RFD §3) --
     InsertInto,
     UpsertInto,
@@ -89,6 +96,7 @@ impl Keyword {
             "INTERSECT" => Self::Intersect,
             "AS" => Self::As,
             "EXPAND" => Self::Expand,
+            "LET" => Self::Let,
             "UPDATE" => Self::Update,
             "REMOVE" => Self::Remove,
             "VALUES" => Self::Values,
@@ -132,6 +140,7 @@ impl Keyword {
             Self::Intersect => "INTERSECT",
             Self::As => "AS",
             Self::Expand => "EXPAND",
+            Self::Let => "LET",
             Self::InsertInto => "INSERT INTO",
             Self::UpsertInto => "UPSERT INTO",
             Self::Update => "UPDATE",
@@ -182,6 +191,8 @@ pub const KEYWORDS: &[&str] = &[
     "INTERSECT",
     "AS",
     "EXPAND",
+    // Functional core (M6, ticket t60) — a deliberate vocabulary addition (decision H).
+    "LET",
     // Effects
     "INSERT INTO",
     "UPSERT INTO",
@@ -242,14 +253,16 @@ mod tests {
         );
     }
 
-    /// Locks the exact frozen count (RFD §3 has 38 reserved keywords). A diff to
-    /// this number is the tripwire that a keyword was smuggled in or removed.
+    /// Locks the exact frozen count. RFD §3 froze 38 reserved keywords; ticket t60
+    /// deliberately adds `LET` (decision H, the M6 functional core), taking the count to
+    /// 39. A diff to this number is the tripwire that a keyword was smuggled in or removed
+    /// — bumping it here is the *intended* change-control event for the `LET` addition.
     #[test]
     fn keyword_count_is_frozen() {
         assert_eq!(
             KEYWORDS.len(),
-            38,
-            "the closed-core keyword set is frozen at 38 entries (RFD §3)"
+            39,
+            "the closed-core keyword set is frozen at 39 entries (RFD §3 + the t60 `LET` addition)"
         );
         // No duplicates in the fixture.
         let mut seen = std::collections::BTreeSet::new();
@@ -319,6 +332,7 @@ mod tests {
         Keyword::Intersect,
         Keyword::As,
         Keyword::Expand,
+        Keyword::Let,
         Keyword::InsertInto,
         Keyword::UpsertInto,
         Keyword::Update,
