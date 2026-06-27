@@ -101,6 +101,11 @@ qfs-driver-git = { path = "../driver-git" }
 # libsqlite3 from source (no system-lib dependency) — the same dep+feature qfs-driver-sql uses for
 # its in-memory test backend, so the artifact already builds in this workspace.
 rusqlite = { version = "0.40", features = ["bundled"] }
+# t42 persistence foundation: the binary is the ONE place that opens a real DB path (decision F +
+# the dep-direction guard — qfs-store is a sync leaf; nothing in the spine names a file). The binary
+# resolves the System DB path (`src/store.rs`) and runs the embedded migrations on start. qfs-store
+# reuses the SAME bundled libsqlite3 build as `rusqlite` above, so the artifact carries one C SQLite.
+qfs-store = { path = "../store" }
 # t36 deployment host-adapter seam: the binary composes the daemon's TokioHost: RuntimeHost,
 # REUSING the existing qfs-http/qfs-cron/qfs-watchtower serve composition behind the trait, and
 # wires the fsync'd FileDurableStore + the on-disk AuditLedger. `host-daemon` is the EC2/Linux

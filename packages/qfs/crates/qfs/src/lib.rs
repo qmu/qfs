@@ -30,6 +30,7 @@ pub mod serve;
 pub mod serve_builtins;
 pub mod shell;
 pub mod sql;
+pub mod store;
 pub mod transport;
 pub mod version;
 pub mod watchtower;

@@ -288,6 +288,13 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // code (its driver edges are dev-deps for the golden corpus only) — so this edge adds zero
         // transitive weight and no runtime/driver coupling to the terminal binary.
         "qfs-skill",
+        // t42 persistence foundation: the binary is the ONE place that opens a real DB path
+        // (decision F). qfs-store is a SYNC leaf (rusqlite, no tokio) consumed only by the terminal
+        // binary, which resolves the System DB path and runs the embedded migrations on start. The
+        // edge keeps the persistence substrate off the spine (nothing below the binary names a DB
+        // file); rusqlite's libsqlite3 build dead-ends in the terminal binary like the existing
+        // qfs-driver-sql backend.
+        "qfs-store",
     ];
     let workspace_prefixed: Vec<&String> =
         bin_deps.iter().filter(|d| d.starts_with("qfs")).collect();

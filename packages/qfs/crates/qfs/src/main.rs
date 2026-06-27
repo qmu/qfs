@@ -11,7 +11,7 @@
 //! binary is that leaf, so it builds the wired shell and injects it into `qfs-cmd` via the
 //! [`qfs_cmd::ShellLauncher`]. The shell LOGIC itself lives in `qfs-exec`; this only wires it.
 
-use qfs::{account, commit, describe, serve, shell, version};
+use qfs::{account, commit, describe, serve, shell, store, version};
 
 fn main() {
     // t40: the binary owns the build metadata (semver + git sha + target triple baked in by
@@ -25,6 +25,17 @@ fn main() {
     if rest.len() == 1 && (rest[0] == "--version" || rest[0] == "-V") {
         println!("{}", version::long_version());
         std::process::exit(0);
+    }
+
+    // t42: open the per-host System DB and apply embedded migrations on start (idempotent — a
+    // second start is a no-op). This is start-time INFRASTRUCTURE, not a qfs effect-plan: it never
+    // goes through preview/commit. t42 wires the seam WITHOUT routing any command through it (the
+    // file vault still backs secrets until t43), so it is best-effort — a host with no config home
+    // or a transient open error must not block the CLI. We log at debug and continue.
+    match store::open_system_db() {
+        Ok(Some(_sys)) => tracing::debug!("qfs: system DB migrations applied/verified on start"),
+        Ok(None) => {}
+        Err(e) => tracing::debug!("qfs: system DB unavailable on start (continuing): {e}"),
     }
 
     let code = qfs_cmd::run(

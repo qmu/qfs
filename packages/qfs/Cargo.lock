@@ -1094,6 +1094,7 @@ dependencies = [
  "qfs-runtime",
  "qfs-secrets",
  "qfs-skill",
+ "qfs-store",
  "qfs-types",
  "qfs-watchtower",
  "rusqlite",
@@ -1541,6 +1542,16 @@ version = "0.0.0"
 dependencies = [
  "qfs-types",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "qfs-store"
+version = "0.0.0"
+dependencies = [
+ "qfs-crypto-core",
+ "rusqlite",
+ "tempfile",
  "thiserror",
 ]
 
