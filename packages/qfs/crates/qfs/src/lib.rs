@@ -27,6 +27,7 @@ pub mod describe;
 pub mod docs;
 pub mod git;
 pub mod host;
+pub mod identity;
 pub mod secret_store;
 pub mod serve;
 pub mod serve_builtins;

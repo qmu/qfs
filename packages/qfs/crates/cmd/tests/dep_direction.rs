@@ -295,6 +295,13 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // file); rusqlite's libsqlite3 build dead-ends in the terminal binary like the existing
         // qfs-driver-sql backend.
         "qfs-store",
+        // t45 identity composition root: the binary wires the System-DB-backed identity store
+        // (`SqliteIdentityStore` in qfs-store) + the identity DOMAIN core (qfs-identity) for `qfs
+        // identity signup/whoami`, injecting the launcher into qfs-cmd (which stays off both
+        // backends). qfs-identity is a pure-ish leaf (no rusqlite/tokio/lang/plan/driver/codec/
+        // parser — asserted by `identity_is_a_pure_domain_leaf` below), so the edge adds no
+        // runtime/driver coupling to the terminal binary.
+        "qfs-identity",
     ];
     let workspace_prefixed: Vec<&String> =
         bin_deps.iter().filter(|d| d.starts_with("qfs")).collect();
@@ -1068,6 +1075,90 @@ fn crypto_core_is_a_pure_leaf_single_sourcing_the_three_vendored_copies() {
              Deps were: {deps:?}"
         );
     }
+}
+
+#[test]
+fn identity_is_a_pure_domain_leaf() {
+    // t45: qfs-identity is the identity DOMAIN core (the `users`/`accounts` model, the consumer-side
+    // IdentityStore trait, pure sign-up validation, argon2id hashing). It is a pure-ish leaf — its
+    // SQLite I/O is INJECTED (the rusqlite `SqliteIdentityStore` lives in qfs-store), so the domain
+    // stays off rusqlite/tokio and the lower spine. This guard pins three facts:
+    //
+    //   (a) qfs-identity's ONLY workspace deps are {qfs-secrets, qfs-crypto-core} — the redacting
+    //       Secret wrapper + the constant-time compare. It does NOT depend on lang/plan/driver/codec/
+    //       parser (it carries no query/engine logic) nor on qfs-store/rusqlite (I/O is injected).
+    //   (b) it carries no tokio/async runtime (it is sync, pure domain logic).
+    //   (c) qfs-store consumes it (the injected rusqlite store impl) — the acyclic edge that keeps
+    //       the I/O out of the domain leaf.
+    let graph = load_graph();
+
+    let workspace_crates = [
+        "qfs-cmd",
+        "qfs-core",
+        "qfs-server",
+        "qfs-lang",
+        "qfs-plan",
+        "qfs-driver",
+        "qfs-codec",
+        "qfs-parser",
+        "qfs-types",
+        "qfs-runtime",
+        "qfs-txn",
+        "qfs-pushdown",
+        "qfs-secrets",
+        "qfs-crypto-core",
+        "qfs-store",
+        "qfs-identity",
+    ];
+
+    // (a) qfs-identity's workspace deps are exactly {qfs-secrets, qfs-crypto-core}.
+    let identity_deps = graph
+        .direct_deps
+        .get("qfs-identity")
+        .expect("qfs-identity is a workspace package");
+    let allowed = ["qfs-secrets", "qfs-crypto-core"];
+    for d in identity_deps
+        .iter()
+        .filter(|d| workspace_crates.contains(&d.as_str()))
+    {
+        assert!(
+            allowed.contains(&d.as_str()),
+            "confinement violation: qfs-identity must depend only on {allowed:?} among workspace \
+             crates (it is a pure-ish domain leaf; SQLite I/O is injected via qfs-store), but \
+             depends on {d}. Deps were: {identity_deps:?}"
+        );
+    }
+    // The defining absences: no tokio/async runtime, no lower-spine / driver / query crates.
+    for forbidden in [
+        "tokio",
+        "futures",
+        "async-trait",
+        "rusqlite",
+        "qfs-lang",
+        "qfs-plan",
+        "qfs-driver",
+        "qfs-codec",
+        "qfs-parser",
+        "qfs-runtime",
+        "qfs-store",
+    ] {
+        assert!(
+            !identity_deps.iter().any(|d| d == forbidden),
+            "confinement violation: qfs-identity must NOT depend on {forbidden} (it is a pure-ish \
+             leaf; tokio/rusqlite/query logic stay out). Deps were: {identity_deps:?}"
+        );
+    }
+
+    // (c) qfs-store consumes qfs-identity (the injected rusqlite IdentityStore impl).
+    let store_deps = graph
+        .direct_deps
+        .get("qfs-store")
+        .expect("qfs-store is a workspace package");
+    assert!(
+        store_deps.iter().any(|d| d == "qfs-identity"),
+        "qfs-store must depend on qfs-identity (it provides the injected rusqlite IdentityStore \
+         impl over the System DB, t45). Deps were: {store_deps:?}"
+    );
 }
 
 #[test]

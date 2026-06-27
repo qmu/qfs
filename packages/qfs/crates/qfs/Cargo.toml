@@ -106,6 +106,12 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 # resolves the System DB path (`src/store.rs`) and runs the embedded migrations on start. qfs-store
 # reuses the SAME bundled libsqlite3 build as `rusqlite` above, so the artifact carries one C SQLite.
 qfs-store = { path = "../store" }
+# t45 identity composition root: the binary wires the System-DB-backed identity store
+# (`SqliteIdentityStore` from qfs-store) and the identity DOMAIN core (qfs-identity) for `qfs identity
+# signup/whoami` — it validates the email/password, hashes with argon2id (qfs-identity), and injects
+# the launcher into qfs-cmd. qfs-cmd stays off both backends (the dep_direction guard). qfs-identity
+# is a pure leaf (no rusqlite/tokio); this edge adds only its argon2/secrets/crypto-core leaves.
+qfs-identity = { path = "../identity" }
 # t43: the SQLite `Secrets` backend (src/secret_store.rs) parses the `created_at` column back to an
 # OffsetDateTime for `AccountRecord` (the same RFC3339 metadata qfs-secrets uses). Parsing/formatting
 # only — no secret material ever touches `time`.

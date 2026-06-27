@@ -38,6 +38,9 @@ use rusqlite::Connection;
 
 pub mod audit;
 
+mod identity_store;
+pub use identity_store::SqliteIdentityStore;
+
 mod migrate;
 pub use migrate::{applied_migrations, migrate, AppliedMigration, Migration, MigrationError};
 
@@ -143,6 +146,15 @@ impl SystemDb {
     pub fn db(&self) -> &Db {
         &self.0
     }
+
+    /// Consume this scope and yield its underlying [`Db`] (already migrated). Paired with
+    /// [`Db::into_connection`] so the binary can move the migrated System-DB connection into a
+    /// backend that OWNS it — t45's [`SqliteIdentityStore`], which holds the connection inside a
+    /// `Mutex` to be `Send + Sync` (the same seam [`ProjectDb::into_db`] gives the secret store).
+    #[must_use]
+    pub fn into_db(self) -> Db {
+        self.0
+    }
 }
 
 /// Per-project database scope (roadmap §4.2): that project's connections, config, state. A distinct
@@ -187,6 +199,16 @@ pub const SYSTEM_MIGRATIONS: &[Migration] = &[
         version: 2,
         name: "system_audit_chain",
         sql: include_str!("schema/system_audit.sql"),
+    },
+    // t45 (roadmap M1): the identity tables — `users` (the human handle) + `accounts` (a linked
+    // sign-in identity; 'local' rows carry an argon2id password hash). Appended as a NEW version (#3)
+    // — migrations #1/#2 stay frozen (the checksum guard forbids editing a shipped migration). The
+    // rusqlite `IdentityStore` impl that fills these lives in `identity_store.rs`. AUTHENTICATION
+    // ONLY: a row here grants no privilege yet (decision §4.1; sessions are t46).
+    Migration {
+        version: 3,
+        name: "system_identity",
+        sql: include_str!("schema/system_identity.sql"),
     },
 ];
 
@@ -249,11 +271,11 @@ mod tests {
     #[test]
     fn migrate_is_forward_only_and_idempotent() {
         let mut db = Db::open(&MemorySource).unwrap();
-        // First call applies the whole System set (v1 skeleton + v2 audit chain, t76).
+        // First call applies the whole System set (v1 skeleton + v2 audit chain t76 + v3 identity t45).
         let applied = migrate(&mut db, SYSTEM_MIGRATIONS).unwrap();
         assert_eq!(
             applied,
-            vec![1, 2],
+            vec![1, 2, 3],
             "first migrate applies every pending version"
         );
         // Second call on the SAME db is a verified no-op (re-verifies the checksum, re-applies none).
@@ -341,7 +363,10 @@ mod tests {
         // t76 migration #2: the audit chain head + bounded live-tail buffer.
         assert!(table_exists(sys.db(), "audit_chain_head"));
         assert!(table_exists(sys.db(), "audit_tail"));
-        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 2);
+        // t45 migration #3: the identity tables.
+        assert!(table_exists(sys.db(), "users"));
+        assert!(table_exists(sys.db(), "accounts"));
+        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 3);
     }
 
     #[test]
@@ -410,6 +435,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "data persisted across reopen");
-        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 2);
+        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 3);
     }
 }

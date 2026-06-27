@@ -1090,6 +1090,7 @@ dependencies = [
  "qfs-exec",
  "qfs-host",
  "qfs-http",
+ "qfs-identity",
  "qfs-pushdown",
  "qfs-runtime",
  "qfs-secrets",
@@ -1440,6 +1441,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "qfs-identity"
+version = "0.0.0"
+dependencies = [
+ "argon2",
+ "qfs-crypto-core",
+ "qfs-secrets",
+ "thiserror",
+]
+
+[[package]]
 name = "qfs-lang"
 version = "0.0.0"
 
@@ -1551,6 +1562,7 @@ name = "qfs-store"
 version = "0.0.0"
 dependencies = [
  "qfs-crypto-core",
+ "qfs-identity",
  "rusqlite",
  "tempfile",
  "thiserror",

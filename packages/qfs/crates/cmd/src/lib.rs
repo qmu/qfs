@@ -82,6 +82,27 @@ pub enum ConnectionAction {
 /// like the shell / serve / describe launchers. Returns the process exit code.
 pub type ConnectionLauncher<'a> = dyn Fn(&ConnectionAction) -> i32 + 'a;
 
+/// A parsed `qfs identity <verb>` request, handed to the binary-injected [`IdentityLauncher`] (t45).
+/// This is the AUTHENTICATION surface — local sign-up + a session-less `whoami` (decision §4.1:
+/// identity is not authorization; sessions land in t46). Like [`ConnectionAction`], the **password is
+/// never carried here** (it would leak into argv / shell history / `ps`); the launcher reads it from
+/// stdin. The email is a handle (safe metadata).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdentityAction {
+    /// `identity signup <email>` — create a user + a local password account. The password is read
+    /// from STDIN by the launcher, never argv.
+    Signup { email: String },
+    /// `identity whoami [email]` — print a user's email + id (NEVER the password hash). With no
+    /// email and no session yet (t46), it resolves the sole user if the deployment has exactly one.
+    Whoami { email: Option<String> },
+}
+
+/// The injected **identity launcher** (t45): the binary supplies the System-DB-backed identity store
+/// I/O (it depends on `qfs-store` + `qfs-identity`, which `qfs-cmd` may not — the dep_direction guard
+/// keeps `qfs-cmd` off the concrete backends). `qfs-cmd` only parses the verb and calls this, exactly
+/// like the connection launcher. Returns the process exit code.
+pub type IdentityLauncher<'a> = dyn Fn(&IdentityAction) -> i32 + 'a;
+
 /// The injected **run-context provider**: the binary supplies the `(Engine, ReadRegistry)` for
 /// `qfs run` — the [`Engine`] whose mount registry has the real drivers (so a `FROM …` source
 /// resolves + plans + pushes down) and the [`qfs_exec::ReadRegistry`] of `ReadDriver` scan facets
@@ -175,6 +196,15 @@ enum Command {
         #[command(subcommand)]
         verb: ConnectionVerb,
     },
+    /// Manage local identity: sign up (email + password) and look yourself up (t45, roadmap M1).
+    ///
+    /// AUTHENTICATION ONLY (decision §4.1: identity is not authorization). A signed-up user can do
+    /// nothing privileged yet — there is local sign-up, **no session** (sessions land in t46, real
+    /// auth in M2). The password is read from STDIN (never argv); the password hash is never printed.
+    Identity {
+        #[command(subcommand)]
+        verb: IdentityVerb,
+    },
     // The absence of a subcommand starts the interactive shell (handled in `run`).
 }
 
@@ -212,6 +242,25 @@ enum ConnectionVerb {
     },
 }
 
+/// `qfs identity <verb>` — the local-identity verbs (t45). Maps onto the injected
+/// [`IdentityLauncher`] over the System-DB identity store. The password is read from STDIN (never an
+/// argv, which would leak into shell history and `ps`); the password hash is never printed.
+#[derive(Subcommand, Debug)]
+enum IdentityVerb {
+    /// Sign up a new local user: creates a `users` row + a `local` password account. The password
+    /// is read from STDIN (e.g. `printf %s "$PW" | qfs identity signup a@b.com`), never argv.
+    Signup {
+        /// The new user's primary email (the unique handle and the local account's subject).
+        email: String,
+    },
+    /// Print a user's email + id (NEVER the password hash). With an `email`, looks that user up;
+    /// with none and exactly one user on this host, prints it (there is no session yet — t46).
+    Whoami {
+        /// The user to look up. Optional: omit it to resolve the sole user.
+        email: Option<String>,
+    },
+}
+
 /// The library entrypoint the thin `qfs` binary calls. Parses `args`, dispatches,
 /// and maps the outcome to a process exit code (`0` on success, `1` on a structured
 /// error, `2` on argv/usage errors from clap). Never panics.
@@ -232,6 +281,7 @@ pub fn run<I, T>(
     describe: &DescribeProvider,
     skill: &SkillProvider,
     connection: &ConnectionLauncher,
+    identity: &IdentityLauncher,
     apply: &qfs_exec::WorldApply,
     run_ctx: &RunContextProvider,
 ) -> i32
@@ -336,6 +386,12 @@ where
         Some(Command::Connection { verb }) => {
             tracing::debug!(target: "qfs::cmd", "dispatch connection via launcher");
             return connection(&connection_action(&verb));
+        }
+        // `identity` is dispatched through the injected launcher (the binary owns the System-DB
+        // identity store; qfs-cmd stays off the concrete backend). Returns the exit code directly.
+        Some(Command::Identity { verb }) => {
+            tracing::debug!(target: "qfs::cmd", "dispatch identity via launcher");
+            return identity(&identity_action(&verb));
         }
     };
 
@@ -545,6 +601,20 @@ fn connection_action(verb: &ConnectionVerb) -> ConnectionAction {
     }
 }
 
+/// Map the clap-parsed [`IdentityVerb`] to the public [`IdentityAction`] handed to the injected
+/// [`IdentityLauncher`]. Pure (handles only); the password is never carried — the launcher reads it
+/// from STDIN, never from argv (which would leak into history / `ps`).
+fn identity_action(verb: &IdentityVerb) -> IdentityAction {
+    match verb {
+        IdentityVerb::Signup { email } => IdentityAction::Signup {
+            email: email.clone(),
+        },
+        IdentityVerb::Whoami { email } => IdentityAction::Whoami {
+            email: email.clone(),
+        },
+    }
+}
+
 /// Render a [`CfsError`] to stderr: a human line, or a `{"error": {...}}` JSON
 /// envelope (AI-facing, RFD §5). This is the only place output mode is rendered.
 fn report_error(err: &CfsError, output: OutputMode) {
@@ -673,6 +743,12 @@ mod tests {
         7
     }
 
+    /// A stub identity launcher returning a distinct sentinel, so a test can assert the `identity`
+    /// arm dispatched into the injected launcher (the real System-DB store I/O lives in the binary).
+    fn stub_identity(_action: &IdentityAction) -> i32 {
+        9
+    }
+
     /// A no-op world-apply: a `--commit` in a unit test "succeeds" without touching the World
     /// (the real interpreter-backed applier lives in the binary crate).
     fn noop_apply(_plan: &qfs_core::Plan) -> Result<(), qfs_exec::ExecError> {
@@ -699,6 +775,7 @@ mod tests {
             &empty_describe,
             &stub_skill,
             &stub_connection,
+            &stub_identity,
             &noop_apply,
             &stub_run_ctx,
         )
@@ -740,6 +817,7 @@ mod tests {
             &empty_describe,
             &stub_skill,
             &stub_connection,
+            &stub_identity,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -788,6 +866,7 @@ mod tests {
             &empty_describe,
             &stub_skill,
             &stub_connection,
+            &stub_identity,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -846,6 +925,40 @@ mod tests {
     }
 
     #[test]
+    fn identity_verbs_map_to_the_public_action() {
+        // The clap verb maps 1:1 to the injected-launcher action (handles only, no password).
+        assert_eq!(
+            identity_action(&IdentityVerb::Signup {
+                email: "a@b.com".into()
+            }),
+            IdentityAction::Signup {
+                email: "a@b.com".into()
+            }
+        );
+        assert_eq!(
+            identity_action(&IdentityVerb::Whoami { email: None }),
+            IdentityAction::Whoami { email: None }
+        );
+        assert_eq!(
+            identity_action(&IdentityVerb::Whoami {
+                email: Some("a@b.com".into())
+            }),
+            IdentityAction::Whoami {
+                email: Some("a@b.com".into())
+            }
+        );
+    }
+
+    #[test]
+    fn identity_subcommand_parses_and_dispatches_to_the_launcher() {
+        // `qfs identity …` parses cleanly and routes into the injected identity launcher (the stub
+        // returns the sentinel 9). The real System-DB store I/O lives in the binary crate.
+        assert_eq!(run_t(["qfs", "identity", "signup", "a@b.com"]), 9);
+        assert_eq!(run_t(["qfs", "identity", "whoami"]), 9);
+        assert_eq!(run_t(["qfs", "identity", "whoami", "a@b.com"]), 9);
+    }
+
+    #[test]
     fn help_exits_zero_without_panic() {
         let code = run_t(["qfs", "--help"]);
         assert_eq!(code, 0);
@@ -869,6 +982,7 @@ mod tests {
                 &empty_describe,
                 &provider,
                 &stub_connection,
+                &stub_identity,
                 &noop_apply,
                 &stub_run_ctx
             ),
@@ -883,6 +997,7 @@ mod tests {
                 &empty_describe,
                 &provider,
                 &stub_connection,
+                &stub_identity,
                 &noop_apply,
                 &stub_run_ctx
             ),

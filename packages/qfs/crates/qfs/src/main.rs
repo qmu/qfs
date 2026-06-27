@@ -11,7 +11,7 @@
 //! binary is that leaf, so it builds the wired shell and injects it into `qfs-cmd` via the
 //! [`qfs_cmd::ShellLauncher`]. The shell LOGIC itself lives in `qfs-exec`; this only wires it.
 
-use qfs::{commit, connection, describe, serve, shell, store, version};
+use qfs::{commit, connection, describe, identity, serve, shell, store, version};
 
 fn main() {
     // t40: the binary owns the build metadata (semver + git sha + target triple baked in by
@@ -55,6 +55,12 @@ fn main() {
         // off the concrete backend). The secret is read from stdin, never argv; each value is
         // AEAD-sealed under a data-key wrapped by the `QFS_PASSPHRASE`-derived key.
         &connection::run_connection,
+        // t45 `qfs identity signup/whoami`: the System-DB-backed identity store I/O, injected here
+        // (the binary owns the rusqlite store over the System DB — qfs-cmd stays off the concrete
+        // backend). The password is read from stdin, never argv, hashed with argon2id (the plaintext
+        // is zeroized after); the password hash is never printed. AUTHENTICATION ONLY — no session
+        // yet (t46), no authorization (M2).
+        &identity::run_identity,
         // The REAL `qfs run --commit` apply path: drives the qfs-runtime interpreter over the live
         // driver registry (local-fs today). qfs-cmd/qfs-exec stay off qfs-runtime; this is the leaf.
         &commit::apply_plan,

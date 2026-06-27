@@ -14,6 +14,11 @@ description = "qfs persistence leaf (roadmap M0 / t42): the embedded SQLite pers
 # silently re-applying (or skipping a tampered) one. qfs-crypto-core is a TRUE pure leaf (zero deps),
 # so this edge adds no runtime/vendor coupling.
 qfs-crypto-core = { path = "../crypto-core" }
+# t45: the identity domain core. qfs-store provides the rusqlite `IdentityStore` impl
+# (`SqliteIdentityStore`) over the System DB — a `qfs-store -> qfs-identity` edge (acyclic: qfs-store
+# is consumed only by the terminal binary, qfs-identity is a pure leaf). qfs-identity carries no
+# rusqlite/tokio, so this adds no coupling beyond its argon2/secrets/crypto-core leaves.
+qfs-identity = { path = "../identity" }
 # The in-process SQLite engine. `bundled` compiles libsqlite3 from source (no system-lib
 # dependency) — the SAME dep+feature qfs-driver-sql's test backend and the `qfs` binary already use,
 # so there is ONE libsqlite3 build in the artifact. SYNC: tokio must not enter this crate.
