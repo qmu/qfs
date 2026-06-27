@@ -106,6 +106,26 @@ pub fn run_serve(config: &Path) -> i32 {
     let wt_triggers = wt_binding.triggers_handle();
     let wt_audit = Arc::new(qfs_watchtower::AuditSink::new());
 
+    // t47 MCP composition: build the MCP serving binding (qfs-mcp, the MCP sibling of
+    // qfs-http/qfs-cron/qfs-watchtower) over the injected ServeMcpEngine, and compose its pure
+    // `POST /mcp` handler into the qfs-http listener via the SAME Fallback seam the watchtower
+    // webhook ingest uses — so qfs-mcp serves no HTTP itself and needs no tokio. The endpoint is
+    // UNAUTHENTICATED this milestone (auth is t50) and rides the listener's localhost-only default
+    // bind. The combined fallback tries the MCP path first, then the watchtower ingest, then 404.
+    let mcp_engine: Arc<dyn qfs_mcp::McpEngine> =
+        Arc::new(crate::mcp::ServeMcpEngine::new(Arc::clone(&engine)));
+    let mcp_binding = Arc::new(qfs_mcp::McpBinding::new(mcp_engine));
+    let combined_fallback: qfs_http::Fallback = {
+        let mcp = Arc::clone(&mcp_binding);
+        let wt = wt_fallback;
+        Arc::new(move |req: &qfs_http::HttpRequest| {
+            if req.path == qfs_mcp::MCP_PATH {
+                return Some(crate::mcp::serve_mcp_request(&mcp, req));
+            }
+            wt(req)
+        })
+    };
+
     let result = rt.block_on(async move {
         let scheduler = qfs_cron::Scheduler::new(cron_store, qfs_cron::SystemClock, cron_committer);
         // Spawn the daemon loop; it runs until the process exits (the serve future drives the
@@ -140,7 +160,7 @@ pub fn run_serve(config: &Path) -> i32 {
             addr,
             SERVE_MAX_ROWS,
             bindings,
-            Some(wt_fallback),
+            Some(combined_fallback),
         )
         .await;
         daemon.abort();

@@ -309,6 +309,17 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // `session_is_a_pure_domain_leaf` below), so the edge adds no runtime/driver coupling to the
         // terminal binary (it pulls only qfs-identity/qfs-secrets/qfs-crypto-core leaves).
         "qfs-session",
+        // t47 serve composition root: the binary ALSO wires the MCP serving binding (qfs-mcp, a leaf
+        // consuming qfs-server + qfs-exec, the MCP sibling of qfs-http/qfs-cron/qfs-watchtower). The
+        // binary implements + injects the McpEngine (describe registry / build_plan / the
+        // policy-gated + IrreversibleGuard-checked, runtime-backed commit / the redacted connection
+        // list) and composes the pure `POST /mcp` handler into the qfs-http listener via a fallback
+        // closure. qfs-mcp serves no HTTP itself and carries no tokio — the apply is the injected
+        // closure that dead-ends the COMMIT interpreter in this terminal binary — so it does NOT
+        // depend on qfs-runtime (asserted by `mcp_binding_is_a_leaf_serve_consumer` below). qfs-mcp
+        // also re-exports the qfs-http-core / qfs-server types the binary adapts onto, so the binary
+        // needs NO direct edge to either lower-spine crate (its thin-entrypoint pin stays intact).
+        "qfs-mcp",
     ];
     let workspace_prefixed: Vec<&String> =
         bin_deps.iter().filter(|d| d.starts_with("qfs")).collect();
@@ -706,15 +717,28 @@ fn exec_is_confined_above_the_spine_and_off_the_runtime() {
     // nothing depends on it except the terminal `qfs` binary (asserted by
     // `watchtower_binding_is_a_leaf_serve_consumer` below). Admitting it does not invert the
     // layering; a spine/lower crate reaching UP into qfs-exec still fails here.
-    let allowed_exec_consumers = ["qfs-cmd", "qfs", "qfs-http", "qfs-cron", "qfs-watchtower"];
+    // t47: `qfs-mcp` (the MCP serving binding) is a SIXTH admitted consumer. Like
+    // qfs-http/qfs-cron/qfs-watchtower it is a LEAF integration consumer of the executor — its
+    // `preview`/`commit` tools build a plan via `build_plan` + `plan_preview` — sitting ABOVE the
+    // spine alongside qfs-cmd, and nothing depends on it except the terminal `qfs` binary (asserted
+    // by `mcp_binding_is_a_leaf_serve_consumer` below). Admitting it does not invert the layering.
+    let allowed_exec_consumers = [
+        "qfs-cmd",
+        "qfs",
+        "qfs-http",
+        "qfs-cron",
+        "qfs-watchtower",
+        "qfs-mcp",
+    ];
     for consumer in &exec_consumers {
         assert!(
             allowed_exec_consumers.contains(&consumer.as_str()),
             "topology violation: {consumer} depends on qfs-exec, but only qfs-cmd, the terminal \
              `qfs` binary (the t28 shell composition root), qfs-http (the t32 leaf HTTP serving \
-             binding), qfs-cron (the t33 leaf JOB scheduler binding), and qfs-watchtower (the t34 \
-             leaf watchtower binding) may consume the integration layer. A spine/lower crate \
-             reaching UP into qfs-exec is a layer inversion (t29)."
+             binding), qfs-cron (the t33 leaf JOB scheduler binding), qfs-watchtower (the t34 \
+             leaf watchtower binding), and qfs-mcp (the t47 leaf MCP serving binding) may consume \
+             the integration layer. A spine/lower crate reaching UP into qfs-exec is a layer \
+             inversion (t29)."
         );
     }
 }
@@ -913,6 +937,73 @@ fn http_binding_is_a_leaf_serve_consumer() {
         !http_deps.iter().any(|d| d == "qfs-runtime"),
         "t32: qfs-http must NOT depend on qfs-runtime — its tokio is the HTTP I/O domain, not the \
          write/COMMIT interpreter. Deps were: {http_deps:?}"
+    );
+}
+
+#[test]
+fn mcp_binding_is_a_leaf_serve_consumer() {
+    // t47 (the MCP serving binding topology): `qfs-mcp` is the leaf binding crate that exposes
+    // qfs's four operating-loop tools (describe / preview / commit / connections) as a JSON-RPC /
+    // MCP surface. The placement decision (the MCP sibling of the t32 qfs-http / t33 qfs-cron / t34
+    // qfs-watchtower bindings) rests on three structural facts this guard pins so they cannot
+    // silently invert:
+    //
+    //   (a) qfs-mcp consumes qfs-server (the policy gate — `gate_plan` / `resolve_policy` / `Policy`
+    //       the `commit` tool routes through) AND qfs-exec (the `build_plan` / `plan_preview`
+    //       evaluator the `preview`/`commit` tools shape results from) — the one crate that
+    //       legitimately binds both for the MCP cause, the reason it is a NEW leaf rather than
+    //       living in qfs-server (which must stay off qfs-exec and runtime-free, CO-t30-1) or
+    //       qfs-cmd (off qfs-exec / the binding crates).
+    //   (b) qfs-mcp is a LEAF: nothing depends on it except the terminal `qfs` binary (the serve
+    //       composition root, which injects the live `McpEngine` and composes the pure `POST /mcp`
+    //       handler into the qfs-http listener via a fallback closure). That keeps any I/O coupling
+    //       dead-ended in the binary — the t28 runtime-leaf exemption precondition.
+    //   (c) qfs-mcp does NOT depend on qfs-runtime. The real commit is the INJECTED
+    //       `McpEngine::apply` closure the binary builds (the same runtime-backed `apply_plan` the
+    //       CLI uses); the protocol core never drives the COMMIT interpreter, so the
+    //       runtime-leaf-confinement guard is untouched (qfs-mcp never appears in its allowlist).
+    //       Corollary: qfs-mcp carries no tokio of its own — the binding is a PURE synchronous
+    //       handler composed into the listener (the watchtower-ingest pattern), so the async HTTP
+    //       I/O still lives only in qfs-http + the binary.
+    let graph = load_graph();
+
+    // (a) qfs-mcp depends on both qfs-server and qfs-exec.
+    let mcp_deps = graph
+        .direct_deps
+        .get("qfs-mcp")
+        .expect("qfs-mcp is a workspace package");
+    for required in ["qfs-server", "qfs-exec"] {
+        assert!(
+            mcp_deps.iter().any(|d| d == required),
+            "t47: qfs-mcp must depend on {required} (it binds the policy gate to the build_plan/\
+             preview evaluator for the MCP cause). Deps were: {mcp_deps:?}"
+        );
+    }
+
+    // (b) qfs-mcp is a leaf: only the terminal `qfs` binary may depend on it.
+    let mcp_consumers: Vec<&String> = graph
+        .direct_deps
+        .iter()
+        .filter(|(pkg, deps)| pkg.as_str() != "qfs-mcp" && deps.iter().any(|d| d == "qfs-mcp"))
+        .map(|(pkg, _)| pkg)
+        .collect();
+    for consumer in &mcp_consumers {
+        assert_eq!(
+            consumer.as_str(),
+            "qfs",
+            "t47 leaf violation: {consumer} depends on qfs-mcp, but only the terminal `qfs` \
+             binary (the serve composition root) may consume the MCP serving binding. If something \
+             else depends on it, the injected-apply / runtime-leaf exemption is no longer sound."
+        );
+    }
+
+    // (c) qfs-mcp must NOT depend on qfs-runtime (the real applier is the injected `McpEngine::apply`
+    // closure the composition root builds, not the COMMIT interpreter).
+    assert!(
+        !mcp_deps.iter().any(|d| d == "qfs-runtime"),
+        "t47: qfs-mcp must NOT depend on qfs-runtime — the real commit path is the INJECTED \
+         `McpEngine::apply` closure the composition root builds, not the COMMIT interpreter. Deps \
+         were: {mcp_deps:?}"
     );
 }
 
