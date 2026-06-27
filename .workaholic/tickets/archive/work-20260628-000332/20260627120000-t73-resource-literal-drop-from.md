@@ -3,9 +3,9 @@ created_at: 2026-06-27T12:00:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Domain]
-effort:
-commit_hash:
-category:
+effort: M
+commit_hash: 5d0e2e4
+category: Changed
 depends_on: [20260626103000-t70-operator-equals-binds-eqeq-compares.md]
 ---
 
