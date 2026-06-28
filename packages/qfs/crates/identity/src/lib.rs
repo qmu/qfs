@@ -34,6 +34,7 @@
 mod invite;
 mod invite_store;
 mod model;
+mod oidc;
 mod password;
 mod signup;
 mod store;
@@ -44,6 +45,7 @@ pub use invite::{
 };
 pub use invite_store::{InviteError, InviteStore, Redemption};
 pub use model::{Account, AccountId, SoleUser, User, UserId, UserStatus, PROVIDER_LOCAL};
+pub use oidc::{link_or_create_from_oidc, LinkError, LinkOutcome, OidcClaims};
 pub use password::{hash_password, verify_password, PasswordError, PasswordHash};
 pub use signup::{
     validate_email, validate_password, SignupError, MAX_PASSWORD_LEN, MIN_PASSWORD_LEN,

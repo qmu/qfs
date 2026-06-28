@@ -34,6 +34,14 @@ pub trait IdentityStore: Send + Sync {
     /// [`IdentityError::Backend`] on a store failure.
     fn find_user_by_email(&self, email: &str) -> Result<Option<User>, IdentityError>;
 
+    /// Look up a user by their stable internal id. `Ok(None)` when no such user exists (not an
+    /// error). The federated-login linker ([`crate::link_or_create_from_oidc`]) uses this to resolve
+    /// the [`User`] an already-linked `(provider, subject)` account points at.
+    ///
+    /// # Errors
+    /// [`IdentityError::Backend`] on a store failure.
+    fn find_user_by_id(&self, id: UserId) -> Result<Option<User>, IdentityError>;
+
     /// Link an account to `user_id`. `password_hash` is `Some` for a `local` provider and `None` for
     /// an OAuth/OIDC provider (which carries no password). The `(provider, subject)` pair is unique.
     ///

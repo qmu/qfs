@@ -120,6 +120,17 @@ impl IdentityStore for SqliteIdentityStore {
         .map_err(|e| IdentityError::Backend(format!("finding user by email: {e}")))
     }
 
+    fn find_user_by_id(&self, id: UserId) -> Result<Option<User>, IdentityError> {
+        let conn = self.lock()?;
+        conn.query_row(
+            "SELECT id, primary_email, created_at, status FROM users WHERE id = ?1",
+            rusqlite::params![id.0],
+            row_to_user,
+        )
+        .optional()
+        .map_err(|e| IdentityError::Backend(format!("finding user by id: {e}")))
+    }
+
     fn create_account(
         &self,
         user_id: UserId,

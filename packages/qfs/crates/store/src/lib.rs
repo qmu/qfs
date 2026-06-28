@@ -55,6 +55,9 @@ pub use oauth_key_store::{OauthKeyStore, StoredSigningKey};
 mod oauth_store;
 pub use oauth_store::{RedeemedCode, RedeemedRefresh, RegisteredClient, SqliteOauthFlowStore};
 
+mod oidc_provider_store;
+pub use oidc_provider_store::{NewOidcProvider, OidcProviderRecord, SqliteOidcProviderStore};
+
 mod migrate;
 pub use migrate::{applied_migrations, migrate, AppliedMigration, Migration, MigrationError};
 
@@ -281,6 +284,19 @@ pub const SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "system_invites",
         sql: include_str!("schema/system_invites.sql"),
     },
+    // t56 (roadmap M5): upstream OIDC federation providers — the "hub model" RP registration store.
+    // `oidc_providers` records each UPSTREAM IdP a host trusts for human login (issuer, RP client id,
+    // the upstream client secret ENVELOPE-ENCRYPTED at rest, and the cached discovery/JWKS) +
+    // `oidc_provider_meta` is the single-row wrapped-DEK envelope (mirroring `oauth_key_meta`, t48).
+    // Appended as a NEW version (#9) — migrations #1–#8 stay frozen (the checksum guard forbids
+    // editing a shipped migration). The rusqlite `SqliteOidcProviderStore` impl that fills these lives
+    // in `oidc_provider_store.rs`. AUTHENTICATION ONLY: a trusted issuer grants identity, not
+    // privilege (§4.1; the ACL is t57).
+    Migration {
+        version: 9,
+        name: "system_oidc_providers",
+        sql: include_str!("schema/system_oidc_providers.sql"),
+    },
 ];
 
 /// The Project DB's ordered migration set (forward-only; append, never edit a shipped entry).
@@ -362,7 +378,7 @@ mod tests {
         let applied = migrate(&mut db, SYSTEM_MIGRATIONS).unwrap();
         assert_eq!(
             applied,
-            vec![1, 2, 3, 4, 5, 6, 7, 8],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
             "first migrate applies every pending version"
         );
         // Second call on the SAME db is a verified no-op (re-verifies the checksum, re-applies none).
@@ -467,7 +483,10 @@ mod tests {
         // t55 migration #8: the invites + memberships tables.
         assert!(table_exists(sys.db(), "invites"));
         assert!(table_exists(sys.db(), "memberships"));
-        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 8);
+        // t56 migration #9: the upstream OIDC federation provider registry + its envelope meta.
+        assert!(table_exists(sys.db(), "oidc_providers"));
+        assert!(table_exists(sys.db(), "oidc_provider_meta"));
+        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 9);
     }
 
     #[test]
@@ -538,7 +557,7 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "data persisted across reopen");
-        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 8);
+        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 9);
     }
 
     #[test]
