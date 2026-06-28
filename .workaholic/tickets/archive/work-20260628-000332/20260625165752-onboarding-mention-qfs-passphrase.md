@@ -3,9 +3,9 @@ created_at: 2026-06-25T16:57:52+09:00
 author: a@qmu.jp
 type: bugfix
 layer: [UX, Infrastructure]
-effort:
-commit_hash:
-category:
+effort: S
+commit_hash: 06c364f
+category: Fixed
 depends_on: []
 ---
 
