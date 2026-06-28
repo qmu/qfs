@@ -11,7 +11,7 @@
 //! binary is that leaf, so it builds the wired shell and injects it into `qfs-cmd` via the
 //! [`qfs_cmd::ShellLauncher`]. The shell LOGIC itself lives in `qfs-exec`; this only wires it.
 
-use qfs::{commit, connection, describe, identity, invite, serve, shell, store, version};
+use qfs::{commit, connection, describe, identity, invite, job, serve, shell, store, version};
 
 fn main() {
     // t40: the binary owns the build metadata (semver + git sha + target triple baked in by
@@ -67,6 +67,11 @@ fn main() {
         // creates a real identity + membership (identity ≠ authorization, §4.1). Email delivery + the
         // HTTP accept-route session are documented seams (see crates/qfs/src/invite.rs).
         &invite::run_invite,
+        // t65 `qfs job run/cron`: the EXTERNAL-scheduler entrypoint. The internal scheduler daemon
+        // is retired (decision M revised) — a JOB is a saved named plan + cadence that OS cron /
+        // Cloudflare Cron Triggers invoke. The binary owns the boot→rehydrate→build→policy-gate→
+        // IrreversibleGuard→real-apply path (qfs-host/qfs-exec/qfs-runtime); qfs-cmd stays off them.
+        &job::run_job_request,
         // The REAL `qfs run --commit` apply path: drives the qfs-runtime interpreter over the live
         // driver registry (local-fs today). qfs-cmd/qfs-exec stay off qfs-runtime; this is the leaf.
         &commit::apply_plan,

@@ -67,14 +67,13 @@ qfs-pushdown = { path = "../pushdown" }
 # qfs-server + the qfs-exec read executor + tokio; putting its composition here keeps qfs-cmd
 # off qfs-exec/qfs-http and lets tokio dead-end in the terminal binary.
 qfs-http = { path = "../http" }
-# t33 serve composition root: the binary ALSO wires the cron JOB scheduler binding (qfs-cron, a
-# leaf consuming qfs-server + qfs-exec, the cron sibling of qfs-http). The binary builds the
-# CronBinding + the binary-local JobStore + the committer + the native daemon loop here, so
-# qfs-cron's feature-gated tokio dead-ends in the terminal binary and qfs-cmd stays off it. The
-# `native` feature (default-on) is required for the CronBinding + RecordingCommitter + daemon.
-qfs-cron = { path = "../cron" }
+# t65 (decision M revised): the internal cron JOB scheduler binding (qfs-cron) is RETIRED — qfs is
+# not a scheduler. A `/server/jobs` row is a SAVED named plan + cadence an EXTERNAL scheduler
+# invokes (OS cron via `qfs job run`; Cloudflare Cron Triggers via the managed Worker). The
+# `qfs job run/cron` entrypoint lives in src/job.rs over qfs-host (saved-plan extraction) + qfs-exec
+# (build_plan) + qfs-runtime (the real apply) — no daemon crate, no tokio interval loop.
 # t34 serve composition root: the binary ALSO wires the watchtower binding (qfs-watchtower, a leaf
-# consuming qfs-server + qfs-exec, the watchtower sibling of qfs-http/qfs-cron). The binary builds
+# consuming qfs-server + qfs-exec, the watchtower sibling of qfs-http). The binary builds
 # the WatchtowerBinding + the shared LocalBus + the injected Committer + the dispatch loop here, and
 # composes the webhook ingest into the qfs-http listener via a fallback closure (so qfs-watchtower
 # serves no HTTP itself and neither leaf depends on the other). qfs-watchtower's feature-gated tokio

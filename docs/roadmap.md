@@ -712,6 +712,16 @@ preview→commit engine under the same `POLICY`. Removing the internal scheduler
 System-DB lease, the leader-election, and the cron daemon from the plan entirely — that distributed,
 exactly-once complexity is now the platform's, not ours.
 
+> **Status (t65 — shipped) ✅.** The internal scheduler is **retired**: the `qfs-cron` crate, its
+> tokio interval daemon, the `JobStore`/lease, and the `qfs serve` scheduler thread are **deleted**.
+> A `CREATE JOB … EVERY … DO …` row is now a saved named plan + cadence only — the `/server/jobs`
+> definition surface is unchanged, but qfs no longer fires it. The invokable unit ships as
+> **`qfs job run <config> <name>`** (PREVIEW by default; `--commit` applies through the **same**
+> policy gate + `IrreversibleGuard` the CLI one-shot uses) and **`qfs job cron <config> <name>`**
+> emits the OS-cron crontab line. The managed tier reads the same cadence from the generated
+> `[triggers] crons` block. Idempotency is now the author's responsibility (external schedulers are
+> at-least-once; there is no internal run-ledger to dedup a re-fire).
+
 ### 4.4 How a mixed-source query resolves — the same on every face ✅ (mechanism) / 🧭 (cloud routing)
 
 A federated query (a `JOIN`/`UNION`/`EXCEPT`/`INTERSECT` that straddles two services) resolves in

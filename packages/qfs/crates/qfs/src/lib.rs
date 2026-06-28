@@ -13,7 +13,7 @@
 //!   are generated from the binary's live introspection surface, never authored twice.
 //!
 //! The modules that wire the runtime-coupled serve/shell/host facets (`serve`, `shell`,
-//! `host`, `cron`, `watchtower`, `serve_builtins`) stay `pub(crate)`-only in spirit but are
+//! `host`, `job`, `watchtower`, `serve_builtins`) stay `pub(crate)`-only in spirit but are
 //! exposed here as modules so `main.rs` can reference them through the crate root; nothing
 //! outside this crate links the binary as a library except `xtask`, which touches only the
 //! pure [`catalog`]/[`docs`]/[`version`] surface (no runtime, no creds, no I/O).
@@ -22,7 +22,6 @@ pub mod audit;
 pub mod catalog;
 pub mod commit;
 pub mod connection;
-pub mod cron;
 pub mod dashboard;
 pub mod describe;
 pub mod directory;
@@ -32,6 +31,7 @@ pub mod git;
 pub mod host;
 pub mod identity;
 pub mod invite;
+pub mod job;
 pub mod mcp;
 pub mod oauth;
 pub mod secret_store;

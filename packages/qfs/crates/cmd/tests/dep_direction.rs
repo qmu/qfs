@@ -222,13 +222,14 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // binary is the terminal sink (nothing depends on it), so reaching up into qfs-http is a
         // composition root consuming a leaf binding, not a layer inversion.
         "qfs-http",
-        // t33: the binary ALSO wires the JOB scheduler binding (qfs-cron, the cron sibling of
-        // qfs-http — a leaf consuming qfs-server + qfs-exec). It builds the CronBinding + the
-        // binary-local JobStore + the committer + the native daemon loop here, so qfs-cron's
-        // feature-gated tokio dead-ends in the terminal sink. Same composition-root rationale.
-        "qfs-cron",
+        // t65 (decision M revised): the internal JOB scheduler binding (qfs-cron) is RETIRED — qfs
+        // is not a scheduler, so the binary no longer wires a CronBinding/daemon and no longer
+        // depends on qfs-cron. A `/server/jobs` row is a SAVED named plan an EXTERNAL scheduler
+        // invokes via `qfs job run` (src/job.rs), which composes qfs-host (saved-plan extraction +
+        // the policy gate) + qfs-exec (build_plan) + qfs-runtime (the real apply) — all already
+        // allowlisted leaves. No new binary dep is introduced by externalizing scheduling.
         // t34: the binary ALSO wires the watchtower binding (qfs-watchtower, the watchtower sibling
-        // of qfs-http/qfs-cron — a leaf consuming qfs-server + qfs-exec). It builds the
+        // of qfs-http — a leaf consuming qfs-server + qfs-exec). It builds the
         // WatchtowerBinding + the shared LocalBus + the injected Committer + the dispatch loop here
         // and composes the webhook ingest into the qfs-http listener via a fallback closure, so
         // qfs-watchtower's feature-gated tokio dead-ends in the terminal sink. Same rationale.
@@ -732,105 +733,33 @@ fn exec_is_confined_above_the_spine_and_off_the_runtime() {
     // `qfs` binary (asserted by `http_binding_is_a_leaf_serve_consumer` below), so tokio still
     // dead-ends in the binary. Admitting it does not invert the layering; a spine/lower crate
     // reaching UP into qfs-exec still fails here.
-    // t33: `qfs-cron` (the JOB scheduler binding) is a FOURTH admitted consumer. Like qfs-http it
-    // is a LEAF integration consumer of the executor — its `RecordingCommitter`/real committer
-    // builds a JOB's DO plan via `build_plan` — that sits ABOVE the spine alongside qfs-cmd, and
-    // nothing depends on it except the terminal `qfs` binary (asserted by
-    // `cron_binding_is_a_leaf_serve_consumer` below). Admitting it does not invert the layering; a
-    // spine/lower crate reaching UP into qfs-exec still fails here.
+    // t65 (decision M revised): `qfs-cron` (the old JOB scheduler binding) is RETIRED — qfs is not
+    // a scheduler, the crate is deleted, and `qfs job run` builds a saved plan from the terminal
+    // binary (src/job.rs) over qfs-exec directly. So there is no separate cron exec-consumer leaf;
+    // the externalized JOB path uses the binary's own already-admitted qfs-exec edge.
     // t34: `qfs-watchtower` (the event bus / webhook / watcher / trigger-dispatch binding) is a
-    // FIFTH admitted consumer. Like qfs-http/qfs-cron it is a LEAF integration consumer of the
+    // FOURTH admitted consumer. Like qfs-http it is a LEAF integration consumer of the
     // executor — its injected Committer builds a fired trigger's plan via `build_plan` and its
     // watchers poll a source via `execute_read` — sitting ABOVE the spine alongside qfs-cmd, and
     // nothing depends on it except the terminal `qfs` binary (asserted by
     // `watchtower_binding_is_a_leaf_serve_consumer` below). Admitting it does not invert the
     // layering; a spine/lower crate reaching UP into qfs-exec still fails here.
-    // t47: `qfs-mcp` (the MCP serving binding) is a SIXTH admitted consumer. Like
-    // qfs-http/qfs-cron/qfs-watchtower it is a LEAF integration consumer of the executor — its
+    // t47: `qfs-mcp` (the MCP serving binding) is a FIFTH admitted consumer. Like
+    // qfs-http/qfs-watchtower it is a LEAF integration consumer of the executor — its
     // `preview`/`commit` tools build a plan via `build_plan` + `plan_preview` — sitting ABOVE the
     // spine alongside qfs-cmd, and nothing depends on it except the terminal `qfs` binary (asserted
     // by `mcp_binding_is_a_leaf_serve_consumer` below). Admitting it does not invert the layering.
-    let allowed_exec_consumers = [
-        "qfs-cmd",
-        "qfs",
-        "qfs-http",
-        "qfs-cron",
-        "qfs-watchtower",
-        "qfs-mcp",
-    ];
+    let allowed_exec_consumers = ["qfs-cmd", "qfs", "qfs-http", "qfs-watchtower", "qfs-mcp"];
     for consumer in &exec_consumers {
         assert!(
             allowed_exec_consumers.contains(&consumer.as_str()),
             "topology violation: {consumer} depends on qfs-exec, but only qfs-cmd, the terminal \
-             `qfs` binary (the t28 shell composition root), qfs-http (the t32 leaf HTTP serving \
-             binding), qfs-cron (the t33 leaf JOB scheduler binding), qfs-watchtower (the t34 \
-             leaf watchtower binding), and qfs-mcp (the t47 leaf MCP serving binding) may consume \
-             the integration layer. A spine/lower crate reaching UP into qfs-exec is a layer \
-             inversion (t29)."
+             `qfs` binary (the t28 shell composition root + the t65 `qfs job run` path), qfs-http \
+             (the t32 leaf HTTP serving binding), qfs-watchtower (the t34 leaf watchtower binding), \
+             and qfs-mcp (the t47 leaf MCP serving binding) may consume the integration layer. A \
+             spine/lower crate reaching UP into qfs-exec is a layer inversion (t29)."
         );
     }
-}
-
-#[test]
-fn cron_binding_is_a_leaf_serve_consumer() {
-    // t33 (the JOB scheduler binding topology): `qfs-cron` is the leaf binding crate that makes
-    // `/server/jobs` rows fire on cadence. The placement decision (the cron sibling of the t32
-    // qfs-http binding) rests on four structural facts this guard pins so they cannot invert:
-    //
-    //   (a) qfs-cron consumes qfs-server (the Binding/ServerState/JobDef registry) AND qfs-exec
-    //       (the build_plan evaluator) — the one crate that legitimately binds both for the JOB
-    //       cause, the reason it is a NEW leaf rather than living in qfs-server (which must stay
-    //       off qfs-exec and runtime-free, CO-t30-1) or qfs-cmd (off qfs-exec/the binding crates).
-    //       NOTE: qfs-server + qfs-exec are OPTIONAL deps gated behind qfs-cron's default-on
-    //       `native` feature so the PURE scheduler core builds for wasm32; with the default
-    //       features active (as the workspace builds), both edges are present.
-    //   (b) qfs-cron is a LEAF: nothing depends on it except the terminal `qfs` binary (the serve
-    //       composition root). That keeps its feature-gated tokio daemon dead-ended in the binary
-    //       — the precondition the t28 runtime-leaf exemption relies on.
-    //   (c) qfs-cron does NOT depend on qfs-runtime. It threads the REAL commit through an INJECTED
-    //       Committer the binary builds; the scheduler never drives the COMMIT interpreter, so the
-    //       runtime-leaf-confinement guard is untouched (qfs-cron never appears in its allowlist).
-    let graph = load_graph();
-
-    // (a) qfs-cron depends on both qfs-server and qfs-exec (with default `native` features on).
-    let cron_deps = graph
-        .direct_deps
-        .get("qfs-cron")
-        .expect("qfs-cron is a workspace package");
-    for required in ["qfs-server", "qfs-exec"] {
-        assert!(
-            cron_deps.iter().any(|d| d == required),
-            "t33: qfs-cron must depend on {required} (it binds the server registry to the build_plan \
-             evaluator for the JOB cause). Deps were: {cron_deps:?}"
-        );
-    }
-
-    // (b) qfs-cron is a leaf: only the terminal `qfs` binary may depend on it.
-    let cron_consumers: Vec<&String> = graph
-        .direct_deps
-        .iter()
-        .filter(|(pkg, deps)| pkg.as_str() != "qfs-cron" && deps.iter().any(|d| d == "qfs-cron"))
-        .map(|(pkg, _)| pkg)
-        .collect();
-    for consumer in &cron_consumers {
-        assert_eq!(
-            consumer.as_str(),
-            "qfs",
-            "t33 leaf violation: {consumer} depends on qfs-cron, but only the terminal `qfs` \
-             binary (the serve composition root) may consume the JOB scheduler binding. If \
-             something else depends on it, qfs-cron's tokio daemon no longer dead-ends in the \
-             binary and the runtime-leaf exemption is unsound."
-        );
-    }
-
-    // (c) qfs-cron must NOT depend on qfs-runtime (the real applier is the injected Committer the
-    // binary builds; the scheduler never drives the COMMIT interpreter — the two impure stages
-    // stay separate, as for qfs-exec / qfs-http).
-    assert!(
-        !cron_deps.iter().any(|d| d == "qfs-runtime"),
-        "t33: qfs-cron must NOT depend on qfs-runtime — the real commit path is the INJECTED \
-         Committer the composition root builds, not the COMMIT interpreter. Deps were: {cron_deps:?}"
-    );
 }
 
 #[test]
@@ -1158,12 +1087,12 @@ fn crypto_core_is_a_pure_leaf_single_sourcing_the_three_vendored_copies() {
     // t34: qfs-crypto-core is the SINGLE SOURCE OF TRUTH for the dependency-free, wasm-clean
     // crypto primitives — SHA-256 (FIPS 180-4), HMAC-SHA256 (RFC 4231), lowercase-hex, and a
     // constant-time byte compare. Before it, an identical SHA-256 (and in two cases HMAC /
-    // constant_time_eq) was independently vendored THREE times: qfs-driver-objstore::sha256
-    // (SigV4), qfs-driver-slack::hmac (signature verification), and qfs-cron::hash (run-id). No
-    // shared crypto leaf existed, and depending on any of those crates would have pulled a
-    // runtime/binding coupling into the consumer, so each re-vendored the routine. t34's webhook
-    // HMAC verification would have been a FOURTH copy; instead this crate single-sources all of
-    // them. This test mirrors `http_core_is_a_pure_leaf_...` but enforces a STRICTER property:
+    // constant_time_eq) was independently vendored: qfs-driver-objstore::sha256 (SigV4) and
+    // qfs-driver-slack::hmac (signature verification) — plus the retired qfs-cron::hash (run-id),
+    // gone since t65 with the scheduler. No shared crypto leaf existed, and depending on any of
+    // those crates would have pulled a runtime/binding coupling into the consumer, so each
+    // re-vendored the routine. t34's webhook HMAC verification would have been another copy; instead
+    // this crate single-sources all of them. It mirrors `http_core_is_a_pure_leaf_...` but stricter:
     //
     //   (a) qfs-crypto-core is a TRUE pure leaf — it depends on NOTHING (no workspace crate AND no
     //       vendor crate; std-only by construction). That maximal purity is what makes it safe for
@@ -1171,8 +1100,9 @@ fn crypto_core_is_a_pure_leaf_single_sourcing_the_three_vendored_copies() {
     //       Workers WEBHOOK ingress, to depend on it without inheriting any coupling. (Unlike
     //       qfs-http-core, which legitimately depends on qfs-secrets for the REDACTED marker, the
     //       crypto leaf needs no such marker — so its allowed dep set is EMPTY.)
-    //   (b) the three former copy-holders all depend on the shared leaf now — so none keeps a
-    //       second SHA-256/HMAC copy; the leaf is the only place they are defined.
+    //   (b) the surviving former copy-holders all depend on the shared leaf now — so none keeps a
+    //       second SHA-256/HMAC copy; the leaf is the only place they are defined. (The third
+    //       former copy, qfs-cron's run-id hash, was deleted with the scheduler in t65.)
     let graph = load_graph();
 
     // (a) TRUE pure leaf: qfs-crypto-core has ZERO dependencies of any kind.
@@ -1188,8 +1118,8 @@ fn crypto_core_is_a_pure_leaf_single_sourcing_the_three_vendored_copies() {
          ingress. Deps were: {crypto_core_deps:?}"
     );
 
-    // (b) the three former vendorings all depend on the shared leaf — single source, no copy left.
-    for crate_name in ["qfs-driver-objstore", "qfs-driver-slack", "qfs-cron"] {
+    // (b) the surviving former vendorings all depend on the shared leaf — single source, no copy.
+    for crate_name in ["qfs-driver-objstore", "qfs-driver-slack"] {
         let deps = graph
             .direct_deps
             .get(crate_name)
@@ -1519,7 +1449,6 @@ fn host_is_the_only_deployment_seam_and_a_leaf() {
         "qfs-exec",
         "qfs-engine",
         "qfs-http",
-        "qfs-cron",
         "qfs-watchtower",
         "qfs-host",
     ];

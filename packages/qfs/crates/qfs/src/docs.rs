@@ -236,7 +236,7 @@ pub fn render_server() -> String {
     );
     let _ = writeln!(
         s,
-        "| `create job` | `job <name> every <interval> do <stmt>` | the cron scheduler / Cron trigger |"
+        "| `create job` | `job <name> every <interval> do <stmt>` | a saved plan an EXTERNAL scheduler runs (`qfs job run` from OS cron; Cloudflare Cron Triggers) |"
     );
     let _ = writeln!(
         s,
@@ -280,7 +280,7 @@ pub fn render_server() -> String {
          | binding | EC2 daemon (`host-daemon`) | Cloudflare Workers (`host-workers`, parked) |\n\
          |---------|---------------------------|---------------------------------------------|\n\
          | `endpoint` | the qfs-http listener | Worker `fetch` |\n\
-         | `job` | the qfs-cron interval daemon | Cron Trigger |\n\
+         | `job` | OS `cron` runs `qfs job run` (no internal scheduler) | Cron Trigger |\n\
          | `webhook` / event | the watchtower bus + `/hooks/...` ingest | Queues |\n\
          | watcher / `LAST_RUN` | the on-disk durable store | Durable Object |\n\
          | `/d1` · `/r2` · `/kv` | (native only on Workers) | native bindings |\n\n\

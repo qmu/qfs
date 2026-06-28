@@ -41,6 +41,50 @@ pub type ShellLauncher<'a> = dyn Fn() -> i32 + 'a;
 /// + listener and returns the process exit code.
 pub type ServeLauncher<'a> = dyn Fn(&std::path::Path) -> i32 + 'a;
 
+/// The injected **job launcher** (t65, decision M revised): the binary supplies `qfs job <verb>`.
+/// **qfs is not a scheduler** — a `CREATE JOB … EVERY … DO …` row is a *saved named plan + its
+/// intended cadence* that an EXTERNAL scheduler (OS `cron` / Cloudflare Cron Triggers) invokes.
+/// `qfs job run <config> <name>` builds + commits that saved plan once through the SAME policy gate
+/// and IrreversibleGuard the CLI one-shot uses; `qfs job cron <config> <name>` emits the crontab
+/// line for the host crontab. The whole boot→rehydrate→build→gate→apply path lives in the binary
+/// composition root (it owns `qfs-host` / `qfs-exec` / `qfs-runtime`), NOT in qfs-cmd (which must
+/// stay off them) — the [`ServeLauncher`] pattern. qfs-cmd only parses the verb and forwards the
+/// [`JobRequest`], returning the launcher's process exit code.
+pub type JobLauncher<'a> = dyn Fn(&JobRequest) -> i32 + 'a;
+
+/// Which `qfs job` action the binary launcher performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobAction {
+    /// `qfs job run` — invoke a saved JOB's plan once (the external-scheduler entrypoint).
+    Run,
+    /// `qfs job cron` — emit the OS-cron crontab line that invokes the JOB on its cadence.
+    Cron,
+}
+
+/// An owned `qfs job <verb>` request the binary-injected [`JobLauncher`] executes. The config path
+/// and job name are safe metadata; no credential is ever carried here (the commit resolves creds
+/// the same way `qfs run --commit` does — from the env / connection store, never argv).
+#[derive(Debug, Clone)]
+pub struct JobRequest {
+    /// The action (`run` / `cron`).
+    pub action: JobAction,
+    /// The `.qfs` config that defines the JOB (the saved-plan source).
+    pub config: PathBuf,
+    /// The JOB name (the `/server/jobs` row key) to run / emit a crontab line for.
+    pub name: String,
+    /// Apply the plan (`run` only; PREVIEW by default, mirroring `qfs run`).
+    pub commit: bool,
+    /// Acknowledge an irreversible effect in this unattended run (`run` only) — required for a
+    /// REMOVE / declared-irreversible CALL, fail-closed without it (the same floor as `qfs run`).
+    pub commit_irreversible: bool,
+    /// Global `--json` flag (output mode).
+    pub json: bool,
+    /// `--format json|table` (`run` only).
+    pub format: Option<String>,
+    /// `--quiet` (`run` only): suppress the success receipt; never the error body.
+    pub quiet: bool,
+}
+
 /// The injected **describe-registry provider** (t39): the binary supplies the
 /// [`qfs_core::MountRegistry`] of **describe-only drivers** (each driver's pure introspective
 /// facet, constructed cred-free) that `qfs describe <path>` consults. It lives in the binary
@@ -271,7 +315,58 @@ enum Command {
         #[command(subcommand)]
         verb: InviteVerb,
     },
+    /// Run / schedule a saved JOB — the invokable unit an EXTERNAL scheduler drives (t65, decision
+    /// M revised). **qfs is not a scheduler**: a `CREATE JOB … EVERY … DO …` row is a saved named
+    /// plan + its intended cadence, not something qfs fires itself. OS `cron` (individual) and
+    /// Cloudflare Cron Triggers (managed) own the *when*; qfs supplies the safe *what*.
+    Job {
+        #[command(subcommand)]
+        verb: JobVerb,
+    },
     // The absence of a subcommand starts the interactive shell (handled in `run`).
+}
+
+/// `qfs job <verb>` — the saved-JOB invocation verbs (t65). Maps onto the injected [`JobLauncher`]
+/// over the booted config's `/server/jobs` rows. The internal scheduler daemon is RETIRED; these
+/// verbs are how an external scheduler (or a human) drives a defined job.
+#[derive(Subcommand, Debug)]
+enum JobVerb {
+    /// Run a saved JOB's plan once — the entrypoint an external scheduler's crontab line invokes.
+    ///
+    /// Loads the named `/server/jobs` plan from `config`, rehydrates it, and (with `--commit`)
+    /// applies it through the SAME policy gate + IrreversibleGuard the CLI one-shot uses. PREVIEW
+    /// by default (no apply). Non-interactive + exit-code-correct, suitable for a crontab line:
+    /// `0 * * * *  qfs job run /etc/qfs/app.qfs nightly --commit` (ensure `QFS_PASSPHRASE` + any
+    /// connection creds are in cron's environment).
+    Run {
+        /// The `.qfs` config that defines the JOB.
+        config: PathBuf,
+        /// The JOB name (the `/server/jobs` row key).
+        name: String,
+        /// Apply the plan (default is PREVIEW), mirroring `qfs run --commit`.
+        #[arg(long = "commit")]
+        commit: bool,
+        /// Acknowledge applying an irreversible effect (a `REMOVE` / `CALL`) in this unattended
+        /// run. Without it, a `--commit` of an irreversible plan fails closed (the same floor as
+        /// `qfs run --commit-irreversible`): an external trigger has no TTY to confirm on.
+        #[arg(long = "commit-irreversible")]
+        commit_irreversible: bool,
+        /// Output format: `json` or `table`. Default: `table` on a TTY, `json` when piped.
+        #[arg(long = "format", value_name = "FORMAT")]
+        format: Option<String>,
+        /// Suppress the success receipt; never suppresses the error body.
+        #[arg(long = "quiet", short = 'q')]
+        quiet: bool,
+    },
+    /// Emit the OS-cron crontab line that invokes this JOB on its `EVERY` cadence — the individual
+    /// counterpart of the `[triggers] crons` entry the managed (Cloudflare) wrangler generation
+    /// emits. Drop the printed line into a host crontab; qfs runs no scheduler of its own.
+    Cron {
+        /// The `.qfs` config that defines the JOB.
+        config: PathBuf,
+        /// The JOB name (the `/server/jobs` row key).
+        name: String,
+    },
 }
 
 /// `qfs connection <verb>` — the credential-store management verbs (t27). Each maps onto a
@@ -395,9 +490,9 @@ enum InviteVerb {
 /// process exit code; the binary forwards it to `std::process::exit`.
 #[must_use]
 // The binary's single composition-root entrypoint: each argument is a distinct injected seam
-// (shell / serve / describe / skill / connection / commit-applier / run-context) the leaf binary
-// supplies so qfs-cmd stays off the concrete driver/runtime/secrets crates. The count is the
-// surface of that injection, not incidental coupling.
+// (shell / serve / describe / skill / connection / identity / invite / job / commit-applier /
+// run-context) the leaf binary supplies so qfs-cmd stays off the concrete driver/runtime/secrets
+// crates. The count is the surface of that injection, not incidental coupling.
 #[allow(clippy::too_many_arguments)]
 pub fn run<I, T>(
     args: I,
@@ -408,6 +503,7 @@ pub fn run<I, T>(
     connection: &ConnectionLauncher,
     identity: &IdentityLauncher,
     invite: &InviteLauncher,
+    job: &JobLauncher,
     apply: &qfs_exec::WorldApply,
     run_ctx: &RunContextProvider,
 ) -> i32
@@ -524,6 +620,14 @@ where
         Some(Command::Invite { verb }) => {
             tracing::debug!(target: "qfs::cmd", "dispatch invite via launcher");
             return invite(&invite_action(&verb));
+        }
+        // `job` is dispatched through the injected launcher (the binary owns the boot→rehydrate→
+        // build→policy-gate→IrreversibleGuard→apply path over qfs-host/qfs-exec/qfs-runtime;
+        // qfs-cmd stays off them). The internal scheduler daemon is RETIRED — this is how an
+        // external scheduler drives a defined job. Returns the exit code directly.
+        Some(Command::Job { verb }) => {
+            tracing::debug!(target: "qfs::cmd", "dispatch job via launcher");
+            return job(&job_request(&verb, cli.json));
         }
     };
 
@@ -785,6 +889,40 @@ fn invite_action(verb: &InviteVerb) -> InviteAction {
     }
 }
 
+/// Map a parsed `qfs job <verb>` into the owned [`JobRequest`] the binary launcher executes (t65).
+/// Pure metadata transform — no boot, no I/O (the launcher owns those).
+fn job_request(verb: &JobVerb, json: bool) -> JobRequest {
+    match verb {
+        JobVerb::Run {
+            config,
+            name,
+            commit,
+            commit_irreversible,
+            format,
+            quiet,
+        } => JobRequest {
+            action: JobAction::Run,
+            config: config.clone(),
+            name: name.clone(),
+            commit: *commit,
+            commit_irreversible: *commit_irreversible,
+            json,
+            format: format.clone(),
+            quiet: *quiet,
+        },
+        JobVerb::Cron { config, name } => JobRequest {
+            action: JobAction::Cron,
+            config: config.clone(),
+            name: name.clone(),
+            commit: false,
+            commit_irreversible: false,
+            json,
+            format: None,
+            quiet: false,
+        },
+    }
+}
+
 /// Render a [`CfsError`] to stderr: a human line, or a `{"error": {...}}` JSON
 /// envelope (AI-facing, RFD §5). This is the only place output mode is rendered.
 fn report_error(err: &CfsError, output: OutputMode) {
@@ -925,6 +1063,12 @@ mod tests {
         11
     }
 
+    /// A stub job launcher: echoes a fixed code (the real boot→build→gate→apply path lives in the
+    /// binary crate; here we only assert the clap dispatch + request plumbing).
+    fn stub_job(_req: &JobRequest) -> i32 {
+        12
+    }
+
     /// A no-op world-apply: a `--commit` in a unit test "succeeds" without touching the World
     /// (the real interpreter-backed applier lives in the binary crate).
     fn noop_apply(_plan: &qfs_core::Plan) -> Result<(), qfs_exec::ExecError> {
@@ -957,9 +1101,75 @@ mod tests {
             &stub_connection,
             &stub_identity,
             &stub_invite,
+            &stub_job,
             &noop_apply,
             &stub_run_ctx,
         )
+    }
+
+    #[test]
+    fn job_verbs_dispatch_through_the_injected_launcher() {
+        // t65: `qfs job run` / `qfs job cron` route to the injected JobLauncher (the binary owns
+        // the boot→build→gate→apply path). qfs-cmd only parses the verb + forwards the request.
+        let seen: std::cell::RefCell<Option<JobRequest>> = std::cell::RefCell::new(None);
+        let launcher = |req: &JobRequest| {
+            *seen.borrow_mut() = Some(req.clone());
+            7
+        };
+        let code = run(
+            [
+                "qfs",
+                "job",
+                "run",
+                "/etc/qfs/app.qfs",
+                "nightly",
+                "--commit",
+            ],
+            &noop_shell,
+            &|_cfg| 0,
+            &empty_describe,
+            &stub_skill,
+            &stub_connection,
+            &stub_identity,
+            &stub_invite,
+            &launcher,
+            &noop_apply,
+            &stub_run_ctx,
+        );
+        assert_eq!(
+            code, 7,
+            "job dispatches to the launcher and returns its code"
+        );
+        let req = seen.borrow().clone().expect("launcher saw a request");
+        assert_eq!(req.action, JobAction::Run);
+        assert_eq!(req.name, "nightly");
+        assert!(req.commit, "--commit plumbs through");
+        assert!(!req.commit_irreversible);
+        assert!(req.config.ends_with("app.qfs"));
+
+        // `qfs job cron` plumbs the Cron action (no commit flags).
+        let seen2: std::cell::RefCell<Option<JobRequest>> = std::cell::RefCell::new(None);
+        let launcher2 = |req: &JobRequest| {
+            *seen2.borrow_mut() = Some(req.clone());
+            0
+        };
+        let _ = run(
+            ["qfs", "job", "cron", "/etc/qfs/app.qfs", "nightly"],
+            &noop_shell,
+            &|_cfg| 0,
+            &empty_describe,
+            &stub_skill,
+            &stub_connection,
+            &stub_identity,
+            &stub_invite,
+            &launcher2,
+            &noop_apply,
+            &stub_run_ctx,
+        );
+        assert_eq!(
+            seen2.borrow().as_ref().expect("cron request").action,
+            JobAction::Cron
+        );
     }
 
     #[test]
@@ -1000,6 +1210,7 @@ mod tests {
             &stub_connection,
             &stub_identity,
             &stub_invite,
+            &stub_job,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -1051,6 +1262,7 @@ mod tests {
             &stub_connection,
             &stub_identity,
             &stub_invite,
+            &stub_job,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -1212,6 +1424,7 @@ mod tests {
                 &stub_connection,
                 &stub_identity,
                 &stub_invite,
+                &stub_job,
                 &noop_apply,
                 &stub_run_ctx
             ),
@@ -1228,6 +1441,7 @@ mod tests {
                 &stub_connection,
                 &stub_identity,
                 &stub_invite,
+                &stub_job,
                 &noop_apply,
                 &stub_run_ctx
             ),

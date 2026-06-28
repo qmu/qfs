@@ -1227,7 +1227,6 @@ dependencies = [
  "async-trait",
  "qfs-cmd",
  "qfs-core",
- "qfs-cron",
  "qfs-driver-directory",
  "qfs-driver-ga",
  "qfs-driver-gdrive",
@@ -1306,22 +1305,6 @@ dependencies = [
  "qfs-types",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "qfs-cron"
-version = "0.0.0"
-dependencies = [
- "qfs-core",
- "qfs-crypto-core",
- "qfs-exec",
- "qfs-parser",
- "qfs-server",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1594,6 +1577,7 @@ dependencies = [
  "qfs-server",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
 ]
 

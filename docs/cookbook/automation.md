@@ -34,15 +34,48 @@ create trigger archive
   do upsert into /s3/archive/mail values (NEW.id)
 ```
 
-## Job — run on a schedule
+## Job — a saved plan an external scheduler runs
 
-**Nightly cleanup of old scratch files** (`EVERY` takes a quoted interval):
+**qfs is not a scheduler.** A `JOB` is a *saved named plan plus its intended cadence* — qfs does not
+fire it itself. The `EVERY` interval is metadata an **external** scheduler reads; the *when* and the
+exactly-once guarantee belong to the platform, not to qfs.
+
+**Define the saved plan** (`EVERY` takes a quoted interval; attach a `POLICY` for least privilege):
 
 ```qfs
+create policy cleanup ALLOW remove on 'local/*'
 create job nightly
   every '1h'
   do remove /tmp/scratch where age > 7
+  policy cleanup
 ```
+
+**Run it once** — the unit an external scheduler invokes. PREVIEW by default; `--commit` applies
+through the same policy gate + irreversible gate as `qfs run`:
+
+```sh
+qfs job run app.qfs nightly --commit
+# an irreversible plan (REMOVE / CALL) additionally needs --commit-irreversible (fail-closed)
+qfs job run app.qfs nightly --commit --commit-irreversible
+```
+
+**Individual / local — OS `cron`.** `qfs job cron` emits the crontab line for the saved cadence;
+drop it into a host crontab (ensure cron's environment carries `QFS_PASSPHRASE` and any connection
+credentials):
+
+```sh
+qfs job cron app.qfs nightly
+# 0 * * * *  qfs job run app.qfs nightly --commit
+```
+
+**Managed tier — Cloudflare Cron Triggers.** The same cadence becomes the `[triggers] crons` entry
+in the generated `wrangler.toml`; the platform owns distribution and exactly-once.
+
+::: warning Idempotency is yours now
+External schedulers are at-least-once (a Cron Trigger can double-fire on retry), and qfs keeps no
+internal run-ledger to dedup a re-fire. Keep effects idempotent — `UPSERT` / `@version`
+preconditions — so a re-run is a no-op.
+:::
 
 ## Endpoint — expose a query as an HTTP API
 

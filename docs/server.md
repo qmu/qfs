@@ -11,7 +11,7 @@
 |---------|-------|-----------------------------|
 | `create endpoint` | `endpoint <name> do <stmt>` | an HTTP `fetch` to the endpoint route |
 | `create trigger` | `trigger <name> on <event> do <stmt>` | an event/watcher firing |
-| `create job` | `job <name> every <interval> do <stmt>` | the cron scheduler / Cron trigger |
+| `create job` | `job <name> every <interval> do <stmt>` | a saved plan an EXTERNAL scheduler runs (`qfs job run` from OS cron; Cloudflare Cron Triggers) |
 | `create view` | `[materialized] view <name> as <pipeline>` | a query against the view |
 | `create webhook` | `webhook <name> do <stmt>` | a signed inbound `/hooks/...` POST |
 | `create policy` | `policy <name> <predicate>` | (gate) blocks plans that violate it |
@@ -34,7 +34,7 @@ The same bindings deploy onto two production hosts behind the `RuntimeHost` seam
 | binding | EC2 daemon (`host-daemon`) | Cloudflare Workers (`host-workers`, parked) |
 |---------|---------------------------|---------------------------------------------|
 | `endpoint` | the qfs-http listener | Worker `fetch` |
-| `job` | the qfs-cron interval daemon | Cron Trigger |
+| `job` | OS `cron` runs `qfs job run` (no internal scheduler) | Cron Trigger |
 | `webhook` / event | the watchtower bus + `/hooks/...` ingest | Queues |
 | watcher / `LAST_RUN` | the on-disk durable store | Durable Object |
 | `/d1` · `/r2` · `/kv` | (native only on Workers) | native bindings |

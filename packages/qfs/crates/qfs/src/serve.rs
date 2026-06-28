@@ -81,19 +81,13 @@ pub fn run_serve(config: &Path) -> i32 {
         }
     };
 
-    // t33 cron composition: build the cron binding (reconciled by the runtime from /server/jobs)
-    // and spawn the native scheduler daemon over a binary-local JobStore + committer. The daemon
-    // reads the binding's live JOB set; its tokio loop dead-ends in this terminal binary.
-    let (cron_binding, jobs_handle, cron_policies) = qfs_cron::build_cron_binding();
-    let cron_store = crate::cron::LedgerJobStore::new(jobs_handle);
-    // t35: the cron committer enforces the JOB's bound POLICY against the built plan before any
-    // apply (default-deny / atomic abort) and emits one FiredPlanRecord per fire to this sink.
-    let cron_audit = Arc::new(qfs_cron::AuditSink::new());
-    let cron_committer = crate::cron::PreviewCommitter::with_policy(
-        clone_engine(&engine),
-        cron_policies,
-        Arc::clone(&cron_audit),
-    );
+    // t65 (decision M revised): the internal JOB scheduler daemon is RETIRED. `qfs serve` no longer
+    // builds a CronBinding, a binary-local JobStore, or spawns a tokio interval loop — qfs is not a
+    // scheduler. A `/server/jobs` row is a SAVED named plan + its cadence: an external scheduler
+    // drives it (OS `cron` invoking `qfs job run`; Cloudflare Cron Triggers firing the managed
+    // Worker). The JOB DEFINITION surface is unchanged — `CREATE JOB … EVERY … DO …` still lands a
+    // `/server/jobs` row (the wrangler `[triggers] crons` generation and `qfs job cron` read it),
+    // qfs just no longer ticks it itself. See crates/qfs/src/job.rs and docs/cookbook/automation.md.
 
     // t34 watchtower composition: build the watchtower binding + shared bus + the webhook ingest
     // fallback the HTTP listener routes `/hooks/...` to. The binding is reconciled by the runtime
@@ -179,17 +173,6 @@ pub fn run_serve(config: &Path) -> i32 {
     };
 
     let result = rt.block_on(async move {
-        let scheduler = qfs_cron::Scheduler::new(cron_store, qfs_cron::SystemClock, cron_committer);
-        // Spawn the daemon loop; it runs until the process exits (the serve future drives the
-        // supervised ctrl_c wait + audit drain). A panic in the daemon never aborts serve.
-        let daemon = tokio::spawn(async move {
-            qfs_cron::run_daemon(
-                scheduler,
-                qfs_cron::DaemonConfig::default(),
-                std::future::pending::<()>(),
-            )
-            .await;
-        });
         // Spawn the watchtower dispatch loop (drains the bus, fires matching triggers, acks on
         // success). It runs until the bus is dropped (shutdown).
         let dispatch = crate::watchtower::spawn_dispatch_loop(
@@ -200,11 +183,11 @@ pub fn run_serve(config: &Path) -> i32 {
             clone_engine(&engine),
             wt_policies,
         );
-        // `cron_binding` is ALREADY a `Box<dyn Binding>` (from build_cron_binding); the watchtower
-        // binding is boxed here. Both are `qfs_server::Binding` (qfs-watchtower re-exports the same
-        // trait), so they share the one binding vector the runtime reconciles.
-        let bindings: Vec<Box<dyn qfs_watchtower::Binding>> =
-            vec![Box::new(wt_binding), cron_binding];
+        // t65: the cron binding is gone (the scheduler daemon is retired). The watchtower binding
+        // is boxed here as the one `qfs_watchtower::Binding` the runtime reconciles. `/server/jobs`
+        // rows still reconcile into the registry (the JOB DEFINITION surface is intact); they are
+        // simply no longer fired in-process — an external scheduler invokes `qfs job run`.
+        let bindings: Vec<Box<dyn qfs_watchtower::Binding>> = vec![Box::new(wt_binding)];
         let served = qfs_http::serve_config_full(
             config,
             engine,
@@ -215,17 +198,9 @@ pub fn run_serve(config: &Path) -> i32 {
             Some(combined_fallback),
         )
         .await;
-        daemon.abort();
         dispatch.abort();
         served
     });
-
-    // t35: drain the cron fired-plan audit ledger on shutdown (secret-free summaries — driver +
-    // path + verb/rule only). The watchtower's own fire-audit sink drains via its dispatch loop.
-    let drained = cron_audit.drain();
-    if drained > 0 {
-        tracing::info!(target: "qfs::serve", fired = drained, "drained cron fired-plan audit ledger");
-    }
 
     match result {
         Ok(()) => 0,
@@ -237,9 +212,9 @@ pub fn run_serve(config: &Path) -> i32 {
     }
 }
 
-/// Clone the serve engine's registries into a fresh `Engine` for the cron committer (so a DO body
-/// resolves against the same mounts/codecs the deployment registered). `Engine` is not `Clone`;
-/// we rebuild it from the shared registries.
+/// Clone the serve engine's registries into a fresh `Engine` for the watchtower committer (so a
+/// fired-trigger plan resolves against the same mounts/codecs the deployment registered). `Engine`
+/// is not `Clone`; we rebuild it from the shared registries.
 fn clone_engine(engine: &std::sync::Arc<Engine>) -> Engine {
     let mut fresh = Engine::new();
     fresh.mounts = engine.mounts.clone();
