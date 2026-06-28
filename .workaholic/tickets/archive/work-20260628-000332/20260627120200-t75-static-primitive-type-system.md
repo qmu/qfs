@@ -3,9 +3,9 @@ created_at: 2026-06-27T12:02:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Domain]
-effort:
-commit_hash:
-category:
+effort: L
+commit_hash: c832ed2
+category: Added
 depends_on: [20260626101900-t61-lambdas-higher-order-fns.md, 20260627120000-t73-resource-literal-drop-from.md]
 ---
 
