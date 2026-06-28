@@ -43,7 +43,8 @@ mod grammar;
 pub use ast::{
     Assignment, CallRef, Codec, DdlKind, EffectBody, EffectStmt, EffectVerb, Expr, FnRef, Ident,
     JoinOp, Literal, NamedArg, Op, OrderKey, Param, PathExpr, PathRef, PathSegment, PipeOp,
-    Pipeline, PlanWrap, PolicyRuleAst, Projection, ServerDdl, Source, Statement, TypeAnn, Values,
+    Pipeline, PlanWrap, PolicyRuleAst, PolicySubjectAst, Projection, ServerDdl, Source, Statement,
+    TypeAnn, Values,
 };
 pub use error::{ParseError, ParseErrorCode};
 

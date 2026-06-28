@@ -526,6 +526,43 @@ fn ddl_policy_allow_deny_rules() {
     assert_eq!(d.policy_rules[0].driver.as_deref(), Some("s3/*"));
 }
 
+#[test]
+fn ddl_policy_t57_actor_scope_and_condition_clauses() {
+    // t57: `FOR <kind> <name>` (actor), `AT <path>` (realm-scoped path), and `WHERE <expr>`
+    // (conditional grant via the ORDINARY `member_of(...)` call) all parse onto a policy rule
+    // WITHOUT adding a keyword — `FOR`/`AT`/`user`/`role`/`group` are contextual idents and
+    // `WHERE` is already frozen; `member_of(...)` is an `Expr::Fn`.
+    let p = parse_ok(
+        "CREATE POLICY eng ALLOW INSERT ON mail FOR role admin AT /members/alice/** \
+         WHERE member_of('/directories/google/groups/eng')",
+    );
+    let Statement::Ddl(d) = p else { panic!() };
+    assert_eq!(d.policy_rules.len(), 1);
+    let r = &d.policy_rules[0];
+    assert!(r.allow);
+    assert_eq!(r.verbs, vec!["INSERT"]);
+    assert_eq!(r.driver.as_deref(), Some("mail"));
+    let subject = r.subject.as_ref().expect("a FOR clause");
+    assert_eq!(subject.kind, "role");
+    assert_eq!(subject.name, "admin");
+    assert_eq!(r.scope.as_deref(), Some("/members/alice/**"));
+    // The WHERE body is an ordinary function call (the "functions are values" seam).
+    match r.condition.as_ref().expect("a WHERE clause") {
+        Expr::Fn(call) => {
+            assert_eq!(call.name, "member_of");
+            assert_eq!(call.args.len(), 1);
+        }
+        other => panic!("expected a member_of(...) call, got {other:?}"),
+    }
+
+    // The clauses are optional: a bare ALLOW rule has none of them.
+    let p = parse_ok("CREATE POLICY plain ALLOW SELECT");
+    let Statement::Ddl(d) = p else { panic!() };
+    assert!(d.policy_rules[0].subject.is_none());
+    assert!(d.policy_rules[0].scope.is_none());
+    assert!(d.policy_rules[0].condition.is_none());
+}
+
 // ---- plan wrappers --------------------------------------------------------
 
 #[test]

@@ -33,7 +33,8 @@ use winnow::{ModalResult, Parser};
 use crate::ast::{
     Assignment, CallRef, Codec, DdlKind, EffectBody, EffectStmt, EffectVerb, Expr, FnRef, Ident,
     JoinOp, Literal, NamedArg, Op, OrderKey, Param, PathExpr, PathRef, PathSegment, PipeOp,
-    Pipeline, PlanWrap, PolicyRuleAst, Projection, ServerDdl, Source, Statement, TypeAnn, Values,
+    Pipeline, PlanWrap, PolicyRuleAst, PolicySubjectAst, Projection, ServerDdl, Source, Statement,
+    TypeAnn, Values,
 };
 use crate::error::{ParseError, ParseErrorCode};
 
@@ -1228,12 +1229,75 @@ fn policy_rule_clause(input: &mut Stream<'_>) -> ModalResult<PolicyRuleAst> {
     let (verbs, all_token) = policy_verb_list(input)?;
     // The optional per-rule `ON <driver-glob>` scope (`ON` IS a frozen keyword).
     let driver = opt(preceded(kw(Keyword::On), raw_token_text)).parse_next(input)?;
+    // t57: the optional richer axes, collected in any order (sugar shape, like the DDL clauses).
+    // `FOR`/`AT` are contextual UPPERCASE idents (no new keyword, the t31 `AT` lesson); `WHERE` is
+    // a frozen keyword whose body is an ORDINARY expression (`member_of(...)` via `Expr::Fn`).
+    let mut subject = None;
+    let mut scope = None;
+    let mut condition = None;
+    loop {
+        if subject.is_none() {
+            if let Some(v) = opt(policy_for_clause).parse_next(input)? {
+                subject = Some(v);
+                continue;
+            }
+        }
+        if scope.is_none() {
+            if let Some(v) = opt(policy_at_clause).parse_next(input)? {
+                scope = Some(v);
+                continue;
+            }
+        }
+        if condition.is_none() {
+            if let Some(v) = opt(policy_where_clause).parse_next(input)? {
+                condition = Some(v);
+                continue;
+            }
+        }
+        break;
+    }
     Ok(PolicyRuleAst {
         allow,
         verbs,
         all_token,
         driver,
+        subject,
+        scope,
+        condition,
     })
+}
+
+/// `FOR (user|role|group) <name>` — the optional t57 actor clause. `FOR` and the kind words are
+/// contextual UPPERCASE idents (matched case-insensitively via [`word`]), so this adds NO frozen
+/// keyword (the t31 `AT` lesson). The name is a bare identifier.
+fn policy_for_clause(input: &mut Stream<'_>) -> ModalResult<PolicySubjectAst> {
+    let _ = word("FOR").parse_next(input)?;
+    let kind = alt((
+        word("USER").map(|_| "user"),
+        word("ROLE").map(|_| "role"),
+        word("GROUP").map(|_| "group"),
+    ))
+    .parse_next(input)?;
+    let name = ident(input)?;
+    Ok(PolicySubjectAst {
+        kind: kind.to_string(),
+        name: name.node,
+    })
+}
+
+/// `AT <path-glob>` — the optional t57 realm-scoped path clause. `AT` is a contextual ident (no
+/// new keyword); the glob is captured as raw path text (`/members/alice/**`).
+fn policy_at_clause(input: &mut Stream<'_>) -> ModalResult<String> {
+    let _ = word("AT").parse_next(input)?;
+    raw_token_text(input)
+}
+
+/// `WHERE <expr>` — the optional t57 conditional grant. `WHERE` IS a frozen keyword; the body is
+/// an ordinary expression (a `member_of('/directories/...')` call — the `Expr::Fn` "functions are
+/// values" seam), so NO keyword is added for the predicate itself.
+fn policy_where_clause(input: &mut Stream<'_>) -> ModalResult<Expr> {
+    let _ = kw(Keyword::Where).parse_next(input)?;
+    expr(input)
 }
 
 /// A POLICY rule's verb list: the bare `ALL` token, or a comma-separated list of verbs. The

@@ -359,6 +359,34 @@ pub struct PolicyRuleAst {
     pub all_token: bool,
     /// The optional `ON <driver-glob>` scope (e.g. `mail`, `s3/*`); `None` = every driver.
     pub driver: Option<String>,
+    /// The optional `FOR <subject>` actor clause (t57): the user/role/group this rule is for.
+    /// `None` = the unscoped `FOR`-less rule (applies to every actor). A shape-only AST node;
+    /// the `Subject` semantics live in `qfs-server::policy`. Adds NO keyword —
+    /// `FOR`/`user`/`role`/`group` are contextual UPPERCASE idents (the t31 `AT` lesson).
+    #[serde(default)]
+    pub subject: Option<PolicySubjectAst>,
+    /// The optional `AT <path-glob>` realm-scoped path clause (t57): a realm-qualified glob like
+    /// `/members/alice/**`. Captured as raw text; the realm/segment semantics live in
+    /// `qfs-server::policy`. `None` = every path. `AT` is a contextual ident (no new keyword).
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// The optional `WHERE <expr>` conditional grant (t57). `WHERE` IS a frozen keyword, so this
+    /// adds none. The expression is an ORDINARY call (`member_of('/directories/...')`, the
+    /// "functions are values" [`Expr::Fn`] seam) — NOT new grammar vocabulary. `None` = no
+    /// condition (the grant always applies).
+    #[serde(default)]
+    pub condition: Option<Expr>,
+}
+
+/// One `FOR <kind> <name>` actor clause inside a `CREATE POLICY` rule (t57). A shape-only AST
+/// node — the `Subject` semantics live in `qfs-server::policy`. `kind` is the
+/// contextual word `user`/`role`/`group`; `name` is the bare principal/role/group identifier.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PolicySubjectAst {
+    /// The subject kind word (`user`/`role`/`group`), as written (case-insensitive downstream).
+    pub kind: String,
+    /// The subject name (a bare identifier: a user id, role label, or group name).
+    pub name: String,
 }
 
 /// The kind of a server-DDL statement (RFD §8). Frozen, driver-agnostic.
