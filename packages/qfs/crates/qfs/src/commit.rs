@@ -238,6 +238,20 @@ fn live_registry() -> DriverRegistry {
         Arc::new(qfs_driver_local::local_apply_driver(&local)),
     );
 
+    // Fs (t68): the first-class `/fs` driver over operator-configured NAMED roots (the allowlist).
+    // Registered only when at least one `QFS_FS_<NAME>` is configured; with none, the allowlist is
+    // empty (deny-all) and `/fs` is left UNREGISTERED so a `/fs` commit fails closed (no driver)
+    // rather than binding a driver that resolves nothing. Real `UPSERT`/`REMOVE`/`CP`/`MV` legs
+    // apply through its `FsApplier`, which re-validates every path against a configured root at
+    // apply time (defence in depth). The `git`-process-like filesystem writes dead-end here.
+    if crate::fs::has_roots() {
+        let fs_driver = crate::fs::fs_driver();
+        reg = reg.with(
+            DriverId::new("fs"),
+            Arc::new(qfs_driver_fs::fs_apply_driver(&fs_driver)),
+        );
+    }
+
     // GitHub: the real REST client over the production reqwest transport + the resolved credential.
     // t54 / M4 — github is a CLOUD driver: it only binds when a signed-in operator has recorded
     // consent for the selected connection (`cloud_bind_allowed`). Otherwise it is left UNREGISTERED

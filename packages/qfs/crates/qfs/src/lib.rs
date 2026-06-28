@@ -27,6 +27,7 @@ pub mod describe;
 pub mod directory;
 pub mod docs;
 pub mod e2e_store;
+pub mod fs;
 pub mod git;
 pub mod host;
 pub mod identity;

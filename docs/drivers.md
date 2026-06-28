@@ -38,6 +38,31 @@ Prelude aliases: _none_
 
 Pushdown: where=true project=false limit=true order=false join=false aggregate=false distinct=false group_by=false
 
+### `/fs` — BlobNamespace
+
+- example node: `/fs/projects/report.md`
+- native verbs: ls cp mv rm (+ universal upsert/remove)
+
+Universal verbs (✓ supported / ✗ rejected at parse time):
+
+| verb | supported |
+|------|-----------|
+| `select` | ✗ |
+| `insert` | ✗ |
+| `upsert` | ✓ |
+| `update` | ✗ |
+| `remove` | ✓ |
+| `ls` | ✓ |
+| `cp` | ✓ |
+| `mv` | ✓ |
+| `rm` | ✓ |
+
+Procedures: _none_
+
+Prelude aliases: _none_
+
+Pushdown: where=false project=true limit=false order=false join=false aggregate=false distinct=false group_by=false
+
 ### `/ga` — RelationalTable
 
 - example node: `/ga/123456789`

@@ -31,6 +31,13 @@ qfs-cmd = { path = "../cmd" }
 qfs-core = { path = "../core" }
 qfs-exec = { path = "../exec" }
 qfs-driver-local = { path = "../driver-local" }
+# t68 first-class filesystem driver: the binary wires the `/fs` driver over operator-configured
+# NAMED roots (the allowlist). qfs-driver-fs is a qfs-runtime consumer that must stay a LEAF — only
+# the terminal binary may depend on it — so the operator config (QFS_FS_<NAME> → base dir) lives in
+# the binary (src/fs.rs) and its applier bridges into the interpreter HERE, exactly like the local /
+# sql / git composition. DESCRIBE is pure + cred-free (registered in the describe registry); the
+# live roots are injected only on the apply registry. std::fs writes dead-end in this terminal leaf.
+qfs-driver-fs = { path = "../driver-fs" }
 # t39 CO-t39-1 `qfs skill` composition root: the binary links the embedded agent skill so SKILL.md
 # (and the example corpus) genuinely SHIP in the artifact and an AI agent can discover the uniform
 # DESCRIBE->statement->PREVIEW->COMMIT loop by RUNNING the binary (`qfs skill`). This is a NORMAL dep

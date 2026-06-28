@@ -17,8 +17,10 @@
 //! — exactly like the t28 shell launcher and the t32 serve launcher.
 //!
 //! ## Coverage (the LIGHT facet of the CO-t29-1 driver-registration carry-over)
-//! Registered cred-free (no backend registration needed for describe): **local, mail, drive,
-//! github, slack, ga, s3, r2**. **sql / git / cf** require a registered connection-catalog / repo
+//! Registered cred-free (no backend registration needed for describe): **local, fs, mail, drive,
+//! github, slack, ga, s3, r2**. The t68 `/fs` driver describes over an EMPTY (deny-all) root
+//! allowlist — its pure introspective half names no host path. **sql / git / cf** require a
+//! registered connection-catalog / repo
 //! / D1-catalog for describe to resolve a concrete node (a *registration* requirement, not a
 //! credential one), so their describe is covered by the `qfs-skill` golden corpus instead — where
 //! the harness builds the registry with a fixture catalog. This is the documented fallback.
@@ -41,6 +43,11 @@ pub fn describe_registry() -> MountRegistry {
     let drivers: Vec<Arc<dyn qfs_core::Driver>> = vec![
         // Blob: the reference local-FS driver (genuinely cred-free).
         Arc::new(qfs_driver_local::LocalFsDriver::new("/")),
+        // Blob: the t68 first-class `/fs` driver. DESCRIBE is PURE — it names no host path and does
+        // no I/O — so it describes cred-free over an EMPTY (deny-all) root allowlist; the live roots
+        // are injected only on the apply registry (`commit.rs`). This is what makes `/fs` appear in
+        // the generated `docs/drivers.md` without exposing any operator-configured directory.
+        Arc::new(qfs_driver_fs::FsDriver::new(qfs_driver_fs::FsRoots::new())),
         // Append: Gmail (fixed describe; the MockGmailClient is never called by describe).
         Arc::new(qfs_driver_gmail::GmailDriver::new(Arc::new(
             qfs_driver_gmail::MockGmailClient::new(),

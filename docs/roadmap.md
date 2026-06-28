@@ -297,7 +297,10 @@ create policy analysts
 ```
 
 New **drivers** join as ordinary paths: a first-class **`fs`** driver (your real filesystem as a blob
-namespace, beyond today's `/local`) and the AI-session driver mounted under a host
+namespace, beyond today's `/local`) — **landed (t68)** as an opt-in, **deny-all-by-default** mount:
+it addresses files under operator-configured **named roots** (`/fs/<root>/...`, one `QFS_FS_<NAME>`
+per root), with `..`/absolute/symlink escapes refused at both scan and apply time and `REMOVE` kept
+irreversible; with no root configured nothing resolves — and the AI-session driver mounted under a host
 (**`/hosts/<host>/claude/...`** — Part 3). Two of the surfaces below are **closed/governed**, not open
 driver mounts (§1.3, decision P): **`/directories/<provider>/...`** (LDAP / Active Directory / Entra /
 Google Workspace, for ACL) — a realm — and **`/sys/...`** (the deployment's own users, policies,

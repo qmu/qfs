@@ -215,6 +215,12 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         "qfs-core",
         "qfs-exec",
         "qfs-driver-local",
+        // t68: the binary ALSO wires the first-class `/fs` driver (describe + the live read facet +
+        // the policy-gated apply over operator-configured named roots). qfs-driver-fs is a
+        // qfs-runtime consumer that must stay a LEAF — only the terminal binary may depend on it —
+        // so the operator config (QFS_FS_<NAME>) lives in src/fs.rs and std::fs writes dead-end
+        // here. Same composition-root rationale as the t28 shell's qfs-driver-local edge.
+        "qfs-driver-fs",
         "qfs-pushdown",
         // t32: the binary is ALSO the `qfs serve` composition root — it wires the HTTP serving
         // binding (qfs-http, a leaf consuming qfs-server + qfs-exec) and injects it into qfs-cmd
@@ -560,6 +566,10 @@ fn runtime_is_confined_to_plan_and_types() {
     // its name here (a one-line, reviewable signal), and (b) guarantees the append was safe.
     let runtime_consumers_allowed = [
         "qfs-driver-local",
+        // t68: the first-class `/fs` driver bridges its FsApplier into the runtime via
+        // qfs-runtime's PlanApplierBridge (like every other driver leaf). It is a leaf — only the
+        // terminal binary depends on it — so tokio still dead-ends in the binary.
+        "qfs-driver-fs",
         "qfs-driver-http",
         "qfs-driver-gmail",
         "qfs-driver-gdrive",

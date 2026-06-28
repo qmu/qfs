@@ -63,6 +63,9 @@ pub struct Catalog {
 fn representative_path(mount: &str) -> String {
     match mount {
         "/local" => "/local/x.txt".to_string(),
+        // t68: a representative blob under a named root. `/fs` describes cred-free (pure, no I/O,
+        // names no host path), so the mount folds into the generated catalog like `/local`.
+        "/fs" => "/fs/projects/report.md".to_string(),
         "/mail" => "/mail/drafts".to_string(),
         // A file/blob node under the My Drive corpus (the t39 corpus prefix). `/drive/Reports`
         // would parse as neither corpus and fold to the empty capability set — under-selling the
@@ -139,8 +142,8 @@ mod tests {
     #[test]
     fn catalog_covers_the_describe_registry_drivers() {
         let cat = driver_catalog();
-        // The describe registry registers 8 cred-free drivers (local/mail/drive/github/slack/ga/
-        // s3/r2); every one whose representative node resolves appears in the catalog.
+        // The describe registry registers 9 cred-free drivers (local/fs/mail/drive/github/slack/
+        // ga/s3/r2); every one whose representative node resolves appears in the catalog.
         assert!(
             cat.drivers.len() >= 7,
             "catalog should fold most describe-registered drivers, got {}",

@@ -1228,6 +1228,7 @@ dependencies = [
  "qfs-cmd",
  "qfs-core",
  "qfs-driver-directory",
+ "qfs-driver-fs",
  "qfs-driver-ga",
  "qfs-driver-gdrive",
  "qfs-driver-git",
@@ -1348,6 +1349,19 @@ dependencies = [
  "qfs-plan",
  "qfs-types",
  "thiserror",
+]
+
+[[package]]
+name = "qfs-driver-fs"
+version = "0.0.0"
+dependencies = [
+ "qfs-driver",
+ "qfs-plan",
+ "qfs-runtime",
+ "qfs-types",
+ "tempfile",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
