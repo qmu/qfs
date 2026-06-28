@@ -860,6 +860,29 @@ the [short-lived credential brokering](#part-5--expanded-possibilities) idea tak
 > tenant Project DB at rest (this slice implements the tenant-Project-DB choice, the testable one);
 > (b) per-user-override precedence over a team default. Managed monitoring + billing are still ahead.
 
+> **Status (M9, billing CORE — t67).** The **billing-tier model + the entitlement gate + plan-state
+> recording** have landed and are hermetic. There is a **FREE individual** tier and a **PAID team**
+> tier (`qfs_identity::billing`): each carries an explicit `Entitlements` set (the paid tier unlocks
+> team-wide brokered connections + unbounded members; the free tier is a single individual with none),
+> and the gate is **default-deny toward the free floor** — an unknown/garbled tier label, a missing
+> `/sys/billing` row, or a paid tier whose subscription is *not active* all resolve to the free
+> entitlements, so a paid-only capability is granted *only* by an actively-paid team plan. Plan state
+> is **data, not a flag**: it lives in the System DB (migration v12) and is surfaced as the
+> `/sys/billing` admin path (`team_id`/`tier`/`status`/`current_period_end`) — read with `FROM
+> /sys/billing`, recorded with a gated, self-auditing `INSERT INTO /sys/billing` (upsert on `team_id`,
+> the preview→commit twin of a dashboard click), exactly the t53 `/sys/*` pattern. The **enforcement**
+> rides where the feature lives: `provision_team_connection` now runs the tier gate *first*, so a
+> free/lapsed team is refused a team connection before the broker is even asked (no token minted,
+> nothing sealed). **The PAYMENT PROVIDER is the one OPEN PRODUCT DECISION, flagged not baked in** —
+> the provider (Stripe, Paddle, …), its fee model, and its tax/invoicing scope are a business choice;
+> this slice ships a `PaymentProvider` **seam** + an in-memory stub (no vendor SDK, no card charged, no
+> working integration claimed). Provider **webhooks** ride the existing `qfs-watchtower`
+> `WebhookBinding` (HMAC-SHA256 verify, signing secret resolved by handle, never logged) and update
+> plan state **idempotently** — deduped on the provider event id via the System-DB `billing_events`
+> ledger, so a replayed "subscription cancelled" never double-applies. Secrets never land in
+> `/sys/billing` or a log (the schema has no secret column; provider keys stay envelope-encrypted in
+> the t43 vault). Managed monitoring is still ahead.
+
 ### 4.6 Observability is external — qfs emits, it does not store 🧭 (decision V)
 
 The same reasoning that keeps qfs out of the scheduler business (§4.3) keeps it out of the monitoring

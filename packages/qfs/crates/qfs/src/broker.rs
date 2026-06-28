@@ -42,6 +42,11 @@ use crate::shared_connection::{resolve_shared_secret, SharedBindError};
 /// at-rest store failed. Both are secret-free.
 #[derive(Debug)]
 pub enum ProvisionError {
+    /// The team's BILLING TIER does not entitle team-wide connections (t67 / M9): provisioning a
+    /// team connection is a PAID-tier feature, refused for a free / unknown / lapsed plan **before
+    /// the broker is even asked** — no token is minted, nothing is sealed (default-deny toward the
+    /// free floor). Secret-free.
+    Entitlement(qfs_identity::EntitlementDenied),
     /// The broker refused to mint a token (unknown team / non-member / unoffered scope). **No secret
     /// was stored** — the credential never existed for the refused request (default-deny).
     Broker(BrokerError),
@@ -55,6 +60,7 @@ impl ProvisionError {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
+            ProvisionError::Entitlement(_) => "tier_not_entitled",
             ProvisionError::Broker(e) => e.code(),
             ProvisionError::Store(e) => e.code(),
         }
@@ -64,6 +70,7 @@ impl ProvisionError {
 impl std::fmt::Display for ProvisionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ProvisionError::Entitlement(e) => write!(f, "{e}"),
             ProvisionError::Broker(e) => write!(f, "{e}"),
             ProvisionError::Store(e) => write!(f, "{e}"),
         }
@@ -72,7 +79,11 @@ impl std::fmt::Display for ProvisionError {
 
 /// Provision a **team connection** through the broker (t66 / M9).
 ///
-/// The flow, in order (the membership gate runs FIRST, so a refusal never reaches the store):
+/// The flow, in order (the tier gate runs FIRST, then the membership gate — a refusal at either never
+/// reaches the store):
+/// 0. **tier gate (t67):** `plan` (the team's recorded `/sys/billing` plan) must entitle
+///    [`Capability::TeamConnections`](qfs_identity::Capability) — a free / unknown / lapsed plan is
+///    refused with [`ProvisionError::Entitlement`] and NOTHING is brokered or sealed;
 /// 1. ask `broker` to mint a team-scoped token for `req` — a **non-member is refused here** with
 ///    [`ProvisionError::Broker`] and NOTHING is sealed (the secret never exists for them);
 /// 2. seal the brokered token under the project DB's data-key via `store.put` (t43 envelope at rest),
@@ -86,7 +97,12 @@ impl std::fmt::Display for ProvisionError {
 /// # Errors
 /// [`ProvisionError::Broker`] if the broker refuses (no secret stored); [`ProvisionError::Store`] on a
 /// seal / DB failure.
+// The provisioning seam threads the tier-gate plan, the broker, the at-rest store, the metadata
+// connection, the (driver, connection) key, the broker request, and the realm scope — each a distinct,
+// non-interchangeable input; bundling them into a struct would only obscure the call sites.
+#[allow(clippy::too_many_arguments)]
 pub fn provision_team_connection(
+    plan: &qfs_identity::BillingPlan,
     broker: &dyn Broker,
     store: &dyn Secrets,
     conn: &Connection,
@@ -95,6 +111,13 @@ pub fn provision_team_connection(
     req: &BrokerTokenRequest,
     realm_scope: &str,
 ) -> Result<BrokerConnectionRow, ProvisionError> {
+    // 0. TIER GATE (t67 / M9): a team-wide brokered connection is a PAID-tier capability. The team's
+    //    recorded `/sys/billing` plan must entitle it — a free / unknown / lapsed plan is refused HERE,
+    //    before the broker is even asked, so no token is minted and nothing is sealed (default-deny
+    //    toward the free floor; the gate reads plan state, not a bespoke `if paid {}`).
+    plan.gate(qfs_identity::Capability::TeamConnections)
+        .map_err(ProvisionError::Entitlement)?;
+
     // 1. Broker the team-scoped token. A non-member / unknown team / unoffered scope refuses HERE,
     //    before any secret is sealed (default-deny — the credential never exists for them).
     let brokered = broker.broker_token(req).map_err(ProvisionError::Broker)?;
@@ -287,6 +310,7 @@ mod tests {
         let req =
             BrokerTokenRequest::new(team("acme"), "alice@acme.co", "google", "drive.readonly");
         let summary = provision_team_connection(
+            &qfs_identity::BillingPlan::paid_team(),
             &broker,
             &store,
             &meta,
@@ -334,6 +358,7 @@ mod tests {
         let req =
             BrokerTokenRequest::new(team("acme"), "carol@beta.co", "google", "drive.readonly");
         let err = provision_team_connection(
+            &qfs_identity::BillingPlan::paid_team(),
             &broker,
             &store,
             &meta,
@@ -344,6 +369,48 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code(), "broker_not_a_member");
+
+        // NOTHING was persisted: no sealed credential, no ownership/brokering rows.
+        let key = credential_key("gdrive", "team").unwrap();
+        assert_eq!(store.get(&key).unwrap_err().code(), "secret_not_found");
+        assert!(db_get_shared_connection(&meta, "gdrive", "team").is_none());
+        assert!(db_get_broker_connection(&meta, "gdrive", "team").is_none());
+    }
+
+    /// t67 / M9: provisioning a team connection on a FREE (un-entitled) billing plan is refused by the
+    /// TIER GATE before the broker is asked — **nothing is stored** (no token minted, no sealed
+    /// credential, no ownership/brokering rows). The paid-tier feature is denied for the free tier.
+    #[test]
+    fn a_free_tier_team_connection_is_refused_before_the_broker() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("project.db");
+        let open = || {
+            ProjectDb::open(&qfs_store::FileSource::new(&path))
+                .unwrap()
+                .into_db()
+                .into_connection()
+        };
+        let store = SqliteSecrets::open_or_init(open(), &Secret::from("pass")).unwrap();
+        let meta = open();
+
+        let broker = fixture();
+        // alice IS a member of acme — but the team is on the FREE tier, so the paid-only team
+        // connection is denied at the gate (the membership never gets a chance to matter).
+        let req =
+            BrokerTokenRequest::new(team("acme"), "alice@acme.co", "google", "drive.readonly");
+        let err = provision_team_connection(
+            &qfs_identity::BillingPlan::free(),
+            &broker,
+            &store,
+            &meta,
+            "gdrive",
+            "team",
+            &req,
+            "/projects/acme/**",
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "tier_not_entitled");
+        assert!(matches!(err, ProvisionError::Entitlement(_)));
 
         // NOTHING was persisted: no sealed credential, no ownership/brokering rows.
         let key = credential_key("gdrive", "team").unwrap();

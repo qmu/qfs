@@ -78,8 +78,9 @@ impl SysDriver {
 pub fn sys_node_capabilities(node: SysNode) -> Capabilities {
     match node {
         // The gated write surfaces: SELECT to review, INSERT to grant a policy / set a setting
-        // (`/sys/settings` upserts on `key`, e.g. the safety mode — t59).
-        SysNode::Policies | SysNode::Settings => {
+        // (`/sys/settings` upserts on `key`, e.g. the safety mode — t59) / record a billing tier
+        // (`/sys/billing` upserts on `team_id` — t67).
+        SysNode::Policies | SysNode::Settings | SysNode::Billing => {
             Capabilities::from_verbs(&[Verb::Select, Verb::Insert])
         }
         // Read-only admin views (audit is append-only: emitted, never user-written; no

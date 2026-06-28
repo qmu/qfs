@@ -31,6 +31,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod billing;
 mod invite;
 mod invite_store;
 mod model;
@@ -39,6 +40,9 @@ mod password;
 mod signup;
 mod store;
 
+pub use billing::{
+    BillingPlan, Capability, EntitlementDenied, Entitlements, SubscriptionStatus, Tier,
+};
 pub use invite::{
     Invite, InviteId, InviteStatus, InviteToken, Membership, MembershipId, MembershipScope,
     NewInvite, Role,

@@ -160,13 +160,13 @@ mod tests {
         // First open creates + migrates (v1 skeleton + v2 audit chain t76 + v3 identity t45 + v4
         // sessions t46 + v5 oauth keys t48 + v6 oauth flow clients/codes t49 + v7 /sys/policies t53 +
         // v8 invites/memberships t55 + v9 oidc providers t56 + v10 /sys/settings t59 + v11 member
-        // public keys t80).
+        // public keys t80 + v12 /sys/billing t67).
         let sys = open_system_db().unwrap().expect("config home resolves");
-        assert_eq!(qfs_store::applied_migrations(sys.db()).unwrap().len(), 11);
+        assert_eq!(qfs_store::applied_migrations(sys.db()).unwrap().len(), 12);
         drop(sys);
         // Second open is a verified no-op (still the same applied migrations).
         let sys2 = open_system_db().unwrap().expect("config home resolves");
-        assert_eq!(qfs_store::applied_migrations(sys2.db()).unwrap().len(), 11);
+        assert_eq!(qfs_store::applied_migrations(sys2.db()).unwrap().len(), 12);
         match prev_xdg {
             Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
             None => std::env::remove_var("XDG_CONFIG_HOME"),

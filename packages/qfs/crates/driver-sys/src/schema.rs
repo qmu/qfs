@@ -42,6 +42,12 @@ pub enum SysNode {
     /// safety mode (`key`/`value`/`updated_at`). The second gated WRITE in this surface: SELECT to
     /// review, an upsert-on-`key` `INSERT INTO /sys/settings` to set a value (super-admin only).
     Settings,
+    /// `/sys/billing` — the per-team billing PLAN (t67, roadmap §3.4 / M9): the recorded tier +
+    /// subscription status, surfaced as DATA (`team_id`/`tier`/`status`/`current_period_end`/
+    /// `updated_at`). The third gated WRITE in this surface: SELECT to review, an upsert-on-`team_id`
+    /// `INSERT INTO /sys/billing` to record/grant a tier (super-admin only). NEVER a payment secret —
+    /// the provider keys + webhook signing secrets live envelope-encrypted in the vault, never here.
+    Billing,
 }
 
 impl SysNode {
@@ -56,6 +62,7 @@ impl SysNode {
             "policies" => Some(Self::Policies),
             "metrics" => Some(Self::Metrics),
             "settings" => Some(Self::Settings),
+            "billing" => Some(Self::Billing),
             _ => None,
         }
     }
@@ -71,6 +78,7 @@ impl SysNode {
             Self::Policies => "policies",
             Self::Metrics => "metrics",
             Self::Settings => "settings",
+            Self::Billing => "billing",
         }
     }
 
@@ -165,6 +173,17 @@ pub fn sys_node_schema(node: SysNode) -> Schema {
         SysNode::Settings => Schema::new(vec![
             col("key", ColumnType::Text, false),
             col("value", ColumnType::Text, false),
+            col("updated_at", ColumnType::Text, true),
+        ]),
+        // t67 billing plan: the per-team recorded tier + subscription status (the gate's authority),
+        // surfaced as DATA. Metadata only — a team id, the tier/status labels, the period end, when
+        // it changed. There is structurally NO column a payment secret / card / provider key could
+        // ride in (the redaction contract, §3.2): the provider material lives in the vault.
+        SysNode::Billing => Schema::new(vec![
+            col("team_id", ColumnType::Text, false),
+            col("tier", ColumnType::Text, false),
+            col("status", ColumnType::Text, false),
+            col("current_period_end", ColumnType::Text, true),
             col("updated_at", ColumnType::Text, true),
         ]),
     }

@@ -45,6 +45,11 @@ const TAIL_CAP: i64 = 256;
 /// this once the super-admin session model lands.
 const ACTOR_CLI: &str = "cli";
 
+/// The acting principal recorded when a PROVIDER WEBHOOK (t67) updates a billing plan — a label, not
+/// a credential. The provider's signing secret was HMAC-verified upstream (`qfs-watchtower`) and
+/// never reaches here; this names the actor as the payment provider, not a human operator.
+const ACTOR_PROVIDER: &str = "provider";
+
 /// The System-DB-backed [`SysBackend`]: the real rusqlite reads/writes over the System DB (and the
 /// Project DB's connection registry). Each connection is held behind a `Mutex` (rusqlite is
 /// `!Sync`; the mutex provides the `Send + Sync` the trait requires).
@@ -174,6 +179,22 @@ impl SysBackend for SystemDbBackend {
                     ]))
                 },
             )?,
+            // t67: the per-team billing plan (the entitlement gate's authority). Metadata only —
+            // team id + tier/status labels + period end. NEVER a payment secret (the schema has no
+            // column for one; the provider keys live envelope-encrypted in the vault).
+            SysNode::Billing => self.scan_system(
+                "SELECT team_id, tier, status, current_period_end, updated_at \
+                 FROM billing_subscriptions ORDER BY team_id",
+                |r| {
+                    Ok(Row::new(vec![
+                        text(r, 0)?,
+                        text(r, 1)?,
+                        text(r, 2)?,
+                        nullable_text(r, 3)?,
+                        nullable_text(r, 4)?,
+                    ]))
+                },
+            )?,
         };
         Ok(RowBatch::new(schema, rows))
     }
@@ -249,9 +270,113 @@ impl SysBackend for SystemDbBackend {
         tx.commit().map_err(backend)?;
         Ok(1)
     }
+
+    fn set_billing(&self, row: &RowBatch) -> Result<u64, SysError> {
+        let team_id = required_text(row, "team_id")?;
+        let tier = required_text(row, "tier")?;
+        let status = required_text(row, "status")?;
+        let current_period_end = optional_text(row, "current_period_end");
+
+        let conn = self.system.lock().map_err(poisoned)?;
+        let tx = conn.unchecked_transaction().map_err(backend)?;
+        upsert_billing_tx(&tx, &team_id, &tier, &status, current_period_end.as_deref())
+            .map_err(backend)?;
+        // Administration observes itself: append the t76 audit row in the SAME transaction. Metadata
+        // only (verb + path), never the plan row — the boundary `describe` enforces.
+        append_audit_tx(
+            &tx,
+            AuditEvent {
+                actor: ACTOR_CLI.to_string(),
+                connection: "default".to_string(),
+                verb: "INSERT".to_string(),
+                path: SysNode::Billing.path(),
+                committed: true,
+                ts: now_rfc3339(),
+            },
+        )
+        .map_err(backend)?;
+        tx.commit().map_err(backend)?;
+        Ok(1)
+    }
 }
 
 impl SystemDbBackend {
+    /// Resolve a team's recorded **billing plan** (t67) from `/sys/billing` — the authority the
+    /// ENTITLEMENT GATE reads. **Fail-closed (default-deny toward the free floor):** a missing row, a
+    /// read error, or a garbled tier/status all resolve to the FREE plan
+    /// ([`qfs_identity::BillingPlan::free`]) — an unpaid/unknown team never gains paid entitlements.
+    /// The labels are decoded through the pure model, so a corrupted value can only LOSE entitlements.
+    #[must_use]
+    pub fn get_billing_plan(&self, team_id: &str) -> qfs_identity::BillingPlan {
+        let Ok(conn) = self.system.lock() else {
+            return qfs_identity::BillingPlan::free();
+        };
+        conn.query_row(
+            "SELECT tier, status FROM billing_subscriptions WHERE team_id = ?1",
+            rusqlite::params![team_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .map_or_else(qfs_identity::BillingPlan::free, |(tier, status)| {
+            qfs_identity::BillingPlan::decode(&tier, &status)
+        })
+    }
+
+    /// Apply a provider subscription event to a team's plan, **idempotently** (t67, the at-least-once
+    /// webhook update path). The provider's `event_id` is inserted into the `billing_events` dedup
+    /// ledger inside the SAME transaction as the upsert: a REPLAYED event (same id) is a no-op (the
+    /// plan is not double-applied), so a re-delivered "subscription cancelled" cannot fight a later
+    /// "renewed". Returns `true` when this call applied the event, `false` when it was a deduped
+    /// replay. The plan row + the audit row + the ledger row commit atomically.
+    ///
+    /// This is the SEAM the binary's webhook handler (`crate::billing`) calls after
+    /// `qfs-watchtower` has HMAC-verified the request — no payment secret crosses into this method
+    /// (only the already-verified, decoded plan labels).
+    ///
+    /// # Errors
+    /// [`SysError::Backend`] on an I/O failure.
+    pub fn apply_provider_event(
+        &self,
+        event_id: &str,
+        team_id: &str,
+        tier: &str,
+        status: &str,
+        current_period_end: Option<&str>,
+    ) -> Result<bool, SysError> {
+        let conn = self.system.lock().map_err(poisoned)?;
+        let tx = conn.unchecked_transaction().map_err(backend)?;
+        // Dedup FIRST (the ledger PK is the provider event id): INSERT OR IGNORE — a 0-row result
+        // means this exact event was already applied, so we apply NOTHING and report a deduped replay.
+        let inserted = tx
+            .execute(
+                "INSERT OR IGNORE INTO billing_events (event_id, team_id) VALUES (?1, ?2)",
+                rusqlite::params![event_id, team_id],
+            )
+            .map_err(backend)?;
+        if inserted == 0 {
+            // A replay: roll back (nothing changed) and report "not applied".
+            tx.rollback().map_err(backend)?;
+            return Ok(false);
+        }
+        upsert_billing_tx(&tx, team_id, tier, status, current_period_end).map_err(backend)?;
+        append_audit_tx(
+            &tx,
+            AuditEvent {
+                actor: ACTOR_PROVIDER.to_string(),
+                connection: "default".to_string(),
+                verb: "INSERT".to_string(),
+                path: SysNode::Billing.path(),
+                committed: true,
+                ts: now_rfc3339(),
+            },
+        )
+        .map_err(backend)?;
+        tx.commit().map_err(backend)?;
+        Ok(true)
+    }
+
     /// Read a single setting `value` by `key` from the System DB (best-effort: a missing row or a
     /// read error yields `None`). The READ side of the `/sys/settings` round-trip.
     #[must_use]
@@ -397,6 +522,28 @@ fn append_audit_tx(tx: &rusqlite::Transaction<'_>, event: AuditEvent) -> rusqlit
     tx.execute(
         "DELETE FROM audit_tail WHERE seq <= ?1 - ?2",
         rusqlite::params![chained.seq as i64, TAIL_CAP],
+    )?;
+    Ok(())
+}
+
+/// Upsert one team's billing plan row (t67) INSIDE an existing transaction — an **upsert on
+/// `team_id`** (a team has one current plan, so re-recording it replaces the row and bumps
+/// `updated_at`). Shared by the gated `/sys/billing` write (`set_billing`) and the provider-webhook
+/// apply path (`apply_provider_event`) so both land identical plan state. Metadata only — never a
+/// payment secret.
+fn upsert_billing_tx(
+    tx: &rusqlite::Transaction<'_>,
+    team_id: &str,
+    tier: &str,
+    status: &str,
+    current_period_end: Option<&str>,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT INTO billing_subscriptions (team_id, tier, status, current_period_end, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%SZ','now')) \
+         ON CONFLICT(team_id) DO UPDATE SET tier = excluded.tier, status = excluded.status, \
+         current_period_end = excluded.current_period_end, updated_at = excluded.updated_at",
+        rusqlite::params![team_id, tier, status, current_period_end],
     )?;
     Ok(())
 }
@@ -716,6 +863,119 @@ mod tests {
         // Each set self-audited (administration observes itself): 3 INSERT audit rows on /sys/settings.
         let audit = backend.scan(SysNode::Audit).unwrap();
         assert_eq!(texts(&audit, "path"), vec!["/sys/settings"; 3]);
+    }
+
+    fn billing_payload(team: &str, tier: &str, status: &str) -> RowBatch {
+        let schema = Schema::new(vec![
+            Column::new("team_id", ColumnType::Text, false),
+            Column::new("tier", ColumnType::Text, false),
+            Column::new("status", ColumnType::Text, false),
+        ]);
+        RowBatch::new(
+            schema,
+            vec![Row::new(vec![
+                Value::Text(team.into()),
+                Value::Text(tier.into()),
+                Value::Text(status.into()),
+            ])],
+        )
+    }
+
+    /// t67: recording a tier through `INSERT INTO /sys/billing` round-trips as DATA and drives the
+    /// ENTITLEMENT GATE — a paid-team active plan permits team connections; a free plan and an
+    /// UNRECORDED team both fail closed to free (deny). The upsert replaces on a re-record.
+    #[test]
+    fn billing_tier_round_trips_and_gates_team_connections() {
+        use qfs_identity::Capability;
+        let (_d, backend) = fixture_backend();
+
+        // An unrecorded team is the free floor (default-deny toward the lower tier).
+        let unknown = backend.get_billing_plan("team-ghost");
+        assert!(!unknown.permits(Capability::TeamConnections));
+
+        // Record a PAID team plan; it round-trips through /sys/billing and unlocks the paid capability.
+        assert_eq!(
+            backend
+                .set_billing(&billing_payload("team-acme", "paid-team", "active"))
+                .unwrap(),
+            1
+        );
+        let plan = backend.get_billing_plan("team-acme");
+        assert_eq!(plan.tier, qfs_identity::Tier::PaidTeam);
+        assert!(
+            plan.permits(Capability::TeamConnections),
+            "an actively-paid team unlocks team connections"
+        );
+        // Visible as DATA through the /sys/billing relation (one-engine-three-faces).
+        let billing = backend.scan(SysNode::Billing).unwrap();
+        assert_eq!(texts(&billing, "team_id"), vec!["team-acme"]);
+        assert_eq!(texts(&billing, "tier"), vec!["paid-team"]);
+
+        // Upsert REPLACES (one plan per team): downgrade to free ⇒ the gate now DENIES (fail closed).
+        backend
+            .set_billing(&billing_payload("team-acme", "free-individual", "inactive"))
+            .unwrap();
+        assert_eq!(backend.scan(SysNode::Billing).unwrap().rows.len(), 1);
+        assert!(
+            !backend
+                .get_billing_plan("team-acme")
+                .permits(Capability::TeamConnections),
+            "a downgraded plan must lose the paid capability"
+        );
+
+        // A garbled stored tier resolves to the free floor (never paid).
+        backend
+            .set_billing(&billing_payload("team-x", "enterprise-unlimited", "active"))
+            .unwrap();
+        assert!(!backend
+            .get_billing_plan("team-x")
+            .permits(Capability::TeamConnections));
+
+        // Each set self-audited (administration observes itself): 3 INSERT rows on /sys/billing.
+        let audit = backend.scan(SysNode::Audit).unwrap();
+        assert_eq!(texts(&audit, "path"), vec!["/sys/billing"; 3]);
+    }
+
+    /// t67: the at-least-once provider webhook apply is IDEMPOTENT — a replayed event id (the dedup
+    /// ledger PK) is a no-op, so a re-delivered "subscription cancelled" cannot double-apply or fight
+    /// a later state. A NEW event id does apply (flips the plan).
+    #[test]
+    fn provider_webhook_apply_is_idempotent() {
+        use qfs_identity::Capability;
+        let (_d, backend) = fixture_backend();
+
+        // First delivery of evt-1 (upgrade to paid) APPLIES.
+        assert!(backend
+            .apply_provider_event(
+                "evt-1",
+                "team-acme",
+                "paid-team",
+                "active",
+                Some("2026-12-31")
+            )
+            .unwrap());
+        assert!(backend
+            .get_billing_plan("team-acme")
+            .permits(Capability::TeamConnections));
+
+        // A REPLAY of evt-1 (same id) is a deduped no-op (false), state unchanged.
+        assert!(!backend
+            .apply_provider_event("evt-1", "team-acme", "free-individual", "canceled", None)
+            .unwrap());
+        assert!(
+            backend
+                .get_billing_plan("team-acme")
+                .permits(Capability::TeamConnections),
+            "a replayed event must NOT double-apply / overwrite the plan"
+        );
+
+        // A NEW event (evt-2, cancellation) DOES apply ⇒ the gate fails closed to free.
+        assert!(backend
+            .apply_provider_event("evt-2", "team-acme", "free-individual", "canceled", None)
+            .unwrap());
+        assert!(!backend
+            .get_billing_plan("team-acme")
+            .permits(Capability::TeamConnections));
     }
 
     #[test]

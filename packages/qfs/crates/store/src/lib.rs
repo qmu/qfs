@@ -320,6 +320,21 @@ pub const SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "system_user_keys",
         sql: include_str!("schema/system_user_keys.sql"),
     },
+    // t67 (roadmap §3.4 / M9): the per-team BILLING PLAN the `/sys/billing` admin path reads and
+    // (gated) writes — `billing_subscriptions` (team_id → tier / status / current_period_end) is the
+    // entitlement gate's authority, `billing_events` is the at-least-once webhook DEDUP ledger
+    // (provider event id is the PK, so a replayed event is an idempotent no-op). Appended as a NEW
+    // version (#12) — migrations #1–#11 stay frozen (the checksum guard forbids editing a shipped
+    // migration). Plan state is DATA (default-deny toward free for a missing/unknown/lapsed plan); the
+    // PAYMENT PROVIDER is a flagged seam, and NO payment secret ever lands in these columns (the
+    // provider keys live envelope-encrypted in the vault, t43). The rusqlite read/write that fills
+    // these columns lives in the binary-injected `SysBackend` (`crates/qfs/src/sys.rs`); this declares
+    // the shape.
+    Migration {
+        version: 12,
+        name: "system_billing",
+        sql: include_str!("schema/system_billing.sql"),
+    },
 ];
 
 /// The Project DB's ordered migration set (forward-only; append, never edit a shipped entry).
@@ -466,7 +481,7 @@ mod tests {
         let applied = migrate(&mut db, SYSTEM_MIGRATIONS).unwrap();
         assert_eq!(
             applied,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
             "first migrate applies every pending version"
         );
         // Second call on the SAME db is a verified no-op (re-verifies the checksum, re-applies none).
@@ -578,7 +593,10 @@ mod tests {
         assert!(table_exists(sys.db(), "sys_settings"));
         // t80 migration #11: the member public-key column on `users` (per-recipient E2E key half).
         assert!(column_exists(sys.db(), "users", "public_key"));
-        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 11);
+        // t67 migration #12: the per-team billing plan + the webhook dedup ledger.
+        assert!(table_exists(sys.db(), "billing_subscriptions"));
+        assert!(table_exists(sys.db(), "billing_events"));
+        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 12);
     }
 
     #[test]
@@ -690,7 +708,7 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "data persisted across reopen");
-        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 11);
+        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 12);
     }
 
     #[test]
@@ -716,5 +734,18 @@ mod tests {
             .unwrap()
             .unwrap_or(false);
         assert!(idx_exists, "the membership uniqueness index was created");
+    }
+
+    #[test]
+    fn system_billing_migration_v12_applies_idempotently() {
+        // t67: migration #12 is idempotent — opening the System DB twice applies it once, re-verifies
+        // it the second time (checksum), and the billing plan + webhook dedup ledger tables exist.
+        let mut db = Db::open(&MemorySource).unwrap();
+        let applied = migrate(&mut db, SYSTEM_MIGRATIONS).unwrap();
+        assert!(applied.contains(&12), "v12 applied on the first migrate");
+        // A relaunch re-applies nothing (the v12 body is re-verified by checksum, not re-run).
+        assert!(migrate(&mut db, SYSTEM_MIGRATIONS).unwrap().is_empty());
+        assert!(table_exists(&db, "billing_subscriptions"));
+        assert!(table_exists(&db, "billing_events"));
     }
 }

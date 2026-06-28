@@ -44,6 +44,20 @@ pub trait SysBackend: Send + Sync {
     /// [`SysError::Backend`] on an I/O failure, or [`SysError::MalformedEffect`] if the row does
     /// not carry a non-empty `key` and `value`.
     fn set_setting(&self, row: &RowBatch) -> Result<u64, SysError>;
+
+    /// Apply a single-row `INSERT INTO /sys/billing` (t67) to the System DB **transactionally** — an
+    /// **upsert on `team_id`** (a team has one current plan, so re-recording it replaces the row) —
+    /// appending the corresponding t76 audit row in the SAME transaction (administration observes
+    /// itself). Returns the affected row count (1 on success). This is how a super-admin records /
+    /// grants a team's billing tier as a qfs statement
+    /// (`INSERT INTO /sys/billing VALUES ('team-acme', 'paid-team', 'active', …)`), the
+    /// preview→commit twin of the dashboard click. NEVER a payment secret — `team_id`/`tier`/`status`
+    /// metadata only.
+    ///
+    /// # Errors
+    /// [`SysError::Backend`] on an I/O failure, or [`SysError::MalformedEffect`] if the row does
+    /// not carry a non-empty `team_id`, `tier`, and `status`.
+    fn set_billing(&self, row: &RowBatch) -> Result<u64, SysError>;
 }
 
 /// A structured, **secret-free** error from the `/sys` backend (RFD §5, AI-consumable). Names a

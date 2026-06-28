@@ -48,6 +48,11 @@ impl SysApplier {
             (EffectKind::Insert | EffectKind::Upsert, SysNode::Settings) => {
                 self.backend.set_setting(&node.args)
             }
+            // t67: record/grant a team's billing tier (upsert-on-`team_id`). The gate later reads
+            // this plan state; the write is a /sys mutation (previewed, committed, self-audited).
+            (EffectKind::Insert | EffectKind::Upsert, SysNode::Billing) => {
+                self.backend.set_billing(&node.args)
+            }
             // /sys/audit is append-only; the other admin views are read-only. Reject every other
             // write at the applier too (so even a hand-built plan that bypassed the parse-time
             // capability gate cannot mutate them).
@@ -122,6 +127,10 @@ mod tests {
             self.inserted.lock().unwrap().push(row.clone());
             Ok(1)
         }
+        fn set_billing(&self, row: &RowBatch) -> Result<u64, SysError> {
+            self.inserted.lock().unwrap().push(row.clone());
+            Ok(1)
+        }
     }
 
     fn policy_row() -> RowBatch {
@@ -183,6 +192,34 @@ mod tests {
         let out = applier
             .apply_shared(&node)
             .expect("settings upsert applies");
+        assert_eq!(out.affected, 1);
+        assert_eq!(
+            backend.inserted.lock().unwrap().len(),
+            1,
+            "row reached backend"
+        );
+    }
+
+    #[test]
+    fn insert_into_sys_billing_routes_to_the_backend() {
+        // t67: `INSERT INTO /sys/billing` (the tier recorder) routes to set_billing.
+        let backend = Arc::new(FakeBackend::default());
+        let applier = SysApplier::new(backend.clone());
+        let schema = Schema::new(vec![
+            Column::new("team_id", ColumnType::Text, false),
+            Column::new("tier", ColumnType::Text, false),
+            Column::new("status", ColumnType::Text, false),
+        ]);
+        let row = RowBatch::new(
+            schema,
+            vec![Row::new(vec![
+                Value::Text("team-acme".into()),
+                Value::Text("paid-team".into()),
+                Value::Text("active".into()),
+            ])],
+        );
+        let node = effect(EffectKind::Insert, "/sys/billing", row);
+        let out = applier.apply_shared(&node).expect("billing upsert applies");
         assert_eq!(out.affected, 1);
         assert_eq!(
             backend.inserted.lock().unwrap().len(),
