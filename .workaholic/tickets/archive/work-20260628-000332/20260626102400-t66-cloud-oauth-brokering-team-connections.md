@@ -3,9 +3,9 @@ created_at: 2026-06-26T10:00:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Domain]
-effort:
-commit_hash:
-category:
+effort: M
+commit_hash: fb27e16
+category: Added
 depends_on: [20260626101200-t54-cloud-connections-consent-flows.md, 20260626101400-t56-upstream-oidc-federation.md]
 ---
 
