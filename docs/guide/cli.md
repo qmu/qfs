@@ -63,10 +63,15 @@ which filters push down to the service. This is the first thing to run against a
 Store and manage credentials per service. Names are metadata (safe to print); the secret is never
 echoed. See [Connections & credentials](/guide/connections).
 
+`add`, `list`, and `remove` need **`QFS_PASSPHRASE`** exported first — the master passphrase that
+unlocks the encrypted local store (not a service credential). The credential **value is read from
+stdin**, never argv:
+
 ```sh
-qfs connection add <service> <name>     # store (or replace) a credential
+read -rs QFS_PASSPHRASE; export QFS_PASSPHRASE     # unlock the store, no shell-history leak
+printf %s "$TOKEN" | qfs connection add <service> <name>   # value via stdin (store/replace)
 qfs connection list [<service>]         # list connection names only
-qfs connection use <service> <name>     # set the active connection for a service
+qfs connection use <service> <name>     # set the active connection (no passphrase needed)
 qfs connection remove <service> <name>  # delete (idempotent)
 ```
 

@@ -45,9 +45,11 @@ operating procedure ships embedded in the binary — run `qfs skill` (and `qfs s
   never inline in a config, a log, or a doc. They are **envelope-encrypted at rest** in the
   SQLite Project DB: a random data-key encrypts each secret value, and that data-key is itself
   wrapped under a key derived from `QFS_PASSPHRASE` (argon2id) — so export `QFS_PASSPHRASE` before
-  `qfs connection add`/`use`. (This SQLite store replaces the old encrypted file vault; there is no
-  migration — re-run `qfs connection add` once for any existing connections.) `CREATE POLICY` gates
-  writes by verb / path / irreversibility. See [`docs/server.md`](docs/server.md).
+  `qfs connection add`/`list`/`remove`, and pipe the credential value in via stdin (never argv). See
+  [Connections & credentials](docs/guide/connections.md) for the full flow. (This SQLite store
+  replaces the old encrypted file vault; there is no migration — re-run `qfs connection add` once
+  for any existing connections.) `CREATE POLICY` gates writes by verb / path / irreversibility. See
+  [`docs/server.md`](docs/server.md).
 
 ## Install
 

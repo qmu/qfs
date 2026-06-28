@@ -108,14 +108,20 @@ qfs describe /mail/drafts --json | jq .verbs
 ## Connecting a real service
 
 `describe` and `preview` need nothing. To **commit** against a live service, store a credential
-once:
+once. First export `QFS_PASSPHRASE` — the master passphrase that unlocks your local credential
+vault (it derives the argon2id key for the encrypted store; it is **not** a service credential).
+It must stay set for the shell that runs `connection add/list/remove`:
 
 ```sh
-qfs connection add mail work     # prompts for the credential; it's never printed back
-qfs connection list              # shows connection names only, never secrets
+read -rs QFS_PASSPHRASE; export QFS_PASSPHRASE   # unlock the local vault, no shell-history leak
+printf %s "$TOKEN" | qfs connection add mail work   # credential VALUE via stdin, never argv
+qfs connection list                                 # shows connection names only, never secrets
 ```
 
-See [Connections & credentials](/guide/connections) for details.
+The credential value is read from **stdin** (not prompted, and never passed on argv where it would
+leak into the process table + shell history); qfs never prints it back.
+
+See [Connections & credentials](/guide/connections) for details, including the passphrase.
 
 ## Where to go next
 
