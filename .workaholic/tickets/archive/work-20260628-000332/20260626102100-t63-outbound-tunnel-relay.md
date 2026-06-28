@@ -3,9 +3,9 @@ created_at: 2026-06-26T10:00:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Infrastructure]
-effort:
-commit_hash:
-category:
+effort: M
+commit_hash: 9b74ea5
+category: Added
 depends_on: [20260626100800-t50-bearer-refresh-token-mcp-auth.md]
 ---
 
