@@ -287,6 +287,16 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // LEAF — only the terminal binary may depend on it — so the production rusqlite-backed
         // SysBackend lives IN the binary (src/sys.rs) and dead-ends here like the SQL backend.
         "qfs-driver-sys",
+        // t58 identity directory: the binary wraps qfs-driver-directory's in-memory
+        // `DirectorySource` into a t57 `MembershipResolver` so `member_of('/directories/...')`
+        // resolves against the directory (src/directory.rs). `/directories` is a RESERVED SCOPE
+        // REALM (decision P), not a driver-backed mount, so this driver is NOT registered in the
+        // MountRegistry — the binary consumes its pure describe surface + read seam directly.
+        // qfs-driver-directory is READ-FIRST: it carries a NoopApplier and NO qfs-runtime dep, so it
+        // is NOT a runtime consumer (it never appears in `runtime_consumers_allowed`) — the lightest
+        // driver shape, like the pure introspective half of qfs-driver-sys minus the apply bridge.
+        // The binary is the allowlisted leaf that may carry the `qfs-driver-*` edge; qfs-cmd stays off it.
+        "qfs-driver-directory",
         // t39 CO-t39-1: the binary links the embedded agent skill so `qfs skill` ships SKILL.md in
         // the artifact (the NORMAL dep edge that keeps the `include_str!` consts from being
         // dead-stripped). qfs-skill's own `[dependencies]` is EMPTY — it carries no runtime/driver

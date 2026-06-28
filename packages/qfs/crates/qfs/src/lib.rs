@@ -25,6 +25,7 @@ pub mod connection;
 pub mod cron;
 pub mod dashboard;
 pub mod describe;
+pub mod directory;
 pub mod docs;
 pub mod e2e_store;
 pub mod git;

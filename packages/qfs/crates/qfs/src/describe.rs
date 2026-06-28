@@ -89,6 +89,15 @@ pub fn describe_registry() -> MountRegistry {
         // describes `/sys/users`, `/sys/audit`, … cred-free, exactly like the other introspective
         // facets. This is what makes `/sys/*` appear in the generated `docs/drivers.md`.
         Arc::new(qfs_driver_sys::SysDriver::new()),
+        // NOTE (t58): the `/directories/...` identity-directory driver is deliberately NOT
+        // registered here. `/directories` is a RESERVED SCOPE REALM (decision P / §1.3 —
+        // `RESERVED_REALMS`), not a driver-backed mount like `/sys`, so `MountRegistry::register`
+        // governance rejects a `/directories` mount (proven by
+        // `register_rejects_a_driver_mount_that_shadows_a_realm`). The t58 driver's PURE,
+        // credential-free describe surface (`qfs_driver_directory::DirectoryDriver`) and its read
+        // seam are instead consumed directly by the live `member_of` resolver in `src/directory.rs`;
+        // routing a scope-realm `/directories/<provider>/groups` path THROUGH the driver for `qfs
+        // describe` is the documented seam this read-first slice leaves open.
     ];
 
     for driver in drivers {

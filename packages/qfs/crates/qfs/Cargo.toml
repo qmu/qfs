@@ -52,6 +52,15 @@ qfs-driver-github = { path = "../driver-github" }
 qfs-driver-slack = { path = "../driver-slack" }
 qfs-driver-ga = { path = "../driver-ga" }
 qfs-driver-objstore = { path = "../driver-objstore" }
+# t58 identity-directory driver: the binary wires the `/directories/<provider>/...` surface
+# (describe is PURE + cred-free, so it registers in the describe registry like the other
+# introspective facets). qfs-driver-directory is READ-FIRST — it carries a NoopApplier and NO
+# qfs-runtime dep, so it is NOT a runtime consumer; the binary is simply the allowlisted leaf that
+# may carry the `qfs-driver-*` edge (qfs-cmd stays off it). It ALSO supplies the live (in-memory)
+# `DirectorySource` the binary wraps into a t57 `MembershipResolver`, so `member_of('/directories/
+# <provider>/groups/<g>')` resolves against the directory — carried as owned group strings into the
+# policy `DecisionContext` (qfs-server stays off the driver crate; see src/directory.rs).
+qfs-driver-directory = { path = "../driver-directory" }
 qfs-pushdown = { path = "../pushdown" }
 # t32 serve composition root: the binary (the terminal sink, the HTTP sibling of the t28 shell
 # composition root) wires the HTTP serving binding (qfs-http). qfs-http is a LEAF that consumes

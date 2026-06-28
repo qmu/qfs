@@ -80,3 +80,9 @@ pub use qfs_server::{
     evaluate_shared_use, policy_from_def, Condition, DecisionContext, PolicyDef, RoleGraph,
     ScopeGlob, SharedUseDecision, Subject,
 };
+// t58 (roadmap M5, decision I): the t57 membership-resolution seam — the `MembershipResolver`
+// trait, the up-front `resolve_memberships` pre-pass, and the resolved-context `evaluate_with_context`
+// — re-exported through this same window so the `qfs` binary can wrap the `/directories/...` driver
+// into a LIVE resolver and prove a `member_of('/directories/...')` grant/deny WITHOUT a forbidden
+// direct `qfs-server` edge (the binary's thin-entrypoint pin stays intact; see src/directory.rs).
+pub use qfs_server::{evaluate_with_context, resolve_memberships, MembershipResolver};
