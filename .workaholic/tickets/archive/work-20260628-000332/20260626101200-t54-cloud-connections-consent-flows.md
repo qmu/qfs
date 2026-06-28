@@ -3,9 +3,9 @@ created_at: 2026-06-26T10:00:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Domain]
-effort:
-commit_hash:
-category:
+effort: M
+commit_hash: f19ee34
+category: Added
 depends_on: [20260626100200-t44-accounts-to-connections-rename.md, 20260626100700-t49-oauth-dcr-authcode-pkce.md]
 ---
 
