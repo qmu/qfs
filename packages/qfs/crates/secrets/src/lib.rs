@@ -43,6 +43,11 @@ mod backends;
 // t54 (roadmap M4): the PURE cloud-driver consent / sign-in decision (no I/O, no Secret), so it
 // builds on both native and wasm. The binary wires the real identity + consent state into it.
 mod consent;
+// t80 (roadmap M5, decision U): the PURE end-to-end attendance gate (no I/O, no crypto, no Secret) —
+// refuses an E2E/high-sensitivity connection for an unattended autonomous agent. Builds on both
+// native and wasm; the per-recipient wrap PRIMITIVE lives in qfs-oauth (it needs p256 ECDH, which
+// must NOT enter this leaf), the per-recipient STORE binary-side; this leaf holds only the decision.
+mod e2e;
 // t43 envelope crypto: native-only (its CSPRNG has no default Workers backend; the SQLite store
 // that consumes it lives in the native binary). Keeps qfs-secrets wasm-buildable.
 #[cfg(not(target_arch = "wasm32"))]
@@ -65,6 +70,10 @@ pub use backends::{EnvStore, InMemoryStore};
 // t54 (roadmap M4): the cloud-driver consent / sign-in decision. The binary's `connection add`/`use`
 // gate and its commit-time bind both consult these to fail closed for an unauthenticated operator.
 pub use consent::{bind_gate, is_cloud_driver, ConsentError, CLOUD_DRIVERS};
+// t80 (roadmap M5, decision U): the end-to-end attendance gate. The binary's commit-time bind
+// consults this to fail closed for a high-sensitivity (per-recipient-wrapped) connection used by an
+// autonomous agent unattended — it requires a human recipient unwrap in the loop.
+pub use e2e::{e2e_attendance_gate, E2eUseError};
 // The envelope-encryption primitive (t43): the SQLite credential store (in the binary) builds on
 // these — a passphrase-derived KEK wraps a random DEK that seals each secret value. Native-only
 // (see the `mod envelope` gate above); Workers never need it.

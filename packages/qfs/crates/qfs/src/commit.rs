@@ -397,6 +397,15 @@ fn networked_credential(driver: &str) -> Option<(Arc<dyn Secrets>, CredentialKey
     if !crate::shared_connection::bind_allowed(driver, &connection) {
         return None;
     }
+    // t80 (decision U / §4.5): a HIGH-SENSITIVITY (end-to-end) connection is wrapped per-recipient and
+    // is NOT server-unwrappable — it cannot be used on this AUTONOMOUS commit registry path (no human
+    // key in the loop). The E2E attendance gate (`attended = false` here) refuses it, leaving the
+    // driver UNREGISTERED (fail closed, audited); using it requires a human recipient unwrap. A
+    // non-E2E connection short-circuits to allowed. Metadata-only + passphrase-free (reads the E2E
+    // flag, never a token, BEFORE any decrypt).
+    if !crate::e2e_store::e2e_bind_allowed(driver, &connection) {
+        return None;
+    }
     // `default` is always a valid connection name; an invalid persisted selection falls back to it.
     let acct = ConnectionId::new(&connection)
         .or_else(|_| ConnectionId::new("default"))

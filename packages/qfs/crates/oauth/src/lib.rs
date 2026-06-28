@@ -48,6 +48,11 @@ mod key;
 mod metadata;
 mod oidc;
 mod pkce;
+// t80 (roadmap M5, decision U / §4.5): the PURE per-recipient (E2E) DEK wrap — ECDH key agreement
+// over the SAME vetted p256 tree (now with the `ecdh` feature) + ChaCha20-Poly1305, so a
+// high-sensitivity connection's data-key is recoverable only by a member holding the matching private
+// key, NOT by the server at rest. The DB-touching per-recipient store lives binary-side.
+mod recipient_wrap;
 mod seal;
 mod sign;
 mod verify;
@@ -67,6 +72,11 @@ pub use key::{OauthError, SigningKey};
 pub use metadata::{AuthorizationServerMetadata, ProtectedResourceMetadata};
 pub use oidc::{verify_id_token, IdTokenClaims, IdTokenError};
 pub use pkce::{pkce_challenge_s256, verify_pkce_s256, PKCE_METHOD_S256};
+// t80 (decision U / §4.5): the per-recipient (E2E) DEK wrap. The binary's `crates/qfs/src/e2e_store.rs`
+// builds the per-recipient wrapped-DEK rows on these; a member unwraps with their own private key.
+pub use recipient_wrap::{
+    unwrap_dek_for_recipient, wrap_dek_to_recipient, RecipientKey, RecipientWrapError,
+};
 pub use seal::{sign_seal, verify_seal, AuditSeal, SealError, SEAL_KIND};
 pub use sign::{sign_jws, verify_jws, Claims};
 pub use verify::{verify_access_token, AccessTokenError, VerifiedAccessToken};

@@ -26,6 +26,7 @@ pub mod cron;
 pub mod dashboard;
 pub mod describe;
 pub mod docs;
+pub mod e2e_store;
 pub mod git;
 pub mod host;
 pub mod identity;

@@ -54,6 +54,45 @@ impl SqliteIdentityStore {
             .lock()
             .map_err(|_| IdentityError::Backend("identity store lock poisoned".into()))
     }
+
+    /// **Register a member's per-recipient (E2E) PUBLIC key** on their `/sys/users` row (t80,
+    /// decision U / §4.5). `public_key` is the publishable public half (e.g. hex-encoded uncompressed
+    /// SEC1 P-256 bytes); the matching PRIVATE key NEVER touches the server — it stays client-side.
+    /// This is the key a high-sensitivity connection's data-key is wrapped TO so only this member can
+    /// unwrap it. Last-writer-wins (a member rotating their keypair re-registers). Not a secret: a
+    /// public key is publishable metadata, so this is on the passphrase-free path.
+    ///
+    /// # Errors
+    /// [`IdentityError::Backend`] on a DB failure (secret-free message). Updating an absent user
+    /// affects zero rows and is still `Ok` (the caller asserts existence via [`Self::public_key`]).
+    pub fn set_public_key(&self, user_id: UserId, public_key: &str) -> Result<(), IdentityError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE users SET public_key = ?1 WHERE id = ?2",
+            rusqlite::params![public_key, user_id.0],
+        )
+        .map_err(|e| IdentityError::Backend(format!("registering member public key: {e}")))?;
+        Ok(())
+    }
+
+    /// Read a member's registered per-recipient (E2E) PUBLIC key by email, or `None` if the user does
+    /// not exist or has not registered a key (t80). Returns publishable metadata only — never a secret
+    /// (the private key is not on the server). Used to wrap a high-sensitivity connection's DEK to an
+    /// authorized member.
+    ///
+    /// # Errors
+    /// [`IdentityError::Backend`] on a DB failure (secret-free message).
+    pub fn public_key(&self, email: &str) -> Result<Option<String>, IdentityError> {
+        let conn = self.lock()?;
+        conn.query_row(
+            "SELECT public_key FROM users WHERE primary_email = ?1",
+            rusqlite::params![email],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map(Option::flatten)
+        .map_err(|e| IdentityError::Backend(format!("reading member public key: {e}")))
+    }
 }
 
 /// Whether a rusqlite error is a UNIQUE/constraint violation (a duplicate), vs. any other failure.
@@ -300,6 +339,32 @@ mod tests {
         let acct = s.find_account(PROVIDER_LOCAL, "a@b.com").unwrap().unwrap();
         assert_eq!(acct.user_id, user.id);
         assert_eq!(acct.provider, "local");
+    }
+
+    #[test]
+    fn member_public_key_registers_and_reads_back_and_is_absent_by_default() {
+        // t80: a member registers their per-recipient (E2E) PUBLIC key; it is publishable metadata,
+        // read back by email. Absent until registered; last-writer-wins on a keypair rotation.
+        let s = store();
+        let user = s.signup_local("m@team.io", &hash("password123")).unwrap();
+        // No key registered yet ⇒ None (the connection cannot wrap to this member yet).
+        assert_eq!(s.public_key("m@team.io").unwrap(), None);
+
+        s.set_public_key(user.id, "04AABBCC_pubkey_hex").unwrap();
+        assert_eq!(
+            s.public_key("m@team.io").unwrap().as_deref(),
+            Some("04AABBCC_pubkey_hex")
+        );
+
+        // Re-registering (keypair rotation) overwrites — last-writer-wins.
+        s.set_public_key(user.id, "04DDEEFF_rotated").unwrap();
+        assert_eq!(
+            s.public_key("m@team.io").unwrap().as_deref(),
+            Some("04DDEEFF_rotated")
+        );
+
+        // An unknown member has no key (and reading it is a plain None, not an error).
+        assert_eq!(s.public_key("ghost@team.io").unwrap(), None);
     }
 
     #[test]

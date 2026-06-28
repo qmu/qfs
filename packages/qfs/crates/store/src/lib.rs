@@ -309,6 +309,17 @@ pub const SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "system_settings",
         sql: include_str!("schema/system_settings.sql"),
     },
+    // t80 (roadmap M5, decision U / §4.5): the member PUBLIC KEY column on `users` — each human's
+    // per-recipient (E2E) keypair public half, used to wrap a high-sensitivity connection's DEK only
+    // to authorized members (the private key stays client-side, NEVER on the server). Appended as a
+    // NEW version (#11) that ALTERs `users` forward — migrations #1–#10 stay frozen (the checksum
+    // guard forbids editing a shipped migration). A public key is publishable metadata, not a secret;
+    // the rusqlite read/write that fills it lives in the binary-injected `SqliteIdentityStore`.
+    Migration {
+        version: 11,
+        name: "system_user_keys",
+        sql: include_str!("schema/system_user_keys.sql"),
+    },
 ];
 
 /// The Project DB's ordered migration set (forward-only; append, never edit a shipped entry).
@@ -358,6 +369,19 @@ pub const PROJECT_MIGRATIONS: &[Migration] = &[
         version: 5,
         name: "project_rotation_revocation",
         sql: include_str!("schema/project_rotation.sql"),
+    },
+    // t80 (roadmap M5, decision U / §4.5): the PER-RECIPIENT (end-to-end) DEK wrap for
+    // HIGH-SENSITIVITY connections — `e2e_recipient_wrap` (one wrapped DEK per authorized member's
+    // public key; presence of a row IS the connection's E2E flag) + `e2e_secret` (the value sealed
+    // under the per-connection DEK, kept SEPARATE from the server-unwrappable `secret_store` so the
+    // server cannot decrypt it by itself). Appended as a NEW version (#6) — migrations #1–#5 stay
+    // frozen (the checksum guard forbids editing a shipped migration). The per-recipient wrap PRIMITIVE
+    // is `qfs_oauth::wrap_dek_to_recipient`; the I/O that fills these tables lives in the binary
+    // (`crates/qfs/src/e2e_store.rs`); this declares the shape.
+    Migration {
+        version: 6,
+        name: "project_e2e_recipient_wrap",
+        sql: include_str!("schema/project_e2e.sql"),
     },
 ];
 
@@ -428,7 +452,7 @@ mod tests {
         let applied = migrate(&mut db, SYSTEM_MIGRATIONS).unwrap();
         assert_eq!(
             applied,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
             "first migrate applies every pending version"
         );
         // Second call on the SAME db is a verified no-op (re-verifies the checksum, re-applies none).
@@ -538,7 +562,9 @@ mod tests {
         assert!(table_exists(sys.db(), "oidc_provider_meta"));
         // t59 migration #10: the /sys/settings deployment key/value (the safety-mode home).
         assert!(table_exists(sys.db(), "sys_settings"));
-        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 10);
+        // t80 migration #11: the member public-key column on `users` (per-recipient E2E key half).
+        assert!(column_exists(sys.db(), "users", "public_key"));
+        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 11);
     }
 
     #[test]
@@ -558,8 +584,11 @@ mod tests {
         // t79 migration #5: rotation/revocation columns on secret_store (last_rotated, revoked_at).
         assert!(column_exists(proj.db(), "secret_store", "last_rotated"));
         assert!(column_exists(proj.db(), "secret_store", "revoked_at"));
-        // All five project migrations are recorded.
-        assert_eq!(applied_migrations(proj.db()).unwrap().len(), 5);
+        // t80 migration #6: the per-recipient (E2E) DEK wrap + the separately-sealed E2E value.
+        assert!(table_exists(proj.db(), "e2e_recipient_wrap"));
+        assert!(table_exists(proj.db(), "e2e_secret"));
+        // All six project migrations are recorded.
+        assert_eq!(applied_migrations(proj.db()).unwrap().len(), 6);
     }
 
     #[test]
@@ -614,7 +643,7 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "data persisted across reopen");
-        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 10);
+        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 11);
     }
 
     #[test]

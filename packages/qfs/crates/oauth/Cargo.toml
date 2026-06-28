@@ -19,7 +19,15 @@ qfs-secrets = { path = "../secrets" }
 # The vetted, pure-Rust RustCrypto P-256 (NIST secp256r1) ECDSA implementation — keygen + sign +
 # verify for ES256. Pure Rust (no C, wasm-clean) so there is no native-link hazard; the thin JWS
 # compact serialization is built over it here rather than pulling a heavy JWT SDK (decision C).
-p256 = { version = "0.13", features = ["ecdsa"] }
+# `ecdh` (t80, decision U / §4.5): the SAME vetted curve also backs the per-recipient (E2E) DEK wrap
+# — ECDH key agreement → a per-recipient KEK that seals a connection's data-key only to a member's
+# public key. REUSES the already-vendored p256 tree; no second curve crate, no hand-rolled asymmetric
+# crypto (the non-negotiable). Pure Rust, wasm-clean.
+p256 = { version = "0.13", features = ["ecdsa", "ecdh"] }
+# AEAD for the per-recipient DEK wrap (t80): once ECDH derives the per-recipient KEK, ChaCha20-Poly1305
+# seals the data-key under it — the SAME vetted AEAD `qfs-secrets`' envelope uses, so the E2E wrap and
+# the at-rest envelope share one cipher choice + threat model. Pure Rust (wasm-clean), no native link.
+chacha20poly1305 = "0.10"
 # base64url (no padding) for the JWS header.payload.signature segments + the JWK coordinate / kid
 # thumbprint encodings (RFC 7515/7517/7638). In the offline cache; kept out of the zero-dep crypto leaf.
 base64 = "0.22"
