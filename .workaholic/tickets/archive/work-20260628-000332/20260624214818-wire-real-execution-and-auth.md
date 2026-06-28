@@ -3,9 +3,9 @@ created_at: 2026-06-24T21:48:18+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Domain, Infrastructure]
-effort:
-commit_hash:
-category:
+effort: -
+commit_hash: (superseded/done)
+category: Superseded
 depends_on: []
 ---
 
@@ -125,3 +125,7 @@ path is proven end-to-end before credentials are involved.
   tokio dead-ending in the binary leaf.
 - **Scope per PR:** ship one slice at a time (each a PR + patch bump), each leaving the tree green
   and the docs honest about exactly what now works.
+
+## DISPOSITION (night drive, 2026-06-29)
+
+UMBRELLA: slices 1-4 (local exec, credential resolver, account add, github/slack commit) SHIPPED v0.0.4. Remaining slice-4 families are tracked as their own tickets (gmail/gdrive/ga, s3/r2, networked reads — implemented in this night drive; sql + git shipped). The credential/auth slices (LocalStore file vault, account add) were SUPERSEDED by the roadmap rebuild: t43 (SQLite envelope store replaces the file vault) and t44 (account->connection rename). No unique remaining work in the umbrella itself.

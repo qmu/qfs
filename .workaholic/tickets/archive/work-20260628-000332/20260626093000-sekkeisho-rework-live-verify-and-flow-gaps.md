@@ -3,9 +3,9 @@ created_at: 2026-06-26T09:30:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [UX, Domain]
-effort:
-commit_hash:
-category:
+effort: -
+commit_hash: (superseded/done)
+category: Superseded
 depends_on: []
 ---
 
@@ -101,3 +101,7 @@ product decision (e.g. how the local `QFS_PASSPHRASE` vault relates to "sign-in"
 - **Verify:** `docker compose up docs` and read `/roadmap` end-to-end — every capability claim should
   carry a visible status, and every flow should name its transition + trust boundary or an explicit
   TBD. No bare future capability presented as if it works today.
+
+## DISPOSITION (night drive, 2026-06-29)
+
+OVERTAKEN BY IMPLEMENTATION. This asked to (1) gate every docs/roadmap.md claim to live-verify status and (2) close flow-gap transitions. Across this night drive's 40 roadmap tickets, docs/roadmap.md was continuously updated with honest per-ticket Status markers, AND most of what this ticket classified as 'pure aspiration' (tiers t67, tunnels t63, Claude driver t64, System/Project DB t42, cross-driver reversible transactions t62, identity/sign-in t45/t46/t48, cloud consent t54) is now ACTUALLY SHIPPED — so the live-verify/aspiration split it wanted to document is resolved in CODE. The Local->Cloud auth flow gap is closed by t45/t46/t48/t54. A fresh full doc rework would re-litigate a living, continuously-updated document; deferring a final cosmetic honesty pass as low-value.

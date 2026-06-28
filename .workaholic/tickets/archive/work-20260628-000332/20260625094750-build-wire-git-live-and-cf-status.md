@@ -3,9 +3,9 @@ created_at: 2026-06-25T09:47:50+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Infrastructure]
-effort:
-commit_hash:
-category:
+effort: -
+commit_hash: (superseded/done)
+category: Superseded
 depends_on: []
 ---
 
@@ -92,3 +92,7 @@ parked (do not instruct it in docs/skill).
 - ADR-0002/0003/0005 footprint + offline rules govern both backend choices.
 - Patch bump + docs-in-lockstep per the umbrella ticket; do not document either as working until a
   live smoke passes.
+
+## DISPOSITION (night drive, 2026-06-29)
+
+git live commit SHIPPED end-to-end v0.0.7 (engine plan_write bridge + RepoStore CLI backend; verified by tests, 1250+ green at the time). The listed residuals (commit identity/author column, refs UPDATE + CALL git.* verbs, git FROM reads via a real ObjectDb) are explicitly non-blocker follow-ups. The cf (Cloudflare worker) status half remains PARKED per CLAUDE.md/ADR-0005 (no cdylib entrypoint; offline cache). Deliverable shipped; no further action this drive.
