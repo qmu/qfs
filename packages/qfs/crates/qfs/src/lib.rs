@@ -46,6 +46,7 @@ pub mod store;
 pub mod sys;
 pub mod telemetry;
 pub mod transport;
+pub mod tunnel;
 pub mod version;
 pub mod watchtower;
 pub mod worm;

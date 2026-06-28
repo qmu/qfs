@@ -625,6 +625,16 @@ or hand to Claude over MCP — same statement, same preview, same commit.
 
   Your fleet of machines — and your teammates' — becomes one queryable surface, with every cross-machine
   call authenticated by the same identity and bounded by the same `POLICY`.
+
+  > **Status (M7, first slice).** The tunnel **transport protocol core** has landed and is hermetically
+  > tested: the length-prefixed frame codec, the relay registration handshake (a missing/invalid qfs
+  > Cloud sign-in token is *refused* — decision N), and request/response **multiplexing** over an
+  > in-memory transport, all in the pure `qfs-tunnel` crate with the redaction floor inherited from the
+  > shared HTTP DTOs (no token crosses a frame's log/`Debug` in cleartext). The **live outbound TCP/TLS
+  > dial** to a running qfs Cloud relay — and the relay's own hosting, node addressing/discovery, and
+  > reconnect/backoff — are a **documented seam** (the `qfs` binary's composition root), not yet wired
+  > to a socket; there is no live two-node tunnel yet, and the `/hosts/<host>/claude/...` driver that
+  > rides it is still ahead.
 - **Scheduled jobs** (decision M) are **externalized**: OS `cron` (individual) or Cloudflare Cron
   Triggers (managed) fire a `qfs run` / saved plan on schedule — qfs runs no scheduler of its own, so
   exactly-once and distribution are the platform's job, not a qfs leader election.

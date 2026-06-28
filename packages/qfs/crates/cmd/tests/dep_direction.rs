@@ -351,6 +351,14 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // carries no tokio and is a leaf (asserted by `oauth_is_a_pure_domain_leaf` below), so the
         // edge adds no runtime/driver coupling to the terminal binary.
         "qfs-oauth",
+        // t63 agent-fabric transport (roadmap M7, decisions L/N): the binary is the composition root
+        // for the qfs-native outbound tunnel + relay. qfs-tunnel is the PURE protocol core (frame
+        // codec + relay handshake + in-memory mux) with NO tokio/runtime — the binary (src/tunnel.rs)
+        // adapts the t50 bearer validation into the handshake's injected TokenValidator (decision N)
+        // and is where the LIVE outbound TCP/TLS dial to qfs Cloud would dead-end (a DOCUMENTED SEAM,
+        // not yet socket-wired). It is a pure leaf consumed only by this terminal binary (asserted by
+        // `tunnel_is_a_pure_protocol_leaf` below), so the edge adds no runtime/driver coupling.
+        "qfs-tunnel",
     ];
     let workspace_prefixed: Vec<&String> =
         bin_deps.iter().filter(|d| d.starts_with("qfs")).collect();
@@ -1413,6 +1421,115 @@ fn oauth_is_a_pure_domain_leaf() {
             "qfs",
             "t48 leaf violation: {consumer} depends on qfs-oauth, but only the terminal `qfs` binary \
              (the serve composition root) may consume the OAuth-AS domain leaf."
+        );
+    }
+}
+
+#[test]
+fn tunnel_is_a_pure_protocol_leaf() {
+    // t63 (the agent-fabric transport topology, roadmap M7 — decisions L + N): `qfs-tunnel` is the
+    // PURE protocol core for the qfs-native outbound tunnel + relay (the frame codec, the relay
+    // registration handshake, the in-memory request/response mux). The placement decision rests on
+    // structural facts this guard pins so they cannot silently invert:
+    //
+    //   (a) qfs-tunnel's ONLY workspace deps are {qfs-http-core, qfs-secrets} — the shared HTTP DTOs
+    //       a frame carries (so the SINGLE redaction authority is inherited, never re-implemented) +
+    //       the REDACTED marker the handshake's `cloud_token` Debug emits. It does NOT depend on
+    //       lang/plan/driver/codec/parser (no query/engine logic), on qfs-server/qfs-exec (it is NOT
+    //       a serve binding — it provides transport, the binary dispatches inbound frames to the
+    //       existing crates/http handler), or on qfs-runtime.
+    //   (b) it carries NO tokio/futures/async-trait/reqwest — the protocol core is synchronous and
+    //       runtime-free (mirroring qfs-google-auth's HttpExchange seam), so the LIVE outbound
+    //       TCP/TLS dial half stays a DOCUMENTED SEAM in the terminal `qfs` binary where tokio
+    //       dead-ends. This absence is WHY qfs-tunnel is NOT in the runtime-consumer allowlist.
+    //   (c) qfs-tunnel is a LEAF: only the terminal `qfs` binary (the serve composition root) may
+    //       consume it — the same role qfs-oauth / the binding leaves play.
+    let graph = load_graph();
+
+    let workspace_crates = [
+        "qfs-cmd",
+        "qfs-core",
+        "qfs-server",
+        "qfs-lang",
+        "qfs-plan",
+        "qfs-driver",
+        "qfs-codec",
+        "qfs-parser",
+        "qfs-types",
+        "qfs-runtime",
+        "qfs-txn",
+        "qfs-pushdown",
+        "qfs-secrets",
+        "qfs-http-core",
+        "qfs-exec",
+        "qfs-tunnel",
+    ];
+
+    // (a) qfs-tunnel's workspace deps are exactly {qfs-http-core, qfs-secrets}.
+    let tunnel_deps = graph
+        .direct_deps
+        .get("qfs-tunnel")
+        .expect("qfs-tunnel is a workspace package");
+    let allowed = ["qfs-http-core", "qfs-secrets"];
+    for d in tunnel_deps
+        .iter()
+        .filter(|d| workspace_crates.contains(&d.as_str()))
+    {
+        assert!(
+            allowed.contains(&d.as_str()),
+            "confinement violation: qfs-tunnel must depend only on {allowed:?} among workspace crates \
+             (it is a pure protocol leaf; the live dial is the binary's documented seam), but depends \
+             on {d}. Deps were: {tunnel_deps:?}"
+        );
+    }
+    // The defining absences: no tokio/async runtime, no serve-binding deps, no lower-spine / driver /
+    // query crates (the live TCP/TLS dial is a DOCUMENTED SEAM in the binary, not in the core).
+    for forbidden in [
+        "tokio",
+        "futures",
+        "async-trait",
+        "reqwest",
+        "qfs-runtime",
+        "qfs-server",
+        "qfs-exec",
+        "qfs-lang",
+        "qfs-plan",
+        "qfs-driver",
+        "qfs-codec",
+        "qfs-parser",
+    ] {
+        assert!(
+            !tunnel_deps.iter().any(|d| d == forbidden),
+            "confinement violation: qfs-tunnel must NOT depend on {forbidden} (it is a pure, \
+             runtime-free protocol leaf; the live outbound dial is the binary's documented seam where \
+             tokio dead-ends). Deps were: {tunnel_deps:?}"
+        );
+    }
+
+    // (b) it carries the shared redaction-inheriting DTOs (so a frame's Debug never leaks a token).
+    assert!(
+        tunnel_deps.iter().any(|d| d == "qfs-http-core"),
+        "t63: qfs-tunnel must depend on qfs-http-core — a tunnel frame carries the shared \
+         HttpRequest/HttpResponse so the single redaction authority is inherited. Deps were: \
+         {tunnel_deps:?}"
+    );
+
+    // (c) qfs-tunnel is a leaf consumed only by the terminal `qfs` binary.
+    let tunnel_consumers: Vec<&String> = graph
+        .direct_deps
+        .iter()
+        .filter(|(pkg, deps)| {
+            pkg.as_str() != "qfs-tunnel" && deps.iter().any(|d| d == "qfs-tunnel")
+        })
+        .map(|(pkg, _)| pkg)
+        .collect();
+    for consumer in &tunnel_consumers {
+        assert_eq!(
+            consumer.as_str(),
+            "qfs",
+            "t63 leaf violation: {consumer} depends on qfs-tunnel, but only the terminal `qfs` binary \
+             (the serve composition root) may consume the tunnel protocol core. The live dial half is \
+             the binary's documented seam where tokio dead-ends."
         );
     }
 }

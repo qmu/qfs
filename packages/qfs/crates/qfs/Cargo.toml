@@ -101,6 +101,14 @@ qfs-mcp = { path = "../mcp" }
 # owns, and composes the three GET routes into the qfs-http listener via the same Fallback seam t47
 # uses for `POST /mcp`. The private key is envelope-decrypted into a `Secret` here and never escapes.
 qfs-oauth = { path = "../oauth" }
+# t63 agent-fabric transport (roadmap M7, decisions L/N): the binary is the composition root for the
+# qfs-native outbound tunnel + relay. qfs-tunnel is the PURE protocol core (frame codec + relay
+# handshake + in-memory mux) with NO tokio; the binary (src/tunnel.rs) is where the LIVE outbound
+# TCP/TLS dial to qfs Cloud would dead-end — that dial loop is a DOCUMENTED SEAM (not yet wired to a
+# socket, honesty-first). The binary adapts the t50 bearer validation into the handshake's injected
+# TokenValidator (decision N — a qfs Cloud sign-in is required) and would dispatch inbound frames to
+# the local crates/http handler path. A pure leaf consumed only by this terminal binary.
+qfs-tunnel = { path = "../tunnel" }
 # The shared secrets surface the watchtower resolves webhook signing secrets from (by handle); also
 # the redacting `Secret` wrapper the binary carries the OAuth passphrase + decrypted signing key in.
 qfs-secrets = { path = "../secrets" }

@@ -1252,6 +1252,7 @@ dependencies = [
  "qfs-session",
  "qfs-skill",
  "qfs-store",
+ "qfs-tunnel",
  "qfs-types",
  "qfs-watchtower",
  "rand 0.9.4",
@@ -1796,6 +1797,17 @@ dependencies = [
  "qfs-parser",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "qfs-tunnel"
+version = "0.0.0"
+dependencies = [
+ "qfs-http-core",
+ "qfs-secrets",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
