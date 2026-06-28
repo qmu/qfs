@@ -10,32 +10,32 @@ and limits **down** into the database and does the rest locally.
 
 ```qfs
 /sql/pg/orders
-|> WHERE total > 100
-|> SELECT id, total, status
-|> ORDER BY total DESC
-|> LIMIT 5
+|> where total > 100
+|> select id, total, status
+|> order by total DESC
+|> limit 5
 ```
 
 **Ranges and sets read naturally:**
 
 ```qfs
 /sql/pg/orders
-|> WHERE total BETWEEN 50 AND 100
-|> SELECT id, total
+|> where total BETWEEN 50 AND 100
+|> select id, total
 ```
 
 ```qfs
 /sql/pg/orders
-|> WHERE status IN ('open', 'pending')
-|> SELECT id, status
+|> where status IN ('open', 'pending')
+|> select id, status
 ```
 
 **Multiple conditions:**
 
 ```qfs
 /sql/pg/users
-|> WHERE age >= 18 AND country == 'JP'
-|> SELECT id, name, age
+|> where age >= 18 AND country == 'JP'
+|> select id, name, age
 ```
 
 ## Summarize
@@ -44,16 +44,16 @@ and limits **down** into the database and does the rest locally.
 
 ```qfs
 /sql/pg/orders
-|> GROUP BY status
-|> AGGREGATE count(id) AS n
-|> ORDER BY n DESC
+|> group by status
+|> aggregate count(id) as n
+|> order by n DESC
 ```
 
 **Sum a column:**
 
 ```qfs
 /sql/pg/orders
-|> AGGREGATE SUM(total) AS revenue
+|> aggregate SUM(total) as revenue
 ```
 
 ## Add a computed column
@@ -62,8 +62,8 @@ and limits **down** into the database and does the rest locally.
 
 ```qfs
 /sql/pg/orders
-|> EXTEND high_value = total
-|> SELECT id, total, high_value
+|> extend high_value = total
+|> select id, total, high_value
 ```
 
 ## Write
@@ -71,24 +71,24 @@ and limits **down** into the database and does the rest locally.
 **Insert a row, returning its id:**
 
 ```qfs
-INSERT INTO /sql/pg/audit
-  VALUES ('login', 'alice')
-  RETURNING id
+insert into /sql/pg/audit
+  values ('login', 'alice')
+  returning id
 ```
 
 **Update matching rows** (preview shows exactly which are affected):
 
 ```qfs
-UPDATE /sql/pg/orders
-  SET status = 'shipped'
-  WHERE id == 7
+update /sql/pg/orders
+  set status = 'shipped'
+  where id == 7
 ```
 
 **Upsert — the retry-safe write** (create-or-replace; running it twice converges):
 
 ```qfs
-UPSERT INTO /sql/pg/settings
-  VALUES ('theme', 'dark')
+upsert into /sql/pg/settings
+  values ('theme', 'dark')
 ```
 
 ## Combine two tables
@@ -97,12 +97,12 @@ Set operations stitch two sources together:
 
 ```qfs
 /sql/pg/users
-|> UNION /sql/mysql/users
+|> union /sql/mysql/users
 ```
 
 ```qfs
 /sql/pg/active_users
-|> EXCEPT /sql/pg/banned_users
+|> except /sql/pg/banned_users
 ```
 
 ::: tip Want to join a database to another *service*?

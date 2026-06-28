@@ -10,8 +10,8 @@ locally — so a Postgres table and a GitHub repo combine as easily as two datab
 
 ```qfs
 /sql/pg/orders
-|> JOIN /github/acme/web/issues ON id == issue_id
-|> SELECT id, title, status
+|> join /github/acme/web/issues on id == issue_id
+|> select id, title, status
 ```
 
 ## Join a database to git history
@@ -20,8 +20,8 @@ locally — so a Postgres table and a GitHub repo combine as easily as two datab
 
 ```qfs
 /sql/pg/users
-|> JOIN /git/myrepo/commits ON id == author_id
-|> SELECT name, message
+|> join /git/myrepo/commits on id == author_id
+|> select name, message
 ```
 
 ## Enrich a service with a local file
@@ -30,8 +30,8 @@ locally — so a Postgres table and a GitHub repo combine as easily as two datab
 
 ```qfs
 /sql/pg/orders
-|> JOIN /local/regions.csv ON region == code
-|> SELECT id, region, total
+|> join /local/regions.csv on region == code
+|> select id, region, total
 ```
 
 ## Combine the same shape from two services
@@ -40,7 +40,7 @@ locally — so a Postgres table and a GitHub repo combine as easily as two datab
 
 ```qfs
 /sql/pg/users
-|> UNION /sql/mysql/users
+|> union /sql/mysql/users
 ```
 
 ## Move data between services
@@ -51,8 +51,8 @@ Because reads and writes share one language, "copy from here to there" spans ser
 
 ```qfs
 /sql/pg/orders
-|> SELECT id, total, status
-|> ENCODE jsonl
+|> select id, total, status
+|> encode jsonl
 ```
 
 …then write those bytes to a bucket with an `UPSERT INTO /s3/...`. (Today these are two steps; the

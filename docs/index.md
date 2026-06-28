@@ -31,33 +31,33 @@ Find unread invoices in your inbox:
 
 ```qfs
 /mail/inbox
-|> WHERE subject LIKE '%invoice%'
-|> SELECT date, from, subject
-|> ORDER BY date DESC
+|> where subject LIKE '%invoice%'
+|> select date, from, subject
+|> order by date DESC
 ```
 
 Join a database table to your GitHub issues — across two completely different services:
 
 ```qfs
 /sql/pg/orders
-|> JOIN /github/acme/web/issues ON id == issue_id
-|> SELECT id, title
+|> join /github/acme/web/issues on id == issue_id
+|> select id, title
 ```
 
 Turn a JSON file into a YAML file:
 
 ```qfs
 /local/config.json
-|> DECODE json
-|> ENCODE yaml
+|> decode json
+|> encode yaml
 ```
 
 Automate it — every time mail lands, post to Slack:
 
 ```qfs
-CREATE TRIGGER notify
-  ON /mail/inbox
-  DO INSERT INTO /slack/acme/general/messages VALUES (NEW.subject)
+create trigger notify
+  on /mail/inbox
+  do insert into /slack/acme/general/messages values (NEW.subject)
 ```
 
 You **preview** each one to see precisely what would happen, then add `--commit` to make it real.

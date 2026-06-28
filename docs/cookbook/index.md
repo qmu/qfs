@@ -10,10 +10,10 @@ pipe leading each line — read it top to bottom like a series of steps:
 
 ```qfs
 /mail/inbox
-|> WHERE subject LIKE '%invoice%'
-|> SELECT date, from, subject
-|> ORDER BY date DESC
-|> LIMIT 20
+|> where subject LIKE '%invoice%'
+|> select date, from, subject
+|> order by date DESC
+|> limit 20
 ```
 
 ::: tip Preview first, always

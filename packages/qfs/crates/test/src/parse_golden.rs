@@ -118,9 +118,10 @@ mod tests {
 
     #[test]
     fn error_snapshot_captures_a_stable_structured_message() {
-        // A lowercase keyword is not in the frozen closed-core set — a stable recovery message.
-        // (`from` is no longer a keyword post-t73; a lowercase *stage* keyword still trips it.)
-        let snap = error_snapshot("/mail/inbox |> where id > 5");
+        // Keywords are lowercase, recognized case-insensitively (t74, decision S). An incomplete
+        // multi-word keyword (`group` with no `by`) is still outside the closed core — a stable
+        // recovery message.
+        let snap = error_snapshot("/mail/inbox |> group id");
         assert!(
             !snap.expected.is_empty(),
             "expected-set is non-empty (RFD §5)"

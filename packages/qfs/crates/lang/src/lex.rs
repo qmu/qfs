@@ -23,9 +23,14 @@
 //! * **`@version` in paths.** `@` binds to the preceding path segment; the raw ref
 //!   text (git ref, S3 versionId, drive rev — RFD §4) is preserved without
 //!   interpretation.
-//! * **Multi-word keywords.** `GROUP BY`, `INSERT INTO`, … are emitted as separate
-//!   adjacent tokens (their lead words surface as uppercase [`Token::Ident`]);
-//!   composition is the parser's job (RFD §3).
+//! * **Keyword case (t74, decision S).** Closed-core keywords are recognized
+//!   **case-insensitively** and are canonically **lowercase** (`where`, `select`,
+//!   `insert into`, …): the word lexer folds a word's case before matching
+//!   [`Keyword::from_word`], so `SELECT`/`Select`/`select` all lex to the same
+//!   [`Token::Keyword`]. Identifiers, paths, and literals stay case-sensitive data.
+//! * **Multi-word keywords.** `group by`, `insert into`, … are emitted as separate
+//!   adjacent tokens (their lead words surface as [`Token::Ident`]); composition is
+//!   the parser's job (RFD §3).
 //!
 //! ## Security note (no-live-creds by construction)
 //! The lexer must never be fed credential material: errors quote source spans, so
@@ -388,7 +393,7 @@ impl Lexer {
             return Ok(());
         }
 
-        // Reserved single-word keyword (case-sensitive UPPERCASE).
+        // Reserved single-word keyword (case-insensitive; canonical form is lowercase, t74).
         if let Some(kw) = Keyword::from_word(&word) {
             self.push(start, Token::Keyword(kw));
             return Ok(());

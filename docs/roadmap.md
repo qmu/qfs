@@ -75,7 +75,7 @@ The plan rests on these decisions. Later sections expand each.
 | P | Addressing | A path names three axes — **scope** (whose), **service** (what), **coordinate** (when). Root is a **closed set of plural realms** (`/members`, `/projects`, `/hosts`, `/directories`) plus two singletons (`/me`, `/sys`); within a scope, connections/accounts are **plain `/`-segments** (no new punctuation). The path is the authorization subject; realms are closed/governed while drivers stay an open registry. See §1.3 |
 | Q | Write form | A write reads as **dataflow**: when it has a source it is a **pipeline stage** — `<source> \|> … \|> insert/upsert/update/remove <target>`; a **source-less literal** write leads with the verb — `insert into <target> values (…)`. Both forms are legal; nothing else is. (Today's parser only accepts the verb-leading form — aligning it to the pipeline-stage form is grammar work, tracked with the M6 language tickets.) |
 | R | Source form | A `/path` is a first-class **`Resource`** value — a lazy, describable handle to a node. The source position needs no `from`: a leading `/path` **is** the source, and the *same* literal serves `join`/set-op operands, `policy` targets, and `member_of(…)` — one spelling for "a node" instead of four. A `Resource` is pure to hold and `describe`; only a pipeline forces its rows. A leading `/` is unambiguous by **position** — `/` where an expression *begins* (a stage/operand start) is always a path, `/` *between* two operands is division — so dropping `from` costs no clarity. (Today's parser requires `from` and quotes path patterns; unifying them is M6 grammar work — see §1.2.) |
-| S | Keyword case | Keywords are **lowercase** (`where`, `select`, `let`, `insert into`, `join`, `policy`, …). Paths, column names, and bindings are the data that carries the visual weight; keywords stay quiet. (§1.1 and the cookbook still render uppercase until the same M6 migration pass; the catalogue stays honest about what parses *now*.) |
+| S | Keyword case | Keywords are **lowercase** (`where`, `select`, `let`, `insert into`, `join`, `policy`, …). Paths, column names, and bindings are the data that carries the visual weight; keywords stay quiet. (**Landed in M6, ticket t74:** the lexer recognizes keywords **case-insensitively** and renders them lowercase as the canonical form — so an older uppercase query still parses — and the generated reference + the cookbook now show lowercase.) |
 | T | Type system | A real, **static** type system, checked at **plan time** — before any I/O, so a type error surfaces in `preview`, consistent with the purity floor. Scalar primitives are lowercase, Rust-style: **`bool`** (`true`/`false`), fixed-width ints **`i32`/`i64`/`u32`/`u64`**, floats **`f32`/`f64`**, and **`string`** (`'…'`) — alongside the **`Resource`** value (decision R) and lambda/function types (CamelCase for named types, lowercase for scalar primitives). Column types come from `describe`, so a pipeline type-checks before it touches the world. Ordinary **infix arithmetic** (`+ - * /`) is supported and type-checked; a leading `/` stays unambiguous by **position** (decision R), not by banning division. |
 | U | Credential vault | Secrets live in a **vault** with a **three-level key hierarchy** (extends E): a deployment **root KEK** (OS keychain / cloud KMS, never in the DB) wraps a per-project/connection **data key**, which encrypts only the secret columns. A team **shares a connection, never the secret** — a project connection is added once and used *as the team*, with actor-based `policy` deciding who may run plans through it; the raw secret is never re-entered, copied, or shown. A secret **never appears in a qfs statement** (it would be previewable/audited) — it enters only through a dedicated credential input (CLI prompt / admin form); the language sees **metadata only**. Member removal revokes use and **rotates**; an optional **per-recipient (E2E) wrap** to a member's key scopes a high-sensitivity connection cryptographically below the server (at the cost that an agent can't use it unattended). See §4.5 |
 | V | Observability | Telemetry is **externalized — qfs emits, it does not store** (the monitoring parallel to decision M). Three signals — **audit** (actor/connection/verb/path/committed), **metrics** (counters/histograms), **traces** (per-plan `describe`→pushdown→`commit`) — written to one of **three prepared output sinks: `file` (default), `stdout`, or `OTel` (recommended)**. Everything downstream (Prometheus, Grafana, Datadog, a SIEM, qfs Cloud's dashboards) consumes one of those — almost always OTel; qfs ships the standard output and integrates with no vendor directly. **One surface, two consumers:** the managed tier consumes it automatically; a self-hosted deployment points its own stack at the same output. Telemetry is **metadata only** — never secrets or row data — and audit reads are `policy`-gated. qfs **exports** the audit stream rather than retaining it: events are **hash-chained** as emitted and the chain head is **sealed to an independent write-once witness** (WORM / transparency log), so the *consumer's* store is tamper-evident and a compromised server can't rewrite history undetectably. **Where the log lives and how long it is kept are the consumer's concern, not qfs's** — though a local install may point the `file` sink at a rotating path when it has no external monitor. See §4.6 |
@@ -91,10 +91,10 @@ followed by **stages** joined by `|>` (a pipe). Read it top to bottom.
 
 ```qfs
 /mail/inbox
-|> WHERE subject LIKE '%invoice%'
-|> SELECT date, from, subject
-|> ORDER BY date DESC
-|> LIMIT 20
+|> where subject LIKE '%invoice%'
+|> select date, from, subject
+|> order by date DESC
+|> limit 20
 ```
 
 Paths are always absolute and name a node on any backend:
@@ -125,8 +125,8 @@ Federation — one query, many services — is the point:
 
 ```qfs
 /sql/pg/orders
-|> JOIN /github/acme/web/issues ON id == issue_id
-|> SELECT id, title
+|> join /github/acme/web/issues on id == issue_id
+|> select id, title
 ```
 
 Safety is built in: `qfs run` **previews by default**, `--commit` applies, and **irreversible**
@@ -134,9 +134,9 @@ effects (sending mail, merging a PR, deleting) demand `--commit-irreversible`. S
 `POLICY` (least-privilege scopes) and `TRIGGER` (automation):
 
 ```qfs
-CREATE POLICY uploads ALLOW UPSERT ON '/s3/*'
-CREATE TRIGGER notify ON /mail/inbox
-  DO INSERT INTO /slack/acme/general/messages VALUES (NEW.subject)
+create policy uploads ALLOW UPSERT on '/s3/*'
+create trigger notify on /mail/inbox
+  do insert into /slack/acme/general/messages values (NEW.subject)
 ```
 
 > Credentials are stored once with `qfs connection add <service> <name>` and never printed back
@@ -199,13 +199,13 @@ let active    = true
 |> select id, total, currency
 ```
 
-> These land across the **M6** language tickets — *not* one ticket. Today's parser still requires `from`,
-> quotes `policy`/`member_of` paths, renders uppercase keywords, and has no static type checker; the work
-> splits by decision: **t70** flips `=`→`==` (decision O), a **`Resource`/drop-`from`** ticket removes
-> `from` and unquotes path literals (decision R), a **lowercase-keywords** ticket lowers the keyword set
-> (decision S), and a **static-type-system** ticket lands typed literals + the plan-time checker (decision
-> T). Until they ship, §1.1 (the grammar you have today ✅) and the [query cookbook](/query-cookbook) stay
-> honest about what parses *now*.
+> These land across the **M6** language tickets — *not* one ticket. The work splits by decision:
+> **t70** flips `=`→`==` (decision O, landed), a **`Resource`/drop-`from`** ticket removes `from` and
+> unquotes path literals (decision R), **t74** lowers the keyword set to **lowercase** (decision S,
+> **landed** — keywords are recognized case-insensitively and render lowercase), and a
+> **static-type-system** ticket lands typed literals + the plan-time checker (decision T, still pending,
+> so the type annotations below are parsed-and-retained but not yet checked). §1.1 (the grammar you have
+> today ✅) and the [query cookbook](/query-cookbook) stay honest about what parses *now*.
 
 **`=` binds, `==` compares** (decision O) — **unlike SQL, a single `=` is never equivalence.** Once
 `let` and lambdas make binding a first-class, everyday act, overloading `=` for both "give this name a
@@ -215,10 +215,10 @@ value" and "is this value equal" reads as a trap. So qfs splits them: `=` **alwa
 
 > The `=`/`==` split (decision O) **has now landed** (ticket t70): the binary parses a single `=` as a
 > bind/assignment only, and `==` as equivalence, so §1.1 (the grammar you have today ✅) and the
-> `grammar=core` recipes in the [query cookbook](/query-cookbook) use `WHERE x == …`. Today's binary
-> still requires `from` and renders keywords uppercase; once the remaining M6 grammar tickets above land,
-> a migration pass finishes the rest (no-`from`, lowercase, unquoted) — until then, the catalogue stays
-> honest about what parses *now*. **The 🧭 examples below already show the full target grammar.**
+> `grammar=core` recipes in the [query cookbook](/query-cookbook) use `where x == …`. **Lowercase keywords
+> (decision S) have also landed** (ticket t74): keywords are recognized case-insensitively and render
+> lowercase, so the reference and the cookbook now show the lowercase form. **The 🧭 examples below
+> already show the full target grammar.**
 
 ```qfs
 # 🧭 proposed — `=` binds the name, `==` tests equivalence; the two never collide.

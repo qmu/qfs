@@ -24,7 +24,7 @@ Some paths take a **coordinate**. Git, for example, lets you read a file as of a
 
 ```qfs
 /git/myrepo@v1.2/src/main.rs
-|> SELECT path
+|> select path
 ```
 
 ## 2. Four archetypes
@@ -70,10 +70,10 @@ You query and change paths with one small SQL-like language. A query is a **sour
 
 ```qfs
 /sql/pg/orders
-|> WHERE total > 100
-|> SELECT id, total
-|> ORDER BY total DESC
-|> LIMIT 5
+|> where total > 100
+|> select id, total
+|> order by total DESC
+|> limit 5
 ```
 
 Read it top to bottom: start from a table, keep the big orders, pick two columns, sort, take five.
@@ -124,8 +124,8 @@ the rest — joins, extra filtering, sorting — locally:
 
 ```qfs
 /sql/pg/orders
-|> JOIN /github/acme/web/issues ON id == issue_id
-|> SELECT id, title
+|> join /github/acme/web/issues on id == issue_id
+|> select id, title
 ```
 
 That's a Postgres table joined to GitHub issues in one query. `describe` shows each path's
@@ -138,8 +138,8 @@ A blob of bytes becomes rows with `DECODE`, and rows become bytes with `ENCODE`.
 
 ```qfs
 /local/config.json
-|> DECODE json
-|> ENCODE yaml
+|> decode json
+|> encode yaml
 ```
 
 ## Credentials, briefly

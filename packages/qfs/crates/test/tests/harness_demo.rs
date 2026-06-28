@@ -174,9 +174,10 @@ fn parser_golden_create_endpoint() {
 
 #[test]
 fn parser_golden_error_recovery() {
-    // A lowercase keyword is not in the frozen closed-core set — a stable recovery message.
-    // (`from` is no longer a keyword post-t73; a lowercase *stage* keyword still trips the check.)
-    error_snapshot("/mail/inbox |> where id > 5").snapshot("ast_error_lowercase_keyword");
+    // Keywords are lowercase and recognized case-insensitively (t74, decision S). An INCOMPLETE
+    // multi-word keyword (`group` with no `by`) is still outside the closed core — a stable
+    // structured recovery message.
+    error_snapshot("/mail/inbox |> group id").snapshot("ast_error_unknown_keyword");
 }
 
 // ---------------------------------------------------------------------------

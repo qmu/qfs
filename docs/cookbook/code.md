@@ -15,14 +15,14 @@ as of a tag, branch, or commit.
 
 ```qfs
 /git/myrepo@9f2c1a/src
-|> SELECT path
+|> select path
 ```
 
 **Record a commit** (history is append-only; this adds one commit):
 
 ```qfs
-INSERT INTO /git/myrepo/commits
-  VALUES ('add feature', 'main')
+insert into /git/myrepo/commits
+  values ('add feature', 'main')
 ```
 
 ## GitHub — pull requests and issues
@@ -33,17 +33,17 @@ GitHub is an **object graph**: things (PRs, issues) with actions you `CALL`.
 
 ```qfs
 /github/acme/web/pulls
-|> WHERE state == 'open'
-|> SELECT number, title
-|> ORDER BY number DESC
-|> LIMIT 10
+|> where state == 'open'
+|> select number, title
+|> order by number DESC
+|> limit 10
 ```
 
 **Squash-merge a pull request** (irreversible — a gate):
 
 ```qfs
 /github/acme/web/pulls/42
-|> CALL github.merge(method => 'squash')
+|> call github.merge(method => 'squash')
 ```
 
 ::: warning Irreversible
@@ -57,16 +57,16 @@ A Slack channel is an **append log**: read the tail, append a message.
 **Post a message:**
 
 ```qfs
-INSERT INTO /slack/acme/general/messages
-  VALUES ('Deploy finished ✅')
+insert into /slack/acme/general/messages
+  values ('Deploy finished ✅')
 ```
 
 **Read the latest messages in a channel:**
 
 ```qfs
 /slack/acme/general/messages
-|> SELECT text
-|> LIMIT 20
+|> select text
+|> limit 20
 ```
 
 ::: tip

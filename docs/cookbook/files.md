@@ -11,16 +11,16 @@ the familiar `ls`/`cp`/`mv`/`rm` — those are just shorthand for these same ver
 
 ```qfs
 /s3/my-bucket/logs
-|> WHERE size > 1000000
-|> SELECT name, size
-|> ORDER BY size DESC
+|> where size > 1000000
+|> select name, size
+|> order by size DESC
 ```
 
 **List a local directory with details:**
 
 ```qfs
 /local/docs
-|> SELECT name, size, is_dir, modified
+|> select name, size, is_dir, modified
 ```
 
 ## Write & copy
@@ -32,21 +32,21 @@ within one.
 **Upload a report to Drive:**
 
 ```qfs
-UPSERT INTO /drive/my/Reports/q3.pdf
-  VALUES ('…bytes…')
+upsert into /drive/my/Reports/q3.pdf
+  values ('…bytes…')
 ```
 
 **Back up a file to S3:**
 
 ```qfs
-UPSERT INTO /s3/backups/2026/db.sql
-  VALUES ('…bytes…')
+upsert into /s3/backups/2026/db.sql
+  values ('…bytes…')
 ```
 
 ## Delete
 
 ```qfs
-REMOVE /s3/my-bucket/tmp/old.log
+remove /s3/my-bucket/tmp/old.log
 ```
 
 ## Convert between formats (codecs)
@@ -58,25 +58,25 @@ REMOVE /s3/my-bucket/tmp/old.log
 
 ```qfs
 /local/config.json
-|> DECODE json
-|> ENCODE yaml
+|> decode json
+|> encode yaml
 ```
 
 **Read a JSON file, keep the errors, write a CSV:**
 
 ```qfs
 /local/events.json
-|> DECODE json
-|> WHERE level == 'error'
-|> ENCODE csv
+|> decode json
+|> where level == 'error'
+|> encode csv
 ```
 
 **Export a database table to JSONL:**
 
 ```qfs
 /sql/pg/orders
-|> SELECT id, total, status
-|> ENCODE jsonl
+|> select id, total, status
+|> encode jsonl
 ```
 
 ::: tip

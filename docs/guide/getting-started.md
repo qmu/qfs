@@ -66,8 +66,8 @@ each `|>` pipe on its own line:
 
 ```qfs
 /mail/inbox
-|> WHERE subject LIKE '%invoice%'
-|> SELECT date, from, subject
+|> where subject LIKE '%invoice%'
+|> select date, from, subject
 ```
 
 ```sh

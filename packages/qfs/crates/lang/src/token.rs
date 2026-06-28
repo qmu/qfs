@@ -13,14 +13,16 @@ use crate::keywords::Keyword;
 
 /// A single classified lexical token.
 ///
-/// One variant per lexical category. Reserved UPPERCASE keywords collapse to
-/// [`Token::Keyword`] (the closed-core chokepoint, RFD §3); everything else is an
-/// identifier, path, literal, operator, or structural punctuation.
+/// One variant per lexical category. Reserved (case-insensitively recognized,
+/// lowercase-canonical) keywords collapse to [`Token::Keyword`] (the closed-core
+/// chokepoint, RFD §3); everything else is an identifier, path, literal, operator, or
+/// structural punctuation.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Token {
     // -- closed-core keywords (frozen; RFD §3) --
-    /// A reserved UPPERCASE keyword from the frozen [`Keyword`] set.
+    /// A reserved keyword from the frozen [`Keyword`] set. Recognized case-insensitively
+    /// and rendered in its canonical lowercase form (t74, decision S).
     Keyword(Keyword),
 
     // -- operators --

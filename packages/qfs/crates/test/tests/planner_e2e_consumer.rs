@@ -154,13 +154,14 @@ fn s3_parser_goldens_over_closed_core() {
 
 #[test]
 fn s3_parse_error_recovery_is_stable_and_structured() {
-    // A lowercase keyword is outside the frozen closed-core set: a stable structured message.
-    // (`from` is no longer a keyword post-t73; a lowercase *stage* keyword still trips the check.)
-    let snap = error_snapshot("/mail/inbox |> where id > 5");
+    // Keywords are lowercase and recognized case-insensitively (t74, decision S), so a miscased
+    // keyword is no longer an error. An INCOMPLETE multi-word keyword (`group` with no `by`) is
+    // still outside the closed core: a stable, structured `UnknownKeyword` recovery message.
+    let snap = error_snapshot("/mail/inbox |> group id");
     assert!(!snap.code.is_empty(), "machine code present (RFD §5)");
     assert!(!snap.expected.is_empty(), "expected-set non-empty (RFD §5)");
     // The structured error never carries a literal value (secret hygiene) — only a kind.
-    snap.snapshot("ast_error_lowercase_keyword");
+    snap.snapshot("ast_error_unknown_keyword");
 }
 
 // ===========================================================================

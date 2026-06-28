@@ -5,7 +5,7 @@
 
 Every service is mounted at a path prefix (e.g. `/mail`, `/s3`). Each one has a shape — one of four archetypes (Blob, Relational, Append, ObjectGraph) — that decides which verbs it supports. A path only offers the verbs that make sense for it; using an unsupported verb is **rejected immediately with a clear error**, never half-applied. The catalog below is generated from your installed binary, so it always matches what you have.
 
-The verbs are always `SELECT` / `INSERT` / `UPSERT` / `UPDATE` / `REMOVE` (plus `CALL`). Where a `native verbs` line mentions `ls`/`cp`/`mv`/`rm`, those are just familiar filesystem **aliases** for the same verbs in the interactive shell (`ls` is a `SELECT`, `cp` an `UPSERT`, `rm` a `REMOVE`) — not a second set of operations.
+The verbs are always `select` / `insert` / `upsert` / `update` / `remove` (plus `call`). Where a `native verbs` line mentions `ls`/`cp`/`mv`/`rm`, those are just familiar filesystem **aliases** for the same verbs in the interactive shell (`ls` is a `select`, `cp` an `upsert`, `rm` a `remove`) — not a second set of operations.
 
 ## Drivers
 
@@ -18,17 +18,17 @@ Universal verbs (✓ supported / ✗ rejected at parse time):
 
 | verb | supported |
 |------|-----------|
-| `SELECT` | ✓ |
-| `INSERT` | ✓ |
-| `UPSERT` | ✓ |
-| `UPDATE` | ✓ |
-| `REMOVE` | ✓ |
-| `LS` | ✓ |
-| `CP` | ✓ |
-| `MV` | ✓ |
-| `RM` | ✗ |
+| `select` | ✓ |
+| `insert` | ✓ |
+| `upsert` | ✓ |
+| `update` | ✓ |
+| `remove` | ✓ |
+| `ls` | ✓ |
+| `cp` | ✓ |
+| `mv` | ✓ |
+| `rm` | ✗ |
 
-Procedures (`CALL drive.action(..)`):
+Procedures (`call drive.action(..)`):
 
 | procedure | params | irreversible |
 |-----------|--------|--------------|
@@ -47,15 +47,15 @@ Universal verbs (✓ supported / ✗ rejected at parse time):
 
 | verb | supported |
 |------|-----------|
-| `SELECT` | ✓ |
-| `INSERT` | ✗ |
-| `UPSERT` | ✗ |
-| `UPDATE` | ✗ |
-| `REMOVE` | ✗ |
-| `LS` | ✗ |
-| `CP` | ✗ |
-| `MV` | ✗ |
-| `RM` | ✗ |
+| `select` | ✓ |
+| `insert` | ✗ |
+| `upsert` | ✗ |
+| `update` | ✗ |
+| `remove` | ✗ |
+| `ls` | ✗ |
+| `cp` | ✗ |
+| `mv` | ✗ |
+| `rm` | ✗ |
 
 Procedures: _none_
 
@@ -72,17 +72,17 @@ Universal verbs (✓ supported / ✗ rejected at parse time):
 
 | verb | supported |
 |------|-----------|
-| `SELECT` | ✓ |
-| `INSERT` | ✓ |
-| `UPSERT` | ✗ |
-| `UPDATE` | ✓ |
-| `REMOVE` | ✗ |
-| `LS` | ✗ |
-| `CP` | ✗ |
-| `MV` | ✗ |
-| `RM` | ✗ |
+| `select` | ✓ |
+| `insert` | ✓ |
+| `upsert` | ✗ |
+| `update` | ✓ |
+| `remove` | ✗ |
+| `ls` | ✗ |
+| `cp` | ✗ |
+| `mv` | ✗ |
+| `rm` | ✗ |
 
-Procedures (`CALL github.action(..)`):
+Procedures (`call github.action(..)`):
 
 | procedure | params | irreversible |
 |-----------|--------|--------------|
@@ -103,15 +103,15 @@ Universal verbs (✓ supported / ✗ rejected at parse time):
 
 | verb | supported |
 |------|-----------|
-| `SELECT` | ✗ |
-| `INSERT` | ✗ |
-| `UPSERT` | ✓ |
-| `UPDATE` | ✗ |
-| `REMOVE` | ✓ |
-| `LS` | ✓ |
-| `CP` | ✓ |
-| `MV` | ✓ |
-| `RM` | ✓ |
+| `select` | ✗ |
+| `insert` | ✗ |
+| `upsert` | ✓ |
+| `update` | ✗ |
+| `remove` | ✓ |
+| `ls` | ✓ |
+| `cp` | ✓ |
+| `mv` | ✓ |
+| `rm` | ✓ |
 
 Procedures: _none_
 
@@ -128,17 +128,17 @@ Universal verbs (✓ supported / ✗ rejected at parse time):
 
 | verb | supported |
 |------|-----------|
-| `SELECT` | ✓ |
-| `INSERT` | ✓ |
-| `UPSERT` | ✓ |
-| `UPDATE` | ✗ |
-| `REMOVE` | ✓ |
-| `LS` | ✗ |
-| `CP` | ✗ |
-| `MV` | ✗ |
-| `RM` | ✗ |
+| `select` | ✓ |
+| `insert` | ✓ |
+| `upsert` | ✓ |
+| `update` | ✗ |
+| `remove` | ✓ |
+| `ls` | ✗ |
+| `cp` | ✗ |
+| `mv` | ✗ |
+| `rm` | ✗ |
 
-Procedures (`CALL mail.action(..)`):
+Procedures (`call mail.action(..)`):
 
 | procedure | params | irreversible |
 |-----------|--------|--------------|
@@ -157,15 +157,15 @@ Universal verbs (✓ supported / ✗ rejected at parse time):
 
 | verb | supported |
 |------|-----------|
-| `SELECT` | ✓ |
-| `INSERT` | ✗ |
-| `UPSERT` | ✓ |
-| `UPDATE` | ✗ |
-| `REMOVE` | ✓ |
-| `LS` | ✓ |
-| `CP` | ✓ |
-| `MV` | ✓ |
-| `RM` | ✓ |
+| `select` | ✓ |
+| `insert` | ✗ |
+| `upsert` | ✓ |
+| `update` | ✗ |
+| `remove` | ✓ |
+| `ls` | ✓ |
+| `cp` | ✓ |
+| `mv` | ✓ |
+| `rm` | ✓ |
 
 Procedures: _none_
 
@@ -182,15 +182,15 @@ Universal verbs (✓ supported / ✗ rejected at parse time):
 
 | verb | supported |
 |------|-----------|
-| `SELECT` | ✓ |
-| `INSERT` | ✗ |
-| `UPSERT` | ✓ |
-| `UPDATE` | ✗ |
-| `REMOVE` | ✓ |
-| `LS` | ✓ |
-| `CP` | ✓ |
-| `MV` | ✓ |
-| `RM` | ✓ |
+| `select` | ✓ |
+| `insert` | ✗ |
+| `upsert` | ✓ |
+| `update` | ✗ |
+| `remove` | ✓ |
+| `ls` | ✓ |
+| `cp` | ✓ |
+| `mv` | ✓ |
+| `rm` | ✓ |
 
 Procedures: _none_
 
@@ -207,17 +207,17 @@ Universal verbs (✓ supported / ✗ rejected at parse time):
 
 | verb | supported |
 |------|-----------|
-| `SELECT` | ✓ |
-| `INSERT` | ✓ |
-| `UPSERT` | ✗ |
-| `UPDATE` | ✗ |
-| `REMOVE` | ✓ |
-| `LS` | ✗ |
-| `CP` | ✗ |
-| `MV` | ✗ |
-| `RM` | ✗ |
+| `select` | ✓ |
+| `insert` | ✓ |
+| `upsert` | ✗ |
+| `update` | ✗ |
+| `remove` | ✓ |
+| `ls` | ✗ |
+| `cp` | ✗ |
+| `mv` | ✗ |
+| `rm` | ✗ |
 
-Procedures (`CALL slack.action(..)`):
+Procedures (`call slack.action(..)`):
 
 | procedure | params | irreversible |
 |-----------|--------|--------------|
@@ -240,15 +240,15 @@ Universal verbs (✓ supported / ✗ rejected at parse time):
 
 | verb | supported |
 |------|-----------|
-| `SELECT` | ✓ |
-| `INSERT` | ✗ |
-| `UPSERT` | ✗ |
-| `UPDATE` | ✗ |
-| `REMOVE` | ✗ |
-| `LS` | ✗ |
-| `CP` | ✗ |
-| `MV` | ✗ |
-| `RM` | ✗ |
+| `select` | ✓ |
+| `insert` | ✗ |
+| `upsert` | ✗ |
+| `update` | ✗ |
+| `remove` | ✗ |
+| `ls` | ✗ |
+| `cp` | ✗ |
+| `mv` | ✗ |
+| `rm` | ✗ |
 
 Procedures: _none_
 
@@ -256,7 +256,7 @@ Prelude aliases: _none_
 
 Pushdown: where=false project=false limit=false order=false join=false aggregate=false distinct=false group_by=false
 
-## Codecs (DECODE / ENCODE formats)
+## Codecs (decode / encode formats)
 
 Codecs bridge blob ↔ relational independent of driver identity. Builtin formats:
 

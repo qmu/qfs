@@ -52,8 +52,8 @@ output, logs, or a `describe` report. On the **server**, you can go further and 
 agent can act, but only within the bounds you set:
 
 ```qfs
-CREATE POLICY api ALLOW SELECT DENY INSERT, UPDATE, REMOVE, CALL
-CREATE POLICY uploads ALLOW UPSERT ON 's3/*'
+create policy api ALLOW select DENY INSERT, update, remove, call
+create policy uploads ALLOW UPSERT on 's3/*'
 ```
 
 The guiding rule: grant the **minimum** a task needs, and let `preview` confirm a plan stays inside

@@ -13,7 +13,7 @@
 //!
 //! ## Closed core, structurally (RFD §3)
 //! Keyword surface comes from the frozen `qfs_lang::Keyword` set — there is no second
-//! transcription. The grammar rejects unknown core constructs (lowercase keywords,
+//! transcription. The grammar rejects unknown core constructs (incomplete multi-word keywords,
 //! reserved-word-as-identifier) but leaves the three registry seams open: `CALL
 //! driver.action`, `fn(...)`, `DECODE/ENCODE fmt`, and `/driver/...` paths all parse
 //! into string-named reference nodes without resolving the names.
@@ -105,19 +105,19 @@ fn map_error(
     )
 }
 
-/// Classify the offending token into a structured code + message. Lowercase
-/// keyword-shaped identifiers are flagged distinctly (closed-core keywords are
-/// UPPERCASE, RFD §3); reserved keywords in identifier position are flagged too.
+/// Classify the offending token into a structured code + message. Keyword-shaped
+/// identifiers are flagged distinctly (an incomplete multi-word keyword like `group`
+/// without `by`, or a keyword used where the grammar wants a name); reserved keywords
+/// in identifier position are flagged too. Keyword recognition is case-insensitive
+/// (t74, decision S), so this is no longer a *case* mistake.
 fn classify(tok: &Token) -> (ParseErrorCode, String) {
     match tok {
-        Token::Ident(s)
-            if s.chars().next().is_some_and(char::is_lowercase) && is_keyword_word(s) =>
-        {
-            (
-                ParseErrorCode::UnknownKeyword,
-                "closed-core keywords are UPPERCASE (RFD §3)".to_string(),
-            )
-        }
+        Token::Ident(s) if is_keyword_word(s) => (
+            ParseErrorCode::UnknownKeyword,
+            "closed-core keywords are lowercase (recognized case-insensitively); this keyword \
+             is not valid here (RFD §3, decision S)"
+                .to_string(),
+        ),
         Token::Keyword(_) => (
             ParseErrorCode::ReservedAsIdentifier,
             "a reserved keyword cannot be used here".to_string(),
@@ -136,12 +136,15 @@ fn classify(tok: &Token) -> (ParseErrorCode, String) {
     }
 }
 
-/// Whether `s`, uppercased, would be a closed-core keyword word (used to detect
-/// lowercase keyword typos like `where`).
+/// Whether `s` is a closed-core keyword word (case-insensitive, t74) — a single-word
+/// keyword, or a multi-word keyword lead/tail / contextual sub-word the lexer leaves
+/// as a bare identifier (`group`, `by`, `into`, `materialized`, …). Used to give a
+/// crisp diagnostic when such a word stands where a name/stage was expected (e.g. a
+/// `group` with no `by`).
 fn is_keyword_word(s: &str) -> bool {
-    Keyword::from_word(&s.to_uppercase()).is_some()
+    Keyword::from_word(s).is_some()
         || matches!(
-            s.to_uppercase().as_str(),
+            s.to_ascii_uppercase().as_str(),
             "GROUP"
                 | "ORDER"
                 | "INSERT"
@@ -208,12 +211,15 @@ fn kw<'a>(k: Keyword) -> impl Parser<Stream<'a>, Span, Err> {
     })
 }
 
-/// Match an UPPERCASE identifier word equal to `word` (used for multi-word keyword
-/// tails and DDL sub-keywords the lexer leaves as identifiers, e.g. `BY`, `INTO`,
-/// `OF`, `ASC`, `DESC`, `MATERIALIZED`).
+/// Match an identifier word equal to `word`, **case-insensitively** (t74, decision S):
+/// used for multi-word keyword tails/leads and the word operators / DDL sub-keywords the
+/// lexer leaves as identifiers, e.g. `by`, `into`, `materialized`, `and`, `or`, `of`,
+/// `asc`, `desc`. The `word` argument is written UPPERCASE by convention; recognition
+/// folds case so `INSERT`/`Insert`/`insert` all match — keeping the closed core lowercase
+/// (canonical) while accepting any case.
 fn word<'a>(word: &'static str) -> impl Parser<Stream<'a>, Span, Err> {
     any.verify_map(move |t: Spanned<Token>| match t.node {
-        Token::Ident(ref s) if s == word => Some(t.span),
+        Token::Ident(ref s) if s.eq_ignore_ascii_case(word) => Some(t.span),
         _ => None,
     })
 }
@@ -232,7 +238,7 @@ fn punct<'a>(tok: Token) -> impl Parser<Stream<'a>, Span, Err> {
     any.verify_map(move |t: Spanned<Token>| if t.node == tok { Some(t.span) } else { None })
 }
 
-/// Multi-word keyword: `GROUP BY` (= `GROUP` ident + `BY` ident, both UPPERCASE).
+/// Multi-word keyword: `group by` (= `group` ident + `by` ident, case-insensitive).
 fn group_by(input: &mut Stream<'_>) -> ModalResult<Span> {
     (word("GROUP"), word("BY"))
         .map(|(a, b)| Span::new(a.start, b.end))
@@ -641,14 +647,32 @@ fn values(input: &mut Stream<'_>) -> ModalResult<Values> {
     Ok(Values { columns, rows })
 }
 
+/// A **column name** in a name-only position: a bare identifier, or a reserved keyword
+/// spelled as a name. Keywords are reserved (t74, case-insensitive), but a column name in
+/// a `VALUES (…)` list is unambiguous, so a keyword token contributes its canonical
+/// lowercase text as the name. This keeps schema fields whose names collide with keyword
+/// words usable without quoting — e.g. the `/server/jobs` field `every` and the
+/// `/server/triggers` field `on` — which decision S's lowercase keyword set would
+/// otherwise shadow. It is a pure surface accommodation: no effect, no new vocabulary.
+fn column_name(input: &mut Stream<'_>) -> ModalResult<Spanned<Ident>> {
+    any.verify_map(|t: Spanned<Token>| match t.node {
+        Token::Ident(s) => Some(Spanned::new(s, t.span)),
+        Token::Keyword(k) => Some(Spanned::new(k.text().to_string(), t.span)),
+        _ => None,
+    })
+    .parse_next(input)
+}
+
 /// A `VALUES` column list `(a, b)` that is followed by a row `(` (lookahead). We
-/// only treat a leading paren-group as columns when all its members are bare
-/// identifiers AND a second `(` (the first row) follows — otherwise the group is
-/// itself the first/only row and this parser backtracks. winnow `&[T]` streams are
-/// `Copy`, so the post-list cursor is restored after the non-consuming lookahead.
+/// only treat a leading paren-group as columns when all its members are column
+/// names ([`column_name`]: a bare identifier or a keyword-in-name-position) AND a
+/// second `(` (the first row) follows — otherwise the group is itself the first/only
+/// row and this parser backtracks. winnow `&[T]` streams are `Copy`, so the post-list
+/// cursor is restored after the non-consuming lookahead.
 fn value_column_list(input: &mut Stream<'_>) -> ModalResult<Vec<Ident>> {
     let _ = punct(Token::LParen).parse_next(input)?;
-    let cols: Vec<Spanned<Ident>> = separated(1.., ident, punct(Token::Comma)).parse_next(input)?;
+    let cols: Vec<Spanned<Ident>> =
+        separated(1.., column_name, punct(Token::Comma)).parse_next(input)?;
     let _ = punct(Token::RParen).parse_next(input)?;
     // Non-consuming lookahead for a following row `(`.
     let after_cols = *input;
@@ -670,7 +694,7 @@ fn pipeline(input: &mut Stream<'_>) -> ModalResult<Pipeline> {
     let source = source(input)?;
     // Once a `|>` is consumed we are committed to a pipe op: `cut_err` turns an
     // inner failure into a non-backtracking error so the diagnostic points *inside*
-    // the op (a dangling `WHERE`, a lowercase keyword) instead of back at the `|>`.
+    // the op (a dangling `where`, an incomplete multi-word keyword) instead of back at the `|>`.
     let ops: Vec<PipeOp> =
         repeat(0.., preceded(punct(Token::Pipe), cut_err(pipe_op))).parse_next(input)?;
     Ok(Pipeline { source, ops })
@@ -1196,7 +1220,7 @@ fn policy_attach_clause(input: &mut Stream<'_>) -> ModalResult<String> {
 /// `ALLOW`/`DENY`/`ALL` are **NOT** in the frozen RFD §3 keyword table; only `POLICY`/`ON` and
 /// the verbs (`SELECT`/`UPDATE`/`REMOVE`/`CALL` as keywords; `INSERT`/`UPSERT` as the
 /// `INTO`-lead idents) are frozen. So this binds over the **existing surface**: `ALLOW`/`DENY`/
-/// `ALL` are matched as contextual UPPERCASE identifiers ([`word`]) — adding no new closed-core
+/// `ALL` are matched as contextual identifiers ([`word`], case-insensitive) — adding no new closed-core
 /// keyword — exactly as t31 bound `AT` and the DDL handles `MATERIALIZED`.
 fn policy_rule_clause(input: &mut Stream<'_>) -> ModalResult<PolicyRuleAst> {
     let allow =
@@ -1214,7 +1238,7 @@ fn policy_rule_clause(input: &mut Stream<'_>) -> ModalResult<PolicyRuleAst> {
 
 /// A POLICY rule's verb list: the bare `ALL` token, or a comma-separated list of verbs. The
 /// verbs span both lexer shapes — `SELECT`/`UPDATE`/`REMOVE`/`CALL` are reserved keyword
-/// tokens, while `INSERT`/`UPSERT` are the bare `INTO`-lead UPPERCASE idents — so this accepts
+/// tokens, while `INSERT`/`UPSERT` are the bare `INTO`-lead idents (case-insensitive) — so this accepts
 /// either. Returns `(verb_labels, was_all_token)`.
 fn policy_verb_list(input: &mut Stream<'_>) -> ModalResult<(Vec<String>, bool)> {
     if opt(word("ALL")).parse_next(input)?.is_some() {
@@ -1228,14 +1252,17 @@ fn policy_verb_list(input: &mut Stream<'_>) -> ModalResult<(Vec<String>, bool)> 
 }
 
 /// A single POLICY verb token: a reserved verb keyword (`SELECT`/`UPDATE`/`REMOVE`/`CALL`) or a
-/// bare UPPERCASE verb ident (`INSERT`/`UPSERT`). Returns the uppercase label.
+/// bare verb ident (`insert`/`upsert`, case-insensitive). Returns the canonical uppercase label.
 fn policy_verb_token(input: &mut Stream<'_>) -> ModalResult<String> {
     any.verify_map(|t: Spanned<Token>| match t.node {
         Token::Keyword(Keyword::Select) => Some("SELECT".to_string()),
         Token::Keyword(Keyword::Update) => Some("UPDATE".to_string()),
         Token::Keyword(Keyword::Remove) => Some("REMOVE".to_string()),
         Token::Keyword(Keyword::Call) => Some("CALL".to_string()),
-        Token::Ident(ref s) if s == "INSERT" || s == "UPSERT" => Some(s.clone()),
+        // `insert`/`upsert` are the multi-word verb leads (bare idents), matched
+        // case-insensitively (t74) and normalized to the canonical uppercase label.
+        Token::Ident(ref s) if s.eq_ignore_ascii_case("INSERT") => Some("INSERT".to_string()),
+        Token::Ident(ref s) if s.eq_ignore_ascii_case("UPSERT") => Some("UPSERT".to_string()),
         _ => None,
     })
     .parse_next(input)
@@ -1272,8 +1299,8 @@ fn ddl_kind(input: &mut Stream<'_>) -> ModalResult<DdlKind> {
     .parse_next(input)
 }
 
-/// `MATERIALIZED VIEW` — `MATERIALIZED` is an UPPERCASE ident the lexer leaves bare,
-/// followed by the `VIEW` keyword.
+/// `materialized view` — `materialized` is an ident the lexer leaves bare (matched
+/// case-insensitively), followed by the `view` keyword.
 fn materialized_view(input: &mut Stream<'_>) -> ModalResult<()> {
     let _ = word("MATERIALIZED").parse_next(input)?;
     let _ = kw(Keyword::View).parse_next(input)?;
@@ -1321,6 +1348,11 @@ fn do_clause(input: &mut Stream<'_>) -> ModalResult<Statement> {
 fn raw_token_text(input: &mut Stream<'_>) -> ModalResult<String> {
     any.verify_map(|t: Spanned<Token>| match t.node {
         Token::Ident(s) => Some(s),
+        // A keyword word standing as a raw label operand (e.g. an `on webhook` event kind,
+        // where `webhook` collides with the keyword). Recognized case-insensitively (t74);
+        // its canonical lowercase text is the label. A pure surface accommodation — these
+        // operands are routes/intervals/event-kinds, never effects.
+        Token::Keyword(k) => Some(k.text().to_string()),
         Token::Str(s) => Some(s),
         Token::Int(i) => Some(i.to_string()),
         Token::Size { value, unit } => Some(format!("{value} {}", unit.text())),

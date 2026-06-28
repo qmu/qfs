@@ -765,12 +765,13 @@ fn let_value_may_not_be_an_effect() {
 }
 
 #[test]
-fn lowercase_let_is_rejected_as_unknown_keyword() {
-    // `LET` is a frozen keyword: the lowercase form is flagged, like every other keyword. Post-t73
-    // a leading bare word is a valid source, so the miscased `let` is exercised in trailing
-    // position (after a valid terminal statement), where it surfaces as the offending token.
-    let err = parse_err("/sql/pg/t\nlet x = /a");
-    assert_eq!(err.code, ParseErrorCode::UnknownKeyword);
+fn lowercase_let_parses_as_a_binding() {
+    // Case policy (t74, decision S): keywords are lowercase canonical and recognized
+    // case-insensitively. The lowercase `let` IS the binding keyword now — it parses, and
+    // so does the historical uppercase `LET` (both fold to the same keyword).
+    assert!(matches!(parse_ok("let x = /a\nx"), Statement::Let { .. }));
+    assert!(matches!(parse_ok("LET x = /a\nx"), Statement::Let { .. }));
+    assert!(matches!(parse_ok("Let x = /a\nx"), Statement::Let { .. }));
 }
 
 #[test]
@@ -988,10 +989,24 @@ fn transaction_does_not_nest() {
 // ---- governance: rejection cases ------------------------------------------
 
 #[test]
-fn lowercase_keyword_rejected_as_unknown_keyword() {
-    let err = parse_err("/mail |> where id = 1");
+fn lowercase_keyword_parses_case_insensitively() {
+    // Post-t74 (decision S) lowercase keywords ARE the canonical form: `where` parses, and so
+    // does `WHERE` / `Where` — all fold to the same stage. (The lone `=` is still the binding
+    // token; equivalence is `==`, RFD decision O / t70 — unrelated to case.)
+    for spelling in ["where", "WHERE", "Where"] {
+        let Statement::Query(p) = parse_ok(&format!("/mail |> {spelling} id == 1")) else {
+            panic!("expected a query for `{spelling}`");
+        };
+        assert!(matches!(p.ops.first(), Some(PipeOp::Where(_))));
+    }
+}
+
+#[test]
+fn incomplete_multiword_keyword_is_unknown_keyword() {
+    // A multi-word keyword fragment standing alone (a `group` with no `by`) is still a crisp
+    // `UnknownKeyword` — case-insensitive recognition does not make a fragment valid (t74).
+    let err = parse_err("/mail |> group id");
     assert_eq!(err.code, ParseErrorCode::UnknownKeyword);
-    // The error points at the offending lowercase `where`.
     assert!(err.span.start > 0);
     assert!(!err.expected.is_empty());
 }
@@ -1111,7 +1126,9 @@ fn no_vendor_type_in_public_api() {
 fn sees_frozen_keyword_set() {
     // `FROM` was removed from the closed core in t73 (decision R): the source position needs no
     // keyword. `WHERE` (and the rest of the frozen set) is unaffected.
+    // Keywords are canonically lowercase (t74, decision S); `from` is gone in any case.
+    assert!(!KEYWORDS.contains(&"from"));
     assert!(!KEYWORDS.contains(&"FROM"));
-    assert!(KEYWORDS.contains(&"WHERE"));
-    assert_eq!(Keyword::Where.text(), "WHERE");
+    assert!(KEYWORDS.contains(&"where"));
+    assert_eq!(Keyword::Where.text(), "where");
 }

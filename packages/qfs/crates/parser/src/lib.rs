@@ -16,7 +16,7 @@
 //! ([`ast::PathExpr`]), functions & procedures ([`ast::FnRef`]/[`ast::CallRef`]), and
 //! codecs ([`ast::Codec`]). Names inside those seams are parsed but **not resolved**
 //! — resolution / capability gating is the semantic phase (E2). Unknown core
-//! constructs (lowercase keywords, reserved words as identifiers) are rejected at
+//! constructs (incomplete multi-word keywords, reserved words as identifiers) are rejected at
 //! parse time with a structured [`ParseError`].
 //!
 //! ## Reversibility (fidelity guard G6, boundary B6)

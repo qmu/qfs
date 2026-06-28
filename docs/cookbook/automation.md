@@ -12,26 +12,26 @@ needed.
 **When mail arrives, post its subject to Slack:**
 
 ```qfs
-CREATE TRIGGER notify
-  ON /mail/inbox
-  DO INSERT INTO /slack/acme/general/messages VALUES (NEW.subject)
+create trigger notify
+  on /mail/inbox
+  do insert into /slack/acme/general/messages values (NEW.subject)
 ```
 
 **Only escalate high-priority mail** — triggers can filter on the new row with `NEW`:
 
 ```qfs
-CREATE TRIGGER escalate
-  ON inbox
-  WHERE NEW.priority > 3
-  DO INSERT INTO /slack/acme/ops/messages VALUES ('urgent mail')
+create trigger escalate
+  on inbox
+  where NEW.priority > 3
+  do insert into /slack/acme/ops/messages values ('urgent mail')
 ```
 
 **Archive every new row to another store:**
 
 ```qfs
-CREATE TRIGGER archive
-  ON /mail/inbox
-  DO UPSERT INTO /s3/archive/mail VALUES (NEW.id)
+create trigger archive
+  on /mail/inbox
+  do upsert into /s3/archive/mail values (NEW.id)
 ```
 
 ## Job — run on a schedule
@@ -39,9 +39,9 @@ CREATE TRIGGER archive
 **Nightly cleanup of old scratch files** (`EVERY` takes a quoted interval):
 
 ```qfs
-CREATE JOB nightly
-  EVERY '1h'
-  DO REMOVE /tmp/scratch WHERE age > 7
+create job nightly
+  every '1h'
+  do remove /tmp/scratch where age > 7
 ```
 
 ## Endpoint — expose a query as an HTTP API
@@ -49,9 +49,9 @@ CREATE JOB nightly
 **A read-only `GET /recent` that returns the latest inbox items:**
 
 ```qfs
-CREATE ENDPOINT recent
-  ON 'GET /recent'
-  AS /mail/inbox |> LIMIT 5
+create endpoint recent
+  on 'GET /recent'
+  as /mail/inbox |> limit 5
 ```
 
 ## View — name and cache a query
@@ -59,15 +59,15 @@ CREATE ENDPOINT recent
 **A plain view** (a named query):
 
 ```qfs
-CREATE VIEW recent_mail
-  AS /mail/inbox |> LIMIT 50
+create view recent_mail
+  as /mail/inbox |> limit 50
 ```
 
 **A materialized view** (cached result):
 
 ```qfs
-CREATE MATERIALIZED VIEW cached
-  AS /mail/inbox |> LIMIT 50
+create materialized view cached
+  as /mail/inbox |> limit 50
 ```
 
 ## Policy — least privilege
@@ -78,16 +78,16 @@ path pattern.
 **Read-only API access:**
 
 ```qfs
-CREATE POLICY api
-  ALLOW SELECT
-  DENY INSERT, UPDATE, REMOVE, CALL
+create policy api
+  ALLOW select
+  DENY INSERT, update, remove, call
 ```
 
 **Allow uploads to one bucket prefix only:**
 
 ```qfs
-CREATE POLICY uploads
-  ALLOW UPSERT ON 's3/*'
+create policy uploads
+  ALLOW UPSERT on 's3/*'
 ```
 
 ::: tip Why this is safe
