@@ -16,10 +16,16 @@ pipe leading each line — read it top to bottom like a series of steps:
 |> limit 20
 ```
 
-::: tip Preview first, always
-`qfs run` **previews** by default — it shows the plan and changes nothing. Add `--commit` to act
-(and `--commit-irreversible` for things that can't be undone, like sending mail or merging a PR).
-So paste any recipe and safely see what it *would* do first.
+::: tip Reads return rows; writes preview
+A **read** runs immediately and returns rows — `/local`, `/sys`, a `/sql` table, and a `/git` repo
+all read today. A read of a cloud service you haven't connected (mail, GitHub, Slack, S3, Drive)
+returns an *actionable* error telling you exactly which `qfs connection add …` to run — it never
+silently fails.
+
+A **write** (`insert`, `update`, `upsert`, `remove`, `call`) **previews** by default: `qfs run`
+shows the plan and changes nothing. Add `--commit` to act, and `--commit-irreversible` for things
+that can't be undone, like sending mail or merging a PR. So paste any recipe and safely see what it
+*would* do first.
 :::
 
 ## The chapters

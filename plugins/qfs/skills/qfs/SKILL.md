@@ -88,7 +88,7 @@ Effect (write) stages and statements:
 
 ```qfs
 insert into /slack/acme/general/messages values ('Deploy done')
-upsert into /s3/backups/db.sql values ('…bytes…')          -- retry-safe write
+upsert into /drive/my/Reports/report.pdf values ('…bytes…')   -- retry-safe blob write
 update /sql/pg/orders set status = 'shipped' where id == 7
 remove /mail/inbox where subject LIKE '%spam%'             -- REMOVE takes a path + WHERE
 /github/acme/web/pulls/42 |> call github.merge(method => 'squash')

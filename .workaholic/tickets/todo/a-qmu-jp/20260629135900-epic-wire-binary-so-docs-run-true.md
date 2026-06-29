@@ -88,6 +88,17 @@ now-wired binary; the table below maps each doc ticket to the wiring it waits on
   a distinct model from a list scan; left on connect-account (the T7 ticket marked GA deferrable).
 - **Gmail `q=` WHERE pushdown** — T7 pushes only the label scope; `from:`/`subject:`/`is:unread`
   pushdown into the Gmail query is a later optimization (WHERE is a local residual today).
+- **`/git@<ref>` temporal reads** — the Phase-5 doc verification found the `@<ref>` coordinate is NOT
+  honored for tree/blob reads (`/git/r@v1/` returns HEAD's tree, not v1's), and single-file blob
+  reads (`/git/r@<ref>/src/main.rs`) error `invalid_path`. T3 wired commits/refs/tags/reflog +
+  HEAD-tree listings (those run); ref-pinned trees + file-bytes-at-a-ref are a follow-up. The docs
+  honestly claim only what runs.
+- **`/local` write materialization** — a one-shot `upsert into /local/<file> values(…)` reports
+  COMMITTED but does not write the file (`commit_failed … carries no content blob`); shell `cp`/
+  `upsert` likewise. A driver-level write seam, surfaced during the shell-doc rewrite.
+- **`md` codec** — `decode/encode md` errors `unknown_codec`; only `json/jsonl/yaml/toml/csv` are
+  wired. The `markdown+frontmatter` codec exists in `crates/codec` but isn't registered in the
+  builtin set the read path resolves through.
 
 ## Considerations
 

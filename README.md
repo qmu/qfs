@@ -1,8 +1,8 @@
 # qfs
 
 **One small grammar for every external service.** `qfs` is a single Rust binary that exposes
-every backend — mail, drive, object storage, GitHub, Slack, SQL, git, Google Analytics, Claude, an
-HTTP fetcher, a directory, and `/sys` administration — through **one uniform, filesystem-shaped,
+every backend — the local filesystem, mail, drive, object storage, GitHub, Slack, SQL, git, Google
+Analytics, Claude, an HTTP fetcher, a directory, and `/sys` administration — through **one uniform, filesystem-shaped,
 pipe-SQL DSL**. The same engine presents **three faces**: a **CLI** (and an FTP-like interactive
 shell), an **MCP endpoint** for AI agents, and an **embedded web dashboard** with approval cards.
 It runs locally or as a self-hosted server (RFD-0001 §1, §9). The Cloudflare Workers `wasm32`
@@ -112,18 +112,38 @@ update, and where to read more). The [Quickstart](#quickstart-the-loop) below is
 ## Quickstart (the loop)
 
 ```sh
-# 1. DESCRIBE a node — pure, no creds, offline:
+# 1. DESCRIBE a node — pure, no creds, no network (the contract you read first):
 qfs describe /mail/drafts
 
-# 2. write + 3. PREVIEW (default — shows the plan, touches nothing):
+# 2. READ that returns rows right now — list any local directory
+#    (`/local` + an ABSOLUTE host path):
+qfs run "/local/etc |> select name, size, is_dir |> limit 5"
+
+# …or run a pure codec pipeline — decode one format, encode another:
+echo '{"k":1,"name":"alpha"}' > /tmp/d.json
+qfs run "/local/tmp/d.json |> decode json |> encode yaml"
+# -> {"rows":[{"content":"- k: 1\n  name: alpha\n"}]}
+
+# …or query SQLite / git with the WHERE pushed into the backend — needs a
+#    connection: export QFS_SQL_<conn>=<file.sqlite> / QFS_GIT_<repo>=<path> first.
+qfs run "/sql/orders/orders |> where total > 100 |> select customer, total |> order by total desc"
+qfs run "/git/myrepo/commits |> select sha, message |> limit 10"
+
+# 3. PREVIEW a write — the default; it builds the effect-plan and touches nothing:
+qfs run "insert into /mail/drafts values ('a@b.com','Hi','Body')"
+# -> {"preview":{"rows":[{"verb":"INSERT","target":{"driver":"mail","path":"/mail/drafts"},
+#     "affected":{"exact":1},"irreversible":false}],...},"committed":false}
+
+# 4. COMMIT applies the plan — `--commit` (writes need a CONNECTED account; below).
+qfs run "insert into /mail/drafts values ('a@b.com','Hi','Body')" --commit
+
+# A mail READ, or an irreversible CALL, needs a connected Google account today:
 qfs run "/mail/inbox |> where subject LIKE '%invoice%' |> select subject, from"
-
-# create a draft (PREVIEW first, then COMMIT to apply):
-qfs run "insert into /mail/drafts values (...)"            # PREVIEW
-qfs run "insert into /mail/drafts values (...) commit"     # apply
-
-# 4. COMMIT an irreversible effect requires an explicit ack in one-shot:
-qfs run "id:draft-1 |> call mail.send commit" --commit-irreversible
+# -> capability error (exit 3): "connect a Google account to read mail — run
+#    `qfs identity signup <email>`, then `qfs connection add gmail`"
+qfs run "/mail/drafts |> where id == 'draft-1' |> call mail.send" --commit --commit-irreversible
+# (same connect-account error until gmail is connected; `mail.send` is irreversible,
+#  so a one-shot COMMIT also needs the explicit `--commit-irreversible` ack)
 ```
 
 The interactive shell (no subcommand) gives the same loop with an FTP-like prompt:
@@ -141,9 +161,13 @@ for (RFD §9):
 $ qfs --version
 qfs 0.0.10
 commit:  <git-sha>
-target:  x86_64-unknown-linux-gnu
+target:  x86_64-unknown-linux-musl
 wasm32:  false
 ```
+
+`target` is the triple the binary was built for — a shipped release is always one of the four
+static-musl Linux / macOS triples (`{x86_64,aarch64}-unknown-linux-musl`, `{x86_64,aarch64}-apple-darwin`),
+never a dynamic `-gnu` build.
 
 ## Documentation
 
