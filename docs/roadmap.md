@@ -127,8 +127,6 @@ guides; each either fails safely or returns a clear error today.
   tree works; reading the tree (or a single file's contents) **as of an older commit or tag**
   (`/git/app@v1.2/…`) does not yet — it currently shows the latest version. Time-travel reads are a
   follow-up.
-- **Actually write local files.** A `upsert into /local/<file> …` previews and *says* it committed,
-  but doesn't yet write the file to disk. The write path needs finishing.
 - **Markdown as a file format.** The format converters cover JSON, JSONL, YAML, TOML, and CSV;
   Markdown-with-front-matter exists in the code but isn't wired into that set yet, so `… encode md`
   errors.
