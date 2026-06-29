@@ -190,6 +190,27 @@ pub fn run_engine_and_reads() -> (Engine, ReadRegistry, qfs_core::SafetyMode) {
         .register(Arc::new(qfs_driver_slack::SlackDriver::new(Arc::new(
             qfs_driver_slack::MockSlackClient::default(),
         ))));
+    // Cloudflare (/cf) + the generic HTTP/REST (/rest) drivers: register their cred-free PLANNING
+    // mounts so `/cf/...` and `/rest/...` statements PLAN + describe (the drivers existed but were
+    // not reachable as paths). Both are built with an empty registry / placeholder config here —
+    // describing the mount root and resolving the path — so a connected user can address them; the
+    // live credentialed read/commit and the per-resource config (which D1/KV/queues; which REST
+    // resource maps) are the documented follow-up, sourced from a richer connection declaration.
+    let _ = engine
+        .mounts
+        .register(Arc::new(qfs_driver_cf::CfDriver::new(
+            crate::describe::cred_free_cf_registry(),
+        )));
+    if let Ok(json) = qfs_core::CodecRegistry::with_builtins().resolve("json") {
+        let _ = engine
+            .mounts
+            .register(Arc::new(qfs_driver_http::RestDriver::new(
+                qfs_driver_http::RestApiConfig::new("http://localhost", Vec::new()),
+                json,
+                Arc::new(qfs_driver_http::MockHttpClient::new()),
+                Arc::new(qfs_secrets::InMemoryStore::new()),
+            )));
+    }
     // Google (gmail / gdrive / ga): register the cred-free mock-client facets as mounts so `/mail`,
     // `/drive`, and `/ga` statements PLAN (see `register_google_planning_mounts`).
     register_google_planning_mounts(&mut engine);

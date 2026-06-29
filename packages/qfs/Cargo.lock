@@ -1227,6 +1227,7 @@ dependencies = [
  "async-trait",
  "qfs-cmd",
  "qfs-core",
+ "qfs-driver-cf",
  "qfs-driver-claude",
  "qfs-driver-directory",
  "qfs-driver-fs",

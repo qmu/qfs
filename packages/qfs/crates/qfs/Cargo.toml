@@ -124,6 +124,9 @@ qfs-types = { path = "../types" }
 # here in the terminal leaf — the driver crates stay transport-agnostic + mockable, and qfs-cmd
 # stays off both. github/slack are already linked above (describe); this only adds the wire client.
 qfs-driver-http = { path = "../driver-http" }
+# The Cloudflare driver — the binary registers its cred-free planning mount so `/cf/...` statements
+# PLAN + describe (a runtime-consumer leaf, like the other driver edges; only the binary may carry it).
+qfs-driver-cf = { path = "../driver-cf" }
 # google-drivers live commit wiring: the binary bridges the ONE reqwest transport onto
 # qfs-google-auth's runtime-free `HttpExchange` seam (src/transport.rs) and composes the OAuth
 # client + per-account `StoredTokenSource` + authenticated `GoogleApiClient` that the gmail/gdrive/ga

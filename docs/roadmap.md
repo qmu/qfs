@@ -47,10 +47,19 @@ wired the binary so the headline things actually run:
 
 Every documentation page was rewritten and checked, example by example, against the running binary.
 
-## The next change 🧭 — define connections **in the language**
+## Connections **in the language** ✅ — shipped
+
+You now declare a connection with a `CREATE CONNECTION <name> DRIVER <driver> [AT '<locator>']
+[SECRET '<ref>']` statement in a `connections.qfs` file (point at it with `QFS_CONNECTIONS=<file>`,
+or `~/.config/qfs/connections.qfs`). A declared `DRIVER sqlite` / `DRIVER git` connection mounts
+`/sql/<name>` / `/git/<name>` with **no env var** — the declaration is the reviewable, committable
+source of truth. `SECRET` is a reference (`env:<VAR>` / `vault:<driver>/<connection>`), never an
+inline value. The old `QFS_SQL_*` / `QFS_GIT_*` env vars are a warned, deprecated fallback —
+`qfs connection import-env` prints the equivalent declarations. (Extending declared mounts to
+Postgres/MySQL and the cloud drivers is the follow-up; the design that got us here is below.)
 
 A **connection** is a named pointer to one source: *which* database/repo/account it is, and how to
-reach it. Today qfs has no clean way to declare one — and that's the problem.
+reach it. The problem this solved:
 
 ### What's wrong today
 
@@ -116,10 +125,11 @@ one-command migration that prints the equivalent `CREATE CONNECTION` lines for y
 
 A batch of these just shipped (see *Just shipped from this backlog* below); what still remains:
 
-- **Two drivers aren't mounted.** A Cloudflare driver and a generic HTTP/REST driver exist in the
-  code but aren't reachable from the CLI as paths. Both need a per-connection config + credential
-  surface, so they're best landed **on top of the `CREATE CONNECTION` model** above rather than a
-  throwaway config of their own.
+- **Finish the Cloudflare & HTTP/REST mounts.** Both drivers are now **reachable as paths** — `/rest`
+  describes and appears in the driver catalogue, and `/cf` is a mounted, plannable path (no longer
+  `unknown_mount`). What remains is the per-resource config they need (which D1/KV/queues; which REST
+  resource maps) and their live credentialed read/commit — best sourced from a richer `CREATE
+  CONNECTION` declaration than the current `(driver, locator, secret)` shape carries.
 - **Spell out `/ga`.** Reading `/ga/<property>` works now, but `/ga` is a cryptic mount name — it
   should be spelled out or aliased to `/analytics`, as a deliberate, deprecation-guarded change to
   the (versioned) path surface.

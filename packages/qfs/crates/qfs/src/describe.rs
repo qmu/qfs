@@ -34,6 +34,22 @@ use qfs_core::MountRegistry;
 /// impossible here (distinct mounts), but a duplicate would be dropped silently rather than
 /// panicking — the registry stays a best-effort describe surface.
 #[must_use]
+/// A cred-free Cloudflare registry carrying ONE representative D1 database / KV namespace / queue,
+/// so `qfs describe /cf/d1/db` (and the t40 driver catalogue) surface `/cf`'s real verbs over the
+/// public in-memory [`MockCfBackend`](qfs_driver_cf::MockCfBackend) — the same "representative
+/// resource" shape the objstore describe uses for `/s3/bucket`. Never *applied* (describe reads only
+/// the introspective half), so no credential and no I/O ever happens.
+pub(crate) fn cred_free_cf_registry() -> qfs_driver_cf::CfRegistry {
+    use qfs_driver_cf::{Catalog, CfRegistry, D1Database, MockCfBackend};
+    CfRegistry::new()
+        .with_d1(
+            "db",
+            D1Database::new(Arc::new(MockCfBackend::new()), Catalog::new(Vec::new())),
+        )
+        .with_kv("ns", Arc::new(MockCfBackend::new()))
+        .with_queue("q", Arc::new(MockCfBackend::new()))
+}
+
 pub fn describe_registry() -> MountRegistry {
     let mut reg = MountRegistry::new();
 
@@ -103,6 +119,12 @@ pub fn describe_registry() -> MountRegistry {
         // session metadata + an append-log, NOT qfs calling an LLM. This is what makes `/claude/*`
         // appear in the generated `docs/drivers.md`.
         Arc::new(qfs_driver_claude::ClaudeDriver::new()),
+        // Cloudflare (/cf) + the generic HTTP/REST (/rest) drivers: their PURE describe surfaces,
+        // built cred-free (empty registry / placeholder config), so `qfs describe /cf` and
+        // `qfs describe /rest` resolve and the t40 driver catalogue surfaces them — closing the
+        // "exist in the code but aren't reachable as paths" gap. Live read/commit + per-resource
+        // config (which D1/KV/queues; which REST resource maps) are the follow-up.
+        Arc::new(qfs_driver_cf::CfDriver::new(cred_free_cf_registry())),
         // NOTE (t58): the `/directories/...` identity-directory driver is deliberately NOT
         // registered here. `/directories` is a RESERVED SCOPE REALM (decision P / §1.3 —
         // `RESERVED_REALMS`), not a driver-backed mount like `/sys`, so `MountRegistry::register`
@@ -118,6 +140,17 @@ pub fn describe_registry() -> MountRegistry {
         // Ignore a (theoretically impossible) duplicate-mount error: the describe surface is
         // best-effort and must never panic.
         let _ = reg.register(driver);
+    }
+    // The generic HTTP/REST driver's cred-free describe mount (placeholder config + mock client +
+    // empty in-memory secrets — never applied). Its codec is resolved from the builtin set; if that
+    // somehow fails, /rest is simply absent rather than panicking (the best-effort describe rule).
+    if let Ok(json) = qfs_core::CodecRegistry::with_builtins().resolve("json") {
+        let _ = reg.register(Arc::new(qfs_driver_http::RestDriver::new(
+            qfs_driver_http::RestApiConfig::new("http://localhost", Vec::new()),
+            json,
+            Arc::new(qfs_driver_http::MockHttpClient::new()),
+            Arc::new(qfs_secrets::InMemoryStore::new()),
+        )));
     }
     reg
 }

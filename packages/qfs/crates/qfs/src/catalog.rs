@@ -147,8 +147,8 @@ mod tests {
     #[test]
     fn catalog_covers_the_describe_registry_drivers() {
         let cat = driver_catalog();
-        // The describe registry registers 9 cred-free drivers (local/fs/mail/drive/github/slack/
-        // ga/s3/r2); every one whose representative node resolves appears in the catalog.
+        // The describe registry registers the cred-free drivers (local/fs/mail/drive/github/slack/
+        // ga/s3/r2/rest/…); every one whose representative node resolves appears in the catalog.
         assert!(
             cat.drivers.len() >= 7,
             "catalog should fold most describe-registered drivers, got {}",
