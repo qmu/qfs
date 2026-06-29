@@ -1,135 +1,160 @@
 # Where qfs is going next
 
-A forward-looking design note (設計書), not a description of shipped behavior. Each item is tagged
-**✅ shipped** (true today — see the guides) or **🧭 proposed** (a plan, not yet runnable). The
-[guide](/guide/concepts) and [cookbook](/cookbook/) only ever document ✅; this page is the one place
-that talks about 🧭. (The previous roadmap was erased once it all shipped as v0.0.9; this is the next
-one.)
+This page is the **plan**, not a description of what works today. The [guide](/guide/concepts) and
+[cookbook](/cookbook/) document only shipped behavior; this is the one page that talks about ideas
+that are not built yet. Each item is tagged **✅ shipped** (real today) or **🧭 proposed** (planned).
+
+## A 30-second orientation (so this page stands alone)
+
+qfs gives every external system **one address space and one query language**. A *path* names a
+source, and you query it with a SQL-like, left-to-right pipe (`|>`). The sources qfs knows about:
+
+| Path | What it is |
+| --- | --- |
+| `/local` | files and folders on your own computer |
+| `/sql/<name>` | a SQL database (SQLite, Postgres, MySQL) you've connected |
+| `/git/<name>` | a git repository on disk |
+| `/mail` | Gmail |
+| `/drive` | Google Drive |
+| `/github`, `/slack` | GitHub and Slack |
+| `/s3`, `/r2` | object storage — Amazon S3 and Cloudflare R2 |
+| `/ga` | Google Analytics |
+| `/sys` | qfs's own admin data (users, audit log, policies, settings) |
+
+A few verbs you'll see below:
+
+- **read** — run a query against a path and get rows back (`/sql/orders/customers |> where … |> select …`).
+- **describe** — inspect a path's shape (its columns and which writes it allows) *without touching it*.
+- **preview** — show exactly what a write *would* do, without doing it (qfs previews by default; you
+  add `--commit` to actually apply).
+- **connect** — give qfs the login a cloud service needs (a token / OAuth), stored encrypted.
 
 ## What just shipped ✅ — the "make the docs true" cycle
 
-The binary was wired so the headline capabilities run for real, instead of erroring for a fresh user:
+The product used to *describe* features that errored the moment a new user tried them. This cycle
+wired the binary so the headline things actually run:
 
-- **`/local` file content + codecs** — `/local/<file>.json |> decode json |> encode yaml` actually
-  transcodes (was a silent no-op).
-- **`/sql` reads** (SQLite) with the `WHERE` pushed **into** the database; **`/git` reads** (commits,
-  refs, tags, reflog, HEAD-tree listings) over the local object store.
-- **Cloud reads fail honestly** — `/mail`, `/drive`, `/github`, … return an actionable *"connect a …
-  account"* capability error instead of `unknown_source`; **gmail** returns real messages once
-  connected.
-- **No WARN noise** on unrelated runs; **`describe`** verb maps now derive from real capabilities.
+- **Convert a file's format in one line.** `/local/config.json |> decode json |> encode yaml` really
+  turns that JSON file into YAML now (it used to silently do nothing).
+- **Query a SQL database**, with the filtering done *inside* the database (`where total > 100` runs
+  as real SQL), and **query a git repository** — its commit history, branches, tags, and the files
+  in its latest snapshot.
+- **Cloud sources fail honestly.** Reading `/mail` or `/github` with no account connected now returns
+  a clear, actionable *"connect a … account — run `qfs connection add …`"* message instead of a
+  cryptic internal error. Once you connect Gmail, reading `/mail` returns your real messages.
+- **Quieter, more honest output.** Unrelated commands no longer print confusing sign-in warnings, and
+  `describe` now reports the *actual* operations a path supports.
 
-Every doc page was rewritten and verified example-by-example against the binary.
+Every documentation page was rewritten and checked, example by example, against the running binary.
 
-## The next change 🧭 — connections become a language *declaration*
+## The next change 🧭 — define connections **in the language**
 
-### The problem with today's model
+A **connection** is a named pointer to one source: *which* database/repo/account it is, and how to
+reach it. Today qfs has no clean way to declare one — and that's the problem.
 
-A connection is **injected from outside the language by a naming convention**. `/sql/orders` works
-only because the binary scans `QFS_SQL_ORDERS=<path>` and lower-cases the suffix into the path
-segment; `/git/<repo>` is the same. There is no declaration you can read, review, or version — the
-source of truth is an *environment variable's name*. Credentialed services use a *different* model
-again (an encrypted store + an "active connection" selector). Two incoherent mechanisms, neither
-declared in the language.
+### What's wrong today
 
-### The design
+To use a SQLite database at `/sql/orders`, you don't *declare* anything — you set an environment
+variable named `QFS_SQL_ORDERS=/path/to/orders.db`, and qfs turns the **name of that variable** into
+the path segment `orders`. So the connection is invisible: there's no statement you can read, review,
+or check into a repo — the source of truth is the *name of an env var*. Cloud accounts work a
+completely different way (a separate encrypted store plus a "which one is active" toggle). Two
+unrelated, mostly-undiscoverable mechanisms.
 
-A connection should be an **explicit statement in qfs**, consistent with the `CREATE TRIGGER` /
-`CREATE POLICY` it already has — reviewable, versionable, and committable as config. Secrets are
-**referenced**, never inlined; the alias is never loaded by matching an env-var prefix.
+### The plan: a `CREATE CONNECTION` statement
+
+Make a connection an **explicit statement**, just like the `CREATE TRIGGER` / `CREATE POLICY`
+statements qfs already has — something you can read, review, and commit to a file. Secrets are never
+written in the file; you *point* at where the secret lives (an environment variable, or qfs's
+encrypted store).
 
 ```text
-🧭 proposed — declare the alias; reference the secret; the name is the path segment
+🧭 proposed — you declare the connection; the file never contains a secret
 
-CREATE CONNECTION orders
+CREATE CONNECTION orders                    -- usable at /sql/orders/<table>
   DRIVER sqlite
-  AT '/data/orders.db'                    -- → read at /sql/orders/<table>
+  AT '/data/orders.db'                       -- a local file: no secret needed
 
-CREATE CONNECTION analytics
+CREATE CONNECTION analytics                 -- usable at /sql/analytics/<table>
   DRIVER postgres
-  AT 'postgres://db.internal/analytics'
-  SECRET env:PG_PASSWORD                  -- value from $PG_PASSWORD, never written in the file
+  AT 'postgres://db.internal/analytics'      -- where the database is
+  SECRET env:PG_PASSWORD                      -- the password comes from the PG_PASSWORD env var
 
-CREATE CONNECTION app
-  DRIVER git
-  AT '/srv/repos/app.git'                 -- → /git/app/commits, /git/app@<ref>/…
-
-CREATE CONNECTION work
+CREATE CONNECTION work                      -- usable at /mail/work/...
   DRIVER gmail
-  SECRET vault:gmail/work                 -- token from the encrypted store → /mail/work/…
+  SECRET vault:gmail/work                     -- the Gmail token from qfs's encrypted store
 ```
 
-- **`DRIVER`** picks the path family (`sqlite`/`postgres`/`mysql` → `/sql`, `git` → `/git`, `gmail`
-  → `/mail`, …); the connection **name** is the segment you write in the path.
-- **`AT '<locator>'`** is the non-secret location (file / URI / bucket); optional when the driver's
-  locator is implicit.
-- **`SECRET env:<VAR>` or `SECRET vault:<path>`** — resolved at use time, never logged, never in a
-  `describe`. A local SQLite/git connection needs no secret. The vault is the *same* encrypted store
-  `qfs connection add` writes — so `add` provisions the secret a `vault:` reference resolves.
-- Declarations live in a **`connections.qfs`** config, loaded by `qfs serve` / `qfs job` and by
-  `qfs run --config` (plus a default config path). Explicit config you commit to a repo — not env
-  scanning.
+- **`DRIVER`** says what kind of source it is, which decides the path: `sqlite`/`postgres`/`mysql`
+  live under `/sql`, `git` under `/git`, `gmail` under `/mail`, and so on. The **name** you give the
+  connection (`orders`, `work`) is the segment you type in the path.
+- **`AT`** is the plain, non-secret location — a file path, a database URL, a bucket. (Omitted when
+  the location is fixed, e.g. Gmail.)
+- **`SECRET`** *references* the secret, never the value: `env:NAME` reads an environment variable;
+  `vault:path` reads qfs's encrypted credential store (the same store `qfs connection add` writes to).
+  A local SQLite file or git repo needs no secret at all.
+- These declarations live in a plain config file (e.g. `connections.qfs`) you can keep in a repo —
+  not in the names of environment variables.
 
-This **replaces** `QFS_SQL_<conn>=<path>` (implicit) with `CREATE CONNECTION orders DRIVER sqlite AT
-'/data/orders.db'` (explicit). The env vars become a deprecated shim with a one-line migration
-(`qfs connection import-env` prints the equivalent declarations).
+The old `QFS_SQL_…` env-var trick stays working for one release as a deprecated fallback, with a
+one-command migration that prints the equivalent `CREATE CONNECTION` lines for you.
 
-### The plan (this cycle's tickets)
+### How it'll be built (tracked as an epic in the backlog)
 
-Tracked as EPIC `20260630004100` + 8 phase tickets in the backlog:
+| Step | What it does |
+| --- | --- |
+| **Design (first, the keystone)** | nail down the exact grammar and a couple of open questions — e.g. should the connection name always be *in the path* (`/mail/work/…`), to match how `/sql` already works? |
+| **Parser** | teach the language to read `CREATE CONNECTION` |
+| **Secret resolution** | implement `env:` and `vault:` lookups (read lazily, never logged) |
+| **Wire it up** | build qfs's connection list from these declarations instead of scanning env-var names |
+| **Load from config** | load a `connections.qfs` when running the server, a scheduled job, or `qfs run --config` |
+| **Retire the old way** | the `QFS_SQL_…`/`QFS_GIT_…` env vars become a warned, temporary fallback |
+| **Tidy the CLI** | `qfs connection add` becomes "store the secret a `vault:` reference points at" |
+| **Docs** | rewrite the connection guide around this (done last, so the docs never get ahead of the code) |
 
-| Phase | What | Status |
-| --- | --- | --- |
-| **Design (keystone)** | finalize the grammar, the driver→path-family map, the `/sql`-name-in-path vs `/mail` active-connection reconciliation, the secret-ref scheme, and the env-var migration | 🧭 |
-| **Parser** | `CREATE CONNECTION` keywords + AST + grammar + a parse-ratchet recipe | 🧭 |
-| **Secret resolution** | `env:` / `vault:` resolvers over the encrypted store; lazy, secret-free | 🧭 |
-| **Registry from declarations** | build the mount + read/apply registries from declarations, replacing the env scan in sql/git/google/objstore | 🧭 |
-| **Config + runtime loading** | `.qfs` config carries declarations; `serve` / `job` / `run --config` load them | 🧭 |
-| **Deprecate env convention** | `QFS_SQL_*`/`QFS_GIT_*` → a warned shim + `connection import-env` | 🧭 |
-| **CLI alignment** | `connection add` stores the secret a `vault:` ref resolves; `list` shows the declared set | 🧭 |
-| **Docs** | flip the guide/cookbook to the declaration model (done last, so docs stay honest) | 🧭 |
+## Near-term backlog 🧭 — known gaps to close
 
-The keystone is the **design** ticket — the grammar is part of the [versioned surface](/), so it is
-finalized deliberately before any code.
+These are honest gaps the documentation cycle uncovered. None of them is claimed to work in the
+guides; each either fails safely or returns a clear error today.
 
-## Near-term backlog 🧭 — follow-ups from the wiring cycle
+- **Read Google Drive and Google Analytics for real.** Connecting the account already works, but the
+  *read* isn't wired: Google Drive needs to translate a folder *path* into Drive's internal folder
+  IDs, and Google Analytics needs to turn a query into one of its report requests (analytics returns
+  pre-aggregated metrics, not a plain table). Until then both return the "connect your account" error
+  even when connected. *(Also: `/ga` is a cryptic name — it should be spelled out, or renamed to
+  `/analytics`.)*
+- **Read a git repo as it was in the past.** Reading a repository's history and its *latest* file
+  tree works; reading the tree (or a single file's contents) **as of an older commit or tag**
+  (`/git/app@v1.2/…`) does not yet — it currently shows the latest version. Time-travel reads are a
+  follow-up.
+- **Actually write local files.** A `upsert into /local/<file> …` previews and *says* it committed,
+  but doesn't yet write the file to disk. The write path needs finishing.
+- **Markdown as a file format.** The format converters cover JSON, JSONL, YAML, TOML, and CSV;
+  Markdown-with-front-matter exists in the code but isn't wired into that set yet, so `… encode md`
+  errors.
+- **Two drivers aren't mounted.** A Cloudflare driver and a generic HTTP/REST driver exist in the
+  code but aren't reachable from the CLI as paths.
+- **Push more work into the source.** Sources do *some* of the query themselves for speed: a SQL
+  database runs the `WHERE`, git uses the commit you named. The rest (column selection, sorting,
+  limits, Gmail's search filters) is still done by qfs after fetching everything — fine for
+  correctness, slower than letting the source do it. Worth deepening over time.
 
-Real gaps the doc-honesty pass surfaced; the guides already avoid claiming these run:
+### Onboarding & polish 🧭
 
-- **`/drive` and `/ga` real reads** — `/drive` needs path→folder-id resolution; `/ga` needs a
-  query→`runReport` (dimensions/metrics) mapping. Both stay on the connect-account error until then.
-- **`/git@<ref>` temporal reads** — `commits`/`refs`/`tags`/`reflog` and the HEAD tree run; the
-  `@<ref>` coordinate is **not yet honored** for tree/blob reads, and reading a *single file's bytes*
-  at a ref errors. Ref-pinned trees + file content are a follow-up.
-- **`/local` write materialization** — a `upsert into /local/<file> …` previews and reports
-  committed, but does not yet write the file (`carries no content blob`).
-- **`md` codec** — `decode/encode md` errors `unknown_codec`; only `json/jsonl/yaml/toml/csv` are
-  registered, though the markdown+frontmatter codec exists in the codec crate.
-- **`/cf` and `/rest` mounts** — the driver crates exist but are not mounted in the CLI.
-- **Pushdown depth** — gmail `q=` `WHERE` pushdown; `/sql` projection/`ORDER`/`LIMIT` and `/git`
-  ref-range/`LIMIT` pushdown (today only `WHERE`/the ref is native, the rest is the engine residual).
-- **Plain-language onboarding** — the first-run and credential docs are too jargon-heavy to land
-  with a normal user (e.g. `install.sh` and `connections.md` explain `QFS_PASSPHRASE` as "the master
-  passphrase that unlocks your local credential vault (argon2id KDF; NOT a service credential)").
-  Rewrite the first-encounter wording in plain terms — *a password you choose that encrypts the
-  service logins you save on this machine* — and keep the crypto detail (argon2id, envelope
-  encryption) only in the dedicated "how it's stored" / threat-model sections for readers who want it.
-- **Colorized CLI output** — the plain CLI output is hard to scan; add color (table headers/rules,
-  the `PREVIEW`/effect lines, the `(!)` irreversible marker, errors, and `describe` sections), gated
-  on a TTY and respecting `NO_COLOR` / `--no-color`. Today everything is monochrome.
-- **Onboarding flow — the first step must *succeed locally*.** The "Next steps" sequence leads the
-  reader toward a cloud command (`qfs describe /mail/drafts` / "connect a service" with the
-  passphrase dance) as step ②. A new user can't complete that without an account, so they bounce
-  instead of feeling the win. Reorder so the **first** step is a local command that completes with
-  real output (a `/local` listing or the JSON→YAML codec), and the connect-a-service step comes
-  *after* the user has already seen it work. Applies to `install.sh`'s Next-steps block and
-  `getting-started.md`.
-- **A "Connecting each service" guide under Get started** — connection configuration + the auth
-  setup *per driver* (mail/drive · github/slack · s3/r2 · sql · git) deserves its own independent
-  article (linked from every page's "Learn more"), so a reader who wants `/mail` or `/github` working
-  has one place with the exact steps for that driver — rather than the generic `connections.md`.
-  Pairs with the in-language connection-declaration epic (the article documents the declarations +
-  the secret each driver needs).
-
-These are intentionally honest gaps, not regressions — the binary fails closed or returns a clear
-error for each, and no guide example depends on them.
+- **Plain-language onboarding.** The first-run and credential text is too jargon-heavy for a normal
+  user — e.g. `QFS_PASSPHRASE` is described as "the master passphrase that unlocks your local
+  credential vault (argon2id KDF; NOT a service credential)." Rewrite it as plain English — *a
+  password you choose that encrypts the service logins you save on this machine* — and leave the
+  cryptography detail to a "how it's stored" section for those who want it.
+- **Color in the terminal.** Command output is all one color and hard to scan. Add color to table
+  headers, previews, the irreversible-action marker, and errors — only when writing to a terminal,
+  and honoring the standard `NO_COLOR` / a `--no-color` flag.
+- **Let the first step succeed.** The "next steps" after install push the reader toward a *cloud*
+  command (`qfs describe /mail/drafts`, or connecting an account with the passphrase setup) before
+  they've done anything that works. A new user with no account hits a wall and leaves. The first step
+  should be a **local** command that returns real output (list a folder, or convert a file) — the
+  win comes first; connecting an account comes after.
+- **A "connect each service" guide.** Each source needs slightly different setup (Gmail and Drive use
+  Google sign-in; GitHub/Slack use tokens; S3/R2 use keys; SQL and git just point at a location).
+  That deserves its own short "Get started" page with the exact steps per source, linked from
+  everywhere — instead of one generic connections page.
