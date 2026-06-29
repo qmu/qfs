@@ -114,6 +114,22 @@ Real gaps the doc-honesty pass surfaced; the guides already avoid claiming these
   Rewrite the first-encounter wording in plain terms — *a password you choose that encrypts the
   service logins you save on this machine* — and keep the crypto detail (argon2id, envelope
   encryption) only in the dedicated "how it's stored" / threat-model sections for readers who want it.
+- **Colorized CLI output** — the plain CLI output is hard to scan; add color (table headers/rules,
+  the `PREVIEW`/effect lines, the `(!)` irreversible marker, errors, and `describe` sections), gated
+  on a TTY and respecting `NO_COLOR` / `--no-color`. Today everything is monochrome.
+- **Onboarding flow — the first step must *succeed locally*.** The "Next steps" sequence leads the
+  reader toward a cloud command (`qfs describe /mail/drafts` / "connect a service" with the
+  passphrase dance) as step ②. A new user can't complete that without an account, so they bounce
+  instead of feeling the win. Reorder so the **first** step is a local command that completes with
+  real output (a `/local` listing or the JSON→YAML codec), and the connect-a-service step comes
+  *after* the user has already seen it work. Applies to `install.sh`'s Next-steps block and
+  `getting-started.md`.
+- **A "Connecting each service" guide under Get started** — connection configuration + the auth
+  setup *per driver* (mail/drive · github/slack · s3/r2 · sql · git) deserves its own independent
+  article (linked from every page's "Learn more"), so a reader who wants `/mail` or `/github` working
+  has one place with the exact steps for that driver — rather than the generic `connections.md`.
+  Pairs with the in-language connection-declaration epic (the article documents the declarations +
+  the secret each driver needs).
 
 These are intentionally honest gaps, not regressions — the binary fails closed or returns a clear
 error for each, and no guide example depends on them.
