@@ -524,7 +524,13 @@ pub(crate) fn cloud_bind_allowed(driver: &str, connection: &str) -> bool {
     match qfs_secrets::bind_gate(&did, connection, signed_in, has_consent) {
         Ok(()) => true,
         Err(e) => {
-            tracing::warn!(
+            // DEBUG, not WARN: the registry is built once per run with EVERY cloud driver, so a
+            // WARN here fired for github/slack/gmail/… on every `qfs run` — even a pure `/local`
+            // ls or a `create trigger` — reading like a credential failure on an unrelated command
+            // (the t8 noise). The operator's actionable signal arrives when they actually TARGET an
+            // unbound driver: the read/commit errors (`unknown_source`, or the t5 "connect your
+            // account"). Keep the structured, secret-free reason at debug level for troubleshooting.
+            tracing::debug!(
                 target: "qfs::consent",
                 "cloud driver '{driver}' not bound for connection '{connection}': {} ({})",
                 e,
