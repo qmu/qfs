@@ -224,6 +224,11 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
+    /// Disable ANSI color in human output. Color is on only when writing to a terminal and is also
+    /// suppressed by the standard `NO_COLOR` environment variable.
+    #[arg(long = "no-color", global = true)]
+    no_color: bool,
+
     #[command(subcommand)]
     cmd: Option<Command>,
 }
@@ -528,6 +533,18 @@ where
             return err.exit_code();
         }
     };
+
+    // Resolve human-output color ONCE, process-wide, before any rendering: on only for a real
+    // terminal with `NO_COLOR` unset, no `--no-color`, and not `--json` (JSON never colorizes). The
+    // renderers (table headers, the preview's irreversible marker, error lines) consult this global.
+    let color = {
+        use std::io::IsTerminal;
+        !cli.no_color
+            && !cli.json
+            && std::env::var_os("NO_COLOR").is_none()
+            && std::io::stdout().is_terminal()
+    };
+    qfs_core::color::set_enabled(color);
 
     let output = if cli.json {
         OutputMode::Json
