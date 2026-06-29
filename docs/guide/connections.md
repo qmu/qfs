@@ -1,7 +1,46 @@
 # Connections & credentials
 
-You don't need any credential to **describe** a path or **preview** a query — both are completely
-offline. You only need one to **commit** against a live service.
+A **connection** is a named configuration that tells qfs *where a source lives and how to reach it*.
+In a path like `/sql/orders/customers` or `/s3/backups/db.sql`, the **second segment is the
+connection name** (`orders`, `backups`) — not a literal host or bucket, but a label you defined that
+holds the actual connection info. That's why you can have `/sql/orders` and `/sql/analytics`, or
+`/mail/work` and `/mail/personal`, side by side.
+
+You don't need any connection to **describe** a path or **preview** a query — both are completely
+offline. You need one to **read rows** from a source or **commit** a change to it.
+
+## Two kinds of connection
+
+How you define a connection depends on whether the source needs a **secret**:
+
+| Source | Defined by | Needs a secret? |
+| --- | --- | --- |
+| **Local databases & repos** — `/sql` (SQLite), `/git` | an **environment variable** | no |
+| **Credentialed services** — `/mail`, `/drive`, `/github`, `/slack`, `/s3`, `/r2` | `qfs connection add` (encrypted store) | yes |
+
+### Local databases & git — an environment variable
+
+A SQLite database or a git repository is just a local path (or URL), so the connection *is* that
+location — no stored secret, no passphrase. You define one by exporting an env var; the suffix
+(lower‑cased) becomes the connection segment in the path:
+
+```sh
+export QFS_SQL_ORDERS=/data/orders.db        # → read it at  /sql/orders/<table>
+export QFS_SQL_ANALYTICS=postgres://…         # the same name pattern, a different connection
+export QFS_GIT_APP=/srv/repos/app.git         # → read it at  /git/app/commits, /git/app@<ref>/…
+```
+
+So `QFS_SQL_<NAME>=<value>` *is* the whole connection: `<NAME>` (lower‑cased) is the `<conn>` you
+write in the path, and `<value>` is where the database lives. Nothing else to run — a `/sql/orders/…`
+query works as soon as `QFS_SQL_ORDERS` is set, and fails closed (`unknown source 'sql'`) when it
+isn't.
+
+### Credentialed services — the credential store
+
+`/mail`, `/drive`, `/github`, `/slack`, `/s3`, `/r2` reach an external account over a token/OAuth, so
+their connection carries a **secret** that must be stored encrypted (`qfs connection add`, below).
+The path segment is still the connection name (`qfs connection add s3 prod` → `/s3/prod/…`). The
+rest of this page is about that encrypted store.
 
 ## Unlocking the store with `QFS_PASSPHRASE`
 
@@ -34,7 +73,8 @@ read `QFS_PASSPHRASE` straight out of the environment. It protects the stored bl
 qfs connection add <service> <name>
 ```
 
-- `<service>` is the driver the connection belongs to — `mail`, `s3`, `github`, `slack`, `sql`, …
+- `<service>` is the driver the connection belongs to — `mail`, `drive`, `github`, `slack`, `s3`,
+  `r2` (the credentialed services; local `/sql`/`/git` use an env var instead — see above)
 - `<name>` is your label for it — `work`, `personal`, `prod`, …
 
 The credential **value is read from stdin** — pipe it in, never pass it on argv (argv is visible in

@@ -16,6 +16,11 @@ here. Everything below is verified by running the binary as a fresh user with no
 | `/sql/<conn>/<table>` | Rows from a SQLite table; `WHERE`/`ORDER`/`LIMIT` push **into** the database | `QFS_SQL_<CONN>=<path-to.sqlite>` |
 | `/git/<repo>/...` | `commits`, `refs`, `tags`, `reflog`, and tree listings | `QFS_GIT_<REPO>=<path-to-repo>` |
 
+The `<conn>`/`<repo>` segment is a **named connection** you define — for `/sql` and `/git` it's an
+environment variable whose value is where the database/repo lives (`QFS_SQL_orders=…` → `/sql/orders`);
+for credentialed services it's a stored credential (`qfs connection add s3 prod` → `/s3/prod`). See
+[Connections & credentials](/guide/connections) for both.
+
 **Write-plan previews run with no account** — `insert`/`update`/`upsert`/`remove into /any/path …`
 returns a plan (`"committed": false`) without ever touching the service, because previewing never
 reads or writes. (See **Preview vs. commit**, §4 below.)
