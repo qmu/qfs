@@ -115,7 +115,8 @@ update, and where to read more). The [Quickstart](#quickstart-the-loop) below is
 
 ```sh
 # 1. DESCRIBE a node — pure, no creds, no network (the contract you read first):
-qfs describe /mail/drafts
+#    Start local: this returns a real schema with no account and no setup.
+qfs describe /local/etc
 
 # 2. READ that returns rows right now — list any local directory
 #    (`/local` + an ABSOLUTE host path):

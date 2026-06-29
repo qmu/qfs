@@ -4,7 +4,7 @@ author: a@qmu.jp
 type: enhancement
 layer: [UX]
 effort: 1h
-commit_hash:
+commit_hash: d8dfc3f
 category: Changed
 depends_on: [20260630010090-plain-language-onboarding.md]
 ---
