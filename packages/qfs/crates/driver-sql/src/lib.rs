@@ -104,20 +104,22 @@ impl SqlDriver {
         Self {
             registry: registry.clone(),
             applier: SqlApplier::new(registry),
-            // SQL is a full backend: the whole relational subtree over one connection collapses
-            // into one native SELECT that runs WHERE / projection / ORDER BY / LIMIT / aggregate /
-            // group_by / distinct / single-source JOIN natively. Declared as Partial-all-true so
-            // the planner queries by intent (and a future un-renderable construct can be turned
-            // off one flag at a time); residual WHERE conjuncts combine locally (see `compile`).
+            // The read path (`execute_query` → `QuerySpec` → `compile`) lowers a `WHERE` into the
+            // native SELECT, pushing the predicate INTO the database (a non-faithfully-renderable
+            // conjunct — LIKE/regex/OR-mixing — is returned as a residual and re-filtered locally,
+            // never wrong rows). Projection / ORDER BY / LIMIT / aggregate / group_by / distinct /
+            // JOIN are NOT yet threaded through the read seam's QuerySpec, so they are declared
+            // unpushable here and stay in the local residual the engine applies (correctness over
+            // optimization; each can be turned on one flag at a time as the QuerySpec grows).
             pushdown: PushdownProfile::Partial {
                 where_: true,
-                project: true,
-                limit: true,
-                order: true,
-                join: true,
-                aggregate: true,
-                distinct: true,
-                group_by: true,
+                project: false,
+                limit: false,
+                order: false,
+                join: false,
+                aggregate: false,
+                distinct: false,
+                group_by: false,
             },
             // The universal write verbs are the surface (no `CALL` procedures).
             procs: Vec::new(),

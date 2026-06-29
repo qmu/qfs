@@ -24,11 +24,12 @@
 
 use std::sync::Arc;
 
-use qfs_core::{CfsError, RowBatch};
+use qfs_core::{CfsError, Driver, Path, RowBatch};
 use qfs_driver_github::GitHubClient;
 use qfs_driver_slack::SlackClient;
+use qfs_driver_sql::{QuerySpec, SqlDriver};
 use qfs_exec::ReadDriver;
-use qfs_pushdown::ScanNode;
+use qfs_pushdown::{PushedQuery, ScanNode};
 
 /// The GitHub read facet: adapts [`qfs_driver_github::read_rows`] (the pure-then-I/O
 /// path→plan→fetch→decode composition) to qfs-exec's async [`ReadDriver`] seam. Owns the
@@ -90,6 +91,73 @@ impl ReadDriver for SlackReadDriver {
     }
 }
 
+/// The SQL read facet: adapts [`SqlDriver::execute_query`] (compile the pushed
+/// projection/`WHERE`/`ORDER BY`/`LIMIT` into ONE native parameterized `SELECT`, run it, return the
+/// rows + the residual predicate SQL could not faithfully render) to qfs-exec's async [`ReadDriver`]
+/// seam. This is the "filters push **into** the database" path — the native `SELECT` does the
+/// pushable work; the residual (e.g. a `LIKE`/regex the dialect can't express exactly) is re-filtered
+/// locally via [`qfs_exec::apply_residual`] so the returned rows are exactly the pushed query's
+/// result before the engine runs the remaining cross-source residual. Unlike the cloud facets this
+/// is hermetic against a SQLite file — no network, no credential.
+pub struct SqlReadDriver {
+    driver: Arc<SqlDriver>,
+}
+
+impl SqlReadDriver {
+    /// Build the read adapter over a live [`SqlDriver`] (its connection registry already
+    /// introspected the catalog).
+    #[must_use]
+    pub fn new(driver: Arc<SqlDriver>) -> Self {
+        Self { driver }
+    }
+}
+
+/// Translate the planner's owned [`PushedQuery`] into the SQL compiler's [`QuerySpec`] — the pushed
+/// projection (column names), `WHERE` predicate, `ORDER BY`, and `LIMIT` the native `SELECT` runs.
+fn query_spec_from_pushed(pushed: &PushedQuery) -> QuerySpec {
+    let projection = pushed.project.as_ref().map_or_else(Vec::new, |cols| {
+        cols.iter().map(|c| c.as_str().to_string()).collect()
+    });
+    let mut spec = QuerySpec::new(projection);
+    if let Some(predicate) = &pushed.filter {
+        spec = spec.with_predicate(predicate.clone());
+    }
+    for order in &pushed.order {
+        spec = spec.order_by(order.column.as_str(), order.descending);
+    }
+    if let Some(limit) = pushed.limit {
+        spec = spec.with_limit(i64::try_from(limit).unwrap_or(i64::MAX));
+    }
+    spec
+}
+
+#[async_trait::async_trait]
+impl ReadDriver for SqlReadDriver {
+    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+        let spec = query_spec_from_pushed(&scan.pushed);
+        let path = Path::new(&scan.path);
+        // The rows execute_query returns carry the table's full column set (only WHERE is pushed);
+        // the typed schema comes from the driver's pure catalog `describe`, not the planner's
+        // post-pushdown `scan.schema` (the engine's residual projection narrows columns afterwards).
+        let schema = self.driver.describe(&path)?.schema;
+        let (rows, residual) =
+            self.driver
+                .execute_query(&path, &spec)
+                .map_err(|e| CfsError::InvalidPath {
+                    path: scan.path.clone(),
+                    reason: e.code(),
+                })?;
+        let batch = RowBatch::new(schema, rows);
+        // The driver applied the faithfully-renderable part natively; re-filter the residual locally
+        // so the rows are exactly the pushed query's result (over-returning on the pushed predicate
+        // is NOT corrected by the engine — the pushed work is the driver's responsibility).
+        Ok(match residual {
+            Some(predicate) => qfs_exec::apply_residual(batch, &predicate),
+            None => batch,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Hermetic adapter tests — no socket, no real credential. The happy path drives the adapter
@@ -138,6 +206,41 @@ mod tests {
             .unwrap();
         assert_eq!(batch.rows.len(), 1);
         assert_eq!(batch.rows[0].values[0], Value::Int(7));
+    }
+
+    #[tokio::test]
+    async fn sql_adapter_reads_a_table_and_pushes_where_into_the_database() {
+        use qfs_types::{CmpOp, ColRef, Literal, Predicate};
+        let (path, driver) = crate::sql::seeded_test_driver(
+            "orders",
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT NOT NULL, total INTEGER NOT NULL);\
+             INSERT INTO orders (customer,total) VALUES ('alice',50),('bob',150),('carol',250);",
+        );
+        let read = SqlReadDriver::new(Arc::new(driver));
+
+        // Bare scan: every row, every column (the catalog-schema derivation path).
+        let all = read.scan(&scan_for("/sql/orders/orders")).await.unwrap();
+        assert_eq!(all.rows.len(), 3, "all seeded rows");
+        assert_eq!(all.schema.columns.len(), 3, "id, customer, total");
+
+        // Pushed WHERE total > 100: the native SELECT filters IN the database to bob + carol.
+        let pushed = PushedQuery {
+            filter: Some(Predicate::Cmp(
+                ColRef::col("total"),
+                CmpOp::Gt,
+                Literal::Int(100),
+            )),
+            ..PushedQuery::default()
+        };
+        let scan = ScanNode {
+            source: qfs_pushdown::SourceId::new("sql"),
+            path: "/sql/orders/orders".to_string(),
+            pushed,
+            schema: Schema::new(Vec::new()),
+        };
+        let filtered = read.scan(&scan).await.unwrap();
+        assert_eq!(filtered.rows.len(), 2, "WHERE total>100 keeps bob + carol");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]

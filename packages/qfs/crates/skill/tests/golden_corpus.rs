@@ -242,8 +242,16 @@ mod sql_fixture {
             qfs_core::DescribeReport::from_driver(driver.as_ref(), &Path::new("/sql/pg/orders"))
                 .expect("/sql/pg/orders describes");
         assert_eq!(report.archetype, qfs_core::Archetype::RelationalTable);
-        assert!(report.pushdown.where_, "sql pushes WHERE down");
-        assert!(report.pushdown.project, "sql pushes projection down");
+        assert!(
+            report.pushdown.where_,
+            "sql pushes WHERE down into the database"
+        );
+        // Projection / ORDER / LIMIT are not yet threaded through the read seam's QuerySpec, so they
+        // stay in the engine's local residual (the t4 read-wiring scope: WHERE pushdown first).
+        assert!(
+            !report.pushdown.project,
+            "projection stays a local residual for now"
+        );
         assert!(report.verbs.select);
         // No credential shape in the report (secrets never appear).
         let json = serde_json::to_string(&report).unwrap();

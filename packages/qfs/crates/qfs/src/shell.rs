@@ -272,6 +272,18 @@ pub fn run_engine_and_reads() -> (Engine, ReadRegistry, qfs_core::SafetyMode) {
             Arc::new(crate::read_facets::SlackReadDriver::new(client)),
         );
     }
+    // SQL (hermetic, no network): register the live SQLite-backed read facet when a connection is
+    // configured, so `FROM /sql/<conn>/<table> |> WHERE … |> SELECT …` executes — the native SELECT
+    // pushes the WHERE/ORDER/LIMIT into the database and the residual is re-filtered locally. Skipped
+    // (leaving the source unresolvable) when no `QFS_SQL_*` connection resolves, so it fails closed.
+    if crate::sql::has_connections() {
+        reads = reads.with(
+            DriverId::new("sql"),
+            Arc::new(crate::read_facets::SqlReadDriver::new(Arc::new(
+                crate::sql::sql_driver(),
+            ))),
+        );
+    }
     (engine, reads, safety_mode)
 }
 

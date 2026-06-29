@@ -860,17 +860,21 @@ fn path_parses_conn_schema_table_shapes() {
 }
 
 #[test]
-fn pushdown_declares_full_sql_vocabulary() {
+fn pushdown_declares_where_only_until_queryspec_grows() {
+    // The read seam's QuerySpec lowers only the WHERE into the native SELECT today; projection /
+    // ORDER BY / LIMIT / aggregate / group_by / distinct / JOIN are NOT yet threaded through it, so
+    // they are declared unpushable and stay in the engine's local residual (correctness over
+    // optimization). Each flag flips on as the QuerySpec grows.
     let (driver, _be) = driver_over(USERS_DDL);
     let pd = driver.pushdown();
     assert!(pd.supports_where());
-    assert!(pd.supports_project());
-    assert!(pd.supports_limit());
-    assert!(pd.supports_order());
-    assert!(pd.supports_join());
-    assert!(pd.supports_aggregate());
-    assert!(pd.supports_distinct());
-    assert!(pd.supports_group_by());
+    assert!(!pd.supports_project());
+    assert!(!pd.supports_limit());
+    assert!(!pd.supports_order());
+    assert!(!pd.supports_join());
+    assert!(!pd.supports_aggregate());
+    assert!(!pd.supports_distinct());
+    assert!(!pd.supports_group_by());
     assert!(matches!(pd, PushdownProfile::Partial { .. }));
 }
 

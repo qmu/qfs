@@ -232,6 +232,26 @@ pub fn sql_driver() -> SqlDriver {
     SqlDriver::new(conn_registry())
 }
 
+/// Build a [`SqlDriver`] over a freshly-seeded temp SQLite database under connection `conn` (the
+/// `ddl` is executed before catalog introspection). Returns the temp path (so the caller deletes it)
+/// and the introspected driver — a test-only helper for the read-facet adapter tests, which need a
+/// live catalog without `QFS_SQL_*` env config.
+#[cfg(test)]
+pub(crate) fn seeded_test_driver(conn: &str, ddl: &str) -> (std::path::PathBuf, SqlDriver) {
+    let mut path = std::env::temp_dir();
+    path.push(format!("qfs-sqlread-{conn}-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let backend = SqliteBackend::open(&path).expect("open temp db");
+    {
+        let c = backend.conn.lock().expect("lock");
+        c.execute_batch(ddl).expect("seed ddl");
+    }
+    let backend: Arc<dyn SqlBackend> = Arc::new(backend);
+    let handle = ConnHandle::new(backend).expect("introspect catalog");
+    let registry = ConnRegistry::new().with(conn.to_string(), handle);
+    (path, SqlDriver::new(registry))
+}
+
 #[cfg(test)]
 mod tests {
     //! Real-engine tests against a temp-file SQLite database (not in-memory), proving the
