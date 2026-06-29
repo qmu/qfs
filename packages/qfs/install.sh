@@ -31,9 +31,10 @@ next_steps() {
      (qfs run PREVIEWs by default; add --commit to actually apply.)
 
   2) Connect a service — only needed to apply real changes:
-     First export QFS_PASSPHRASE — the master passphrase that unlocks your local
-     credential vault (argon2id KDF; NOT a service credential). It must stay set
-     for the shell that runs `connection add/list/remove`:
+     First export QFS_PASSPHRASE — a password you choose that encrypts the
+     service logins you save on this machine. It is not any service's own
+     password; it just locks the local file your saved logins live in. Keep it
+     set for the shell that runs `connection add/list/remove`:
        read -rs QFS_PASSPHRASE; export QFS_PASSPHRASE   # no shell-history leak
      Then add the connection, piping the credential VALUE via stdin (never argv,
      which leaks into the process table + shell history):

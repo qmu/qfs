@@ -44,11 +44,11 @@ rest of this page is about that encrypted store.
 
 ## Unlocking the store with `QFS_PASSPHRASE`
 
-Stored credentials live in an encrypted local vault. `QFS_PASSPHRASE` is the **master passphrase
-that unlocks that vault** — qfs derives an argon2id AEAD key from it to encrypt and decrypt the
-store. It is **not** a service credential (not your mail token, not an API key); it only protects
-the local file at rest. The per-store salt is created automatically — the passphrase is the one
-thing you supply.
+`QFS_PASSPHRASE` is **a password you choose that encrypts the service logins you save on this
+machine**. It is *not* a service credential — not your mail token, not an API key — and you never
+register it anywhere: it only locks and unlocks the local file your saved logins live in. You pick
+it once and reuse it; everything else is handled for you. (How that encryption actually works is in
+the *“Where the store lives”* note further down, for those who want the detail.)
 
 `connection add`, `connection list`, and `connection remove` all need it exported in the shell that
 runs them (`connection use` does not — it only flips which stored connection is active). With it

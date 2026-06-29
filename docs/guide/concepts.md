@@ -268,8 +268,8 @@ The path model, the four archetypes, and preview-then-commit are identical on al
 
 `describe` and `preview` never need a credential. To **commit** against a live service you store one
 once with `qfs connection add <service> <name>` — and qfs never prints it back. That command first
-needs `QFS_PASSPHRASE` exported (the master passphrase that unlocks the local encrypted store) and
-reads the credential value from stdin. See [Connections & credentials](/guide/connections) for the
-full flow.
+needs `QFS_PASSPHRASE` exported (a password you choose that encrypts the service logins saved on this
+machine — not any service's own password) and reads the credential value from stdin. See
+[Connections & credentials](/guide/connections) for the full flow.
 
 **Next:** put it all together in [the Cookbook →](/cookbook/)

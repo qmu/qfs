@@ -221,9 +221,9 @@ qfs run "/mail/inbox |> select date, subject"
 ```
 
 Once connected, the same query returns real messages. To connect, store a credential once. First
-export `QFS_PASSPHRASE` — the master passphrase that unlocks your local credential vault (it derives
-the argon2id key for the encrypted store; it is **not** a service credential). It must stay set for
-the shell that runs `connection add/list/remove`:
+export `QFS_PASSPHRASE` — a password you choose that encrypts the service logins you save on this
+machine (it is **not** any service's own password; it just locks the local file your saved logins
+live in). It must stay set for the shell that runs `connection add/list/remove`:
 
 ```sh
 read -rs QFS_PASSPHRASE; export QFS_PASSPHRASE   # unlock the local vault, no shell-history leak
