@@ -146,9 +146,19 @@ fn lower_source(
             let segs: Vec<String> = path.segments.iter().map(|s| s.name.clone()).collect();
             let src = source_of(&segs);
             let schema = schema_of(&src);
-            // Retain the full addressed VFS path (`/seg/seg`) so a read driver can navigate to
-            // the exact node (t28), not just the mount root.
-            let vfs = format!("/{}", segs.join("/"));
+            // Retain the full addressed VFS path so a read driver can navigate to the exact node
+            // (t28) — INCLUDING each segment's `@version` (e.g. `/git/app@v1.2/…`) so a time-travel
+            // read reaches the driver at the addressed ref instead of the latest. Source routing /
+            // schema lookup key on names only (above); the addressed path keeps the ref.
+            let mut vfs = String::new();
+            for seg in &path.segments {
+                vfs.push('/');
+                vfs.push_str(&seg.name);
+                if let Some(version) = &seg.version {
+                    vfs.push('@');
+                    vfs.push_str(version);
+                }
+            }
             Ok(LogicalPlan::scan_at(src, vfs, schema))
         }
         Source::Subquery(inner) => lower_query(inner, source_of, schema_of),
