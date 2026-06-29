@@ -27,7 +27,38 @@ features:
 
 ## See it
 
-Find unread invoices in your inbox:
+Some of these run today against local files and a SQLite database — no account, no setup
+beyond a path. The rest show what the same grammar does the moment a service is connected.
+
+**Turn a JSON file into YAML** — the codec stages genuinely transcode:
+
+```qfs
+/local/config.json
+|> decode json
+|> encode yaml
+```
+
+Given a `config.json` of `{"k":1,"name":"alpha"}`, qfs emits the YAML:
+
+```yaml
+- k: 1
+  name: alpha
+```
+
+**Query a database — and the filter runs *inside* it.** `WHERE` is pushed down to SQL;
+ordering and projection ride the pipe:
+
+```qfs
+/sql/sales/orders
+|> where total > 100
+|> select customer, total
+|> order by total DESC
+```
+
+Then the breadth — the same small grammar reaching across services. These need a connected
+account, but they are the whole point of qfs.
+
+**Find unread invoices in your inbox:**
 
 ```qfs
 /mail/inbox
@@ -36,23 +67,17 @@ Find unread invoices in your inbox:
 |> order by date DESC
 ```
 
-Join a database table to your GitHub issues — across two completely different services:
+**Join a database table to your GitHub issues — across two completely different services:**
 
 ```qfs
-/sql/pg/orders
+/sql/sales/orders
 |> join /github/acme/web/issues on id == issue_id
 |> select id, title
 ```
 
-Turn a JSON file into a YAML file:
+The `/sql` leg reads today; the GitHub leg needs a connected account — `qfs connection add github`.
 
-```qfs
-/local/config.json
-|> decode json
-|> encode yaml
-```
-
-Automate it — every time mail lands, post to Slack:
+**Automate it — every time mail lands, post to Slack:**
 
 ```qfs
 create trigger notify
@@ -60,7 +85,8 @@ create trigger notify
   do insert into /slack/acme/general/messages values (NEW.subject)
 ```
 
-You **preview** each one to see precisely what would happen, then add `--commit` to make it real.
+You **preview** each one to see precisely what would happen — the trigger above previews as a
+pure plan that fires nothing until you wire it up — then add `--commit` to make it real.
 
 ## One engine, three faces
 

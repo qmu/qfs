@@ -13,9 +13,19 @@ group, an agent's MCP commit gated by a safety mode — because the interactions
 
 ::: warning Worked recipes, with a few running ahead of the parser
 Every recipe is tagged by the capability that delivers it. The [generated reference](/language) is
-always the truth about the binary *today*. Most of this catalogue is now live (the M0→M+ surface
-shipped), but a handful of recipes use grammar the parser does not ship yet — they are tagged so you
-can tell which is which. Each ` ```qfs ` block carries a machine-readable header
+always the truth about the binary *today*. Two things are now true of this catalogue. First, every
+`grammar=core` recipe **parses** against today's frozen grammar — the ratchet test below proves it.
+Second, many of the **reads actually execute and return rows**: `/local` (directory listings,
+single-file content, and the `decode`/`encode` codecs), `/sys`, a configured `/sql` connection
+(`QFS_SQL_<name>`), and a configured `/git` repository (`QFS_GIT_<name>`) all run for real and hand
+back data. The cloud-driver reads (`/mail`, `/drive`, `/github`, `/slack`, `/s3`, `/r2`) parse and
+plan, but **executing** them needs a connected account — without one they return an actionable
+"connect a … account" error (run `qfs identity signup <email>`, then `qfs connection add <service>`),
+never an opaque unknown-source failure; `/drive` and `/ga` reads ride that same connect-account path
+but are still coming soon. Bare write statements (`insert into /mail/drafts …`, `update /sql/…`)
+**preview** their effect and touch nothing. On top of all that, a handful of recipes use grammar the
+parser does not ship yet — they are tagged so you can tell which is which. Each ` ```qfs ` block
+carries a machine-readable header
 comment — `# qfs-cookbook: grammar=core|extended; milestone=…; features=…` — and a test
 (`packages/qfs/crates/test/tests/roadmap_cookbook.rs`) extracts every block: **`grammar=core` recipes must parse
 with today's parser** (so the catalogue can never drift from the real grammar), while
@@ -23,8 +33,10 @@ with today's parser** (so the catalogue can never drift from the real grammar), 
 (`LET`, lambdas, `TRANSACTION`) *and* other not-yet-shipped grammar (inline `GROUP BY`/`AGGREGATE`,
 `||`, source `AS` aliases, richer DDL, …) — and are tracked as a living coverage report, each promoted
 to a hard assertion as the milestone that delivers it lands. `grammar=core` means *the grammar of
-the statement* is shipped — a recipe may still address a path whose driver arrives later (`/sys`,
-`/hosts`, `/directories`), since a path is just a token to the parser.
+the statement* is shipped — a recipe may still address a path that is not yet executable here:
+a planned admin mount whose driver arrives later (`/hosts`, `/directories`), or a cloud read that
+needs a connected account before it returns rows (`/mail`, `/drive`, `/github`, `/slack`, `/s3`,
+`/r2`), since a path is just a token to the parser.
 :::
 
 The safety floor holds in every recipe: **describe is pure, preview touches nothing, commit is
@@ -33,7 +45,7 @@ explicit, and irreversible effects (`CALL mail.send`, merges, deletes) demand
 
 ## Reads, filters & projection
 
-The simplest thing qfs does is read one source, narrow it with a predicate, and shape the columns you keep — and that single skill works identically against a mailbox, a Postgres table, a GitHub repo, a Slack channel, a git tree, an object store, or a planned admin mount. These recipes stay inside one source per query and lean on the read vocabulary: `WHERE`/`SELECT`/`EXTEND`/`ORDER BY`/`LIMIT`/`DISTINCT`, the full predicate set (`LIKE`, `~`, `IN`, `BETWEEN`, `ANY`, `AND`/`OR`/`NOT`), dotted path navigation into nested objects, `EXPAND` of nested collections, and the temporal coordinate (`@version` and `AS OF`). Everything here is read-only, so `PREVIEW` shows exactly what would come back and nothing is ever touched.
+The simplest thing qfs does is read one source, narrow it with a predicate, and shape the columns you keep — and that single skill works identically against a mailbox, a Postgres table, a GitHub repo, a Slack channel, a git tree, an object store, or a planned admin mount. These recipes stay inside one source per query and lean on the read vocabulary: `WHERE`/`SELECT`/`EXTEND`/`ORDER BY`/`LIMIT`/`DISTINCT`, the full predicate set (`LIKE`, `~`, `IN`, `BETWEEN`, `ANY`, `AND`/`OR`/`NOT`), dotted path navigation into nested objects, `EXPAND` of nested collections, and the temporal coordinate (`@version` and `AS OF`). Everything here is read-only, so nothing is ever touched. The `/local`, `/sys`, and configured `/sql`/`/git` reads return real rows today; the cloud-service reads (`/mail`, `/github`, `/slack`, `/s3`, `/r2`, `/drive`) parse and plan but first need a connected account, after which `PREVIEW` shows exactly what would come back.
 
 **Triage the inbox: unread mail from outside the company, newest first.**
 

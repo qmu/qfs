@@ -9,12 +9,12 @@ qfs [OPTIONS] [COMMAND]
 Commands:
   run        Run one statement and exit (preview by default)
   describe   Describe a path: archetype, columns, verbs, procedures, pushdown
+  skill      Print the embedded AI operating procedure
+  serve      Start the server (CLI + MCP endpoint + web dashboard) from a .qfs config
   connection Manage stored credentials per service/connection
   identity   Local identity: sign up, look yourself up
   invite     Team invites & membership: create, redeem, revoke
   job        Run / schedule a saved JOB (an external scheduler drives it)
-  skill      Print the embedded AI operating procedure
-  serve      Start the server (CLI + MCP endpoint + web dashboard) from a .qfs config
   help       Print help for any command
 
 Global options:
@@ -46,7 +46,8 @@ echo "<statement>" | qfs run -   # read from stdin
 qfs run "insert into /mail/drafts values ('alice@example.com','Hi','Body')"
 qfs run "insert into /mail/drafts values ('alice@example.com','Hi','Body')" --commit
 
-# Irreversible needs the extra ack:
+# Irreversible needs the extra ack (this CALL needs a connected mail account first —
+# see `qfs connection`; without one it returns a capability error):
 qfs run "/mail/drafts |> call mail.send" --commit --commit-irreversible
 ```
 
@@ -150,4 +151,5 @@ when reporting an issue:
 qfs 0.0.10
 commit:  <git-sha>
 target:  x86_64-unknown-linux-gnu
+wasm32:  false
 ```
