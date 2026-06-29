@@ -4,7 +4,7 @@ author: a@qmu.jp
 type: refactoring
 layer: [Config, UX]
 effort: 4h
-commit_hash:
+commit_hash: 8ecdc10
 category: Changed
 depends_on: [20260630004140-connection-registry-from-declarations.md]
 ---
