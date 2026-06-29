@@ -4,7 +4,7 @@ author: a@qmu.jp
 type: refactoring
 layer: [UX, Infrastructure]
 effort: 4h
-commit_hash:
+commit_hash: 1368c0c
 category: Changed
 depends_on: [20260630004130-secret-reference-resolution.md, 20260630004140-connection-registry-from-declarations.md]
 ---
