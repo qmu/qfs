@@ -260,18 +260,34 @@ pub fn run_engine_and_reads() -> (Engine, ReadRegistry, qfs_core::SafetyMode) {
     // the read facet UNREGISTERED so the `FROM` then fails honestly ("no source") rather than
     // reading without authorization. A registered facet whose credential cannot be resolved at
     // request time surfaces a clear auth error (see `crate::read_facets`), never empty rows.
-    if let Some(client) = crate::clients::live_github_client() {
-        reads = reads.with(
+    // GitHub / Slack: register the real networked read facet behind the credentialed client (t6); on
+    // a fresh, unconfigured operator the client builder returns None, so fall back to the honest
+    // connect-account facet (t5) — a `FROM /github/...` then gets an ACTIONABLE error, never the raw
+    // unknown_source. The authenticated path returns real rows (issues/pulls/messages).
+    reads = match crate::clients::live_github_client() {
+        Some(client) => reads.with(
             DriverId::new("github"),
             Arc::new(crate::read_facets::GitHubReadDriver::new(client)),
-        );
-    }
-    if let Some(client) = crate::clients::live_slack_client() {
-        reads = reads.with(
+        ),
+        None => reads.with(
+            DriverId::new("github"),
+            Arc::new(crate::read_facets::ConnectAccountReadDriver::new(
+                "connect a GitHub account to read it — run `qfs identity signup <email>`, then `qfs connection add github` (GitHub reads need an authenticated token)",
+            )),
+        ),
+    };
+    reads = match crate::clients::live_slack_client() {
+        Some(client) => reads.with(
             DriverId::new("slack"),
             Arc::new(crate::read_facets::SlackReadDriver::new(client)),
-        );
-    }
+        ),
+        None => reads.with(
+            DriverId::new("slack"),
+            Arc::new(crate::read_facets::ConnectAccountReadDriver::new(
+                "connect a Slack workspace to read it — run `qfs identity signup <email>`, then `qfs connection add slack`",
+            )),
+        ),
+    };
     // SQL (hermetic, no network): register the live SQLite-backed read facet when a connection is
     // configured, so `FROM /sql/<conn>/<table> |> WHERE … |> SELECT …` executes — the native SELECT
     // pushes the WHERE/ORDER/LIMIT into the database and the residual is re-filtered locally. Skipped

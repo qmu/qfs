@@ -340,10 +340,10 @@ fn local_run_at_default_log_level_emits_no_cloud_bind_noise() {
 #[test]
 fn unknown_source_is_capability_exit_three() {
     // No read driver registered → an absolute source resolves to a structured capability error.
-    // `/github` (uncredentialed) has its read facet left UNregistered (fail closed), so it is the
-    // genuine unknown_source case — `/mail` now carries an actionable connect-account capability
-    // error (still exit 3) rather than the raw unknown_source (see the connect-account facet, t5).
-    let o = qfs(&["run", "-e", "/github/acme/web/pulls |> LIMIT 1", "--json"]);
+    // `/claude` (no QFS_CLAUDE_SESSIONS configured) leaves its read facet UNregistered, so it is the
+    // genuine unknown_source case. The cloud sources (`/mail`, `/github`, …) now carry actionable
+    // connect-account capability errors (still exit 3) rather than the raw unknown_source (t5/t6).
+    let o = qfs(&["run", "-e", "/claude/sessions |> LIMIT 1", "--json"]);
     assert_eq!(o.code, 3, "unsupported-op/capability is exit 3");
     let v = json(&o.stderr);
     assert_eq!(v["error"]["kind"], "capability");
