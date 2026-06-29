@@ -9,6 +9,12 @@ holds the actual connection info. That's why you can have `/sql/orders` and `/sq
 You don't need any connection to **describe** a path or **preview** a query — both are completely
 offline. You need one to **read rows** from a source or **commit** a change to it.
 
+::: tip Just want the steps for one service?
+[Connect a service](/guide/connect) is the per-source how-to (Gmail/Drive, GitHub/Slack, S3/R2,
+SQL/git). This page is the model behind it — the encrypted store, the passphrase, and rotating or
+revoking secrets.
+:::
+
 ## Two kinds of connection
 
 How you define a connection depends on whether the source needs a **secret**:

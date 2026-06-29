@@ -1,0 +1,101 @@
+# Connect a service
+
+qfs reads `/local`, `/sys`, and any file you point it at with **no setup at all**. Everything else —
+a database, a git repo, mail, Drive, GitHub, Slack, object storage — needs a one-time **connection**
+that tells qfs where the source is and (for cloud services) how to authenticate.
+
+This page is the per-service how-to: the exact commands for each source. For the underlying model
+(what a connection *is*, the encrypted store, rotating/revoking secrets) see
+[Connections & credentials](/guide/connections).
+
+Two things some services need first:
+
+- **A passphrase for the local secret store.** Any service that stores a secret (mail, Drive,
+  GitHub, Slack, S3, R2) needs `QFS_PASSPHRASE` exported — a password you choose that encrypts the
+  service logins you save on this machine (not any service's own password). Set it without leaking it
+  into shell history:
+  ```sh
+  read -rs QFS_PASSPHRASE; export QFS_PASSPHRASE
+  ```
+- **A sign-in, for Google services.** Adding a Gmail / Drive / Analytics connection requires a
+  signed-in identity first: `qfs identity signup <email>`.
+
+Local databases and git need **neither** — they store no secret.
+
+## Local databases & git — point at a location
+
+A SQLite file or a git repo *is* its location, so the "connection" is just an environment variable.
+The name (lower-cased) becomes the path segment:
+
+```sh
+export QFS_SQL_ORDERS=/data/orders.db          # → /sql/orders/<table>
+export QFS_SQL_ANALYTICS=postgres://db/analytics
+export QFS_GIT_APP=/srv/repos/app.git          # → /git/app/commits, /git/app@<ref>/…
+```
+
+A `/sql/orders/…` or `/git/app/…` query works as soon as the variable is set — no passphrase, no
+`connection add`. (Reading the database's `WHERE` is pushed into the backend; git uses the commit you
+name.)
+
+## Gmail, Google Drive & Google Analytics — Google sign-in
+
+All three Google sources share one OAuth consent. Sign in, then add the connection — one consent
+covers Gmail, Drive, and Analytics:
+
+```sh
+qfs identity signup you@example.com            # register a local identity (once per machine)
+export QFS_PASSPHRASE                           # the store passphrase (above)
+
+# Interactive browser consent (opens the Google approval page, captures the redirect):
+QFS_GOOGLE_CONSENT=1 qfs connection add gmail work
+```
+
+`gmail` / `gdrive` / `ga` is the driver; `work` is your label (the path segment: `/mail/work/…`).
+The consent is recorded against that connection; the refresh token is stored encrypted and never
+printed. If you provision a refresh token out of band instead of using the browser flow, pipe it on
+stdin (`printf %s "$TOKEN" | qfs connection add gmail work`).
+
+Once connected, **`/mail` reads return your real messages.** Reading `/drive` and `/ga` is still
+being wired — connecting works today, but those reads land per the [roadmap](/roadmap); until then
+they return the actionable "connect / not-yet-available" error.
+
+## GitHub & Slack — a token
+
+Create a token in the service (a GitHub personal-access token, a Slack bot/user token), then pipe the
+**value** in on stdin — never on argv, where it would leak into your shell history and the process
+table:
+
+```sh
+export QFS_PASSPHRASE
+printf %s "$GH_TOKEN"    | qfs connection add github personal   # → /github/personal/…
+printf %s "$SLACK_TOKEN" | qfs connection add slack team        # → /slack/team/…
+```
+
+qfs stores the token encrypted and never prints it back. `connection list` shows the connection name
+only.
+
+## Amazon S3 & Cloudflare R2 — access keys
+
+S3 and R2 sign each request with an access-key pair. The **secret** access key is stored with
+`connection add` (piped on stdin); its non-secret partner (the access-key id) and the region /
+endpoint / bucket are configured alongside it — see the S3/R2 setup in
+[Connections & credentials](/guide/connections):
+
+```sh
+export QFS_PASSPHRASE
+printf %s "$AWS_SECRET_ACCESS_KEY" | qfs connection add s3 prod   # → /s3/prod/…
+printf %s "$R2_SECRET_ACCESS_KEY"  | qfs connection add r2 backups
+```
+
+## After connecting
+
+```sh
+qfs connection list            # the connections you've added (names + metadata only, never secrets)
+qfs run "/mail/work/inbox |> where subject LIKE '%invoice%' |> select date, subject"
+```
+
+`describe` and `preview` never need any of this — they're always offline. A connection is only
+required to **read rows** from a source or **commit** a change to it.
+
+See [Connections & credentials](/guide/connections) for the full model: choosing the active
+connection, rotating and revoking secrets, re-keying the store, and how the store is encrypted.

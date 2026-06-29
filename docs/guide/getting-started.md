@@ -234,7 +234,8 @@ qfs connection list                                 # shows connection names onl
 The credential value is read from **stdin** (not prompted, and never passed on argv where it would
 leak into the process table + shell history); qfs never prints it back.
 
-See [Connections & credentials](/guide/connections) for details, including the passphrase.
+See [Connect a service](/guide/connect) for the exact steps per source (Gmail/Drive, GitHub/Slack,
+S3/R2, SQL/git), and [Connections & credentials](/guide/connections) for the full model.
 
 ## Where to go next
 
