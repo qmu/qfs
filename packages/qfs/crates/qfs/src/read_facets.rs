@@ -217,11 +217,15 @@ impl GmailReadDriver {
 impl ReadDriver for GmailReadDriver {
     async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
         let predicate = scan.pushed.filter.as_ref();
-        qfs_driver_gmail::read_rows(self.client.as_ref(), &scan.path, predicate).map_err(|e| {
-            CfsError::InvalidPath {
-                path: scan.path.clone(),
-                reason: e.code(),
-            }
+        qfs_driver_gmail::read_rows(
+            self.client.as_ref(),
+            &scan.path,
+            predicate,
+            scan.pushed.limit,
+        )
+        .map_err(|e| CfsError::InvalidPath {
+            path: scan.path.clone(),
+            reason: e.code(),
         })
     }
 }

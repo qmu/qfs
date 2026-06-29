@@ -10,14 +10,23 @@ use qfs_types::{Predicate, RowBatch};
 use crate::client::GmailClient;
 use crate::error::GmailError;
 use crate::path::MailPath;
+use crate::query::build_query;
 use crate::schema::MailMessage;
 
-/// The fan-out cap for a label scan — the engine residual applies the real `WHERE`/`LIMIT`.
+/// The fan-out ceiling for a collection scan when the engine still re-filters locally — over-fetch,
+/// then the residual `WHERE`/`LIMIT` narrows. A pushed `LIMIT` tightens the fetch below this only
+/// when the whole predicate pushed down (see [`read_rows`]).
 const READ_CAP: u32 = 1_000;
 
-/// Read a `/mail/<label>` or `/mail/drafts` collection into [`MailMessage`] rows. `predicate` is
-/// reserved for a future Gmail `q=` pushdown (`from:`/`subject:`/`is:unread`); today the `WHERE`
-/// stays a local residual the engine re-filters, so only the label/drafts scope is pushed.
+/// Read a `/mail/<label>` or `/mail/drafts` collection into [`MailMessage`] rows, pushing the
+/// `WHERE` into Gmail's `q=` search where it can (`from:`/`to:`/`subject:`/`after:`/`is:unread`/the
+/// `label:` scope) and the `LIMIT` into the fetch cap where it is safe to.
+///
+/// The engine still re-applies the exact `WHERE`/`LIMIT` locally (over-fetch then filter, RFD §6),
+/// so Gmail's looser field operators never return wrong rows; the `q=` is a backend pre-filter that
+/// narrows the fetch. The pushed `LIMIT` is applied to the fetch cap **only** when nothing is left
+/// as a local residual — with a residual, a tight cap would under-fetch (drop rows that survive the
+/// local filter), so the fetch stays at [`READ_CAP`] and the engine applies the `LIMIT`.
 ///
 /// # Errors
 /// [`GmailError`] when the path is not a readable collection, or on an auth / transport / decode
@@ -25,11 +34,22 @@ const READ_CAP: u32 = 1_000;
 pub fn read_rows(
     client: &dyn GmailClient,
     path: &str,
-    _predicate: Option<&Predicate>,
+    predicate: Option<&Predicate>,
+    limit: Option<u64>,
 ) -> Result<RowBatch, GmailError> {
-    let query = match MailPath::parse_str(path)? {
-        MailPath::Label { name } => format!("label:{name}"),
-        MailPath::Drafts => "in:draft".to_string(),
+    let pushdown = match MailPath::parse_str(path)? {
+        MailPath::Label { name } => build_query(Some(&name), predicate),
+        MailPath::Drafts => {
+            // The drafts scope is `in:draft`, not a `label:` term — build the predicate query, then
+            // prepend the scope.
+            let mut pd = build_query(None, predicate);
+            pd.query = if pd.query.is_empty() {
+                "in:draft".to_string()
+            } else {
+                format!("in:draft {}", pd.query)
+            };
+            pd
+        }
         _ => {
             return Err(GmailError::InvalidPath {
                 path: path.to_string(),
@@ -37,7 +57,14 @@ pub fn read_rows(
             })
         }
     };
-    let page = client.search_message_ids(&query, Some(READ_CAP))?;
+    // Push the planner LIMIT into the fetch cap only when the whole predicate pushed down (no
+    // residual); otherwise over-fetch up to READ_CAP and let the engine apply the LIMIT after its
+    // local re-filter. Either way READ_CAP is the hard ceiling.
+    let cap = match (limit, &pushdown.residual) {
+        (Some(n), None) => u32::try_from(n).unwrap_or(READ_CAP).clamp(1, READ_CAP),
+        _ => READ_CAP,
+    };
+    let page = client.search_message_ids(&pushdown.query, Some(cap))?;
     let mut rows = Vec::with_capacity(page.ids.len());
     for id in &page.ids {
         rows.push(client.get_message(id)?.to_row());
@@ -73,7 +100,7 @@ mod tests {
                 next_page_token: None,
             })
             .with_message(fixture_message("m1", "Invoice 42"));
-        let batch = read_rows(&client, "/mail/INBOX", None).unwrap();
+        let batch = read_rows(&client, "/mail/INBOX", None, None).unwrap();
         assert_eq!(batch.rows.len(), 1);
         let subj = batch
             .schema
@@ -87,7 +114,55 @@ mod tests {
     #[test]
     fn a_message_node_is_not_a_collection_read() {
         let client = MockGmailClient::new();
-        let err = read_rows(&client, "/mail/INBOX/18f1a2b3", None).unwrap_err();
+        let err = read_rows(&client, "/mail/INBOX/18f1a2b3", None, None).unwrap_err();
         assert_eq!(err.code(), "invalid_path");
+    }
+
+    /// Extract the single recorded Gmail search call's `(query, max_results)`.
+    fn recorded_search(client: &MockGmailClient) -> (String, Option<u32>) {
+        client
+            .recorded()
+            .into_iter()
+            .find_map(|c| match c {
+                crate::client::RecordedCall::Search { query, max_results } => {
+                    Some((query, max_results))
+                }
+                _ => None,
+            })
+            .expect("a search call was recorded")
+    }
+
+    #[test]
+    fn pushes_the_where_into_the_gmail_search_query_and_keeps_a_lossy_residual_uncapped() {
+        use qfs_types::{CmpOp, ColRef, Literal, Predicate};
+        let client = MockGmailClient::new().with_search_page(MessageIdPage {
+            ids: Vec::new(),
+            next_page_token: None,
+        });
+        // `subject = 'Invoice'` is a LOSSY Gmail `subject:` pre-filter → kept as residual.
+        let pred = Predicate::Cmp(
+            ColRef::col("subject"),
+            CmpOp::Eq,
+            Literal::Text("Invoice".to_string()),
+        );
+        read_rows(&client, "/mail/INBOX", Some(&pred), Some(5)).unwrap();
+        let (query, max_results) = recorded_search(&client);
+        assert!(query.contains("label:INBOX"), "query: {query}");
+        assert!(query.contains("subject:Invoice"), "query: {query}");
+        // A residual remains, so the LIMIT is NOT pushed to the fetch — the engine applies it.
+        assert_eq!(max_results, Some(READ_CAP));
+    }
+
+    #[test]
+    fn pushes_the_limit_into_the_fetch_when_no_residual_remains() {
+        let client = MockGmailClient::new().with_search_page(MessageIdPage {
+            ids: Vec::new(),
+            next_page_token: None,
+        });
+        // A bare label scan with no `WHERE` leaves no residual, so the LIMIT is safe to push.
+        read_rows(&client, "/mail/INBOX", None, Some(5)).unwrap();
+        let (query, max_results) = recorded_search(&client);
+        assert!(query.contains("label:INBOX"), "query: {query}");
+        assert_eq!(max_results, Some(5));
     }
 }
