@@ -59,7 +59,7 @@ completely offline:
 qfs describe /mail/drafts
 
 # Preview a query — shows the plan, changes nothing
-qfs run "INSERT INTO /mail/drafts VALUES ('alice@example.com', 'Hi', 'Body text')"
+qfs run "insert into /mail/drafts values ('alice@example.com', 'Hi', 'Body text')"
 ```
 
 When you're ready to act on real services, [add a connection](/guide/connections).

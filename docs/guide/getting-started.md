@@ -50,7 +50,7 @@ can `SELECT`, `INSERT`, `UPSERT`, `REMOVE` — but not `UPDATE`), the **procedur
 `qfs run` **previews by default**. Nothing is applied:
 
 ```sh
-qfs run "INSERT INTO /mail/drafts VALUES ('alice@example.com', 'Hi', 'Body text')"
+qfs run "insert into /mail/drafts values ('alice@example.com', 'Hi', 'Body text')"
 ```
 
 ```text
@@ -71,7 +71,7 @@ each `|>` pipe on its own line:
 ```
 
 ```sh
-qfs run "/mail/inbox |> WHERE subject LIKE '%invoice%' |> SELECT date, from, subject"
+qfs run "/mail/inbox |> where subject LIKE '%invoice%' |> select date, from, subject"
 ```
 
 ## 4. Commit
@@ -79,7 +79,7 @@ qfs run "/mail/inbox |> WHERE subject LIKE '%invoice%' |> SELECT date, from, sub
 When the preview looks right, add `--commit`:
 
 ```sh
-qfs run "INSERT INTO /mail/drafts VALUES ('alice@example.com', 'Hi', 'Body text')" --commit
+qfs run "insert into /mail/drafts values ('alice@example.com', 'Hi', 'Body text')" --commit
 ```
 
 ### Irreversible actions need an extra OK
@@ -89,7 +89,7 @@ a one-shot command, requires an explicit extra acknowledgement so you can never 
 
 ```sh
 # Sending is irreversible — --commit alone is refused:
-qfs run "/mail/drafts |> CALL mail.send" --commit --commit-irreversible
+qfs run "/mail/drafts |> call mail.send" --commit --commit-irreversible
 ```
 
 If you forget the extra flag on an irreversible plan, qfs **fails safely** and tells you why.

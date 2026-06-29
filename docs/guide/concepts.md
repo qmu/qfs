@@ -142,6 +142,31 @@ A blob of bytes becomes rows with `DECODE`, and rows become bytes with `ENCODE`.
 |> encode yaml
 ```
 
+## 6. Administration is paths too (`/sys`)
+
+qfs's own deployment state is surfaced as ordinary paths you query with the same grammar — there is
+no separate admin API. Under `/sys` you'll find `users`, `projects`, `audit`, `connections`,
+`policies`, `metrics`, `settings`, and `billing`. So reviewing the audit trail or the connection
+registry is just a read:
+
+```qfs
+/sys/audit
+|> order by seq DESC
+|> limit 20
+```
+
+The selectable AI **safety mode** lives in `/sys/settings` (a deployment chooses how strict the
+commit gate is, above the always-on safety floor); `/sys/audit` is the **append-only, hash-chained**
+record every `/sys` mutation writes to — administration observes itself. The redaction is
+structural: `/sys/connections` has no column a secret could appear in.
+
+## One engine, three faces
+
+Everything above is the *same engine* no matter how you reach it. `qfs serve` presents that engine
+as three faces — the **CLI** (and interactive shell), an **MCP endpoint** for AI agents, and an
+**embedded web dashboard** whose approval cards let a human approve a pending irreversible commit.
+The path model, the four archetypes, and preview-then-commit are identical on all of them.
+
 ## Credentials, briefly
 
 `describe` and `preview` never need a credential. To **commit** against a live service you store one

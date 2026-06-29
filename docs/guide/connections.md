@@ -72,6 +72,32 @@ qfs connection use mail work
 qfs connection remove mail work     # idempotent — fine to run twice
 ```
 
+## Rotating, revoking, and rekeying
+
+Offboarding and key hygiene are first-class. The new secret (or passphrase) is read from **stdin**,
+never argv:
+
+```sh
+printf %s "$NEW" | qfs connection rotate mail work   # re-mint the secret in place, clear any revoke
+qfs connection revoke mail work                      # mark the connection unresolvable (fails closed)
+printf %s "$NEWPASS" | qfs connection rekey          # re-wrap the store's data-key under a new passphrase
+```
+
+- **rotate** replaces a connection's secret (the offboarding answer — *replace*, not un-grant) and
+  clears any prior revocation. Other connections are untouched.
+- **revoke** marks one connection unresolvable: a later bind fails closed and the secret is never
+  returned. Other connections keep working.
+- **rekey** re-wraps the store's data-key under a new `QFS_PASSPHRASE` (the current one is the old
+  one, read from the environment; the new one from stdin). Existing secrets stay decryptable; the
+  old passphrase stops unlocking. It is one re-wrap of the data-key, not an N-way re-encryption.
+
+::: tip Where the store lives
+Stored credentials are **envelope-encrypted at rest** in qfs's SQLite store: a random data-key
+encrypts each secret value, and that data-key is itself wrapped under an argon2id key derived from
+`QFS_PASSPHRASE`. The `/sys/connections` admin path shows the registry — driver, connection name,
+and `created_at` only; there is structurally no column a secret could ride in.
+:::
+
 ## Least privilege
 
 qfs is built so a credential is only ever used for the exact plan you commit, and never appears in

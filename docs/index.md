@@ -22,7 +22,7 @@ features:
   - title: Preview before you commit
     details: Every command shows exactly what it will do first. Nothing touches the real world until you add --commit. Irreversible actions (sending mail, merging a PR) need an explicit extra OK.
   - title: Safe for AI agents
-    details: One small grammar instead of a hundred vendor SDKs. An agent learns it once and drives every service — with previews and least-privilege policies as guardrails.
+    details: One small grammar instead of a hundred vendor SDKs. An agent learns it once and drives every service over the same loop — on the CLI, through the MCP endpoint, or via the web dashboard's approval cards — with previews and least-privilege policies as guardrails.
 ---
 
 ## See it
@@ -61,6 +61,13 @@ create trigger notify
 ```
 
 You **preview** each one to see precisely what would happen, then add `--commit` to make it real.
+
+## One engine, three faces
+
+The same engine — and the same preview-then-commit safety model — answers on three faces: the
+**CLI** (and an FTP-like interactive shell), an **MCP endpoint** that exposes the describe → preview
+→ commit loop as tools for an AI agent, and an **embedded web dashboard** where a human approves a
+pending irreversible commit on an approval card. You learn the loop once and it works everywhere.
 
 **Next:** [Install qfs](/guide/installation) · [Your first queries](/guide/getting-started) ·
 [The Cookbook](/cookbook/)

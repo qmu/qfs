@@ -6,16 +6,16 @@ aside: false
 
 [[toc]]
 
-This is the payoff of the whole plan: a broad, worked-by-example catalogue of the queries qfs will
-support once the roadmap is delivered (M0→M+). Read the [roadmap](/roadmap) for the *why*; read this for the *how*,
-in the grammar you would actually type. The recipes deliberately **combine features and interact** —
-a federation join feeding a transaction, a policy driven by a directory group, an agent's MCP commit
-gated by a safety mode — because the interactions are the product.
+A broad, worked-by-example catalogue of qfs queries, in the grammar you would actually type. See
+[How qfs works](/guide/concepts) for the model behind them. The recipes deliberately **combine
+features and interact** — a federation join feeding a transaction, a policy driven by a directory
+group, an agent's MCP commit gated by a safety mode — because the interactions are the product.
 
-::: warning Direction, not documentation
-Every recipe is tagged by the milestone that delivers its capability. The
-[generated reference](/language) is always the truth about the binary *today*; this cookbook is the
-truth about where the grammar is *going*. Each ` ```qfs ` block carries a machine-readable header
+::: warning Worked recipes, with a few running ahead of the parser
+Every recipe is tagged by the capability that delivers it. The [generated reference](/language) is
+always the truth about the binary *today*. Most of this catalogue is now live (the M0→M+ surface
+shipped), but a handful of recipes use grammar the parser does not ship yet — they are tagged so you
+can tell which is which. Each ` ```qfs ` block carries a machine-readable header
 comment — `# qfs-cookbook: grammar=core|extended; milestone=…; features=…` — and a test
 (`packages/qfs/crates/test/tests/roadmap_cookbook.rs`) extracts every block: **`grammar=core` recipes must parse
 with today's parser** (so the catalogue can never drift from the real grammar), while
@@ -379,7 +379,7 @@ The simplest thing qfs does is read one source, narrow it with a predicate, and 
 
 This is the whole reason qfs exists: one query language that JOINs, UNIONs, and set-subtracts across services that otherwise never speak to each other. Because every service is a path and every path yields rows, a SQL table can JOIN a GitHub issue list, a Slack message log can be reconciled against a git history, and a Drive folder can be diffed against a catalog with EXCEPT. The recipes below stay in today's frozen grammar (`grammar=core`) — the milestone tag reflects which services must be live for the recipe to actually run — and lean on `JOIN … ON`, `UNION`, `EXCEPT`, `INTERSECT`, plus aggregation and filtering on top of the federated result.
 
-**How a mixed-source query resolves — pushed down per source, combined locally, identical on every face.** This is the canonical federation recipe: it documents the execution model (see the roadmap, §4.4), not just the syntax.
+**How a mixed-source query resolves — pushed down per source, combined locally, identical on every face.** This is the canonical federation recipe: it documents the execution model (see [How qfs works → Federation](/guide/concepts#_5-federation-one-query-many-services)), not just the syntax.
 
 ```qfs
 # qfs-cookbook: grammar=core; milestone=M4; features=where,join,on,select,order by
@@ -394,7 +394,7 @@ This is the whole reason qfs exists: one query language that JOINs, UNIONs, and 
 qfs resolves this in two stages, and the resolution is the **same** whether you run it from the CLI on your laptop, a self-hosted server, or a cloud Worker:
 
 1. **Pushdown per source.** The `/sql/pg/orders` subtree (`WHERE status = 'paid' AND placed_at >= …`) becomes **one SQL query** executed inside Postgres; the `/github/acme/support/issues` subtree becomes a **filtered GitHub API fetch**. Each backend does what it can natively (`qfs describe` shows the **pushdown** line for each).
-2. **Local combine.** The cross-source `JOIN … ON orders.email = issues.reporter_email`, the post-join `WHERE issues.state = 'open'`, the `SELECT`, and the `ORDER BY` run **in qfs's own engine, in-process** — only the residual that genuinely spans the two services. The same binary, the same planner, the same combine engine do this on every face; at cloud scale only the tenant→DB routing differs (roadmap §4.2, §4.4) — never the resolution itself.
+2. **Local combine.** The cross-source `JOIN … ON orders.email = issues.reporter_email`, the post-join `WHERE issues.state = 'open'`, the `SELECT`, and the `ORDER BY` run **in qfs's own engine, in-process** — only the residual that genuinely spans the two services. The same binary, the same planner, the same combine engine do this on every face; at cloud scale only the tenant→DB routing differs — never the resolution itself.
 
 **Match paid orders to the GitHub issues their customers filed.**
 

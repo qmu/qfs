@@ -4,6 +4,11 @@ The same language has a server side. Each `CREATE …` binding takes a query you
 runs it on an **event**, a **schedule**, or an **HTTP request**. You collect bindings in a `.qfs`
 config and run it with `qfs serve config.qfs`.
 
+`qfs serve` is one process presenting the engine as three faces: the HTTP API, an **MCP endpoint**
+an AI agent connects to, and an **embedded web dashboard** whose **approval cards** let a human
+review and approve a pending irreversible commit. So unattended bindings can still route an
+irreversible effect to a person for sign-off instead of failing closed.
+
 You can **preview** any binding to see exactly the plan it would install — no socket, no backend
 needed.
 

@@ -1,9 +1,12 @@
 # qfs
 
 **One small grammar for every external service.** `qfs` is a single Rust binary that exposes
-every backend — mail, drive, object storage, GitHub, Slack, SQL, git, Google Analytics — through
-**one uniform, filesystem-shaped, pipe-SQL DSL**. It runs as a **CLI** locally, as a **daemon** on
-EC2, or (target) compiled to `wasm32` for Cloudflare Workers (RFD-0001 §1, §9).
+every backend — mail, drive, object storage, GitHub, Slack, SQL, git, Google Analytics, Claude, an
+HTTP fetcher, a directory, and `/sys` administration — through **one uniform, filesystem-shaped,
+pipe-SQL DSL**. The same engine presents **three faces**: a **CLI** (and an FTP-like interactive
+shell), an **MCP endpoint** for AI agents, and an **embedded web dashboard** with approval cards.
+It runs locally or as a self-hosted server (RFD-0001 §1, §9). The Cloudflare Workers `wasm32`
+target is parked while the worker crate is offline ([ADR-0005](docs/adr/0005-deployment-hosts.md)).
 
 > qfs generalizes the FTP-shell idea per
 > [RFD-0001](.workaholic/RFDs/0001-qfs-architecture.md): instead of one FTP-style client for one
@@ -51,6 +54,39 @@ operating procedure ships embedded in the binary — run `qfs skill` (and `qfs s
   for any existing connections.) `CREATE POLICY` gates writes by verb / path / irreversibility. See
   [`docs/server.md`](docs/server.md).
 
+## The shipped surface (three faces, one engine)
+
+The same engine answers on three faces, and the safety model (PREVIEW → COMMIT, the irreversible
+gate, the policy gate) is identical on all of them:
+
+- **CLI** — one-shot `qfs run` / `qfs describe`, plus the FTP-like interactive shell (no
+  subcommand). See [`docs/guide/cli.md`](docs/guide/cli.md).
+- **MCP endpoint** — the server exposes the same DESCRIBE → PREVIEW → COMMIT loop as MCP tools so an
+  AI agent drives every service through one contract.
+- **Web dashboard** — an embedded SPA served by `qfs serve` with **approval cards**: a human
+  reviews and approves a pending irreversible commit in the browser.
+
+Beyond reads/writes, v0.0.9 ships the operator surface:
+
+- **Identity** — local sign-up + lookup: `qfs identity signup <email>` / `qfs identity whoami`
+  (authentication only; identity is not authorization).
+- **Teams & invites** — `qfs invite create` mints a one-time, expiring token; `qfs invite redeem`
+  creates the local user + membership; `qfs invite revoke` cancels a pending invite.
+- **Jobs** — a saved `CREATE JOB … EVERY … DO …` plan run by an **external** scheduler:
+  `qfs job run <config> <name> --commit` and `qfs job cron <config> <name>` (qfs is not a scheduler).
+- **`/sys/*` administration** — the deployment's own state surfaced as ordinary paths you query:
+  `/sys/{users,projects,audit,connections,policies,metrics,settings,billing}`. The selectable AI
+  **safety mode** lives in `/sys/settings`; the hash-chained WORM audit tail is `/sys/audit`; the
+  per-team billing tier is recorded as data in `/sys/billing` (never a payment secret).
+- **OAuth Authorization Server** — qfs is its own OAuth AS (Dynamic Client Registration + PKCE) for
+  the agent/dashboard auth handshake. The credential store supports rotation / revocation / rekey
+  (`qfs connection rotate|revoke|rekey`).
+
+Honestly **not yet wired** (kept out of the capability claims): live OAuth *browser* consent, the
+MCP cloud-tunnel dial, an LDAP/AD/Entra/Workspace directory backend, the qfs Cloud broker endpoint,
+a payment provider, Postgres/MySQL SQL backends (SQLite ships), live gmail/gdrive/ga/objstore
+*reads* (github/slack reads ship), and the Cloudflare Workers wasm artifact (parked, ADR-0005).
+
 ## Install
 
 ```sh
@@ -80,14 +116,14 @@ update, and where to read more). The [Quickstart](#quickstart-the-loop) below is
 qfs describe /mail/drafts
 
 # 2. write + 3. PREVIEW (default — shows the plan, touches nothing):
-qfs run "/mail/inbox |> WHERE subject LIKE '%invoice%' |> SELECT subject, from"
+qfs run "/mail/inbox |> where subject LIKE '%invoice%' |> select subject, from"
 
 # create a draft (PREVIEW first, then COMMIT to apply):
-qfs run "INSERT INTO /mail/drafts VALUES (...)"            # PREVIEW
-qfs run "INSERT INTO /mail/drafts VALUES (...) COMMIT"     # apply
+qfs run "insert into /mail/drafts values (...)"            # PREVIEW
+qfs run "insert into /mail/drafts values (...) commit"     # apply
 
 # 4. COMMIT an irreversible effect requires an explicit ack in one-shot:
-qfs run "id:draft-1 |> CALL mail.send COMMIT" --commit-irreversible
+qfs run "id:draft-1 |> call mail.send commit" --commit-irreversible
 ```
 
 The interactive shell (no subcommand) gives the same loop with an FTP-like prompt:
@@ -103,7 +139,7 @@ for (RFD §9):
 
 ```
 $ qfs --version
-qfs 0.0.4
+qfs 0.0.10
 commit:  <git-sha>
 target:  x86_64-unknown-linux-gnu
 wasm32:  false

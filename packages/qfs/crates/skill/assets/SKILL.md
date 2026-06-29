@@ -186,6 +186,24 @@ network, no live creds**.
 
 ---
 
+## Beyond the loop (the shipped surface)
+
+The loop is identical no matter how you reach qfs, and these surfaces are live today:
+
+- **Three faces, one engine.** You may be driving qfs as the **CLI**, over the **MCP endpoint**
+  (the same DESCRIBE → PREVIEW → COMMIT loop exposed as MCP tools), or behind the **web dashboard**
+  whose **approval cards** route a pending irreversible commit to a human for sign-off. The grammar,
+  the archetypes, and the gates are the same on all three.
+- **Administration is paths.** The deployment's own state is queryable under `/sys/*`:
+  `users`, `projects`, `audit`, `connections`, `policies`, `metrics`, `settings`, `billing`. Read
+  them with the same grammar (`/sys/audit |> order by seq desc |> limit 20`). `/sys/audit` is the
+  append-only, hash-chained record; `/sys/connections` shows names/metadata only (never a secret).
+- **Selectable safety mode.** The deployment's AI safety mode lives in `/sys/settings` and governs
+  how strict the commit gate is, **above** the always-on safety floor (PREVIEW default + the
+  irreversible ack). You never bypass it; you describe → preview → commit and let the gate decide.
+- **Teams.** Membership comes from `qfs invite create` (one-time, expiring token) → `invite redeem`.
+  Membership is not a capability — a `POLICY` / the ACL is what authorizes an action (default-deny).
+
 ## Quick reference
 
 - **PREVIEW is the default.** `qfs run '<stmt>'` previews; add `--commit` to apply.
