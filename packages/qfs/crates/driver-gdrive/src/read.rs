@@ -9,7 +9,7 @@
 //! fetched bytes. The actual fetch is the impure client call; everything here is pure.
 
 use qfs_codec::{Codec, RowBatch};
-use qfs_types::{Predicate, Row};
+use qfs_types::{Column, ColumnType, Predicate, Row, Schema, Value};
 
 use crate::client::GDriveClient;
 use crate::error::DriveError;
@@ -106,28 +106,101 @@ pub fn read_rows(
     path: &str,
     predicate: Option<&Predicate>,
 ) -> Result<RowBatch, DriveError> {
-    let rows = match DrivePath::parse_str(path)? {
+    let parsed = DrivePath::parse_str(path)?;
+    let revision = parsed.revision().map(str::to_string);
+    match parsed {
         // The virtual root and the Shared-Drives root list pseudo-directories, not real files.
-        DrivePath::Root => corpora_rows(),
-        DrivePath::SharedRoot => shared_drive_rows(client)?,
-        // My Drive: list the root, or walk a path under it then list the resolved folder.
-        DrivePath::MyRoot => list_children(client, MY_DRIVE_ROOT, None, predicate)?,
+        DrivePath::Root => Ok(folder_batch(corpora_rows())),
+        DrivePath::SharedRoot => Ok(folder_batch(shared_drive_rows(client)?)),
+        DrivePath::MyRoot => Ok(folder_batch(list_children(
+            client,
+            MY_DRIVE_ROOT,
+            None,
+            predicate,
+        )?)),
+        // My Drive: walk a path under it; the resolved node is listed if it is a folder, or its
+        // CONTENT is downloaded/exported if it is a file (gdrive-ftp `get`).
         DrivePath::My { segments, .. } => {
-            let folder = resolve_folder(client, MY_DRIVE_ROOT, None, &segments, path)?;
-            list_children(client, &folder, None, predicate)?
+            let meta = resolve_node(client, MY_DRIVE_ROOT, None, &segments, path)?;
+            node_batch(client, meta, None, predicate, revision.as_deref())
         }
-        // A Shared Drive: resolve the drive name → id, walk inside it (scoped by `driveId`).
+        // A Shared Drive: resolve the drive name → id, walk inside it (scoped by `driveId`). An empty
+        // segment list addresses the drive ROOT (always a folder → list it).
         DrivePath::Shared {
             drive, segments, ..
         } => {
             let drive_id = resolve_shared_drive(client, &drive, path)?;
-            let folder = resolve_folder(client, &drive_id, Some(&drive_id), &segments, path)?;
-            list_children(client, &folder, Some(&drive_id), predicate)?
+            if segments.is_empty() {
+                return Ok(folder_batch(list_children(
+                    client,
+                    &drive_id,
+                    Some(&drive_id),
+                    predicate,
+                )?));
+            }
+            let meta = resolve_node(client, &drive_id, Some(&drive_id), &segments, path)?;
+            node_batch(
+                client,
+                meta,
+                Some(&drive_id),
+                predicate,
+                revision.as_deref(),
+            )
         }
-        // A folder addressed directly by id — list its children.
-        DrivePath::ById { id, .. } => list_children(client, &id, None, predicate)?,
+        // Addressed directly by id — list children if it is a folder, else download its content.
+        // Only the id is known, so fetch the node's metadata to decide which.
+        DrivePath::ById { id, .. } => {
+            let meta = client.get_file(&id)?;
+            node_batch(client, meta, None, predicate, revision.as_deref())
+        }
+    }
+}
+
+/// Wrap folder-listing rows in the canonical [`FileMeta`] schema.
+fn folder_batch(rows: Vec<Row>) -> RowBatch {
+    RowBatch::new(FileMeta::schema(), rows)
+}
+
+/// Dispatch a resolved Drive node by id: a FOLDER lists its children; a FILE downloads (or exports a
+/// Google-native doc to) its bytes into a one-row `content` batch — gdrive-ftp `get` (RFD §4
+/// blob↔rows, mirroring `/local/<file>` and `/git/<repo>/<file>` so `… |> decode <fmt>` has bytes).
+fn node_batch(
+    client: &dyn GDriveClient,
+    meta: FileMeta,
+    drive_id: Option<&str>,
+    predicate: Option<&Predicate>,
+    revision: Option<&str>,
+) -> Result<RowBatch, DriveError> {
+    if meta.is_folder() {
+        return Ok(folder_batch(list_children(
+            client, &meta.id, drive_id, predicate,
+        )?));
+    }
+    // A file: plan the read (raw download, or export for a Google-native doc) and fetch the bytes.
+    let (bytes, mime) = match plan_read(&meta, revision, None)? {
+        ReadPlan::Download { id, revision } => (
+            client.download(&id, revision.as_deref())?,
+            meta.mime_type.clone(),
+        ),
+        ReadPlan::Export { id, target } => (client.export(&id, &target.mime)?, target.mime),
     };
-    Ok(RowBatch::new(FileMeta::schema(), rows))
+    Ok(content_batch(&meta.name, &mime, bytes))
+}
+
+/// The single-row file-content batch: `name` + `mime_type` + the raw bytes under the well-known
+/// `content` column (the name the engine's `DECODE` reads, matching the local/git content reads).
+fn content_batch(name: &str, mime: &str, bytes: Vec<u8>) -> RowBatch {
+    let schema = Schema::new(vec![
+        Column::new("name", ColumnType::Text, false),
+        Column::new("mime_type", ColumnType::Text, false),
+        Column::new("content", ColumnType::Bytes, true),
+    ]);
+    let row = Row::new(vec![
+        Value::Text(name.to_string()),
+        Value::Text(mime.to_string()),
+        Value::Bytes(bytes),
+    ]);
+    RowBatch::new(schema, vec![row])
 }
 
 /// List a folder's children as rows, narrowed by the pushed predicate and excluding trashed files
@@ -150,16 +223,20 @@ fn list_children(
     Ok(page.files.iter().map(FileMeta::to_row).collect())
 }
 
-/// Walk `segments` from `start_id`, resolving each name to its child id, returning the final
-/// node's id. Each step is one `name = '<seg>' and '<parent>' in parents` lookup against Drive.
-fn resolve_folder(
+/// Walk `segments` from `start_id`, resolving each name to its child node, returning the FINAL
+/// node's [`FileMeta`] (folder OR file — the caller lists a folder's children or downloads a file's
+/// content). Each step is one `name = '<seg>' and '<parent>' in parents` lookup against Drive;
+/// intermediate segments must be folders (a file has no children, so the next lookup finds nothing
+/// and fails closed). `segments` is non-empty (the empty-path roots are handled by the caller).
+fn resolve_node(
     client: &dyn GDriveClient,
     start_id: &str,
     drive_id: Option<&str>,
     segments: &[String],
     path: &str,
-) -> Result<String, DriveError> {
+) -> Result<FileMeta, DriveError> {
     let mut current = start_id.to_string();
+    let mut node: Option<FileMeta> = None;
     for segment in segments {
         let query = format!(
             "name = '{}' and '{}' in parents and trashed = false",
@@ -176,9 +253,14 @@ fn resolve_folder(
                 segment: segment.clone(),
                 reason: "no child of this name under the parent folder",
             })?;
-        current = next.id;
+        current = next.id.clone();
+        node = Some(next);
     }
-    Ok(current)
+    node.ok_or_else(|| DriveError::NotFound {
+        path: path.to_string(),
+        segment: String::new(),
+        reason: "empty path under the corpus root",
+    })
 }
 
 /// Resolve a Shared Drive name to its drive id.
@@ -295,8 +377,13 @@ mod read_rows_tests {
 
     #[test]
     fn by_id_lists_a_folder_directly_without_a_walk() {
+        // The id's metadata is fetched once to decide folder-vs-file; a folder then lists its
+        // children directly (no name walk).
+        let folder = FileMeta::for_test("fold9", "Folder9", FOLDER_MIME, vec![]);
         let child = FileMeta::for_test("f9", "a.txt", "text/plain", vec!["fold9".to_string()]);
-        let client = MockDriveClient::new().with_list_page(page(vec![child]));
+        let client = MockDriveClient::new()
+            .with_file(folder)
+            .with_list_page(page(vec![child]));
         let batch = read_rows(&client, "id:fold9", None).unwrap();
         assert_eq!(batch.rows.len(), 1);
         let queries: Vec<String> = client
@@ -309,5 +396,55 @@ mod read_rows_tests {
             .collect();
         assert_eq!(queries.len(), 1, "no walk for an id: address");
         assert!(queries[0].contains("'fold9' in parents"));
+    }
+
+    #[test]
+    fn by_id_to_a_file_downloads_its_content() {
+        // gdrive-ftp `get`: `id:<fileId>` to a binary file returns a single `content` row (raw
+        // bytes), not an empty folder listing.
+        let file = FileMeta::for_test("doc1", "report.txt", "text/plain", vec!["root".to_string()]);
+        let client = MockDriveClient::new()
+            .with_file(file)
+            .with_download("doc1", b"hello drive\n".to_vec());
+        let batch = read_rows(&client, "id:doc1", None).unwrap();
+        assert_eq!(batch.rows.len(), 1, "a file is exactly one content row");
+        let idx = |name: &str| {
+            batch
+                .schema
+                .columns
+                .iter()
+                .position(|c| c.name.as_str() == name)
+                .unwrap_or_else(|| panic!("column {name}"))
+        };
+        assert!(matches!(&batch.rows[0].values[idx("name")], Value::Text(s) if s == "report.txt"));
+        assert_eq!(
+            batch.rows[0].values[idx("content")],
+            Value::Bytes(b"hello drive\n".to_vec()),
+            "the content column holds the file's raw bytes"
+        );
+    }
+
+    #[test]
+    fn my_drive_path_to_a_file_downloads_its_content() {
+        // Walk `/drive/my/Reports/q3.csv` to a FILE leaf → content download (the resolved node's
+        // metadata comes from the walk, so no extra get_file is needed).
+        let reports = FileMeta::for_test("rep1", "Reports", FOLDER_MIME, vec!["root".to_string()]);
+        let file = FileMeta::for_test("csv1", "q3.csv", "text/csv", vec!["rep1".to_string()]);
+        let client = MockDriveClient::new()
+            .with_list_page(page(vec![reports]))
+            .with_list_page(page(vec![file]))
+            .with_download("csv1", b"a,b\n1,2\n".to_vec());
+        let batch = read_rows(&client, "/drive/my/Reports/q3.csv", None).unwrap();
+        assert_eq!(batch.rows.len(), 1);
+        let content_idx = batch
+            .schema
+            .columns
+            .iter()
+            .position(|c| c.name.as_str() == "content")
+            .expect("content column");
+        assert_eq!(
+            batch.rows[0].values[content_idx],
+            Value::Bytes(b"a,b\n1,2\n".to_vec())
+        );
     }
 }
