@@ -11,6 +11,13 @@ depends_on: []
 
 # General `CREATE ALIAS <short> FOR <mount>` shorthand (split from 20260630203110)
 
+> **SUPERSEDED (2026-07-01) — subsumed by EPIC `20260701100000`.** The owner reframed this into a
+> broader redesign: third-party drivers are no longer pre-mounted; every one is bound to a
+> user-defined **"defined path"** (the renamed "alias") declared together with its credential, plus
+> recursive nested paths. The path-binding grammar is now designed ONCE under the new epic (see
+> `20260701100020`) rather than as this narrow shorthand. Moved to `abandoned/` as subsumed, not
+> failed. Retained for context.
+
 ## Context
 
 Split out of `20260630203110` (owner item #8). That ticket's **Part 1 — rename `/ga` →
