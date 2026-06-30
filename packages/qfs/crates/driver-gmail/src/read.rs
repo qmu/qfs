@@ -5,13 +5,13 @@
 //! write leg; the binary's async `ReadDriver` adapter calls it (the same topology as the GitHub
 //! driver's `read_rows`).
 
-use qfs_types::{Predicate, RowBatch};
+use qfs_types::{Predicate, Row, RowBatch, Value};
 
 use crate::client::GmailClient;
 use crate::error::GmailError;
 use crate::path::MailPath;
 use crate::query::build_query;
-use crate::schema::MailMessage;
+use crate::schema::{label_listing_schema, MailMessage};
 
 /// The fan-out ceiling for a collection scan when the engine still re-filters locally — over-fetch,
 /// then the residual `WHERE`/`LIMIT` narrows. A pushed `LIMIT` tightens the fetch below this only
@@ -37,7 +37,26 @@ pub fn read_rows(
     predicate: Option<&Predicate>,
     limit: Option<u64>,
 ) -> Result<RowBatch, GmailError> {
-    let pushdown = match MailPath::parse_str(path)? {
+    // Single-node reads short-circuit the search/limit machinery: the mailbox ROOT lists labels
+    // (gmail-ftp `ls /`), and a single MESSAGE node downloads that one message's row (gmail-ftp
+    // `get`) — both advertised by `caps_for` (Root: Ls/Select; Message: Select) and now wired.
+    let parsed = MailPath::parse_str(path)?;
+    match &parsed {
+        MailPath::Root => {
+            let rows = client
+                .list_labels()?
+                .into_iter()
+                .map(|name| Row::new(vec![Value::Text(name)]))
+                .collect();
+            return Ok(RowBatch::new(label_listing_schema(), rows));
+        }
+        MailPath::Message { id } => {
+            let row = client.get_message(id)?.to_row();
+            return Ok(RowBatch::new(MailMessage::schema(), vec![row]));
+        }
+        _ => {}
+    }
+    let pushdown = match parsed {
         MailPath::Label { name } => build_query(Some(&name), predicate),
         MailPath::Drafts => {
             // The drafts scope is `in:draft`, not a `label:` term — build the predicate query, then
@@ -112,9 +131,64 @@ mod tests {
     }
 
     #[test]
-    fn a_message_node_is_not_a_collection_read() {
+    fn reads_the_root_label_listing() {
+        // gmail-ftp `ls /` parity: the mailbox root lists labels as `name` rows.
+        let client = MockGmailClient::new().with_labels(vec![
+            "INBOX".to_string(),
+            "SENT".to_string(),
+            "Work".to_string(),
+        ]);
+        let batch = read_rows(&client, "/mail", None, None).unwrap();
+        assert_eq!(batch.schema.columns.len(), 1);
+        assert_eq!(batch.schema.columns[0].name.as_str(), "name");
+        let names: Vec<_> = batch
+            .rows
+            .iter()
+            .map(|r| match &r.values[0] {
+                Value::Text(s) => s.clone(),
+                other => panic!("label name must be text, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(names, vec!["INBOX", "SENT", "Work"]);
+        assert!(
+            client
+                .recorded()
+                .iter()
+                .any(|c| matches!(c, crate::client::RecordedCall::ListLabels)),
+            "the root listing calls labels.list"
+        );
+    }
+
+    #[test]
+    fn reads_a_single_message_node_into_one_row() {
+        // gmail-ftp `get` parity: a single message node downloads that message's row (headers +
+        // snippet + attachments-as-nested-entries) instead of erroring `invalid_path`.
+        let client = MockGmailClient::new().with_message(fixture_message("18f1a2b3", "Invoice 42"));
+        let batch = read_rows(&client, "/mail/INBOX/18f1a2b3", None, None).unwrap();
+        assert_eq!(batch.rows.len(), 1, "a message node is exactly one row");
+        let idx = |name: &str| {
+            batch
+                .schema
+                .columns
+                .iter()
+                .position(|c| c.name.as_str() == name)
+                .unwrap_or_else(|| panic!("column {name}"))
+        };
+        assert!(matches!(&batch.rows[0].values[idx("id")], Value::Text(s) if s == "18f1a2b3"));
+        assert!(
+            matches!(&batch.rows[0].values[idx("subject")], Value::Text(s) if s == "Invoice 42")
+        );
+        // The same path also resolves via the `id:` selector (label-independent addressing).
+        let by_id = read_rows(&client, "id:18f1a2b3", None, None).unwrap();
+        assert_eq!(by_id.rows.len(), 1);
+    }
+
+    #[test]
+    fn an_attachment_node_has_no_backing_read_yet() {
+        // Attachment-bytes fetch is a documented park (no `get_attachment` client method); the read
+        // still fails closed with a structured invalid_path rather than panicking.
         let client = MockGmailClient::new();
-        let err = read_rows(&client, "/mail/INBOX/18f1a2b3", None, None).unwrap_err();
+        let err = read_rows(&client, "/mail/INBOX/18f1a2b3/att1", None, None).unwrap_err();
         assert_eq!(err.code(), "invalid_path");
     }
 

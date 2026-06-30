@@ -212,10 +212,15 @@ impl Driver for GmailDriver {
         MOUNT
     }
 
-    fn describe(&self, _path: &Path) -> Result<NodeDesc, qfs_driver::CfsError> {
-        // Every /mail node is the Append/log archetype; its message relation is the canonical
-        // MailMessage schema. Pure: builds data, no I/O.
-        Ok(NodeDesc::new(Archetype::AppendLog, MailMessage::schema()))
+    fn describe(&self, path: &Path) -> Result<NodeDesc, qfs_driver::CfsError> {
+        // Every /mail node is the Append/log archetype. The ROOT lists labels (the directory view,
+        // `ls /mail`), so it reports the label-listing schema; every other node reads messages, so
+        // it reports the canonical MailMessage schema. Pure: builds data, no I/O.
+        let schema = match MailPath::parse(path) {
+            Ok(MailPath::Root) => schema::label_listing_schema(),
+            _ => MailMessage::schema(),
+        };
+        Ok(NodeDesc::new(Archetype::AppendLog, schema))
     }
 
     fn capabilities(&self, path: &Path) -> Capabilities {

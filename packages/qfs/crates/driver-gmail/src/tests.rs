@@ -93,6 +93,20 @@ fn describe_emits_append_archetype_and_message_schema() {
     );
 }
 
+#[test]
+fn describe_root_reports_the_label_listing_schema() {
+    // The mailbox ROOT lists labels (`ls /mail`), so its DESCRIBE reports the `name` label schema —
+    // not the message schema — keeping introspection honest about what a root read returns.
+    let (d, _) = driver_with_mock();
+    let desc = d.describe(&Path::new("/mail")).unwrap();
+    assert_eq!(desc.archetype, Archetype::AppendLog);
+    assert_eq!(desc.schema.columns.len(), 1);
+    assert!(
+        desc.schema.column("name").is_some(),
+        "root lists labels by name"
+    );
+}
+
 // ---- capability golden (path-keyed gate) -------------------------------------------------
 
 #[test]
