@@ -84,7 +84,7 @@ files. Gmail's `label:` search is case-insensitive, so write labels however you 
 | `find <pat> [label]` | `/mail/inbox \|> where subject LIKE '%pat%'` |
 | `search <gmail-query>` | `/mail/inbox \|> where from == 'x@y.z'` — `WHERE` pushes down into Gmail search |
 | `get <msg>` | `/mail/inbox/<msg-id> \|> select date, from, subject, snippet` — read the message by path |
-| `get id:att:<msg>:<att>` | `/mail/inbox/<msg-id>/<att-id> \|> select filename, mime, size` |
+| `get id:att:<msg>:<att>` | `/mail/inbox/<msg-id>/<att-id> \|> select filename, mime, size, content` — the attachment node downloads the bytes (`content`) with its metadata |
 | `get id:thread:<id>` | `/mail/inbox \|> where thread_id == '<thread-id>' \|> select date, from, subject` |
 | `put` / `compose` (make a draft) | `insert into /mail/drafts values ('to@x.y', 'Subject', 'Body')` |
 | `send <draft>` | `/mail/drafts \|> call mail.send` — **irreversible** |

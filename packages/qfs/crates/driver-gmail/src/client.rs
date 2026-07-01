@@ -59,6 +59,16 @@ pub trait GmailClient: Send + Sync {
     /// [`GmailError`] on a non-2xx status, a decode failure, or an auth/transport failure.
     fn get_message(&self, id: &str) -> Result<MailMessage, GmailError>;
 
+    /// Download and decode one attachment's raw bytes (`messages.{message_id}.attachments.
+    /// {attachment_id}.get`, gmail-ftp `get id:att:<msg>:<att>`). The base64url `data` is decoded
+    /// here so no vendor encoding crosses the client seam (the caller pairs these bytes with the
+    /// message's [`AttachmentMeta`](crate::schema::AttachmentMeta) for `filename`/`mime`).
+    ///
+    /// # Errors
+    /// [`GmailError`] on a non-2xx status, a response missing/undecodable `data`, or a transport
+    /// failure.
+    fn get_attachment(&self, message_id: &str, attachment_id: &str) -> Result<Vec<u8>, GmailError>;
+
     /// Create a draft from a base64url-encoded RFC 5322 `raw` message; returns the new draft id.
     ///
     /// # Errors
@@ -221,6 +231,27 @@ impl GmailClient for GoogleApiGmailClient {
         decode_message(&json).ok_or(GmailError::Decode {
             op,
             reason: "message JSON missing required fields".to_string(),
+        })
+    }
+
+    fn get_attachment(&self, message_id: &str, attachment_id: &str) -> Result<Vec<u8>, GmailError> {
+        let op = "attachments.get";
+        let req = HttpRequest::new(
+            HttpMethod::Get,
+            format!("{API_BASE}/messages/{message_id}/attachments/{attachment_id}"),
+        );
+        let resp = self.send(op, &req)?;
+        let json = Self::parse_json(op, &resp)?;
+        let data = json
+            .get("data")
+            .and_then(|v| v.as_str())
+            .ok_or(GmailError::Decode {
+                op,
+                reason: "attachment JSON missing `data`".to_string(),
+            })?;
+        crate::mime::decode_base64url(data).ok_or(GmailError::Decode {
+            op,
+            reason: "attachment `data` is not valid base64url".to_string(),
         })
     }
 
@@ -425,6 +456,8 @@ fn encode_query(value: &str) -> String {
 pub struct MockGmailClient {
     labels: Vec<String>,
     messages: Vec<MailMessage>,
+    /// Seeded attachment bytes, keyed by `(message_id, attachment_id)`.
+    attachments: Vec<(String, String, Vec<u8>)>,
     search_ids: Mutex<Vec<MessageIdPage>>,
     recorded: Mutex<Vec<RecordedCall>>,
 }
@@ -447,6 +480,13 @@ pub enum RecordedCall {
     GetMessage {
         /// The message id fetched.
         id: String,
+    },
+    /// `messages.{id}.attachments.{attId}.get` — an attachment bytes download.
+    GetAttachment {
+        /// The owning message id.
+        message_id: String,
+        /// The attachment id fetched.
+        attachment_id: String,
     },
     /// `drafts.create` (carries the base64url raw so a test can decode it).
     CreateDraft {
@@ -504,6 +544,19 @@ impl MockGmailClient {
     #[must_use]
     pub fn with_message(mut self, message: MailMessage) -> Self {
         self.messages.push(message);
+        self
+    }
+
+    /// Seed the raw bytes `get_attachment` returns for a `(message_id, attachment_id)` pair.
+    #[must_use]
+    pub fn with_attachment(
+        mut self,
+        message_id: &str,
+        attachment_id: &str,
+        bytes: Vec<u8>,
+    ) -> Self {
+        self.attachments
+            .push((message_id.to_string(), attachment_id.to_string(), bytes));
         self
     }
 
@@ -579,6 +632,21 @@ impl GmailClient for MockGmailClient {
             .cloned()
             .ok_or(GmailError::Api {
                 op: "messages.get",
+                status: 404,
+            })
+    }
+
+    fn get_attachment(&self, message_id: &str, attachment_id: &str) -> Result<Vec<u8>, GmailError> {
+        self.record(RecordedCall::GetAttachment {
+            message_id: message_id.to_string(),
+            attachment_id: attachment_id.to_string(),
+        });
+        self.attachments
+            .iter()
+            .find(|(m, a, _)| m == message_id && a == attachment_id)
+            .map(|(_, _, bytes)| bytes.clone())
+            .ok_or(GmailError::Api {
+                op: "attachments.get",
                 status: 404,
             })
     }

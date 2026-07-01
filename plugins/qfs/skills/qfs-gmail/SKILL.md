@@ -188,14 +188,16 @@ query and re-filters locally only the parts Gmail can't express exactly.
 |> select date, from, subject, snippet
 ```
 
-**List a message's attachments**, then **download one** (its `filename`, `mime`, `size`, and bytes):
+**List a message's attachments**, then **download one** — the attachment node
+`/mail/<label>/<msg-id>/<att-id>` reads the `filename`, `mime`, `size`, and the decoded `content`
+bytes (gmail-ftp `get id:att:<msg>:<att>`):
 
 ```qfs
 /mail/inbox/18f1a2b3c4
 |> select attachments
 
 /mail/inbox/18f1a2b3c4/ANGjdJ_att0
-|> select filename, mime, size
+|> select filename, mime, size, content
 ```
 
 ## Summarize

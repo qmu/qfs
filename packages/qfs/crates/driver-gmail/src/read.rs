@@ -11,7 +11,7 @@ use crate::client::GmailClient;
 use crate::error::GmailError;
 use crate::path::MailPath;
 use crate::query::build_query;
-use crate::schema::{label_listing_schema, MailMessage};
+use crate::schema::{attachment_read_schema, label_listing_schema, MailMessage};
 
 /// The fan-out ceiling for a collection scan when the engine still re-filters locally — over-fetch,
 /// then the residual `WHERE`/`LIMIT` narrows. A pushed `LIMIT` tightens the fetch below this only
@@ -53,6 +53,31 @@ pub fn read_rows(
         MailPath::Message { id } => {
             let row = client.get_message(id)?.to_row();
             return Ok(RowBatch::new(MailMessage::schema(), vec![row]));
+        }
+        MailPath::Attachment {
+            message,
+            attachment,
+        } => {
+            // gmail-ftp `get id:att:<msg>:<att>`: the bytes come from attachments.get, the
+            // filename/mime/size from the owning message's part metadata (the API's attachment
+            // endpoint returns only size + data). One combined row: filename, mime, size, content.
+            let msg = client.get_message(message)?;
+            let meta = msg
+                .attachments
+                .iter()
+                .find(|a| &a.attachment_id == attachment)
+                .ok_or(GmailError::InvalidPath {
+                    path: path.to_string(),
+                    reason: "no attachment with that id on the message",
+                })?;
+            let bytes = client.get_attachment(message, attachment)?;
+            let row = Row::new(vec![
+                Value::Text(meta.filename.clone()),
+                Value::Text(meta.mime.clone()),
+                Value::Int(meta.size),
+                Value::Bytes(bytes),
+            ]);
+            return Ok(RowBatch::new(attachment_read_schema(), vec![row]));
         }
         _ => {}
     }
@@ -184,10 +209,48 @@ mod tests {
     }
 
     #[test]
-    fn an_attachment_node_has_no_backing_read_yet() {
-        // Attachment-bytes fetch is a documented park (no `get_attachment` client method); the read
-        // still fails closed with a structured invalid_path rather than panicking.
-        let client = MockGmailClient::new();
+    fn reads_an_attachment_node_into_a_content_row() {
+        // gmail-ftp `get id:att:<msg>:<att>` parity: the attachment node yields one row with the
+        // filename/mime/size (from the message part) and the decoded `content` bytes.
+        let mut msg = fixture_message("18f1a2b3", "Invoice 42");
+        msg.attachments = vec![crate::schema::AttachmentMeta {
+            filename: "invoice.pdf".to_string(),
+            mime: "application/pdf".to_string(),
+            attachment_id: "att1".to_string(),
+            size: 5,
+        }];
+        let client = MockGmailClient::new().with_message(msg).with_attachment(
+            "18f1a2b3",
+            "att1",
+            b"hello".to_vec(),
+        );
+        let batch = read_rows(&client, "/mail/INBOX/18f1a2b3/att1", None, None).unwrap();
+        assert_eq!(batch.rows.len(), 1);
+        let idx = |name: &str| {
+            batch
+                .schema
+                .columns
+                .iter()
+                .position(|c| c.name.as_str() == name)
+                .unwrap_or_else(|| panic!("column {name}"))
+        };
+        assert!(
+            matches!(&batch.rows[0].values[idx("filename")], Value::Text(s) if s == "invoice.pdf")
+        );
+        assert!(
+            matches!(&batch.rows[0].values[idx("mime")], Value::Text(s) if s == "application/pdf")
+        );
+        assert!(matches!(&batch.rows[0].values[idx("content")], Value::Bytes(b) if b == b"hello"));
+        assert!(client
+            .recorded()
+            .iter()
+            .any(|c| matches!(c, crate::client::RecordedCall::GetAttachment { .. })));
+    }
+
+    #[test]
+    fn an_attachment_node_with_no_such_attachment_fails_closed() {
+        // A message with no matching attachment id is a structured invalid_path, not a panic.
+        let client = MockGmailClient::new().with_message(fixture_message("18f1a2b3", "Invoice 42"));
         let err = read_rows(&client, "/mail/INBOX/18f1a2b3/att1", None, None).unwrap_err();
         assert_eq!(err.code(), "invalid_path");
     }

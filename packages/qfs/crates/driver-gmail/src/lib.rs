@@ -38,12 +38,12 @@
 //! `qfs-driver-http` — this crate rides the t19 `HttpExchange` seam.
 //!
 //! ## Deferred for t20 (named parks)
-//! - **Attachment bytes fetch — parked.** A listing row carries attachment *metadata* only
-//!   ([`AttachmentMeta`]); the on-demand bytes fetch is **not implemented** in this crate. The
-//!   [`GmailClient`] trait has **no** `get_attachment` method and the
-//!   [`MailPath::Attachment`](path::MailPath) parse + its `Select` capability exist with no
-//!   client method behind them yet. Decoding the bytes into an [`Attachment`] (the read path) is
-//!   deferred to a follow-up; until then an attachment read has no backing call.
+//! - **Attachment bytes fetch — wired (t92).** A listing row carries attachment *metadata* only
+//!   ([`AttachmentMeta`]); the on-demand bytes fetch reads the single node
+//!   [`MailPath::Attachment`](path::MailPath) (`/mail/<label>/<msg>/<att>`, its `Select`
+//!   capability) via [`GmailClient::get_attachment`](client::GmailClient::get_attachment) —
+//!   attachments.get bytes (base64url-decoded at the client seam) paired with the message part's
+//!   `filename`/`mime`/`size` into a `content`-bearing row. gmail-ftp `get id:att:<msg>:<att>` parity.
 //! - **`historyId` / `@version` incremental sync — parked.** [`VersionSupport::None`]; deferred
 //!   to the E7 trigger sibling.
 //! - **Live create→send→trash smoke test — parked.** The suite is mock-only (no env-gated live
