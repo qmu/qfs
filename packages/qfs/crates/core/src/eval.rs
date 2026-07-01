@@ -1085,6 +1085,21 @@ fn literal_value(expr: &Expr) -> Result<Value, EvalError> {
                 detail: format!("VALUES expects a constant, got column reference `{name}`"),
             }),
         },
+        // t92 composite constructors are constant in a VALUES/SET cell iff every element is
+        // constant (the inline-literal attachment case). A non-constant element (a column ref)
+        // makes the whole cell non-constant — computed rows belong in an `INSERT … FROM <query>`.
+        Expr::Array(elems) => Ok(Value::Array(
+            elems
+                .iter()
+                .map(literal_value)
+                .collect::<Result<Vec<Value>, _>>()?,
+        )),
+        Expr::Struct(fields) => Ok(Value::Struct(Fields::new(
+            fields
+                .iter()
+                .map(|(name, e)| Ok((name.clone(), literal_value(e)?)))
+                .collect::<Result<Vec<(Name, Value)>, EvalError>>()?,
+        ))),
         other => Err(EvalError::NonLiteralValues {
             detail: format!("VALUES expects a constant, got {other:?}"),
         }),
@@ -1103,17 +1118,9 @@ fn literal_to_value(lit: &Literal) -> Value {
         Literal::Null => Value::Null,
         Literal::Size { value, .. } => Value::Int(*value as i64),
         Literal::Typed { raw, .. } => Value::Text(raw.clone()),
-        // t92 composite literals lower structurally into the mirrored runtime values: hex bytes
-        // to `Value::Bytes`, `[ … ]` to `Value::Array`, `{ name: value }` to a self-describing
-        // `Value::Struct` (field order preserved). Nesting is handled by the recursive call.
+        // t92: hex bytes lower to `Value::Bytes`. `[ … ]` arrays and `{ … }` structs are now
+        // the expression forms `Expr::Array`/`Expr::Struct`, constant-folded by `literal_value`.
         Literal::Bytes(b) => Value::Bytes(b.clone()),
-        Literal::Array(elems) => Value::Array(elems.iter().map(literal_to_value).collect()),
-        Literal::Struct(fields) => Value::Struct(Fields::new(
-            fields
-                .iter()
-                .map(|(name, lit)| (name.clone(), literal_to_value(lit)))
-                .collect(),
-        )),
     }
 }
 

@@ -4,8 +4,8 @@ author: a@qmu.jp
 type: enhancement
 layer: [Domain]
 effort: 4h
-commit_hash:
-category:
+commit_hash: 2a380d4
+category: Added
 depends_on: [20260701192439-query-array-struct-bytes-literals-gmail-draft-attachments.md]
 ---
 
@@ -92,3 +92,66 @@ There is **no** engine step that evaluates an arbitrary `Expr` (a struct constru
 - Building the scalar executor is the risky part (touches the closed-core physical execution); land it behind the engine's naive-eval property tests first, then add `ARRAY_AGG`, then the recipe.
 - A large Drive file becomes a `Value::Bytes` cell flowing through the effect pipeline — avoid unnecessary copies; note any practical size ceiling in the cookbook.
 - Retiring `Literal::Array/Struct` in favour of `Expr::Array/Struct` is an experimental hard-break (no compat shim, per memory) — update the 192439 parser test accordingly.
+
+## Final Report
+
+Delivered the **read-path composable `ARRAY_AGG(STRUCT)` pipe** — the "real blocker" this ticket
+identified as the bulk of the work — end to end, fully green across every gate. Steps 1–3 of the plan
+are complete; step 4's *language* piece (the packed columns land by name) is proven, but the terminal
+`INSERT … FROM` **commit-side materialisation** and the **live send** are NOT done (see below).
+
+### What landed
+- **Step 1 — `Expr::Array`/`Expr::Struct` (generalised from literals).** Retired `Literal::Array/Struct`
+  (experimental hard-break); `[ … ]`/`{ … }` now parse as expression constructors whose elements are
+  full sub-expressions. Inline-literal cases (192439's attachment recipe) preserved via constant-folding
+  in `literal_value`. All Expr-walking passes updated (core eval/lambda/typeck/resolve/ddl-spec, server
+  lower, http rewrite, watchtower bind).
+- **Step 2 — per-row scalar executor.** New `qfs_pushdown::ScalarExpr` (`Col`/`Lit(Value)`/`Array`/
+  `Struct`), lowered from the AST in `pushdown::lower` (a scalar `fn(...)` in a projection stays a
+  structured `LowerError` — it needs the stdlib the engine doesn't depend on, an intentional acyclic
+  boundary). New residual ops `LogicalPlan::ProjectExpr`/`Extend` → `CombineOp::ProjectExpr`/`Extend`
+  (always local; the pushable name-only `Project` path is untouched, so no pushdown/explain golden
+  drift). `engine::eval_value`/`project_expr`/`extend` evaluate them per row. **EXTEND now actually
+  computes values on the read path — it was a silent schema-only pass-through before.**
+- **Step 3 — single-column `ARRAY_AGG`.** `Aggregator::ArrayAgg` (a faithful collect, keeps nulls, row
+  order) across `pushdown` + `engine::run_aggregate` + `stdlib::AggregateKind` + the typeck return-type
+  path (`Array(elem)`). Fits the closed single-column `Aggregate` shape — no invasion of the aggregate
+  representation.
+
+### Verified
+- Hermetic differential test `cross_service_pack_attachments_project_expr_array_agg_extend`
+  (`crates/engine/tests/engine.rs`): ProjectExpr → ARRAY_AGG → Extend over an in-memory Drive scan
+  yields one row whose `attachments` is an `Array` of two `Struct`s carrying each file's bytes/filename/
+  mime, plus the extended draft columns.
+- The **real binary** runs the composable pipe end to end (read/preview): `… |> select {filename: name,
+  mime: mime_type, bytes: content} as att |> aggregate array_agg(att) as attachments |> extend to=…,
+  subject=…, body=…` → `{"attachments":[{…},…],"to":…,"subject":…,"body":…}`.
+- All gates green: `build`, full `test` suite, `clippy -D warnings`, `fmt --check`, `gen-docs --check`,
+  `gen-skills --check`, and the `cookbook_skills` parse ratchet (the new cross-service recipe parses).
+  Version stays `0.0.12` (one bump for the whole PR, per the carry ticket).
+
+### Remaining (follow-up — genuinely out of this read-path feature's reach)
+- **`INSERT … FROM <pipeline>` commit-side materialisation.** The effect plan's `Read` node
+  (`core/eval.rs` `eval_write`) is only a *dependency marker* carrying the source target; the write's
+  `args` stay empty for a pipeline body, and the runtime interpreter never re-executes the transform to
+  feed the applier. So the terminal `|> insert into /mail/drafts` does not yet write the *packed* rows at
+  commit. This is a **pre-existing, separate runtime/interpreter gap** (step 4 of the plan assumed it
+  already worked). File a follow-up: wire the interpreter to run the effect's `FROM` pipeline via the
+  read executor and hand its `RowBatch` to the write applier.
+- **Live send acceptance.** Requires the owner's real Google account + the irreversible gate
+  (`CALL mail.send` / `--commit-irreversible`); not autonomously verifiable.
+
+### Discovered Insights
+- **Insight**: Reads never touch the pure evaluator's `PlanSource` — `execute_read` lowers the AST
+  **directly** via `plan_query` → `pushdown::lower_query` → `partition_by_source` → `PhysicalPlan`, then
+  `MiniEvaluator`. `PlanSource` (`core/eval.rs`) is schema-only, for preview/typing.
+  **Context**: any new *runtime* read behaviour must be threaded through the pushdown `LogicalPlan` →
+  `PhysicalPlan`/`CombineOp` layers and the engine kernels, not `PlanSource`.
+- **Insight**: There are two aggregate representations — `stdlib::AggregateKind` (typeck + the
+  `AggregateState` machine, used only by stdlib tests today) and `pushdown::Aggregator` (the actual read
+  execution via `engine::run_aggregate`). `AVG` exists only in the former.
+  **Context**: a new aggregate must be added to **both** to type-check *and* execute; keep their
+  semantics aligned (e.g. `ARRAY_AGG`'s null handling).
+- **Insight**: `EXTEND`/`SET` on the read path produced no runtime column before this ticket (dropped in
+  both lowerings). Anything relying on a computed `EXTEND` column downstream was silently getting nothing.
+  **Context**: `EXTEND` is now a real residual op; watch for pipelines that assumed the old no-op.

@@ -171,6 +171,23 @@ pub fn eval_expr(
             captured: env.clone(),
         })),
         Expr::Fn(fnref) => eval_fn(&fnref.name, &fnref.args, env, stdlib, ctx),
+        // t92 composite constructors: build a runtime `Value::Array`/`Value::Struct` from the
+        // evaluated element/field sub-expressions (each may reference bound variables). A field
+        // value must be a plain data value (not a closure) — struct fields carry data, not fns.
+        Expr::Array(elems) => {
+            let mut out = Vec::with_capacity(elems.len());
+            for e in elems {
+                out.push(eval_expr(e, env, stdlib, ctx)?.into_data()?);
+            }
+            Ok(LambdaValue::Data(Value::Array(out)))
+        }
+        Expr::Struct(fields) => {
+            let mut out = Vec::with_capacity(fields.len());
+            for (name, e) in fields {
+                out.push((name.clone(), eval_expr(e, env, stdlib, ctx)?.into_data()?));
+            }
+            Ok(LambdaValue::Data(Value::Struct(Fields::new(out))))
+        }
         Expr::Binary { op, lhs, rhs } => eval_binary(*op, lhs, rhs, env, stdlib, ctx),
         Expr::Unary { op: Op::Not, expr } => {
             let v = eval_expr(expr, env, stdlib, ctx)?.into_data()?;
@@ -409,15 +426,9 @@ fn literal_to_value(lit: &Literal) -> Value {
         Literal::Null => Value::Null,
         Literal::Size { value, .. } => Value::Int(*value as i64),
         Literal::Typed { raw, .. } => Value::Text(raw.clone()),
-        // t92 composite literals (mirrors the evaluator's lowering in `eval.rs`).
+        // t92: hex bytes lower to `Value::Bytes`; `[ … ]`/`{ … }` are the expression forms
+        // `Expr::Array`/`Expr::Struct`, evaluated in `eval_expr` (they may reference variables).
         Literal::Bytes(b) => Value::Bytes(b.clone()),
-        Literal::Array(elems) => Value::Array(elems.iter().map(literal_to_value).collect()),
-        Literal::Struct(fields) => Value::Struct(Fields::new(
-            fields
-                .iter()
-                .map(|(name, lit)| (name.clone(), literal_to_value(lit)))
-                .collect(),
-        )),
     }
 }
 

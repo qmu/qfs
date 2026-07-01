@@ -254,9 +254,10 @@ fn literal_value(expr: &Expr) -> Result<Value, String> {
             Literal::Null => Ok(Value::Null),
             Literal::Size { value, unit } => Ok(Value::Text(format!("{value} {unit}"))),
             Literal::Typed { raw, .. } => Ok(Value::Text(raw.clone())),
-            // t92 composite literals are not valid scalar /server config values.
-            Literal::Bytes(_) | Literal::Array(_) | Literal::Struct(_) => Err(
-                "/server config values must be scalar literals (an array/struct/bytes literal is not a valid config value)"
+            // t92 composite scalar literal (bytes) is not a valid scalar /server config value;
+            // `[ … ]`/`{ … }` arrive as `Expr::Array`/`Expr::Struct`, rejected by the `other` arm.
+            Literal::Bytes(_) => Err(
+                "/server config values must be scalar literals (a bytes literal is not a valid config value)"
                     .to_string(),
             ),
         },
@@ -281,5 +282,7 @@ fn expr_kind(expr: &Expr) -> &'static str {
         Expr::Like { .. } => "LIKE",
         Expr::AnyOp { .. } => "ANY",
         Expr::Lambda { .. } => "lambda",
+        Expr::Array(_) => "array",
+        Expr::Struct(_) => "struct",
     }
 }

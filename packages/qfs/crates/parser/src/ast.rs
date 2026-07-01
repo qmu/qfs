@@ -517,6 +517,16 @@ pub enum Expr {
         /// The body expression, evaluated with the params in scope.
         body: Box<Expr>,
     },
+    /// An array constructor `[ e1, e2, … ]` (t92, generalised): each element is a full
+    /// sub-expression (a column reference, a literal, a nested array/struct), so the array
+    /// is built per row on the read path, not only from constants. An all-constant array is
+    /// constant-folded to a [`Value::Array`](qfs_types::Value::Array); an empty array is `[]`.
+    Array(Vec<Expr>),
+    /// A struct constructor `{ name: value, … }` (t92, generalised): named fields whose
+    /// values are full sub-expressions in insertion order (field order preserved). Lowers to
+    /// [`Value::Struct`](qfs_types::Value::Struct). The per-row constructor is what feeds a
+    /// Gmail draft's `attachments` column from Drive columns (`{filename: name, bytes: content}`).
+    Struct(Vec<(String, Expr)>),
 }
 
 /// One lambda parameter: a name with an optional type annotation (`addr: string`).
@@ -601,14 +611,10 @@ pub enum Literal {
         /// The raw, unvalidated inner string content.
         raw: String,
     },
-    /// A hex bytes literal (`X'48656c6c6f'`): the decoded raw bytes (t92).
+    /// A hex bytes literal (`X'48656c6c6f'`): the decoded raw bytes (t92). The only composite
+    /// **scalar** literal that remains; `[ … ]` arrays and `{ … }` structs are now the
+    /// expression forms [`Expr::Array`]/[`Expr::Struct`] (their elements are sub-expressions).
     Bytes(Vec<u8>),
-    /// An array literal (`[ e1, e2, … ]`): homogeneous element literals in order (t92).
-    /// Lowers to [`Value::Array`](qfs_types::Value::Array); an empty array is `[]`.
-    Array(Vec<Literal>),
-    /// A struct literal (`{ name: value, … }`): named field literals in insertion order
-    /// (t92). Lowers to [`Value::Struct`](qfs_types::Value::Struct); field order is preserved.
-    Struct(Vec<(String, Literal)>),
 }
 
 /// A `/driver/seg/seg` path expression — the open path/mount registry seam (RFD §3,

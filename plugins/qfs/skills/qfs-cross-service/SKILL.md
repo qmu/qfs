@@ -95,6 +95,45 @@ content
 they speak the same language end to end. `UPSERT` into `/local` runs now; `/s3`/`/r2` writes are
 not yet implemented — see [Files & object storage](/cookbook/files).)
 
+## Attach a Drive file to a Gmail draft 🚧
+
+The dogfooding payoff: **download a file from Google Drive, pack it into a Gmail draft's
+`attachments` column, and address the draft** — one composable statement, no bespoke `pack()`. It
+uses two small, reusable primitives: a **struct-over-columns** constructor (`{ … }` whose field
+values are columns) and single-column **`array_agg`** (N rows → one `Array`).
+
+```qfs
+/drive/my/report.pdf
+|> select {filename: name, mime: mime_type, bytes: content} as att
+|> aggregate array_agg(att) as attachments
+|> extend to = 'a@example.com', subject = 'Q3 report', body = 'See attached.'
+|> insert into /mail/drafts
+```
+
+Read left to right: each Drive row becomes a `{filename, mime, bytes}` **struct** (`content` is the
+file's bytes); `array_agg` collapses those structs into one `attachments` **array**; `extend` adds the
+draft's `to`/`subject`/`body`. The struct constructor and `array_agg` are **general** — usable in any
+read pipeline, not just this recipe:
+
+```qfs
+/local/reports
+|> select {name: name, size: size} as entry
+|> aggregate array_agg(entry) as entries
+```
+
+```text
+entries
+--------------------------------------------------
+[{"name":"a.csv","size":120},{"name":"b.csv","size":98}]
+(1 row(s))
+```
+
+The **read pipeline above runs today** — the struct/array constructors and `array_agg` execute
+locally and produce the packed `attachments` value. What is **still being wired (🚧)** is the terminal
+`|> insert into /mail/drafts` *materialising* a computed `FROM`-pipeline's rows into the draft at
+commit (a runtime step distinct from this read-path feature), and the final `CALL mail.send` — which
+stays behind the explicit irreversible gate (`--commit-irreversible`), never automatic.
+
 ::: tip How to know what joins
 `qfs describe <path>` reports a node's verbs and its **pushdown** line — which filters run inside
 the service vs. locally. It answers today for `/local`, `/mail`, and `/github` nodes; `describe` for

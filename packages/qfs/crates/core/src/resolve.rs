@@ -431,6 +431,20 @@ impl<'r> Resolver<'r> {
             // sub-expression; its parameters introduce no callable to resolve here (a lambda
             // is a pure value, never an effect — RFD §3 purity).
             Expr::Lambda { body, .. } => self.resolve_expr_fns(body, receiver, out),
+            // t92 composite constructors: walk each element/field sub-expression for nested
+            // prelude-alias `fn`s (a struct field may be `{ x: driver.alias(col) }`).
+            Expr::Array(elems) => {
+                for e in elems {
+                    self.resolve_expr_fns(e, receiver, out)?;
+                }
+                Ok(())
+            }
+            Expr::Struct(fields) => {
+                for (_, e) in fields {
+                    self.resolve_expr_fns(e, receiver, out)?;
+                }
+                Ok(())
+            }
             Expr::Lit(_) | Expr::Col(_) | Expr::Path(_) => Ok(()),
         }
     }

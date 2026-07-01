@@ -455,13 +455,47 @@ fn paren_expr_list(input: &mut Stream<'_>) -> ModalResult<Vec<Expr>> {
 /// `(a == b)` still parses as `paren_expr`.
 fn primary(input: &mut Stream<'_>) -> ModalResult<Expr> {
     alt((
-        literal.map(Expr::Lit),
+        // Composite constructors first — their `[`/`{` opener is unambiguous in value
+        // position and their elements are full sub-expressions (t92, generalised).
+        array_expr,
+        struct_expr,
+        scalar_literal.map(Expr::Lit),
         lambda,
         paren_expr,
         fn_call,
         dotted_path,
     ))
     .parse_next(input)
+}
+
+/// An array constructor `[ e1, e2, … ]` (t92, generalised): comma-separated element
+/// **expressions**, empty `[]` allowed. The `[` opener is backtrackable (so a non-array
+/// `primary` alternative can still match); once opened, a missing `]` is a hard error.
+fn array_expr(input: &mut Stream<'_>) -> ModalResult<Expr> {
+    let _ = punct(Token::LBracket).parse_next(input)?;
+    let elems: Vec<Expr> = separated(0.., expr, punct(Token::Comma)).parse_next(input)?;
+    let _ = cut_err(punct(Token::RBracket)).parse_next(input)?;
+    Ok(Expr::Array(elems))
+}
+
+/// A struct constructor `{ name: value, … }` (t92, generalised): comma-separated
+/// `name: <expr>` fields in insertion order, empty `{}` allowed. The field name is a bare
+/// identifier or a keyword-in-name-position ([`column_name`]). The `{` opener is
+/// backtrackable; once opened, a malformed field or missing `}` is a hard error.
+fn struct_expr(input: &mut Stream<'_>) -> ModalResult<Expr> {
+    let _ = punct(Token::LBrace).parse_next(input)?;
+    let fields: Vec<(String, Expr)> =
+        separated(0.., struct_field, punct(Token::Comma)).parse_next(input)?;
+    let _ = cut_err(punct(Token::RBrace)).parse_next(input)?;
+    Ok(Expr::Struct(fields))
+}
+
+/// One `name: <expr>` field of a struct constructor.
+fn struct_field(input: &mut Stream<'_>) -> ModalResult<(String, Expr)> {
+    let name = column_name(input)?;
+    let _ = cut_err(punct(Token::Colon)).parse_next(input)?;
+    let value = cut_err(expr).parse_next(input)?;
+    Ok((name.node, value))
 }
 
 /// A lambda literal `( params ) => <expr>` — a first-class value (M6 ticket t61,
@@ -540,15 +574,6 @@ fn dotted_path(input: &mut Stream<'_>) -> ModalResult<Expr> {
     }
 }
 
-/// A literal value (RFD §4): a scalar token, or a composite `[ … ]` array / `{ … }` struct
-/// literal (t92). Composite literals are tried first (their `[`/`{` opener is unambiguous in
-/// value position); a scalar literal is the single-token fallback. Because `literal` is the
-/// first `primary` alternative, arrays and structs are valid anywhere an expression is (VALUES
-/// cells, `SET`, `EXTEND`, `LET`), which is what feeds a Gmail draft's `attachments` column.
-fn literal(input: &mut Stream<'_>) -> ModalResult<Literal> {
-    alt((array_literal, struct_literal, scalar_literal)).parse_next(input)
-}
-
 /// A single-token scalar literal (string/int/float/bool/null/size/typed/bytes).
 fn scalar_literal(input: &mut Stream<'_>) -> ModalResult<Literal> {
     any.verify_map(|t: Spanned<Token>| match t.node {
@@ -569,36 +594,6 @@ fn scalar_literal(input: &mut Stream<'_>) -> ModalResult<Literal> {
         _ => None,
     })
     .parse_next(input)
-}
-
-/// An array literal `[ e1, e2, … ]` (t92): comma-separated element literals, empty `[]`
-/// allowed. The `[` opener is backtrackable (so a non-array `primary` alternative can still
-/// match); once opened, a missing `]` is a hard error.
-fn array_literal(input: &mut Stream<'_>) -> ModalResult<Literal> {
-    let _ = punct(Token::LBracket).parse_next(input)?;
-    let elems: Vec<Literal> = separated(0.., literal, punct(Token::Comma)).parse_next(input)?;
-    let _ = cut_err(punct(Token::RBracket)).parse_next(input)?;
-    Ok(Literal::Array(elems))
-}
-
-/// A struct literal `{ name: value, … }` (t92): comma-separated `name: <literal>` fields in
-/// insertion order, empty `{}` allowed. The field name is a bare identifier or a
-/// keyword-in-name-position ([`column_name`]). The `{` opener is backtrackable; once opened, a
-/// malformed field or missing `}` is a hard error.
-fn struct_literal(input: &mut Stream<'_>) -> ModalResult<Literal> {
-    let _ = punct(Token::LBrace).parse_next(input)?;
-    let fields: Vec<(String, Literal)> =
-        separated(0.., struct_field, punct(Token::Comma)).parse_next(input)?;
-    let _ = cut_err(punct(Token::RBrace)).parse_next(input)?;
-    Ok(Literal::Struct(fields))
-}
-
-/// One `name: <literal>` field of a struct literal.
-fn struct_field(input: &mut Stream<'_>) -> ModalResult<(String, Literal)> {
-    let name = column_name(input)?;
-    let _ = cut_err(punct(Token::Colon)).parse_next(input)?;
-    let value = cut_err(literal).parse_next(input)?;
-    Ok((name.node, value))
 }
 
 fn lit_type_text(ty: LitType) -> &'static str {
@@ -1839,12 +1834,14 @@ fn let_value(input: &mut Stream<'_>) -> ModalResult<Statement> {
     alt((
         lambda.map(wrap_value_binding),
         pipeline.map(Statement::Query),
-        // A scalar value binding (`LET cutoff = '2026-03-27'`). Restricted to a *literal* so
-        // it cannot collide with the `pipeline` source forms above: a bare identifier stays a
-        // `LET`-bound relation name (`LET b = a`, t60), and a fn-call (`map(…)`) belongs in a
-        // pipeline stage, not as a bare `LET` value — keeping every existing relation binding
-        // parsing exactly as before.
-        literal.map(|lit| wrap_value_binding(Expr::Lit(lit))),
+        // A composite or scalar value binding (`LET atts = [ … ]`, `LET cutoff = '2026-03-27'`).
+        // Restricted to a *constructor / literal* so it cannot collide with the `pipeline`
+        // source forms above: a bare identifier stays a `LET`-bound relation name (`LET b = a`,
+        // t60), and a fn-call (`map(…)`) belongs in a pipeline stage, not as a bare `LET` value
+        // — keeping every existing relation binding parsing exactly as before.
+        array_expr.map(wrap_value_binding),
+        struct_expr.map(wrap_value_binding),
+        scalar_literal.map(|lit| wrap_value_binding(Expr::Lit(lit))),
     ))
     .parse_next(input)
 }
