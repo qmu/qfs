@@ -9,96 +9,79 @@ category: Added
 depends_on: []
 ---
 
-# EPIC: User-defined "defined paths" replace pre-designated driver mounts (+ recursive nesting)
-
-> **DECISION UPDATE (2026-07-01, owner) — see `20260701100010` Design Resolution (authoritative).**
-> The verb is **`CONNECT`** (a side-effecting statement), NOT `CREATE CONNECTION`/`CREATE ALIAS`.
-> There is **NO `connections.qfs` file** — a connection is **server state**; running `CONNECT` mutates
-> the project **DB** (the single source of truth), like a connection/DDL statement against MySQL/Postgres.
-> qfs is **experimental: NO backward compatibility / deprecation** — old fixed mounts are simply removed,
-> not shimmed. Ignore any `connections.qfs` / `CREATE CONNECTION` / deprecate-not-break wording below.
-
+# EPIC: `CONNECT` — user-defined paths replace pre-designated driver mounts
 
 ## The goal (owner, 2026-07-01)
 
-Today every driver hardcodes a fixed first-path mount (`/ga`, `/github`, `/mail`, `/slack`, `/sql`,
-`/s3`, …). The owner wants to invert this:
+Today every driver hardcodes a fixed first-path mount (`/ga`, `/github`, `/mail`, `/slack`, `/s3`, …).
+Invert this:
 
-1. **Only a MINIMUM set of SYSTEM-defined first-paths remain** (the realms + the few driver-backed
-   system mounts). No more pre-designated per-driver mounts for third-party services.
-2. **Every third-party / connecting driver is bound to a USER-chosen path** — and that binding is
-   declared **at the same time the user configures the credential**. One declaration ties
-   `{ path → driver + credential }`. The concept formerly called an **"alias" is renamed
-   "defined path"** (one-concept-one-word; `alias` already means a pipeline-verb alias like `SEND`).
-3. **Recursive / nested path grouping.** A user can define hierarchical paths —
-   `/<folder1>/<resource1>` or `/<folder1>/<folder2>/<resource>` — so the path namespace is a
-   user-shaped tree, not a flat driver list.
+1. **Only a MINIMUM set of SYSTEM first-paths stay built in** — the reserved realms + the
+   driver-backed `/sys` (and likely `/local`). No third-party driver is pre-mounted.
+2. **Everything else is reached only via `CONNECT`.** A user binds a chosen path to a driver +
+   credential. `CONNECT` is a **side-effecting statement**: running it mutates the qfs **server's own
+   state** (the project DB), exactly like a connection/DDL statement changes a MySQL/Postgres server.
+   The DB is the **single source of truth** — there is **no `connections.qfs` config file**.
+3. **Recursive / nested paths.** A user can define `/<folder>/<resource>` or
+   `/<folder>/<folder>/<resource>` — the path namespace is a user-shaped tree, not a flat driver list.
 
-This supersedes the queued `CREATE ALIAS` shorthand ticket (`20260630204000`, moved to `abandoned/`
-as subsumed) and extends the shipped **in-language connection declaration** epic
-(`20260630004100`, `CREATE CONNECTION`). It is a change to qfs's **versioned surface** (grammar +
-registries), so it must be **additive / deprecate-not-break**.
+**qfs is experimental: NO backward compatibility, NO deprecation.** The old fixed per-driver mounts
+are simply removed — no shims, no migration window.
 
-## Why this is feasible without a parser rewrite (discovery, 2026-07-01)
+## The model
 
-The decoupling seam ALREADY exists, which is what makes this an epic of wiring + grammar rather than
-a ground-up rewrite:
+- A **connection** = `{driver + credential}` — the thing that can talk to a service.
+- A **defined path** = a user path that MOUNTS a connection. One connection can carry MANY paths.
+- `CONNECT` establishes both; `DISCONNECT` removes a path.
 
-- Every driver-facing `Path` is **reconstructed as `/<driver.id()>/<sub>`** before it reaches the
-  driver (`crates/core/src/resolve.rs:622`, `eval.rs:{538,690,837}`, `plan.rs:129`). So a driver's
-  per-path parser only ever sees its **canonical** prefix — never the user-facing mount. If
-  `Driver::id()` stays canonical, the per-driver `path.rs` parsers keep working **untouched** under a
-  user-defined mount. (`Driver::id()` defaults to `mount().strip_prefix('/')`, `driver/lib.rs:587` —
-  the load-bearing coupling; see ticket 203110's insight.)
-- `MountRegistry::resolve_path` (`registry.rs:421`) **already routes multi-segment mounts** by
-  longest-prefix boundary match — so `/<folder>/<sub>/<resource>` user mounts route with **no router
-  change**. The single known single-segment assumption is `resolve_driver_namespace` (CALL routing,
-  `resolve.rs:599`).
-- `MountRegistry::register_alias` (`registry.rs:381`, shipped by `203110`/commit `754a348`) is the
-  literal precedent: a routing-only second key into the SAME driver `Arc` with the SAME canonical id.
-  A user "defined path" is this, generalized and declared in-language.
-- `RESERVED_REALMS` (`registry.rs:33`) is the existing closed, system-defined first-path set — the
-  precedent for "minimal system mounts; everything else user-bound". Realms are NOT mounts; only
-  `/sys` is driver-backed.
+```
+CONNECT /work/orders TO postgres AT 'postgres://db/orders' SECRET 'env:PG_PASS'   -- configure + mount
+CONNECT /db          TO /work/orders                                              -- alias only (reuse)
+DISCONNECT /db
+```
 
-## Sub-tickets
+`TO <driver>` (bare ident) = full connect; `TO /<path>` (leading slash) = alias. A read (`/path …`)
+has NO side effect; `CONNECT`/`DISCONNECT` DO (commit-class effects on the describe→preview→commit
+path).
 
-1. `20260701100010` — **Design keystone**: the `defined path` model, terminology, grammar shape
-   (contextual idents), the `id()`-stays-canonical decision, the minimal system-mount set, recursive
-   nesting semantics, and the deprecate-not-break framing. **Gates the rest.**
-2. `20260701100020` — **Declaration grammar + config**: add the `defined path` clause to the parser
-   AST + grammar (no new frozen keyword) and the `connections.qfs` / `DeclaredConnection` model;
-   persist the `{path → driver + credential}` binding at `connection add`. (Subsumes `204000`.)
-3. `20260701100030` — **Resolution + recursive nesting**: route user-defined multi-segment mounts
-   through the resolver / eval / plan reconstruction sites; fix the single-segment CALL-routing
-   assumption; the recursive folder-grouping semantics.
-4. `20260701100040` — **Registration redesign + minimal system set + mount deprecation**: replace the
-   three static registration sites (shell / describe / commit) with a minimum-system-set + a
-   per-declared-connection binding loop, keeping `id()` canonical; deprecate (not delete) the old
-   per-driver mounts.
+## Why this is mostly wiring, not a rewrite (discovery, 2026-07-01)
+
+- Every driver-facing `Path` is reconstructed as `/<driver.id()>/<sub>` before it reaches the driver
+  (`resolve.rs:622`, `eval.rs`, `plan.rs`), so a driver's parser only ever sees its **canonical**
+  prefix. Keeping `Driver::id()` canonical means the per-driver `path.rs` parsers work **untouched**
+  under a user path (proven by the `/ga` alias).
+- `MountRegistry::resolve_path` **already routes multi-segment mounts** (longest-prefix boundary) —
+  recursive paths route with no router change. **Validated** by the landed spike
+  `registry.rs::resolve_path_routes_a_multi_segment_user_mount`.
+- `MountRegistry::register_alias` is the routing seam a defined path plugs into.
+- `RESERVED_REALMS` is the existing closed system-first-path set (the "minimal system mounts"
+  precedent); a defined path may NEVER shadow a realm.
+
+## Sub-tickets (in work order)
+
+1. `20260701100010` — **Design keystone.** DECIDED (owner) — see its Design Resolution (authoritative).
+2. `20260701100020` — **`CONNECT`/`DISCONNECT` grammar + persistence.** The statement + the DB binding.
+3. `20260701100030` — **Resolution + recursive nesting.** Route the DB bindings through the engine.
+4. `20260701100040` — **Registration redesign.** Remove the fixed per-driver mounts; register from the
+   DB bindings + the minimal system set.
 
 ## Considerations
 
-- **Freeze-safety is the spine of this epic.** The new declaration clause MUST be a contextual ident
-  (like `CONNECTION`/`DRIVER`/`SECRET`/`AT`), never a new keyword, or it is a MAJOR grammar break.
-  Removing per-driver mounts must be a DEPRECATION (old mounts keep routing for one release with a
-  warning + migration), not a deletion.
-- **Fail-closed** must hold: an unconfigured / uncredentialed user path leaves the driver
-  UNREGISTERED with a clear "no source" error, never a faked success (the `commit.rs` pattern).
-- **Anti-drift docs**: the mount model is rendered into `docs/drivers.md` by `xtask gen-docs`;
-  every slice regenerates and keeps `gen-docs --check` green.
+- **Grammar is additive by contextual ident** (like `SECRET`/`AT`), so `CONNECT`/`DISCONNECT` add no
+  frozen keyword — a matter of clean grammar, NOT backward compatibility.
+- **Fail-closed:** a path whose credential cannot be resolved is defined but unresolvable — reading it
+  errors "not connected", never a fake mount.
+- **Anti-drift docs:** the mount model renders into `docs/drivers.md` via `xtask gen-docs`; keep
+  `gen-docs --check` green each slice.
 
 ## Policies
 
-- `design/rest-api-design` — versioned-surface + deprecate-not-break for the mount/grammar change.
-- `design/access-control`, `design/data-sovereignty`, `design/defense-in-depth` — a binding ties a
-  credential to a path; single authoritative authz layer, least-privilege, no escalation via
-  unanticipated (recursive) path constructions.
+- `design/access-control`, `design/data-sovereignty`, `design/defense-in-depth` — `CONNECT` binds a
+  credential to a path (an authz + secret-handling operation); least-privilege, no escalation via
+  recursive path constructions.
 - `design/modeless-design`, `implementation/accessibility-first` — the user-defined recursive
-  namespace must stay reachable without modes, by users AND AI agents.
-- `implementation/type-driven-design` — recursive paths + bindings as value objects / sum types, not
-  bare strings; the freeze-safety check is mechanical.
-- `implementation/domain-layer-separation`, `implementation/persistence` — resolution + binding logic
-  in the domain layer; the binding registry is schema-first persisted state in qfs's own DB.
-- `planning/terminology` — `alias` → `defined path` rename updated everywhere in one change.
+  namespace stays reachable without modes, by users AND AI agents.
+- `implementation/type-driven-design` — paths + bindings as value objects / sum types, not strings.
+- `implementation/domain-layer-separation`, `implementation/persistence` — resolution + the binding
+  store are domain/schema logic in qfs's own DB (the single source of truth).
 - `implementation/directory-structure`, `implementation/coding-standards` — always apply.
