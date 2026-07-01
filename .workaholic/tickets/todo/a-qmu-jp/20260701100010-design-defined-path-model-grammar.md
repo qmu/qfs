@@ -73,51 +73,56 @@ beyond a throwaway spike if needed to validate a decision.
   (additive expression, value-object paths), `design/modeless-design` (namespace reachability),
   `planning/terminology` (alias→defined path), `design/access-control` (the binding is an authz rule).
 
-## Design Resolution — PROPOSED (night run 2026-07-01; ONE owner decision outstanding)
+## Design Resolution — DECIDED (owner, 2026-07-01)
 
-Drafted autonomously during a `night /drive` for morning review. Five of the six decisions have a
-clear recommendation grounded in discovery; **decision #2 (grammar syntax) is genuinely the owner's
-call** and is why this ticket stays in `todo` (NOT archived) pending sign-off.
+qfs is **experimental: NO backward compatibility, NO migration/deprecation.** A rename or replacement
+just removes the old form; do not design deprecation windows, legacy shims, or migration commands.
 
-1. **Terminology — DECIDED.** `defined path` (owner's term) for a `{user path → driver + credential}`
-   binding. The pipeline-verb `alias` (`SEND`/`MERGE`) keeps its name (different layer). Retire
-   "alias" only for the mount sense: rename `MountRegistry::register_alias` → `register_defined_path`,
-   update error messages + docs, in the same change (`planning/terminology`).
+**The verb is `CONNECT` (a side-effecting statement). There is NO `connections.qfs` file.** A
+connection is **server state**, not config — running `CONNECT` mutates the qfs server's own state
+(the project DB), exactly like issuing a connection/DDL command to MySQL/Postgres changes server
+state. The project DB is the **single source of truth**; `dashboard`/`CLI`/`MCP` all read it
+(decision E). This drops the `CREATE CONNECTION`/`CREATE ALIAS` shapes AND the whole
+`connections.qfs` config-file concept.
 
-2. **Grammar syntax — OPEN, OWNER DECISION.** Two viable shapes, both freeze-safe (contextual idents,
-   no new keyword):
-   - **(A) One declaration — extend `CREATE CONNECTION` with a path clause** (recommended). Best fits
-     the owner's "define the path AND the credential at the same time": one statement carries
-     `{name, driver, secret, PATH '<…>'}`. The path clause needs a NEW contextual ident (`AT` is
-     taken by the locator + the policy path clause) — proposed word: `PATH` (or `MOUNT`/`AS PATH`).
-   - **(B) A sibling `CREATE PATH '<…>' FOR <connection>`** — separates path-binding from credential
-     config; closer to the abandoned `CREATE ALIAS` shape but renamed.
-   Recommendation: **(A)** + the contextual ident word `PATH`. *Owner: confirm A vs B, and the word.*
+1. **The model.** A **connection** = `{driver + credential}` (can talk to a service). A **defined
+   path** = a user path that MOUNTS a connection. One connection can carry MANY paths (aliases).
 
-3. **`id()` stays canonical — DECIDED (recommended).** Keep each driver's `id()` canonical so the
-   `/<driver.id()>/<sub>` reconstruction (`resolve.rs:622`, `eval.rs`, `plan.rs`) keeps per-driver
-   `path.rs` parsers untouched. The binding table maps `user-path → (canonical driver id, connection)`;
-   the credential stays keyed by the canonical driver id (no connection migration). Proven in
-   production by the `/ga` alias (canonical id `ga`, non-canonical mount).
+2. **`CONNECT` — one verb, two arms** (disambiguated by what follows `TO`: a bare driver ident vs a
+   leading-`/` path). A read (`/path …`) has no side effect; `CONNECT`/`DISCONNECT` do (commit-class
+   effects that mutate server state, on the describe→preview→commit path).
+   - **Full connect** (configure connection + mount): `CONNECT /<path> TO <driver> [AT '<locator>']
+     [SECRET '<ref>']` — creates the connection keyed by the path and mounts it there.
+   - **Alias only** (mount another path onto an existing connection): `CONNECT /<path> TO /<existing-path>`
+     — no driver, no secret; resolves to the SAME `(driver-id, connection)`. This is `register_alias`
+     made user-expressible.
+   - **`DISCONNECT /<path>`** removes a defined path; removing a connection removes its aliases (FK).
 
-4. **Minimal system set — DECIDED (recommended), minor confirm.** System-defined first-paths =
-   `RESERVED_REALMS` (`members/projects/hosts/directories/me/sys`) + the driver-backed `/sys`, plus
-   keep `/local` (and `/git`?) as built-in system mounts (local-first). Everything else is a user
-   defined-path. Governance rule unchanged: a defined-path may NEVER shadow a realm (`register()`
-   guard, `registry.rs:355`). *Owner: confirm `/local` + `/git` stay built-in.*
+3. **`id()` stays canonical.** Each driver's `id()` stays canonical so the `/<driver.id()>/<sub>`
+   reconstruction (`resolve.rs:622`, `eval.rs`, `plan.rs`) keeps per-driver `path.rs` parsers
+   untouched. The binding maps `user-path → (canonical driver id, connection)`. Proven by the `/ga`
+   alias precedent.
 
-5. **Recursive nesting — DECIDED (recommended), VALIDATED.** A defined path is a **multi-segment
-   mount** for v1 (`/<folder>/<folder>/<resource>`); folders-as-grouping-nodes-over-multiple-paths is
-   a future extension. **De-risk spike landed:** `registry.rs::resolve_path_routes_a_multi_segment_user_mount`
-   proves multi-segment mounts route through the existing longest-prefix router with NO change.
-   Precedence: user defined-paths slot at the existing **Mount** tier (`resolve_name`,
-   `registry.rs:195`: `Reserved > Lexical > Mount > Connection > Unbound`).
+4. **Storage (all server state = project DB; no file).** The binding row = metadata (path,
+   canonical driver-id, connection, `AT` locator) — NON-secret. The secret VALUE: `SECRET 'env:VAR'`
+   stores only the REFERENCE (value read from env at use, never persisted); `SECRET 'vault:…'` is
+   sealed envelope-encrypted in the DB's `secret_store`. An unresolvable secret ⇒ the path is defined
+   but **fail-closed** (reading it errors "not connected"), never a fake mount.
 
-6. **Deprecate-not-break — DECIDED.** Old per-driver mounts (`/github`, `/mail`, …) become built-in
-   **deprecated** defined-paths for one release (warning + a `connection`/`path` migration command),
-   then removed — mirroring `/ga`→`/google-analytics` (ticket `203110`, `register_alias`).
-   (`design/rest-api-design`.)
+5. **Minimal system set.** Built-in first-paths = `RESERVED_REALMS`
+   (`members/projects/hosts/directories/me/sys`) + driver-backed `/sys` (+ likely `/local`). NOTHING
+   else is pre-mounted — `postgres`/`gmail`/`s3`/… are reachable ONLY after a `CONNECT`. A defined
+   path may NEVER shadow a realm (`register()` guard). The old fixed per-driver mounts
+   (`/github`/`/mail`/…) are simply **removed** (no deprecation — experimental).
 
-**Implementation children are UNBLOCKED once the owner signs off #2 (+ the #4 confirm).** With those
-settled, `100020` builds the chosen grammar, `100030` wires resolution (the multi-segment premise is
-already validated), `100040` does the registration redesign + deprecation.
+6. **Recursive nesting — VALIDATED.** A defined path is a multi-segment mount
+   (`/<folder>/<folder>/<resource>`); folders are just longer prefixes. Spike
+   `registry.rs::resolve_path_routes_a_multi_segment_user_mount` proves the existing longest-prefix
+   router handles them with NO change. Precedence: the existing **Mount** tier (`resolve_name`).
+
+**Open sub-decision (non-blocking):** the token between path and target — `TO` (proposed) vs
+`AS`/`=`/`USING`. Locking `TO` unless the owner prefers otherwise.
+
+**Children now proceed on this basis:** `100020` builds the `CONNECT`/`DISCONNECT` grammar + writes
+the binding to the DB (no file); `100030` wires resolution (multi-segment already validated);
+`100040` removes the fixed per-driver mounts + registers from the DB bindings (no deprecation).

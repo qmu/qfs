@@ -11,6 +11,14 @@ depends_on: [20260701100010-design-defined-path-model-grammar.md, 20260701100020
 
 # Registration redesign: minimal system mounts + per-connection binding loop + deprecate old mounts
 
+> **DECISION UPDATE (2026-07-01, owner) — see `20260701100010` Design Resolution (authoritative).**
+> The verb is **`CONNECT`** (a side-effecting statement), NOT `CREATE CONNECTION`/`CREATE ALIAS`.
+> There is **NO `connections.qfs` file** — a connection is **server state**; running `CONNECT` mutates
+> the project **DB** (the single source of truth), like a connection/DDL statement against MySQL/Postgres.
+> qfs is **experimental: NO backward compatibility / deprecation** — old fixed mounts are simply removed,
+> not shimmed. Ignore any `connections.qfs` / `CREATE CONNECTION` / deprecate-not-break wording below.
+
+
 Part of EPIC `20260701100000`. The final slice: stop hardcoding per-driver mounts and instead
 register each driver under its user-declared defined path, keeping only a minimal system set — while
 **deprecating, not deleting**, the old per-driver mounts.

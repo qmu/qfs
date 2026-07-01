@@ -11,6 +11,14 @@ depends_on: [20260701100010-design-defined-path-model-grammar.md, 20260701100020
 
 # Resolution + recursive nesting for user-defined paths
 
+> **DECISION UPDATE (2026-07-01, owner) — see `20260701100010` Design Resolution (authoritative).**
+> The verb is **`CONNECT`** (a side-effecting statement), NOT `CREATE CONNECTION`/`CREATE ALIAS`.
+> There is **NO `connections.qfs` file** — a connection is **server state**; running `CONNECT` mutates
+> the project **DB** (the single source of truth), like a connection/DDL statement against MySQL/Postgres.
+> qfs is **experimental: NO backward compatibility / deprecation** — old fixed mounts are simply removed,
+> not shimmed. Ignore any `connections.qfs` / `CREATE CONNECTION` / deprecate-not-break wording below.
+
+
 Part of EPIC `20260701100000`. Makes a declared, persisted defined-path (`100020`) actually
 **resolve** through the engine — including the recursive `/<folder1>/<folder2>/<resource>` grouping.
 

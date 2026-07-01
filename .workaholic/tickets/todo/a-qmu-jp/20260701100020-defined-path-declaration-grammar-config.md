@@ -11,6 +11,14 @@ depends_on: [20260701100010-design-defined-path-model-grammar.md]
 
 # Defined-path declaration: grammar + config + persisted binding
 
+> **DECISION UPDATE (2026-07-01, owner) — see `20260701100010` Design Resolution (authoritative).**
+> The verb is **`CONNECT`** (a side-effecting statement), NOT `CREATE CONNECTION`/`CREATE ALIAS`.
+> There is **NO `connections.qfs` file** — a connection is **server state**; running `CONNECT` mutates
+> the project **DB** (the single source of truth), like a connection/DDL statement against MySQL/Postgres.
+> qfs is **experimental: NO backward compatibility / deprecation** — old fixed mounts are simply removed,
+> not shimmed. Ignore any `connections.qfs` / `CREATE CONNECTION` / deprecate-not-break wording below.
+
+
 Part of EPIC `20260701100000`. Implements the declaration surface decided in the design keystone
 (`100010`). **Subsumes** the abandoned `CREATE ALIAS` ticket (`20260630204000`) — the path-binding
 grammar is built here ONCE as "defined path", not as a throwaway alias shorthand.

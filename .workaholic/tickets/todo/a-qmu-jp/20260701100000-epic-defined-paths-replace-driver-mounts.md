@@ -11,6 +11,14 @@ depends_on: []
 
 # EPIC: User-defined "defined paths" replace pre-designated driver mounts (+ recursive nesting)
 
+> **DECISION UPDATE (2026-07-01, owner) — see `20260701100010` Design Resolution (authoritative).**
+> The verb is **`CONNECT`** (a side-effecting statement), NOT `CREATE CONNECTION`/`CREATE ALIAS`.
+> There is **NO `connections.qfs` file** — a connection is **server state**; running `CONNECT` mutates
+> the project **DB** (the single source of truth), like a connection/DDL statement against MySQL/Postgres.
+> qfs is **experimental: NO backward compatibility / deprecation** — old fixed mounts are simply removed,
+> not shimmed. Ignore any `connections.qfs` / `CREATE CONNECTION` / deprecate-not-break wording below.
+
+
 ## The goal (owner, 2026-07-01)
 
 Today every driver hardcodes a fixed first-path mount (`/ga`, `/github`, `/mail`, `/slack`, `/sql`,
