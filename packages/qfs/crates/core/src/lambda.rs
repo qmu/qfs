@@ -26,7 +26,7 @@
 use std::collections::HashMap;
 
 use qfs_parser::{Expr, Literal, Op};
-use qfs_types::Value;
+use qfs_types::{Fields, Value};
 
 use crate::eval::EvalError;
 use crate::resolve::ResolveError;
@@ -409,6 +409,15 @@ fn literal_to_value(lit: &Literal) -> Value {
         Literal::Null => Value::Null,
         Literal::Size { value, .. } => Value::Int(*value as i64),
         Literal::Typed { raw, .. } => Value::Text(raw.clone()),
+        // t92 composite literals (mirrors the evaluator's lowering in `eval.rs`).
+        Literal::Bytes(b) => Value::Bytes(b.clone()),
+        Literal::Array(elems) => Value::Array(elems.iter().map(literal_to_value).collect()),
+        Literal::Struct(fields) => Value::Struct(Fields::new(
+            fields
+                .iter()
+                .map(|(name, lit)| (name.clone(), literal_to_value(lit)))
+                .collect(),
+        )),
     }
 }
 

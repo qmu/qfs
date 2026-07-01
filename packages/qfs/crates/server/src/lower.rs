@@ -246,15 +246,20 @@ fn is_body_column(node: ServerNode, col: &str) -> bool {
 /// (names, routes, intervals, plan source text) — a non-literal is a malformed config write.
 fn literal_value(expr: &Expr) -> Result<Value, String> {
     match expr {
-        Expr::Lit(lit) => Ok(match lit {
-            Literal::Str(s) => Value::Text(s.clone()),
-            Literal::Int(n) => Value::Int(*n),
-            Literal::Float(f) => Value::Float(*f),
-            Literal::Bool(b) => Value::Bool(*b),
-            Literal::Null => Value::Null,
-            Literal::Size { value, unit } => Value::Text(format!("{value} {unit}")),
-            Literal::Typed { raw, .. } => Value::Text(raw.clone()),
-        }),
+        Expr::Lit(lit) => match lit {
+            Literal::Str(s) => Ok(Value::Text(s.clone())),
+            Literal::Int(n) => Ok(Value::Int(*n)),
+            Literal::Float(f) => Ok(Value::Float(*f)),
+            Literal::Bool(b) => Ok(Value::Bool(*b)),
+            Literal::Null => Ok(Value::Null),
+            Literal::Size { value, unit } => Ok(Value::Text(format!("{value} {unit}"))),
+            Literal::Typed { raw, .. } => Ok(Value::Text(raw.clone())),
+            // t92 composite literals are not valid scalar /server config values.
+            Literal::Bytes(_) | Literal::Array(_) | Literal::Struct(_) => Err(
+                "/server config values must be scalar literals (an array/struct/bytes literal is not a valid config value)"
+                    .to_string(),
+            ),
+        },
         other => Err(format!(
             "/server config values must be literals, got {}",
             expr_kind(other)

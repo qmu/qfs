@@ -601,6 +601,14 @@ pub enum Literal {
         /// The raw, unvalidated inner string content.
         raw: String,
     },
+    /// A hex bytes literal (`X'48656c6c6f'`): the decoded raw bytes (t92).
+    Bytes(Vec<u8>),
+    /// An array literal (`[ e1, e2, … ]`): homogeneous element literals in order (t92).
+    /// Lowers to [`Value::Array`](qfs_types::Value::Array); an empty array is `[]`.
+    Array(Vec<Literal>),
+    /// A struct literal (`{ name: value, … }`): named field literals in insertion order
+    /// (t92). Lowers to [`Value::Struct`](qfs_types::Value::Struct); field order is preserved.
+    Struct(Vec<(String, Literal)>),
 }
 
 /// A `/driver/seg/seg` path expression — the open path/mount registry seam (RFD §3,

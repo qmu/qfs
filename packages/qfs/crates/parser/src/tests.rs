@@ -252,6 +252,55 @@ fn insert_values_returning() {
 }
 
 #[test]
+fn insert_draft_with_array_struct_bytes_attachment_literal() {
+    // t92: an `[ { filename, mime, bytes: X'…' } ]` attachments column parses end-to-end (the
+    // foundation for a Gmail draft attachment). `X'68656c6c6f'` decodes to "hello".
+    let stmt = parse_ok(
+        "INSERT INTO /mail/drafts VALUES ('to@x.y', 'Subject', 'Body', \
+         [ { filename: 'note.txt', mime: 'text/plain', bytes: X'68656c6c6f' } ])",
+    );
+    let Statement::Effect(e) = stmt else {
+        panic!("expected Effect")
+    };
+    let EffectBody::Values(v) = &e.body else {
+        panic!("expected Values body")
+    };
+    let row = &v.rows[0];
+    assert_eq!(row.len(), 4);
+    let Expr::Lit(Literal::Array(items)) = &row[3] else {
+        panic!("expected an array literal, got {:?}", row[3])
+    };
+    assert_eq!(items.len(), 1);
+    let Literal::Struct(fields) = &items[0] else {
+        panic!("expected a struct literal element")
+    };
+    assert_eq!(fields.len(), 3);
+    assert_eq!(fields[0].0, "filename");
+    assert!(matches!(&fields[0].1, Literal::Str(s) if s == "note.txt"));
+    assert_eq!(fields[2].0, "bytes");
+    assert!(matches!(&fields[2].1, Literal::Bytes(b) if b == b"hello"));
+}
+
+#[test]
+fn empty_array_and_struct_literals_parse() {
+    let Statement::Effect(e) = parse_ok("INSERT INTO /t VALUES ([], {})") else {
+        panic!("expected Effect")
+    };
+    let EffectBody::Values(v) = &e.body else {
+        panic!("expected Values body")
+    };
+    assert!(matches!(&v.rows[0][0], Expr::Lit(Literal::Array(a)) if a.is_empty()));
+    assert!(matches!(&v.rows[0][1], Expr::Lit(Literal::Struct(s)) if s.is_empty()));
+}
+
+#[test]
+fn bad_hex_bytes_literal_is_rejected() {
+    // A non-hex digit or an odd number of digits is a lex error surfaced as a parse failure.
+    let _ = parse_err("INSERT INTO /t VALUES (X'zz')");
+    let _ = parse_err("INSERT INTO /t VALUES (X'abc')");
+}
+
+#[test]
 fn upsert_distinct_from_insert() {
     let stmt = parse_ok("UPSERT INTO /s3/bucket/key VALUES ('blob')");
     let Statement::Effect(e) = stmt else { panic!() };

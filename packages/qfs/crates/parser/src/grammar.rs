@@ -198,6 +198,11 @@ fn describe(tok: &Token) -> String {
         Token::Null => "`NULL`".to_string(),
         Token::Size { .. } => "a size literal".to_string(),
         Token::TypedLit { .. } => "a typed literal".to_string(),
+        Token::Bytes(_) => "a bytes literal".to_string(),
+        Token::LBrace => "`{`".to_string(),
+        Token::RBrace => "`}`".to_string(),
+        Token::LBracket => "`[`".to_string(),
+        Token::RBracket => "`]`".to_string(),
         _ => "a token".to_string(),
     }
 }
@@ -535,8 +540,17 @@ fn dotted_path(input: &mut Stream<'_>) -> ModalResult<Expr> {
     }
 }
 
-/// A literal value token → AST literal (RFD §4).
+/// A literal value (RFD §4): a scalar token, or a composite `[ … ]` array / `{ … }` struct
+/// literal (t92). Composite literals are tried first (their `[`/`{` opener is unambiguous in
+/// value position); a scalar literal is the single-token fallback. Because `literal` is the
+/// first `primary` alternative, arrays and structs are valid anywhere an expression is (VALUES
+/// cells, `SET`, `EXTEND`, `LET`), which is what feeds a Gmail draft's `attachments` column.
 fn literal(input: &mut Stream<'_>) -> ModalResult<Literal> {
+    alt((array_literal, struct_literal, scalar_literal)).parse_next(input)
+}
+
+/// A single-token scalar literal (string/int/float/bool/null/size/typed/bytes).
+fn scalar_literal(input: &mut Stream<'_>) -> ModalResult<Literal> {
     any.verify_map(|t: Spanned<Token>| match t.node {
         Token::Str(s) => Some(Literal::Str(s)),
         Token::Int(i) => Some(Literal::Int(i)),
@@ -551,9 +565,40 @@ fn literal(input: &mut Stream<'_>) -> ModalResult<Literal> {
             ty: lit_type_text(ty).to_string(),
             raw,
         }),
+        Token::Bytes(b) => Some(Literal::Bytes(b)),
         _ => None,
     })
     .parse_next(input)
+}
+
+/// An array literal `[ e1, e2, … ]` (t92): comma-separated element literals, empty `[]`
+/// allowed. The `[` opener is backtrackable (so a non-array `primary` alternative can still
+/// match); once opened, a missing `]` is a hard error.
+fn array_literal(input: &mut Stream<'_>) -> ModalResult<Literal> {
+    let _ = punct(Token::LBracket).parse_next(input)?;
+    let elems: Vec<Literal> = separated(0.., literal, punct(Token::Comma)).parse_next(input)?;
+    let _ = cut_err(punct(Token::RBracket)).parse_next(input)?;
+    Ok(Literal::Array(elems))
+}
+
+/// A struct literal `{ name: value, … }` (t92): comma-separated `name: <literal>` fields in
+/// insertion order, empty `{}` allowed. The field name is a bare identifier or a
+/// keyword-in-name-position ([`column_name`]). The `{` opener is backtrackable; once opened, a
+/// malformed field or missing `}` is a hard error.
+fn struct_literal(input: &mut Stream<'_>) -> ModalResult<Literal> {
+    let _ = punct(Token::LBrace).parse_next(input)?;
+    let fields: Vec<(String, Literal)> =
+        separated(0.., struct_field, punct(Token::Comma)).parse_next(input)?;
+    let _ = cut_err(punct(Token::RBrace)).parse_next(input)?;
+    Ok(Literal::Struct(fields))
+}
+
+/// One `name: <literal>` field of a struct literal.
+fn struct_field(input: &mut Stream<'_>) -> ModalResult<(String, Literal)> {
+    let name = column_name(input)?;
+    let _ = cut_err(punct(Token::Colon)).parse_next(input)?;
+    let value = cut_err(literal).parse_next(input)?;
+    Ok((name.node, value))
 }
 
 fn lit_type_text(ty: LitType) -> &'static str {

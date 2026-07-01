@@ -32,7 +32,7 @@
 use std::collections::HashMap;
 
 use qfs_parser::{Expr, FnRef, Literal, Op};
-use qfs_types::{CmpOp, ColumnType, Schema, TypeError};
+use qfs_types::{CmpOp, Column, ColumnType, Schema, TypeError};
 
 use crate::eval::EvalError;
 use crate::stdlib::{BuiltinEval, FnError, StdlibRegistry};
@@ -377,6 +377,19 @@ fn literal_type(lit: &Literal) -> ColumnType {
             "TIMESTAMP" | "TIME" => ColumnType::Timestamp,
             _ => ColumnType::Unknown,
         },
+        // t92 composite literals. `Bytes` is the opaque byte type; an array recovers its element
+        // type from the first element (empty `[]` is `Array(Unknown)`); a struct's type is a
+        // schema of its named fields (each nullable, mirroring `Value::Struct::type_of`).
+        Literal::Bytes(_) => ColumnType::Bytes,
+        Literal::Array(elems) => ColumnType::Array(Box::new(
+            elems.first().map_or(ColumnType::Unknown, literal_type),
+        )),
+        Literal::Struct(fields) => ColumnType::Struct(Schema::new(
+            fields
+                .iter()
+                .map(|(n, l)| Column::new(n.clone(), literal_type(l), true))
+                .collect(),
+        )),
     }
 }
 

@@ -256,6 +256,21 @@ PREVIEW: 1 effect(s)
   total affected: 1
 ```
 
+**Draft with an attachment.** The `attachments` column is an **array of structs**, each
+`{ filename, mime, bytes }` — qfs's general nested-value literals. Give `bytes` a hex `X'…'` bytes
+literal (or a plain string for text), and name the columns so the array lands in `attachments`:
+
+```qfs
+insert into /mail/drafts
+  values (to, subject, body, attachments)
+         ('alice@example.com', 'Q3 report', 'See attached.',
+          [ { filename: 'hello.txt', mime: 'text/plain', bytes: X'68656c6c6f' } ])
+```
+
+The draft is built as a `multipart/mixed` message with the file attached — still a reversible
+preview until you `--commit`. Piping a **Google Drive** download straight into this column (instead
+of an inline literal) is the [cross-service attach-and-send recipe](/cookbook/cross-service).
+
 **Draft, then send it.** The draft is reversible; the send is the irreversible step:
 
 ```qfs

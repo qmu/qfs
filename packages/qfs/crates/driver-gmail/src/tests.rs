@@ -394,6 +394,35 @@ fn insert_into_drafts_decodes_to_create_draft() {
 }
 
 #[test]
+fn insert_into_drafts_decodes_an_attachments_array_struct_column() {
+    // The `attachments` column is the `Array(Struct{filename, mime, bytes})` shape a t92
+    // `[ { filename: '…', mime: '…', bytes: X'…' } ]` literal lowers to; the effect decoder must
+    // surface it as a `MailDraft` attachment carrying the raw bytes (here `X'68656c6c6f'` = "hello").
+    let attachment = Value::Struct(qfs_types::Fields::new(vec![
+        ("filename".to_string(), Value::Text("note.txt".into())),
+        ("mime".to_string(), Value::Text("text/plain".into())),
+        ("bytes".to_string(), Value::Bytes(b"hello".to_vec())),
+    ]));
+    let node = EffectNode::new(NodeId(0), EffectKind::Insert, target("/mail/drafts")).with_args(
+        draft_args(&[
+            (TO_COL, Value::Text("bob@example.com".into())),
+            (SUBJECT_COL, Value::Text("hi".into())),
+            (BODY_COL, Value::Text("body".into())),
+            ("attachments", Value::Array(vec![attachment])),
+        ]),
+    );
+    match GmailEffect::from_node(&node).unwrap() {
+        GmailEffect::CreateDraft { draft } => {
+            assert_eq!(draft.attachments.len(), 1);
+            assert_eq!(draft.attachments[0].filename, "note.txt");
+            assert_eq!(draft.attachments[0].mime, "text/plain");
+            assert_eq!(draft.attachments[0].bytes, b"hello");
+        }
+        other => panic!("expected CreateDraft, got {other:?}"),
+    }
+}
+
+#[test]
 fn upsert_into_drafts_is_retry_safe_keyed_by_draft_id() {
     let node = EffectNode::new(NodeId(0), EffectKind::Upsert, target("/mail/drafts")).with_args(
         draft_args(&[

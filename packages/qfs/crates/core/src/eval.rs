@@ -37,7 +37,7 @@ use qfs_plan::{
     kind_for_verb, Affected, EffectKind, EffectNode, NodeId, Plan, PlanBuilder, ProcId, Target,
     VfsPath,
 };
-use qfs_types::{Column, ColumnType, DriverId, Name, Row, RowBatch, Schema, Value};
+use qfs_types::{Column, ColumnType, DriverId, Fields, Name, Row, RowBatch, Schema, Value};
 
 use crate::registry::MountRegistry;
 use crate::resolve::{write_verb_for, ResolveError, Resolver};
@@ -1103,6 +1103,17 @@ fn literal_to_value(lit: &Literal) -> Value {
         Literal::Null => Value::Null,
         Literal::Size { value, .. } => Value::Int(*value as i64),
         Literal::Typed { raw, .. } => Value::Text(raw.clone()),
+        // t92 composite literals lower structurally into the mirrored runtime values: hex bytes
+        // to `Value::Bytes`, `[ … ]` to `Value::Array`, `{ name: value }` to a self-describing
+        // `Value::Struct` (field order preserved). Nesting is handled by the recursive call.
+        Literal::Bytes(b) => Value::Bytes(b.clone()),
+        Literal::Array(elems) => Value::Array(elems.iter().map(literal_to_value).collect()),
+        Literal::Struct(fields) => Value::Struct(Fields::new(
+            fields
+                .iter()
+                .map(|(name, lit)| (name.clone(), literal_to_value(lit)))
+                .collect(),
+        )),
     }
 }
 
