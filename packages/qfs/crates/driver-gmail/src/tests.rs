@@ -423,6 +423,34 @@ fn insert_into_drafts_decodes_an_attachments_array_struct_column() {
 }
 
 #[test]
+fn insert_into_labels_decodes_to_create_label() {
+    // gmail-ftp `mkdir Work/Receipts` → INSERT INTO /mail/labels VALUES ('Work/Receipts'). The
+    // positional `name` column is named by the label collection's describe schema.
+    let node = EffectNode::new(NodeId(0), EffectKind::Insert, target("/mail/labels")).with_args(
+        draft_args(&[(NAME_COL, Value::Text("Work/Receipts".into()))]),
+    );
+    match GmailEffect::from_node(&node).unwrap() {
+        GmailEffect::CreateLabel { name } => assert_eq!(name, "Work/Receipts"),
+        other => panic!("expected CreateLabel, got {other:?}"),
+    }
+}
+
+#[test]
+fn insert_into_labels_with_no_name_is_malformed() {
+    let node = EffectNode::new(NodeId(0), EffectKind::Insert, target("/mail/labels"))
+        .with_args(draft_args(&[("other", Value::Text("x".into()))]));
+    assert!(GmailEffect::from_node(&node).is_err());
+}
+
+#[test]
+fn label_create_capability_is_insert_only() {
+    let (d, _) = driver_with_mock();
+    let labels = Path::new("/mail/labels");
+    assert!(check_capability(&d, &labels, Verb::Insert).is_ok());
+    assert!(check_capability(&d, &labels, Verb::Select).is_err());
+}
+
+#[test]
 fn upsert_into_drafts_is_retry_safe_keyed_by_draft_id() {
     let node = EffectNode::new(NodeId(0), EffectKind::Upsert, target("/mail/drafts")).with_args(
         draft_args(&[

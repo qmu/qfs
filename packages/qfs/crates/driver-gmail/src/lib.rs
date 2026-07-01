@@ -75,8 +75,8 @@ use qfs_types::ColumnType;
 pub use applier::GmailApplier;
 pub use client::{GmailClient, GoogleApiGmailClient, MessageIdPage, MockGmailClient, RecordedCall};
 pub use effect::{
-    GmailEffect, ADD_LABELS_COL, BODY_COL, CC_COL, DRAFT_ID_COL, REMOVE_LABELS_COL, SUBJECT_COL,
-    TO_COL,
+    GmailEffect, ADD_LABELS_COL, BODY_COL, CC_COL, DRAFT_ID_COL, NAME_COL, REMOVE_LABELS_COL,
+    SUBJECT_COL, TO_COL,
 };
 pub use error::GmailError;
 pub use path::{MailPath, DRAFTS_SEGMENT, MOUNT};
@@ -201,6 +201,7 @@ impl GmailDriver {
             Ok(MailPath::Message { .. }) => Capabilities::from_verbs(&[Verb::Select, Verb::Remove]),
             Ok(MailPath::Thread { .. }) => Capabilities::from_verbs(&[Verb::Remove]),
             Ok(MailPath::Root) => Capabilities::from_verbs(&[Verb::Ls, Verb::Select]),
+            Ok(MailPath::Labels) => Capabilities::from_verbs(&[Verb::Insert]),
             Ok(MailPath::Attachment { .. }) => Capabilities::from_verbs(&[Verb::Select]),
             Err(_) => Capabilities::none(),
         }
@@ -217,7 +218,9 @@ impl Driver for GmailDriver {
         // `ls /mail`), so it reports the label-listing schema; every other node reads messages, so
         // it reports the canonical MailMessage schema. Pure: builds data, no I/O.
         let schema = match MailPath::parse(path) {
-            Ok(MailPath::Root) => schema::label_listing_schema(),
+            // The root lists labels; the label-management collection takes a `name` (its INSERT
+            // column) — both report the `name` label schema. Every other node reads messages.
+            Ok(MailPath::Root | MailPath::Labels) => schema::label_listing_schema(),
             _ => MailMessage::schema(),
         };
         Ok(NodeDesc::new(Archetype::AppendLog, schema))

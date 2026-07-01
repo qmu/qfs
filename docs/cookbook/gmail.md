@@ -242,6 +242,15 @@ update /mail/inbox
   where from LIKE '%@stripe.com'
 ```
 
+**Create a new label first** (gmail-ftp `mkdir`). Labels are the mailbox's directories, so making
+one is an `INSERT` into the `/mail/labels` collection — a nested `Parent/Child` name creates the
+hierarchy. It previews like any write and only applies on `--commit`:
+
+```qfs
+insert into /mail/labels
+  values ('Work/Receipts')
+```
+
 ## Write — draft and send
 
 **Draft an email** (reversible — creating a draft sends nothing). Writing a draft *previews* until

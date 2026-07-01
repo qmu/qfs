@@ -90,14 +90,13 @@ files. Gmail's `label:` search is case-insensitive, so write labels however you 
 | `send <draft>` | `/mail/drafts \|> call mail.send` — **irreversible** |
 | `rm <msg>` | `remove /mail/inbox where id == '<msg-id>'` — trash (**irreversible**) |
 | `rm id:thread:<id>` | `remove /mail/inbox where thread_id == '<thread-id>'` — trash the thread's messages (**irreversible**) |
+| `mkdir <label>` (create a label) | `insert into /mail/labels values ('Work/Receipts')` — create a new (optionally nested) user label |
 
 **Beyond the FTP tools:** qfs also *relabels* in one statement — `update /mail/inbox set
 add_labels = 'STARRED', remove_labels = 'UNREAD' where from == 'boss@x.y'` (star + mark read),
 or archive with `set remove_labels = 'INBOX'`. See the [Gmail cookbook](/cookbook/gmail).
 
-**Not yet:** creating a *new* user label (gmail-ftp's `mkdir`, its own v1.1 item) is not a qfs
-command — `add_labels` applies an existing label. Raw `.eml`/`.mbox` export is a gmail-ftp format
-feature; qfs returns structured rows.
+**Not yet:** raw `.eml`/`.mbox` export is a gmail-ftp format feature; qfs returns structured rows.
 
 ## gdrive-ftp → qfs
 

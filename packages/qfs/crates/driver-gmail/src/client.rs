@@ -106,6 +106,12 @@ pub trait GmailClient: Send + Sync {
     /// # Errors
     /// [`GmailError`] on a non-2xx status or an auth/transport failure.
     fn modify_labels(&self, id: &str, add: &[String], remove: &[String]) -> Result<(), GmailError>;
+
+    /// Create a new user label (`labels.create`, gmail-ftp `mkdir`); returns the new label id.
+    ///
+    /// # Errors
+    /// [`GmailError`] on a non-2xx status, a decode failure, or an auth/transport failure.
+    fn create_label(&self, name: &str) -> Result<String, GmailError>;
 }
 
 /// The real Gmail client: builds owned [`HttpRequest`]s and sends them through the t19
@@ -331,6 +337,20 @@ impl GmailClient for GoogleApiGmailClient {
         self.post_json("messages.modify", &format!("/messages/{id}/modify"), body)?;
         Ok(())
     }
+
+    fn create_label(&self, name: &str) -> Result<String, GmailError> {
+        let op = "labels.create";
+        let body = serde_json::json!({ "name": name });
+        let resp = self.post_json(op, "/labels", body)?;
+        let json = Self::parse_json(op, &resp)?;
+        json.get("id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or(GmailError::Decode {
+                op,
+                reason: "labels.create response missing label id".to_string(),
+            })
+    }
 }
 
 /// Translate one Gmail `messages.get?format=metadata` JSON object into the owned
@@ -524,6 +544,11 @@ pub enum RecordedCall {
         /// The label ids removed.
         remove: Vec<String>,
     },
+    /// `labels.create` — a new user label.
+    CreateLabel {
+        /// The new label's name.
+        name: String,
+    },
 }
 
 impl MockGmailClient {
@@ -690,5 +715,12 @@ impl GmailClient for MockGmailClient {
             remove: remove.to_vec(),
         });
         Ok(())
+    }
+
+    fn create_label(&self, name: &str) -> Result<String, GmailError> {
+        self.record(RecordedCall::CreateLabel {
+            name: name.to_string(),
+        });
+        Ok(format!("Label_{name}"))
     }
 }
