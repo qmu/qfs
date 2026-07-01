@@ -135,6 +135,36 @@ fn capabilities_are_path_keyed() {
 }
 
 #[test]
+fn system_labels_are_case_insensitive() {
+    use crate::path::MailPath;
+    // `/mail/inbox` and `/mail/INBOX` name the SAME system label (canonical uppercase Gmail id), so
+    // the ergonomic lowercase spelling in the cookbook resolves to the real `INBOX` label.
+    let inbox = MailPath::Label {
+        name: "INBOX".to_string(),
+    };
+    assert_eq!(MailPath::parse_str("/mail/inbox").unwrap(), inbox);
+    assert_eq!(MailPath::parse_str("/mail/INBOX").unwrap(), inbox);
+    assert_eq!(
+        MailPath::parse_str("/mail/Sent").unwrap(),
+        MailPath::Label {
+            name: "SENT".to_string()
+        }
+    );
+    // The drafts collection is case-insensitive too.
+    assert_eq!(
+        MailPath::parse_str("/mail/DRAFTS").unwrap(),
+        MailPath::Drafts
+    );
+    // A USER label keeps its exact case (Gmail user-label ids are case-sensitive).
+    assert_eq!(
+        MailPath::parse_str("/mail/Label_Work").unwrap(),
+        MailPath::Label {
+            name: "Label_Work".to_string()
+        }
+    );
+}
+
+#[test]
 fn insert_into_message_is_rejected_structurally() {
     let (d, _) = driver_with_mock();
     let err = check_capability(&d, &Path::new("id:m1"), Verb::Insert).unwrap_err();
