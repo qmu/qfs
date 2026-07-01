@@ -25,7 +25,7 @@ You can **preview** a single binding with `qfs run` to confirm it parses and typ
 no backend needed. A binding has no rows to return, so the preview is an empty, pure plan
 (`rows: [], is_pure: true`): proof the statement is valid, not an install report.
 
-## Trigger — react to events
+## Trigger — react to events 🚧
 
 **When mail arrives, post its subject to Slack:**
 

@@ -53,7 +53,7 @@ refs/tags/v1      | 4d3a66d9a60ed9f255d1779ffd01f495f1dd93b9
 (4 row(s))
 ```
 
-## Read the tree at a ref
+## Read the tree at a ref 🚧
 
 **List a directory as of a tag** — the `@<ref>` coordinate reads the tree at that point:
 

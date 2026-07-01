@@ -45,7 +45,7 @@ config.json | /local/home/you/docs/config.json | 22   | 1782734201012 | false  |
 (1 row(s))
 ```
 
-## Convert between formats (codecs)
+## Convert between formats (codecs) 🚧
 
 `DECODE` turns bytes into rows; `ENCODE` turns rows into bytes. Supported formats: `json`, `jsonl`,
 `yaml`, `toml`, `csv`. Point a `/local` file read at `decode`, then `encode` the other way, and the
@@ -125,7 +125,7 @@ but `decode json |> where level == 'error' |> encode csv` is not. Reshaping deco
 is coming soon.
 :::
 
-## Write & copy
+## Write & copy 🚧
 
 Writing a blob is an `UPSERT` (retry-safe — re-running converges instead of duplicating). Because
 every store is the same kind of path, the same statement shape works across them. Writes **preview**

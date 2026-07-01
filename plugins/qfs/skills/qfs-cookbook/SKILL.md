@@ -8,6 +8,10 @@ description: Use for an overview of what qfs can do and which qfs cookbook skill
 Real tasks, and the one qfs statement that solves each. Every recipe is grouped by what you're
 working with; use the sidebar to jump around.
 
+A section heading marked **🚧** has a part that isn't wired yet — the recipes shown work, but the
+section's callout notes what's still coming (today that's object-store writes and reading a git
+blob's bytes at a `@ref`).
+
 ## How to read a recipe
 
 Each recipe is a short statement. Multi-stage queries are written one stage per line, with the `|>`
