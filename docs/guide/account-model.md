@@ -130,7 +130,10 @@ secret is **never decrypted for an unauthorized actor**:
 ::: warning Today vs. planned
 Single-operator, user-owned connections work now. The team, brokered, and end-to-end pieces are
 wired against their models but partly reach a **live qfs Cloud network broker that isn't part of this
-repo** — treat them as the direction, per the [roadmap](/roadmap), not a shipped feature.
+repo** — treat them as the direction, per the [roadmap](/roadmap), not a shipped feature. The
+decided shape of that direction — the CLI as a client of **hosts** (local, self-hosted, managed),
+per-layer verbs, and key-guardian vault slots — is
+[ADR 0008](/adr/0008-multi-host-account-model).
 :::
 
 ## Putting it together — connecting Gmail, layer by layer

@@ -99,6 +99,7 @@ export default defineConfig({
           { text: '0005 — Deployment hosts', link: '/adr/0005-deployment-hosts' },
           { text: '0006 — Test harness', link: '/adr/0006-test-harness' },
           { text: '0007 — Docs and distribution', link: '/adr/0007-docs-and-distribution' },
+          { text: '0008 — Multi-host account model', link: '/adr/0008-multi-host-account-model' },
         ],
       },
       {
