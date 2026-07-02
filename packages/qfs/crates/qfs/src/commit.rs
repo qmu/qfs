@@ -409,12 +409,17 @@ fn mount_connection(mount: &crate::cloud_mounts::CloudMount) -> &str {
 
 /// Build the account-bound [`GoogleStack`](crate::google::GoogleStack) for one Google-kind cloud
 /// mount, or `None` (fail closed): the mount must carry an account email (ADR 0008 — no account,
-/// no bind), the t54 sign-in + consent gate must pass for the mount's `(kind, account)`, and the
-/// operator's OAuth app credentials must resolve.
+/// no bind; the documented [`crate::google::GOOGLE_ACCOUNT_ENV`] CI override is the one
+/// exception), the t54 sign-in + consent gate must pass for the mount's `(kind, account)`, and
+/// the operator's OAuth app credentials must resolve.
 pub(crate) fn google_stack_for_mount(
     mount: &crate::cloud_mounts::CloudMount,
 ) -> Option<crate::google::GoogleStack> {
-    let Some(email) = mount.account.as_deref() else {
+    let email = crate::google::effective_account(
+        crate::google::account_override(),
+        mount.account.as_deref(),
+    );
+    let Some(email) = email else {
         tracing::debug!(
             target: "qfs::consent",
             "cloud mount '{}' has no account — reconnect it with an account email",
@@ -427,10 +432,10 @@ pub(crate) fn google_stack_for_mount(
     } else {
         mount.kind.as_str()
     };
-    if !cloud_bind_allowed(consent_kind, email) {
+    if !cloud_bind_allowed(consent_kind, &email) {
         return None;
     }
-    crate::google::google_stack_for_account(email)
+    crate::google::google_stack_for_account(&email)
 }
 
 /// Shared objstore-registry builder for a `driver` id (`s3`/`r2`) over the mount's credential

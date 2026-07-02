@@ -16,22 +16,22 @@
 //! ## Fail-closed by construction (RFD §10)
 //! There is **no baked-in OAuth app** — the operator registers a Google "Desktop" OAuth client and
 //! supplies its id/secret either by saving the `credentials.json` into qfs's own encrypted DB
-//! (`cat credentials.json | qfs connection add google-app default` — read first by
-//! [`app_config_from_store`], so qfs owns the app and does not depend on an external file) or via
-//! [`GOOGLE_CLIENT_ID_ENV`] / [`GOOGLE_CLIENT_SECRET_ENV`] (the agent/CI fallback). Absent either
-//! (or absent a selected Google account email), [`live_google_stack`] returns `None` and the commit
-//! registry leaves `/mail` / `/drive` / `/ga` **unregistered** — a commit then fails with a clear
+//! (`cat credentials.json | qfs app add google` — read first by [`app_config_from_store`], so qfs
+//! owns the app and does not depend on an external file) or via [`GOOGLE_CLIENT_ID_ENV`] /
+//! [`GOOGLE_CLIENT_SECRET_ENV`] (the agent/CI fallback). Absent either (or absent an account on
+//! the mount), [`google_stack_for_account`] / `google_stack_for_mount` return `None` and the
+//! commit registry leaves the mount **unregistered** — a commit then fails with a clear
 //! "no driver / not configured" cause rather than faking success. The `client_secret` and the
 //! refresh token are `qfs_secrets::Secret` (envelope-encrypted at rest, redacting `Debug`), never
 //! logged and never placed on argv.
 //!
-//! ## The account model
+//! ## The account model (ADR 0008 — mount-bound)
 //! One consent serves all three Google drivers: the refresh token is stored ONCE under
-//! `google:<email>:refresh_token` (`qfs_google_auth::refresh_token_key`), and a single
-//! [`StoredTokenSource`] + [`GoogleApiClient`] (built per account email) is shared by the gmail,
-//! drive, and analytics clients. The active account email is resolved from
-//! [`GOOGLE_ACCOUNT_ENV`] (the explicit agent/CI override) else the active `google` connection
-//! selection (`qfs connection use google <email>`).
+//! `google:<email>:refresh_token` (`qfs_google_auth::refresh_token_key`), and a
+//! [`StoredTokenSource`] + [`GoogleApiClient`] is built **per connect-created mount**, bound to
+//! the MOUNT's account email ([`google_stack_for_account`], called by
+//! `crate::commit::google_stack_for_mount`). There is NO selection state: N accounts coexist as
+//! N mounts. [`GOOGLE_ACCOUNT_ENV`] survives only as the explicit CI/agent override.
 //!
 //! ## The live consent flow is a documented SEAM
 //! [`run_google_consent`] wires the real `qfs_google_auth::authorize` loopback browser flow (build
@@ -52,9 +52,10 @@ pub const GOOGLE_CLIENT_ID_ENV: &str = "QFS_GOOGLE_CLIENT_ID";
 /// Env var carrying the operator's Google Desktop OAuth **client secret**. Read into a
 /// [`Secret`] (redacting); absent ⇒ the Google drivers are not registered (fail closed).
 pub const GOOGLE_CLIENT_SECRET_ENV: &str = "QFS_GOOGLE_CLIENT_SECRET";
-/// Env var naming the active Google **account email** (the explicit agent/CI override for the
-/// account whose `google:<email>:refresh_token` the token source uses). Falls back to the active
-/// `google` connection selection.
+/// Env var naming a Google **account email** that OVERRIDES every mount's bound account for this
+/// process — the explicit **CI/agent override only** (ADR 0008: the account otherwise always comes
+/// off the mount's `path_binding.account`; there is no selection state). Checked before the mount,
+/// only when set and non-empty.
 pub const GOOGLE_ACCOUNT_ENV: &str = "QFS_GOOGLE_ACCOUNT";
 /// How long the loopback consent listener waits for the redirect before giving up. A human who
 /// never approves yields a timeout rather than hanging forever.
@@ -149,15 +150,23 @@ fn all_google_scopes() -> Vec<String> {
     ]
 }
 
-/// Resolve the active Google **account email**: the explicit [`GOOGLE_ACCOUNT_ENV`] override first
-/// (the agent/CI path), else the active `google` connection selection. `None` (fail closed) when no
-/// account is selected — without an account email there is no refresh token to mint from, so the
-/// drivers are left unregistered rather than bound to nothing.
-fn resolve_account_email() -> Option<String> {
-    if let Some(email) = non_empty(std::env::var(GOOGLE_ACCOUNT_ENV).ok()) {
-        return Some(email);
-    }
-    crate::connection::active_connection("google").filter(|s| !s.is_empty())
+/// The [`GOOGLE_ACCOUNT_ENV`] CI/agent override, when set and non-empty. This is the ONLY
+/// account resolution that does not come off a mount (ADR 0008) — a test/CI harness pins the
+/// account for the whole process; it is never "selection" state.
+#[must_use]
+pub fn account_override() -> Option<String> {
+    non_empty(std::env::var(GOOGLE_ACCOUNT_ENV).ok())
+}
+
+/// The account email one Google-kind cloud mount binds: the [`GOOGLE_ACCOUNT_ENV`] CI override
+/// when set, else the MOUNT's own account. Pure over its inputs (the env read happens in
+/// [`account_override`]), so the override-only-when-set contract is unit-testable.
+#[must_use]
+pub fn effective_account(
+    env_override: Option<String>,
+    mount_account: Option<&str>,
+) -> Option<String> {
+    env_override.or_else(|| mount_account.map(str::to_string))
 }
 
 /// Resolve the credential store the commit path reads (mirrors `commit::networked_credential`): the
@@ -208,15 +217,6 @@ pub fn google_stack_for_account(email: &str) -> Option<GoogleStack> {
         Arc::new(StoredTokenSource::new(email.to_string(), store, oauth));
     let api = Arc::new(GoogleApiClient::new(transport, tokens));
     Some(GoogleStack { api })
-}
-
-/// Build the [`GoogleStack`] for the **selected** account (the legacy single-active-account path):
-/// resolve the account email ([`GOOGLE_ACCOUNT_ENV`] else the active `google` connection) and bind
-/// a stack to it via [`google_stack_for_account`]. `None` (fail closed) when no account is selected
-/// or the OAuth app credentials are absent.
-#[must_use]
-pub fn live_google_stack() -> Option<GoogleStack> {
-    google_stack_for_account(&resolve_account_email()?)
 }
 
 /// **Documented SEAM — the live loopback browser consent flow.** Run `qfs_google_auth::authorize`
@@ -317,6 +317,25 @@ mod tests {
             !format!("{secret:?}").contains("secret"),
             "the client secret must be redacted on Debug, never printed"
         );
+    }
+
+    /// ADR 0008: the env override wins ONLY when set; otherwise the account is the mount's — and
+    /// a mount with no account resolves to nothing (fail closed), never to some other account.
+    #[test]
+    fn env_override_applies_only_when_set() {
+        assert_eq!(
+            effective_account(None, Some("mount@example.com")).as_deref(),
+            Some("mount@example.com")
+        );
+        assert_eq!(
+            effective_account(Some("ci@example.com".into()), Some("mount@example.com")).as_deref(),
+            Some("ci@example.com")
+        );
+        assert_eq!(
+            effective_account(Some("ci@example.com".into()), None).as_deref(),
+            Some("ci@example.com")
+        );
+        assert_eq!(effective_account(None, None), None);
     }
 
     /// The shared consent scope union is exactly the four least-privilege Google scopes (modify +
