@@ -19,8 +19,10 @@ Two things some services need first:
   ```sh
   read -rs QFS_PASSPHRASE; export QFS_PASSPHRASE
   ```
-- **A sign-in, for Google services.** Adding a Gmail / Drive / Analytics connection requires a
-  signed-in identity first: `qfs identity signup <email>`.
+- **A signed-in operator, for cloud services.** Adding any cloud connection (Gmail / Drive /
+  Analytics, GitHub, Slack, S3/R2, Cloudflare) requires a registered identity first:
+  `qfs identity signup <email>` (it prompts for a password on a terminal). What this identity is,
+  and why it's required, is in **[The operator identity](/guide/operator)**.
 
 Local databases and git need **neither** — they store no secret.
 

@@ -10,10 +10,12 @@ a `JOIN`, `UNION`, `INTERSECT`, or `EXCEPT` whose paths live in *different* serv
 service is the same kind of path yielding rows, a database table, a GitHub issue list, and a mailbox
 combine in a single query as easily as two tables would.
 
-::: tip Prerequisite — unlock your credential store
-A cross-service query needs **every** participating service connected, and each connection stores a
-login behind your `QFS_PASSPHRASE` — the one-time setup in **[The QFS passphrase](/guide/passphrase)**.
-Connect each service via its own cookbook (linked below) once the store is unlocked.
+::: tip Prerequisites — unlock the store, sign in
+A cross-service query needs **every** participating service connected. That means the two one-time
+setup gates: your `QFS_PASSPHRASE` unlocks the local credential store
+(**[The QFS passphrase](/guide/passphrase)**), and a signed-in operator identity
+(**[The operator identity](/guide/operator)**) is required for each cloud service. Connect each one
+via its own cookbook (linked below) first.
 :::
 
 ## See it work first

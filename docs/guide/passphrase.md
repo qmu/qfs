@@ -9,7 +9,8 @@ Google Drive, GitHub, Slack, S3, R2, a remote database — qfs keeps that creden
 Every third-party cookbook (Gmail, Drive, GitHub, Slack, files/object storage, remote databases,
 cross-service, automation) assumes the store is unlocked. If a command reports
 *`QFS_PASSPHRASE is not set`*, come back here first — you can't `connection add` or read a connected
-service without it.
+service without it. A **cloud** service also needs a signed-in operator — see the companion step,
+**[The operator identity](/guide/operator)**.
 :::
 
 ## What it is (and is not)

@@ -48,6 +48,7 @@ export default defineConfig({
           { text: 'Installation', link: '/guide/installation' },
           { text: 'Get started', link: '/guide/getting-started' },
           { text: 'The QFS passphrase', link: '/guide/passphrase' },
+          { text: 'The operator identity', link: '/guide/operator' },
           { text: 'Connect a service', link: '/guide/connect' },
         ],
       },
