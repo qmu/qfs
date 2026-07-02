@@ -12,8 +12,8 @@
 //! [`qfs_cmd::ShellLauncher`]. The shell LOGIC itself lives in `qfs-exec`; this only wires it.
 
 use qfs::{
-    account, commit, connection, describe, identity, init, invite, job, serve, shell, store, vault,
-    version,
+    account, commit, connection, describe, hosts, identity, init, invite, job, serve, shell, store,
+    vault, version,
 };
 
 fn main() {
@@ -68,6 +68,9 @@ fn main() {
         // password: OS-delegated auth, unusable placeholder hash) + the vault creation through the
         // guardian flow, injected here (qfs-cmd stays off the concrete backends).
         &init::run_init,
+        // ADR 0008 §1 `qfs host` (list/login/logout): the System-DB hosts registry — records a
+        // remote host with NO network I/O (the remote protocol is deferred, ADR §6), injected here.
+        &hosts::run_host,
         // ADR 0008 §3 `qfs app` / `qfs account`: the per-layer verbs over the vault + consent
         // ledger + the live Google consent seam, injected here (qfs-cmd stays off the backends).
         &account::run_account,

@@ -578,6 +578,10 @@ fn run_connect(
     if !path.starts_with('/') {
         return Err(format!("a defined path must be absolute, got `{path}`"));
     }
+    // ADR 0008 §1: a --host must name a recorded host (or be the implicit `local`). The mount
+    // records it; binding a mount to a remote host fails closed at bind time (the remote protocol
+    // is deferred, ADR §6) — validated here so an unknown host is caught at connect, not at use.
+    crate::hosts::require_known_host(host)?;
     let conn = open_project_conn()?;
     match (driver, alias_of) {
         (Some(_), Some(_)) => {

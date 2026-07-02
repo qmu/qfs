@@ -4,7 +4,7 @@ author: a@qmu.jp
 type: enhancement
 layer: [UX, DB]
 effort:
-commit_hash:
+commit_hash: be17f8e
 category: Added
 depends_on: [20260702120030-qfs-init-one-operator.md]
 ---

@@ -37,6 +37,7 @@ pub mod fs;
 pub mod git;
 pub mod google;
 pub mod host;
+pub mod hosts;
 pub mod identity;
 pub mod init;
 pub mod invite;

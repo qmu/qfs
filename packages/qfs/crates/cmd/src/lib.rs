@@ -200,6 +200,29 @@ pub struct InitAction {
 /// process exit code.
 pub type InitLauncher<'a> = dyn Fn(&InitAction) -> i32 + 'a;
 
+/// A parsed `qfs host <verb>` request, handed to the binary-injected [`HostLauncher`] (ADR 0008
+/// §1 — the CLI as a client of hosts). Selectors/URLs only; no credential (the login records the
+/// host, and the remote session protocol is deferred per ADR §6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostAction {
+    /// `host list` — every recorded host (always includes the implicit `local`).
+    List,
+    /// `host login <url>` — record a remote host (NO network I/O yet — the protocol is deferred).
+    Login {
+        /// The remote host's base URL (e.g. `https://qfs.cloud`).
+        url: String,
+    },
+    /// `host logout <name>` — forget a recorded host (`local` is refused).
+    Logout {
+        /// The host name to forget.
+        name: String,
+    },
+}
+
+/// The injected **host launcher** (ADR 0008 §1): the binary supplies the System-DB `hosts`
+/// registry I/O. Returns the process exit code.
+pub type HostLauncher<'a> = dyn Fn(&HostAction) -> i32 + 'a;
+
 /// A parsed `qfs app <verb>` / `qfs account <verb>` request, handed to the binary-injected
 /// [`AccountLauncher`] (ADR 0008 §3 — the per-layer verbs that dissolve the `connection`
 /// grab-bag). Both nouns ride ONE launcher: apps (OAuth client registrations) and accounts
@@ -456,6 +479,13 @@ enum Command {
         /// The operator email. Omit it on a terminal to be prompted.
         email: Option<String>,
     },
+    /// Manage the qfs hosts this CLI can act on (ADR 0008 §1): `local` is implicit; `host login
+    /// <url>` records a remote (the remote session protocol is not yet implemented — it records
+    /// the host so a mount can reference it). `host list` / `host logout <name>`.
+    Host {
+        #[command(subcommand)]
+        verb: HostVerb,
+    },
     /// Manage OAuth app registrations (ADR 0008): the client credentials YOUR apps authenticate
     /// with (today: Google's credentials.json). `cat credentials.json | qfs app add google`.
     App {
@@ -611,6 +641,24 @@ enum ConnectionVerb {
     Paths,
 }
 
+/// `qfs host <verb>` — the client-of-hosts verbs (ADR 0008 §1). Maps onto the injected
+/// [`HostLauncher`]; no credential rides here.
+#[derive(Subcommand, Debug)]
+enum HostVerb {
+    /// List the recorded hosts (always includes the implicit `local`).
+    List,
+    /// Record a remote host by URL (no network I/O yet — the remote protocol is on the roadmap).
+    Login {
+        /// The remote host's base URL (e.g. `https://qfs.cloud`).
+        url: String,
+    },
+    /// Forget a recorded host (`local` is refused).
+    Logout {
+        /// The host name to forget.
+        name: String,
+    },
+}
+
 /// `qfs app <verb>` — the OAuth-app registration verbs (ADR 0008 §3). Maps onto the injected
 /// [`AccountLauncher`]; credentials arrive on stdin, never argv.
 #[derive(Subcommand, Debug)]
@@ -746,6 +794,7 @@ pub fn run<I, T>(
     connection: &ConnectionLauncher,
     identity: &IdentityLauncher,
     init: &InitLauncher,
+    host: &HostLauncher,
     account: &AccountLauncher,
     vault: &VaultLauncher,
     invite: &InviteLauncher,
@@ -905,6 +954,12 @@ where
         Some(Command::Init { email }) => {
             tracing::debug!(target: "qfs::cmd", "dispatch init via launcher");
             return init(&InitAction { email });
+        }
+        // `host` (ADR 0008 §1) dispatches through the injected launcher (the binary owns the
+        // System-DB hosts registry). Returns the exit code.
+        Some(Command::Host { verb }) => {
+            tracing::debug!(target: "qfs::cmd", "dispatch host via launcher");
+            return host(&host_action(&verb));
         }
         // `app` / `account` (ADR 0008 §3) dispatch through ONE injected launcher (the binary owns
         // the vault + consent I/O and the Google consent seam). Returns the exit code.
@@ -1160,6 +1215,16 @@ fn connection_action(verb: &ConnectionVerb) -> ConnectionAction {
 /// Map the clap-parsed [`IdentityVerb`] to the public [`IdentityAction`] handed to the injected
 /// [`IdentityLauncher`]. Pure (handles only); the password is never carried — the launcher reads it
 /// from STDIN, never from argv (which would leak into history / `ps`).
+/// Map the clap-parsed [`HostVerb`] to the public [`HostAction`] handed to the injected
+/// [`HostLauncher`]. Pure (selectors/URLs only).
+fn host_action(verb: &HostVerb) -> HostAction {
+    match verb {
+        HostVerb::List => HostAction::List,
+        HostVerb::Login { url } => HostAction::Login { url: url.clone() },
+        HostVerb::Logout { name } => HostAction::Logout { name: name.clone() },
+    }
+}
+
 /// Map the clap-parsed [`AppVerb`] to the public [`AccountAction`] app arms. Pure (selectors
 /// only); credentials never ride argv.
 fn app_action(verb: &AppVerb) -> AccountAction {
@@ -1430,6 +1495,12 @@ mod tests {
         15
     }
 
+    /// A stub host launcher returning a distinct sentinel, so a test can assert the `host` arm
+    /// dispatched into the injected launcher (the real hosts-registry I/O lives in the binary).
+    fn stub_host(_action: &HostAction) -> i32 {
+        16
+    }
+
     /// A stub job launcher: echoes a fixed code (the real boot→build→gate→apply path lives in the
     /// binary crate; here we only assert the clap dispatch + request plumbing).
     fn stub_job(_req: &JobRequest) -> i32 {
@@ -1468,6 +1539,7 @@ mod tests {
             &stub_connection,
             &stub_identity,
             &stub_init,
+            &stub_host,
             &stub_account,
             &stub_vault,
             &stub_invite,
@@ -1475,6 +1547,42 @@ mod tests {
             &noop_apply,
             &stub_run_ctx,
         )
+    }
+
+    #[test]
+    fn host_verbs_dispatch_through_the_injected_launcher() {
+        // ADR 0008 §1: `qfs host list/login/logout` route to the injected HostLauncher.
+        let seen: std::cell::RefCell<Option<HostAction>> = std::cell::RefCell::new(None);
+        let launcher = |action: &HostAction| {
+            *seen.borrow_mut() = Some(action.clone());
+            16
+        };
+        let code = run(
+            ["qfs", "host", "login", "https://qfs.cloud"],
+            &noop_shell,
+            &|_cfg| 0,
+            &empty_describe,
+            &stub_skill,
+            &stub_connection,
+            &stub_identity,
+            &stub_init,
+            &launcher,
+            &stub_account,
+            &stub_vault,
+            &stub_invite,
+            &stub_job,
+            &noop_apply,
+            &stub_run_ctx,
+        );
+        assert_eq!(code, 16);
+        assert_eq!(
+            seen.borrow().as_ref(),
+            Some(&HostAction::Login {
+                url: "https://qfs.cloud".into()
+            })
+        );
+        assert_eq!(run_t(["qfs", "host", "list"]), 16);
+        assert_eq!(run_t(["qfs", "host", "logout", "qfs.cloud"]), 16);
     }
 
     #[test]
@@ -1501,6 +1609,7 @@ mod tests {
                 &stub_connection,
                 &stub_identity,
                 &stub_init,
+                &stub_host,
                 &launcher,
                 &stub_vault,
                 &stub_invite,
@@ -1551,6 +1660,7 @@ mod tests {
             &stub_connection,
             &stub_identity,
             &stub_init,
+            &stub_host,
             &stub_account,
             &launcher,
             &stub_invite,
@@ -1594,6 +1704,7 @@ mod tests {
             &stub_connection,
             &stub_identity,
             &stub_init,
+            &stub_host,
             &stub_account,
             &stub_vault,
             &stub_invite,
@@ -1627,6 +1738,7 @@ mod tests {
             &stub_connection,
             &stub_identity,
             &stub_init,
+            &stub_host,
             &stub_account,
             &stub_vault,
             &stub_invite,
@@ -1678,6 +1790,7 @@ mod tests {
             &stub_connection,
             &stub_identity,
             &stub_init,
+            &stub_host,
             &stub_account,
             &stub_vault,
             &stub_invite,
@@ -1733,6 +1846,7 @@ mod tests {
             &stub_connection,
             &stub_identity,
             &stub_init,
+            &stub_host,
             &stub_account,
             &stub_vault,
             &stub_invite,
@@ -1843,6 +1957,7 @@ mod tests {
             &stub_connection,
             &stub_identity,
             &launcher,
+            &stub_host,
             &stub_account,
             &stub_vault,
             &stub_invite,
@@ -1930,6 +2045,7 @@ mod tests {
                 &stub_connection,
                 &stub_identity,
                 &stub_init,
+                &stub_host,
                 &stub_account,
                 &stub_vault,
                 &stub_invite,
@@ -1950,6 +2066,7 @@ mod tests {
                 &stub_connection,
                 &stub_identity,
                 &stub_init,
+                &stub_host,
                 &stub_account,
                 &stub_vault,
                 &stub_invite,

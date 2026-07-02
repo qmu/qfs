@@ -335,6 +335,17 @@ pub const SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "system_billing",
         sql: include_str!("schema/system_billing.sql"),
     },
+    // EPIC 20260702120000 / ADR 0008 §1 (the multi-host account model): the CLIENT-SIDE `hosts`
+    // registry — `local` (the implicit embedded host, seeded) plus any remote a `qfs host login`
+    // records. Selectors + metadata only; no token (the remote protocol + session are deferred per
+    // ADR §6, so `session_ref` stays NULL). A mount's `host` column references a `name` here.
+    // Appended as a NEW version (#13) — migrations #1–#12 stay frozen. The I/O lives in the binary
+    // (`crates/qfs/src/hosts.rs`); this declares the shape.
+    Migration {
+        version: 13,
+        name: "system_hosts",
+        sql: include_str!("schema/system_hosts.sql"),
+    },
 ];
 
 /// The Project DB's ordered migration set (forward-only; append, never edit a shipped entry).
@@ -520,7 +531,7 @@ mod tests {
         let applied = migrate(&mut db, SYSTEM_MIGRATIONS).unwrap();
         assert_eq!(
             applied,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
             "first migrate applies every pending version"
         );
         // Second call on the SAME db is a verified no-op (re-verifies the checksum, re-applies none).
@@ -727,7 +738,9 @@ mod tests {
         // t67 migration #12: the per-team billing plan + the webhook dedup ledger.
         assert!(table_exists(sys.db(), "billing_subscriptions"));
         assert!(table_exists(sys.db(), "billing_events"));
-        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 12);
+        // ADR 0008 migration #13: the client-side hosts registry, with the implicit `local` seeded.
+        assert!(table_exists(sys.db(), "hosts"));
+        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 13);
     }
 
     #[test]
@@ -876,7 +889,7 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "data persisted across reopen");
-        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 12);
+        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 13);
     }
 
     #[test]
