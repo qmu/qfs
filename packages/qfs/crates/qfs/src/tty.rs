@@ -7,8 +7,12 @@
 //! *prompts* — with echo disabled — instead of requiring the env var or a piped password.
 //!
 //! Two invariants keep this safe and automation-transparent:
-//! - Every prompt is gated by [`is_interactive`] / [`stdin_is_terminal`]. When stdin isn't a TTY
-//!   (a pipe, cron, CI) these are never reached and the caller keeps its non-interactive behavior.
+//! - Every prompt is gated: values read from **stdin** ([`prompt_line`], the piped-credential
+//!   entry) gate on [`is_interactive`] / [`stdin_is_terminal`]; the PASSPHRASE prompt reads the
+//!   **controlling terminal** (`/dev/tty` — rpassword's default input), so it gates on
+//!   [`can_prompt_secret`] instead and works even while stdin carries a piped secret
+//!   (`cat credentials.json | qfs app add google`). With no controlling terminal (cron, CI) no
+//!   prompt is ever reached and callers keep their non-interactive behavior.
 //! - The prompt text is written to **stderr**, never stdout, so it never pollutes captured output;
 //!   the secret is read with terminal echo OFF and lands in a zeroizing [`Secret`], never on argv,
 //!   stdout, or the environment.
@@ -17,10 +21,34 @@ use qfs_secrets::Secret;
 use std::io::{IsTerminal, Write};
 
 /// True only when BOTH stdin and stderr are real terminals — the guard every *prompt-and-continue*
-/// flow checks so redirected output or piped input never blocks on an invisible prompt.
+/// flow that reads its answer from STDIN checks (e.g. the init email prompt), so redirected output
+/// or piped input never blocks on an invisible prompt.
 #[must_use]
 pub fn is_interactive() -> bool {
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// Whether the PASSPHRASE prompt can run: stderr is a terminal (to carry the prompt text) and a
+/// controlling terminal exists for the answer. **Deliberately independent of stdin**: the
+/// pipe-a-secret commands (`app add`, `account add` token import, `account rotate`) carry the
+/// credential on stdin BY DESIGN, and [`prompt_secret`] reads the passphrase from `/dev/tty`,
+/// never stdin — so a piped stdin must not disable the prompt (the v0.0.14 first-run regression).
+#[must_use]
+pub fn can_prompt_secret() -> bool {
+    std::io::stderr().is_terminal() && controlling_tty_available()
+}
+
+/// Whether a controlling terminal is reachable for the echo-off secret read. On unix this is
+/// exactly "does `/dev/tty` open" (the path rpassword reads); elsewhere fall back to stdin being
+/// a terminal (the pre-/dev/tty behavior — release targets are unix-only today).
+#[cfg(unix)]
+fn controlling_tty_available() -> bool {
+    std::fs::File::open("/dev/tty").is_ok()
+}
+
+#[cfg(not(unix))]
+fn controlling_tty_available() -> bool {
+    std::io::stdin().is_terminal()
 }
 
 /// Whether stdin alone is a terminal — the gate for the password-entry fallback, where stdin is the
@@ -30,8 +58,10 @@ pub fn stdin_is_terminal() -> bool {
     std::io::stdin().is_terminal()
 }
 
-/// Prompt on stderr and read one secret line with terminal echo OFF. The plaintext never touches
-/// stdout, argv, or the environment; it is returned as a zeroizing [`Secret`].
+/// Prompt on stderr and read one secret line from the **controlling terminal** (`/dev/tty`,
+/// rpassword's default input) with terminal echo OFF — never from stdin, which may be carrying a
+/// piped credential. The plaintext never touches stdout, argv, or the environment; it is returned
+/// as a zeroizing [`Secret`].
 ///
 /// # Errors
 /// A string message if the terminal cannot be read.

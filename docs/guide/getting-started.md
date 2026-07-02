@@ -266,6 +266,14 @@ qfs connect /github --driver github --account work
 qfs account list                                      # labels + metadata only, never secrets
 ```
 
+On a terminal, each command prompts for the vault passphrase (the one you chose at `qfs init`) on
+the controlling terminal — piping a secret on stdin does not disable the prompt. With **no**
+terminal (cron, CI, a non-interactive SSH command), export the passphrase for the session instead:
+
+```sh
+read -rs QFS_PASSPHRASE && export QFS_PASSPHRASE
+```
+
 See [Connect a service](/guide/connect) for the exact steps per source (Gmail/Drive, GitHub/Slack,
 S3/R2, SQL/git), and [Connections & credentials](/guide/connections) for the full model.
 
