@@ -4,7 +4,7 @@ author: a@qmu.jp
 type: enhancement
 layer: [Domain, UX, DB]
 effort:
-commit_hash:
+commit_hash: acc0ae3
 category: Changed
 depends_on: [20260702120010-mount-coordinate-foundation.md, 20260702120040-qfs-app-account-verbs.md]
 ---
