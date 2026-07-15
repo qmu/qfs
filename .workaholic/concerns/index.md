@@ -3,7 +3,6 @@
 * [170000 Quality Gate #5 — owner live vault-unlock confirmation](170000-quality-gate-5-owner-live.md)
 * [Artifacts repo token is sealed but live round-trip is owner-gated](artifacts-repo-token-is-sealed-but.md)
 * [Bearer-gated (non-loopback) reconcile round is not live-verified](bearer-gated-non-loopback-reconcile-round.md)
-* [(carried) CREATE ACCOUNT ships the core; two edges are scoped out (SECRET reference form, Google-email in-language REMOVE)](carried-create-account-ships-the-core.md)
 * [`cd` into a blob file is still admitted](cd-into-a-blob-file-is.md)
 * [/cf live (203090) unimplemented; /cf and /rest are placeholder mounts](cf-live-203090-unimplemented-cf-and.md)
 * [Console bundle pin unset; live serve + release stamp pending the plgg bundle](console-bundle-pin-unset-live-serve.md)

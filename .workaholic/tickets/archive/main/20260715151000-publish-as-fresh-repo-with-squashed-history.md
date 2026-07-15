@@ -5,7 +5,7 @@ type: housekeeping
 layer: [Infrastructure]
 effort:
 commit_hash:
-category:
+category: Changed
 depends_on:
 mission:
 ---

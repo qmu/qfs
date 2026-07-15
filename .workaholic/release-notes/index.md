@@ -23,3 +23,4 @@
 * [Give /fs and /drive single-file reads their content-column parity etc](work-20260713-185925.md)
 * [Fix Slack file detach and Gmail attachment addressing etc](work-20260713-233938.md)
 * [ls /type is SHOW TYPES: the shell face lands, and the effect selector goes uniform](work-20260714-111817.md)
+* [Sample output in the Cloudflare cookbook is now a neutral example](work-20260715-163500.md)
