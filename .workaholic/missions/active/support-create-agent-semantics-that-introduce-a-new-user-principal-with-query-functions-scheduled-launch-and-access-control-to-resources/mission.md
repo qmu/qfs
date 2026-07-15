@@ -5,9 +5,13 @@ slug: support-create-agent-semantics-that-introduce-a-new-user-principal-with-qu
 status: active
 created_at: 2026-07-12T04:34:26+09:00
 author: a@qmu.jp
+assignee: a@qmu.jp
 tickets: []
 stories: []
 concerns: []
+gate_type: documentation
+gate_target: /blueprint
+gate_assert: The agent-model chapter rules an agent as a principal (not a process), and names where its rows live, how its identity reaches DecisionContext/Subject, and its secret posture.
 ---
 
 # support CREATE AGENT semantics that introduce a new user principal with query functions, scheduled launch, and access control to resources

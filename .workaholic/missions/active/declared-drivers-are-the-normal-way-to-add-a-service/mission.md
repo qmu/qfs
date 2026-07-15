@@ -5,9 +5,13 @@ slug: declared-drivers-are-the-normal-way-to-add-a-service
 status: active
 created_at: 2026-07-15T20:55:00+09:00
 author: a@qmu.jp
+assignee: a@qmu.jp
 tickets: []
 stories: []
 concerns: []
+gate_type: documentation
+gate_target: /guide/connect
+gate_assert: Every service on the page connects through a committed declaration with a referenced secret — no qfs account add prerequisite for cloud, and no QFS_* env var presented as a working path.
 ---
 
 # Declared drivers are the normal way to add a service
