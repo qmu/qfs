@@ -1,0 +1,207 @@
+//! The **BlobFs** read path (Blob archetype): `ls` a tree at any `@<ref>`, read a blob's exact
+//! bytes at any `@<ref>`, and hand those bytes to the **t15 codec registry** so a committed
+//! `*.md`/`*.json`/`*.yaml`/`*.toml`/`*.csv` decodes to frontmatter columns + body (blueprint §4
+//! blob↔rows interop). Pure reads over the in-memory object DB — no I/O beyond the object store.
+
+use qfs_codec::{Codec, RowBatch};
+
+use crate::dto::{blob_listing_schema, BlameRow};
+use crate::error::GitError;
+use crate::objectdb::{parse_tree, ObjectKind, Oid, TreeEntry};
+use crate::repo::Repo;
+use qfs_types::{Column, ColumnType, Row, Schema, Value};
+
+/// Read `ref`/`path` and dispatch on what it addresses (blueprint §4 blob↔rows): a **file** (blob) yields
+/// a single-row content batch — a `path` column plus the raw bytes under the well-known `content`
+/// column, so `/git/<repo>[@<ref>]/<file> |> decode <fmt>` works exactly like a `/local/<file>` read
+/// — while a **directory** (tree, or the empty root path) yields the tree listing ([`ls`]). The path
+/// archetype ([`crate::path::GitNode::Blob`]) cannot know file-vs-dir without the object DB, so the
+/// distinction is made here at read time.
+///
+/// # Errors
+/// [`GitError`] if the ref/path resolves to neither a blob nor a tree.
+pub fn read(repo: &Repo, reference: &str, path: &str) -> Result<RowBatch, GitError> {
+    // A non-empty path naming a blob entry reads as content; `resolve_blob` matches ONLY non-tree
+    // entries, so a tree path falls through to the listing below (the root lists too).
+    if !path.is_empty() {
+        if let Ok(bytes) = cat(repo, reference, path) {
+            return Ok(content_batch(path, bytes));
+        }
+    }
+    ls(repo, reference, path)
+}
+
+/// Build the single-row content batch for a blob FILE read: `path` (Text) + `content` (Bytes). The
+/// `content` column name matches the local driver's so the engine's `DECODE` finds the bytes.
+fn content_batch(path: &str, bytes: Vec<u8>) -> RowBatch {
+    let schema = Schema::new(vec![
+        Column::new("path", ColumnType::Text, false),
+        Column::new("content", ColumnType::Bytes, true),
+    ]);
+    let row = Row::new(vec![Value::Text(path.to_string()), Value::Bytes(bytes)]);
+    RowBatch::new(schema, vec![row])
+}
+
+/// `ls` the tree at `ref`/`path`: resolve the ref to a commit, walk to the tree at `path`, and
+/// list its entries as `(name, mode, oid, kind)` rows. An empty `path` lists the root tree.
+///
+/// # Errors
+/// [`GitError`] if the ref/path does not resolve to a tree.
+pub fn ls(repo: &Repo, reference: &str, path: &str) -> Result<RowBatch, GitError> {
+    let commit_oid = repo.resolve_ref(reference)?;
+    let commit = repo.read_commit(&commit_oid)?;
+    let tree_oid = walk_to_tree(repo, &commit.tree, path)?;
+    let raw = repo.db().read(&tree_oid)?;
+    let tree = parse_tree(&raw.payload)?;
+    let rows = tree
+        .entries
+        .iter()
+        .map(|e| {
+            Row::new(vec![
+                Value::Text(e.name.clone()),
+                Value::Text(e.mode.clone()),
+                Value::Text(e.oid.as_str().to_string()),
+                Value::Text(entry_kind(e).to_string()),
+            ])
+        })
+        .collect();
+    Ok(RowBatch::new(blob_listing_schema(), rows))
+}
+
+/// Read the **exact bytes** of the blob at `ref`/`path` (the §4 versioned cat).
+///
+/// # Errors
+/// [`GitError`] if the ref/path does not resolve to a blob.
+pub fn cat(repo: &Repo, reference: &str, path: &str) -> Result<Vec<u8>, GitError> {
+    let commit_oid = repo.resolve_ref(reference)?;
+    let commit = repo.read_commit(&commit_oid)?;
+    let blob_oid = resolve_blob(repo, &commit.tree, path)?;
+    let raw = repo.db().read(&blob_oid)?;
+    if raw.kind != ObjectKind::Blob {
+        return Err(GitError::Corrupt {
+            reason: format!("{path} is not a blob"),
+        });
+    }
+    Ok(raw.payload)
+}
+
+/// Read the blob at `ref`/`path` and **decode** it through a [`Codec`] (the t15 interop): a
+/// committed `*.md` yields frontmatter columns + `body`. The caller selects the codec by format
+/// (the engine's `DECODE fmt` resolves it from the registry); this is the blob→rows bridge.
+///
+/// # Errors
+/// [`GitError`] if the blob is unresolved; the codec's [`qfs_codec::CfsError`] is mapped to a
+/// [`GitError::Corrupt`] (a decode failure over committed bytes).
+pub fn cat_decode(
+    repo: &Repo,
+    reference: &str,
+    path: &str,
+    codec: &dyn Codec,
+) -> Result<RowBatch, GitError> {
+    let bytes = cat(repo, reference, path)?;
+    codec.decode(&bytes).map_err(|e| GitError::Corrupt {
+        reason: format!("DECODE {} of {path}: {e}", codec.fmt()),
+    })
+}
+
+/// Compute `/blame` for a file at a ref: attribute each line to the most recent commit on the
+/// first-parent walk whose version of the file differs from its parent's (a simple,
+/// bounded last-touched attribution — the deep-history blame engine is a named park). Returns
+/// owned [`BlameRow`]s.
+///
+/// # Errors
+/// [`GitError`] if the ref or file does not resolve.
+pub fn blame(
+    repo: &Repo,
+    reference: &str,
+    file: &str,
+    limit: usize,
+) -> Result<Vec<BlameRow>, GitError> {
+    let start = repo.resolve_ref(reference)?;
+    let history = repo.revwalk(&start, limit)?;
+    // Find the newest commit on the walk whose version of `file` differs from its first parent's
+    // (the last-touched commit). Walking newest-first, the FIRST such commit is the answer.
+    let mut attributing: Option<(Oid, String, i64)> = None;
+    for (oid, commit) in &history {
+        let cur = resolve_blob(repo, &commit.tree, file).ok();
+        let parent_blob = match commit.parents.first() {
+            Some(p) => {
+                let pc = repo.read_commit(p)?;
+                resolve_blob(repo, &pc.tree, file).ok()
+            }
+            None => None, // a root commit "introduces" the file.
+        };
+        if cur != parent_blob {
+            attributing = Some((oid.clone(), commit.author.clone(), commit.committer_time));
+            break;
+        }
+    }
+    let (sha, author, time) = attributing.ok_or_else(|| GitError::UnresolvedRef {
+        reference: reference.to_string(),
+    })?;
+    // Attribute every line of the file's current content to that commit.
+    let content = cat(repo, reference, file)?;
+    let text = String::from_utf8_lossy(&content);
+    let rows = text
+        .lines()
+        .enumerate()
+        .map(|(i, _line)| BlameRow {
+            path: file.to_string(),
+            line: (i + 1) as i64,
+            sha: sha.as_str().to_string(),
+            author: author.clone(),
+            time,
+        })
+        .collect();
+    Ok(rows)
+}
+
+/// Walk a tree to the subtree addressed by `path` (empty path = the tree itself), **descending each
+/// `/`-separated segment** through its intermediate subtree objects. So `src/driver` reads the root
+/// tree, follows the `src` subtree, then its `driver` subtree. A flat path (no `/`) resolves in one
+/// hop, exactly as before. A segment that is missing or names a blob (not a subtree) is a structured
+/// `InvalidPath` (fail-closed).
+fn walk_to_tree(repo: &Repo, root_tree: &Oid, path: &str) -> Result<Oid, GitError> {
+    let mut current = root_tree.clone();
+    for segment in path.split('/').filter(|s| !s.is_empty()) {
+        let raw = repo.db().read(&current)?;
+        let tree = parse_tree(&raw.payload)?;
+        current = tree
+            .entries
+            .iter()
+            .find(|e| e.name == segment && e.is_tree())
+            .map(|e| e.oid.clone())
+            .ok_or_else(|| GitError::InvalidPath {
+                path: path.to_string(),
+                reason: "no such subtree at ref",
+            })?;
+    }
+    Ok(current)
+}
+
+/// Resolve a blob oid at `path` by **descending nested subtrees to its parent directory**, then
+/// finding the file entry there. `src/driver/git.rs` walks `src` → `driver`, then resolves the blob
+/// `git.rs`. A flat path (no `/`) resolves directly at the root tree, as before.
+fn resolve_blob(repo: &Repo, root_tree: &Oid, path: &str) -> Result<Oid, GitError> {
+    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let tree_oid = walk_to_tree(repo, root_tree, dir)?;
+    let raw = repo.db().read(&tree_oid)?;
+    let tree = parse_tree(&raw.payload)?;
+    tree.entries
+        .iter()
+        .find(|e| e.name == name && !e.is_tree())
+        .map(|e| e.oid.clone())
+        .ok_or_else(|| GitError::InvalidPath {
+            path: path.to_string(),
+            reason: "no such blob at ref",
+        })
+}
+
+/// The `kind` label for a tree entry's listing row.
+fn entry_kind(e: &TreeEntry) -> &'static str {
+    if e.is_tree() {
+        "tree"
+    } else {
+        "blob"
+    }
+}

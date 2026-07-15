@@ -1,0 +1,51 @@
+{
+  "ast": {
+    "Ddl": {
+      "as_query": {
+        "Query": {
+          "ops": [
+            {
+              "Limit": 5
+            }
+          ],
+          "source": {
+            "Path": {
+              "as_of": null,
+              "segments": [
+                {
+                  "glob": false,
+                  "name": "mail",
+                  "version": null
+                },
+                {
+                  "glob": false,
+                  "name": "inbox",
+                  "version": null
+                }
+              ],
+              "span": [
+                43,
+                54
+              ]
+            }
+          }
+        }
+      },
+      "connection": null,
+      "do_plan": null,
+      "every": null,
+      "kind": "Endpoint",
+      "name": "recent",
+      "on": "GET /recent",
+      "policy": null,
+      "policy_rules": [],
+      "target": [
+        "server",
+        "endpoints",
+        "recent"
+      ],
+      "where_pred": null
+    }
+  },
+  "source": "CREATE ENDPOINT recent ON 'GET /recent' AS /mail/inbox |> LIMIT 5"
+}

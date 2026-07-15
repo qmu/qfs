@@ -1,0 +1,42 @@
+{
+  "deps": [],
+  "nodes": [
+    {
+      "args": {
+        "rows": [
+          {
+            "values": [
+              {
+                "Text": "report-bytes"
+              }
+            ]
+          }
+        ],
+        "schema": {
+          "columns": [
+            {
+              "name": "id",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            }
+          ]
+        }
+      },
+      "est_affected": {
+        "exact": 1
+      },
+      "id": 0,
+      "irreversible": false,
+      "kind": "upsert",
+      "target": {
+        "driver": "drive",
+        "path": "/drive/my/Reports/report.pdf"
+      }
+    }
+  ],
+  "returning": null
+}

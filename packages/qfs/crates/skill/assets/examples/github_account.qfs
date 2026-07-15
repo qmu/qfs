@@ -1,0 +1,52 @@
+-- github_account.qfs — a DECLARED (query-based) read-only GitHub driver mounted at /ghdecl.
+--
+-- Blueprint §13 self-hosting, ticket 20260711121534: the FIRST declared driver whose auth is an
+-- account REFERENCE rather than a per-driver API key. `AUTH ACCOUNT 'github'` binds the driver to
+-- the EXISTING `github` account provider — the same stored token the compiled /github driver uses —
+-- so an OAuth-style service is expressible in the declared model without the declaration ever
+-- carrying a secret. The live bearer is injected from the account/vault machinery at wire time.
+--
+-- It COEXISTS with the compiled /github driver (which serves PRs/issues/reviews with typed pushdown);
+-- this mounts at the distinct name `/ghdecl` (a name the compiled registry knows is never served by a
+-- declaration — compiled wins a collision), a small read-only slice you extend with more CREATE VIEW.
+--
+-- INSTALL: preview then commit each statement (they desugar to /sys/drivers rows — an ordinary,
+--   audited local write; zero network). CONNECT binds the STORED github account, never a token here:
+--     qfs account add github <label>          # once (the same token /github uses)
+--     qfs connect /ghdecl TO ghdecl ACCOUNT '<label>'
+--   The declaration and its /sys/drivers row carry ONLY the provider name ('github'); the token stays
+--   in the vault and is resolved at wire time from the account named by the CONNECT.
+--
+-- HOST CONFINEMENT (enforced at load): every wire body addresses ONLY /http/ghdecl/… , so this
+--   script is structurally unable to read GitHub and exfiltrate elsewhere. It is credential-free by
+--   construction — no clause can carry a token value; `AUTH ACCOUNT` names only the provider.
+--
+-- LIVE NOTE: GitHub's API expects a User-Agent header; a live round supplies it via the account/app
+--   layer. The hermetic gate mocks the transport, so it exercises the account→bearer injection here.
+
+CREATE DRIVER ghdecl
+  AT 'https://api.github.com'
+  AUTH ACCOUNT 'github';
+
+-- Stable outward row shapes (the `OF` contract); conformance reconciles these against the live API.
+CREATE TYPE ghdecl/repo (
+  id int PRIMARY KEY,
+  name text NOT NULL,
+  full_name text,
+  private bool
+);
+
+CREATE TYPE ghdecl/pull (
+  number int PRIMARY KEY,
+  title text NOT NULL,
+  state text
+);
+
+-- The authenticated user's repositories (a token-scoped GET, no path parameters). GitHub returns a
+-- bare JSON array, so a plain `|> DECODE json` yields one row per repo.
+CREATE VIEW /ghdecl/user/repos OF ghdecl/repo AS
+  /http/ghdecl/user/repos |> DECODE json;
+
+-- A repository's pull requests ({owner}/{repo} are path parameters).
+CREATE VIEW /ghdecl/repos/{owner}/{repo}/pulls OF ghdecl/pull AS
+  /http/ghdecl/repos/{owner}/{repo}/pulls |> DECODE json;

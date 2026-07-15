@@ -1,0 +1,78 @@
+-- chatwork.qfs — a DECLARED (query-based) Chatwork driver mounted at /chatwork.
+--
+-- Blueprint §13 self-hosting: Chatwork's plain-REST surface expressed as declarative config over
+-- the generic /http wire primitive — no compiled Rust. Chatwork is an API-key REST API: the token
+-- rides an `x-chatworktoken` header (AUTH HEADER carries only the header NAME, never the value).
+-- This is the mission's API-key-style "rewrite a driver by qfs query" proof, alongside the shipped
+-- /cloudflare precedent.
+--
+-- INSTALL: preview then commit each statement (they desugar to /sys/drivers rows — an ordinary,
+--   audited local write; zero network). CONNECT binds the stored Chatwork API token from the
+--   account layer, never from this script:
+--     qfs account add chatwork <label>            # stores the x-chatworktoken value in the vault
+--     qfs connect /chatwork TO chatwork SECRET 'vault:chatwork/<label>'
+--
+-- HOST CONFINEMENT (enforced at load): every wire body addresses ONLY /http/chatwork/… , so this
+--   script is structurally unable to read Chatwork and exfiltrate elsewhere. It is credential-free
+--   by construction — no clause can carry a token value.
+
+CREATE DRIVER chatwork
+  AT 'https://api.chatwork.com/v2'
+  AUTH HEADER 'x-chatworktoken';
+
+-- Stable outward row shapes (the `OF` contract); conformance reconciles these against what the
+-- live API delivers. Extra API fields are dropped to these columns; missing ones surface as drift.
+CREATE TYPE chatwork/room (
+  room_id text PRIMARY KEY,
+  name text NOT NULL,
+  type text,
+  role text
+);
+
+CREATE TYPE chatwork/message (
+  message_id text PRIMARY KEY,
+  body text NOT NULL,
+  send_time timestamp
+);
+
+CREATE TYPE chatwork/file (
+  file_id text PRIMARY KEY,
+  filename text NOT NULL,
+  filesize int
+);
+
+-- Reads. Chatwork returns a bare JSON array from each of these, so `|> DECODE json` yields one row
+-- per element directly (no `{result:[...]}` wrapper to EXPAND, unlike Cloudflare).
+CREATE VIEW /chatwork/rooms OF chatwork/room AS
+  /http/chatwork/rooms |> DECODE json;
+
+CREATE VIEW /chatwork/rooms/{room}/messages OF chatwork/message AS
+  /http/chatwork/rooms/{room}/messages |> DECODE json;
+
+CREATE VIEW /chatwork/rooms/{room}/files OF chatwork/file AS
+  /http/chatwork/rooms/{room}/files |> DECODE json;
+
+-- A write: post a message to a room. An ordinary reversible INSERT (a message can be deleted); the
+-- token stays in the account layer.
+CREATE MAP INSERT /chatwork/rooms/{room}/messages AS
+  INSERT INTO /http/chatwork/rooms/{room}/messages VALUES (row);
+
+-- ── FILE TRANSFER (ticket 20260711121526, primitives shipped 2026-07-12) ────────────────────────
+--
+-- Both file operations ride the two GENERIC declared primitives (never Chatwork-specific code):
+--
+-- DOWNLOAD — `|> FOLLOW <field>`: the metadata GET returns a temporary `download_url` on a
+-- DIFFERENT host (e.g. appdata.chatwork.com); FOLLOW performs the second GET off that delivered
+-- field and yields the raw bytes as a one-row `content` batch. The follow request carries NO
+-- driver credential (the URL is self-authorizing), so the x-chatworktoken never leaves
+-- api.chatwork.com.
+CREATE VIEW /chatwork/rooms/{room}/files/{file}/blob AS
+  /http/chatwork/rooms/{room}/files/{file}?create_download_url=1
+  |> DECODE json |> FOLLOW download_url;
+
+-- UPLOAD — `|> ENCODE multipart`: Chatwork `POST /rooms/{room}/files` is `multipart/form-data`
+-- with a `file` part. The generic encoder maps the row struct onto form parts: a bytes field is
+-- the file part (named by the sibling `filename` text field), every other scalar is a plain part.
+-- Write shape: INSERT a row carrying `file` (bytes), `filename` (text), optional `message`.
+CREATE MAP INSERT /chatwork/rooms/{room}/files AS
+  INSERT INTO /http/chatwork/rooms/{room}/files |> ENCODE multipart VALUES (row);

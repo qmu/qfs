@@ -1,0 +1,48 @@
+{
+  "ast": {
+    "Query": {
+      "ops": [
+        {
+          "Where": {
+            "Binary": {
+              "lhs": {
+                "Col": "id"
+              },
+              "op": "Gt",
+              "rhs": {
+                "Lit": {
+                  "Int": 5
+                }
+              }
+            }
+          }
+        },
+        {
+          "Limit": 10
+        }
+      ],
+      "source": {
+        "Path": {
+          "as_of": null,
+          "segments": [
+            {
+              "glob": false,
+              "name": "mail",
+              "version": null
+            },
+            {
+              "glob": false,
+              "name": "inbox",
+              "version": null
+            }
+          ],
+          "span": [
+            0,
+            11
+          ]
+        }
+      }
+    }
+  },
+  "source": "/mail/inbox |> WHERE id > 5 |> LIMIT 10"
+}

@@ -1,0 +1,66 @@
+{
+  "deps": [],
+  "nodes": [
+    {
+      "args": {
+        "rows": [
+          {
+            "values": [
+              {
+                "Text": "alice@example.com"
+              },
+              {
+                "Text": "Hi"
+              },
+              {
+                "Text": "Body text"
+              }
+            ]
+          }
+        ],
+        "schema": {
+          "columns": [
+            {
+              "name": "to",
+              "nullable": true,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Unknown"
+            },
+            {
+              "name": "subject",
+              "nullable": true,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Unknown"
+            },
+            {
+              "name": "body",
+              "nullable": true,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Unknown"
+            }
+          ]
+        }
+      },
+      "est_affected": {
+        "exact": 1
+      },
+      "id": 0,
+      "irreversible": false,
+      "kind": "insert",
+      "target": {
+        "driver": "mail",
+        "path": "/mail/drafts"
+      }
+    }
+  ],
+  "returning": null
+}

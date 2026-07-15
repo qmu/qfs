@@ -1,0 +1,66 @@
+{
+  "deps": [],
+  "nodes": [
+    {
+      "args": {
+        "rows": [
+          {
+            "values": [
+              {
+                "Int": 1
+              },
+              {
+                "Text": "a"
+              },
+              {
+                "Bool": true
+              }
+            ]
+          }
+        ],
+        "schema": {
+          "columns": [
+            {
+              "name": "id",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Int"
+            },
+            {
+              "name": "name",
+              "nullable": true,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "active",
+              "nullable": true,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Bool"
+            }
+          ]
+        }
+      },
+      "est_affected": {
+        "exact": 1
+      },
+      "id": 0,
+      "irreversible": false,
+      "kind": "upsert",
+      "target": {
+        "driver": "db",
+        "path": "/db/users"
+      }
+    }
+  ],
+  "returning": null
+}

@@ -1,0 +1,3 @@
+-- mail (append_log). DESCRIBE /mail/drafts -> insert/upsert + irreversible CALL mail.send.
+-- Step 2: create a draft (reversible INSERT), then send it (irreversible CALL).
+INSERT INTO /mail/drafts VALUES ('alice@example.com', 'Hi', 'Body text')

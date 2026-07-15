@@ -1,0 +1,93 @@
+{
+  "deps": [],
+  "nodes": [
+    {
+      "args": {
+        "rows": [
+          {
+            "values": [
+              {
+                "Text": "hello"
+              },
+              {
+                "Text": "GET"
+              },
+              {
+                "Text": "/hello"
+              },
+              {
+                "Text": "{\"Query\":{\"source\":{\"Path\":{\"segments\":[{\"name\":\"mail\",\"version\":null,\"glob\":false},{\"name\":\"inbox\",\"version\":null,\"glob\":false}],\"as_of\":null,\"span\":[0,0]}},\"ops\":[]}}"
+              },
+              "Null"
+            ]
+          }
+        ],
+        "schema": {
+          "columns": [
+            {
+              "name": "name",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "method",
+              "nullable": true,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "route",
+              "nullable": true,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "query",
+              "nullable": true,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "policy",
+              "nullable": true,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            }
+          ]
+        }
+      },
+      "est_affected": {
+        "exact": 1
+      },
+      "id": 0,
+      "irreversible": false,
+      "kind": {
+        "server_config_write": {
+          "node": "endpoints",
+          "op": "upsert"
+        }
+      },
+      "target": {
+        "driver": "server",
+        "path": "/server/endpoints"
+      }
+    }
+  ],
+  "returning": null
+}

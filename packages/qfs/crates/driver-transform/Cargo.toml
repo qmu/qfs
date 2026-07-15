@@ -1,0 +1,24 @@
+[package]
+name = "qfs-driver-transform"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "qfs /transform definition driver (blueprint §15, decision W): the transform-predicate DEFINITION registry — the rows a `CREATE TRANSFORM <name> INPUT (…) OUTPUT (…) PROVIDER … MODEL …` declaration stores, exposed as the ordinary qfs relation /transform. A definition is DATA (declare → store → activate): `SELECT`/`ls /transform` lists definitions, `DESCRIBE /transform/<name>` reports its schemas + the DERIVED cardinality mode, `INSERT INTO /transform` creates, `REMOVE /transform/<name>` (irreversible) deletes. The introspective half (mount/describe/capabilities) is PURE — a stable, credential-free schema with NO DB and NO secrets, mirroring the /sys administration driver's split. The System-DB read source + the transactional applier are INJECTED from the qfs binary through the vendor-free TransformBackend seam, so this crate stays tokio-free and DB-free. The cardinality mode is DERIVED from the declared INPUT (never a stored flag); the secret is a REFERENCE (env:/vault:) resolved lazily at COMMIT, never here, never at DESCRIBE."
+
+[dependencies]
+# The introspective Driver contract: trait, archetype/capability DTOs, CfsError, Path adapter.
+qfs-driver = { path = "../driver" }
+# The effect substrate: EffectKind/EffectNode/Target + the synchronous PlanApplier seam.
+qfs-plan = { path = "../plan" }
+# The typed row model + Schema/Column/Value the describe schema and scanned rows speak.
+qfs-types = { path = "../types" }
+# The async apply side: SharedApplier/EffectError/EffectOutput + PlanApplierBridge (a runtime leaf).
+qfs-runtime = { path = "../runtime" }
+# Structured, secret-free TransformError taxonomy.
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

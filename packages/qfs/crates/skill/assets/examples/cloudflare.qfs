@@ -1,0 +1,64 @@
+-- cloudflare.qfs — a DECLARED (query-based) Cloudflare driver mounted at /cloudflare.
+--
+-- Blueprint §13 self-hosting: Cloudflare's plain-REST surface expressed as declarative config over
+-- the generic /http wire primitive — no compiled Rust. It COEXISTS with the compiled /cf driver:
+--   * use /cf        for D1 (the SQL planner: WHERE/JOIN/aggregate pushdown), KV, and Queues;
+--   * use /cloudflare for the broad, user-extensible REST surface below (zones, DNS, and the
+--     account-scoped listings), and extend it by adding more CREATE VIEW/MAP statements.
+-- On a name collision the compiled driver wins, so this mounts at the distinct name `/cloudflare`.
+--
+-- INSTALL: preview then commit each statement (they desugar to /sys/drivers rows — an ordinary,
+--   audited local write; zero network). CONNECT binds the stored Cloudflare API token from the
+--   account layer, never from this script:
+--     qfs connect /cloudflare TO cloudflare SECRET 'vault:cf/<label>'
+--   where <label> is the `qfs account add cf <label>` connection (the same token /cf uses). The
+--   {account} path segment is the Cloudflare account id `qfs connect /cf` auto-discovers, visible
+--   in `qfs connect --list`.
+--
+-- HOST CONFINEMENT (enforced at load): every wire body addresses ONLY /http/cloudflare/… , so this
+--   script is structurally unable to read Cloudflare and exfiltrate elsewhere. It is credential-free
+--   by construction — no clause can carry a token value.
+
+CREATE DRIVER cloudflare
+  AT 'https://api.cloudflare.com/client/v4'
+  AUTH BEARER;
+
+-- Stable outward row shapes (the `OF` contract); conformance reconciles these against what the
+-- live API delivers. Extra API fields are dropped to these columns; missing ones surface as drift.
+CREATE TYPE cloudflare/zone (
+  id text PRIMARY KEY,
+  name text NOT NULL,
+  status text
+);
+
+CREATE TYPE cloudflare/dns_record (
+  id text PRIMARY KEY,
+  type text NOT NULL,
+  name text NOT NULL,
+  content text
+);
+
+-- Token-scoped resources (no account segment): the API token's zones and a zone's DNS records.
+-- Cloudflare wraps list payloads in `{ "result": [...], "success": true }`, so `|> EXPAND result`
+-- unnests the array into one row per item.
+CREATE VIEW /cloudflare/zones OF cloudflare/zone AS
+  /http/cloudflare/zones |> DECODE json |> EXPAND result;
+
+CREATE VIEW /cloudflare/zones/{zone}/dns_records OF cloudflare/dns_record AS
+  /http/cloudflare/zones/{zone}/dns_records |> DECODE json |> EXPAND result;
+
+-- A write-pattern SEED: create a DNS record in a zone. An ordinary reversible INSERT (a record can
+-- be deleted); the token stays in the account layer. Extend the file with more maps the same way.
+CREATE MAP INSERT /cloudflare/zones/{zone}/dns_records AS
+  INSERT INTO /http/cloudflare/zones/{zone}/dns_records VALUES (row);
+
+-- Account-scoped resources: {account} is the Cloudflare account id (see `qfs connect --list`).
+-- KV namespaces, Queues, and D1 database *listings* over plain REST (D1 SQL itself stays on /cf).
+CREATE VIEW /cloudflare/accounts/{account}/storage/kv/namespaces AS
+  /http/cloudflare/accounts/{account}/storage/kv/namespaces |> DECODE json |> EXPAND result;
+
+CREATE VIEW /cloudflare/accounts/{account}/queues AS
+  /http/cloudflare/accounts/{account}/queues |> DECODE json |> EXPAND result;
+
+CREATE VIEW /cloudflare/accounts/{account}/d1/database AS
+  /http/cloudflare/accounts/{account}/d1/database |> DECODE json |> EXPAND result;

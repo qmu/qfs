@@ -1,0 +1,110 @@
+name: qfs release
+
+# Tag-triggered release pipeline. On a `v*` tag, build the per-target release tarballs — each on a
+# runner that can actually link it (Linux musl on Ubuntu, macOS on a macOS runner) — plus the wasm
+# artifact, then attach them all to a GitHub Release. `install.sh` consumes these.
+#
+# Each job runs `cargo run -p xtask -- dist --target <triple>` (or `--wasm`), which builds, strips,
+# tarballs, and writes a `<tarball>.sha256`. `xtask dist` refuses to run unless QFS_DIST_ALLOW=1
+# (set here) — it is CI-only by design. No secret is used beyond the auto-provided GITHUB_TOKEN.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # create the GitHub Release + upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+  QFS_DIST_ALLOW: "1"   # authorize the CI-only `xtask dist`
+
+defaults:
+  run:
+    working-directory: packages/qfs
+
+jobs:
+  # One native tarball per target, each on a runner that can link it.
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/qfs
+          # A per-target cache key: the two macOS targets share the arm64 host and the two musl
+          # targets share the x64 host, so without a distinct key the second job's cache save fails
+          # with "Unable to reserve cache … another job may be creating this cache". One key per
+          # target gives each its own cache — no collision.
+          key: ${{ matrix.target }}
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      # The bundled SQLite (rusqlite `bundled`) compiles libsqlite3.c with a C compiler that must
+      # target the SAME libc we link against. For musl that requires a real *musl* cross C compiler
+      # — the stock glibc `gcc-aarch64-linux-gnu` makes sqlite3.c reference glibc-only symbols
+      # (`open64`/`stat64`/`__memset_chk`/…) that don't exist in musl, so the static link fails.
+      # This action installs the correct musl cross toolchain and exports the target-scoped
+      # `CC_<triple>` / `AR_<triple>` / `CARGO_TARGET_<triple>_LINKER` env the `cc` crate + linker use.
+      - name: Set up cross toolchain (Linux musl)
+        if: runner.os == 'Linux'
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
+      - name: Build tarball
+        # The action also sets CARGO_BUILD_TARGET (so plain `cargo` cross-builds); unset it here so
+        # the OUTER `cargo run -p xtask` still builds + runs xtask on the HOST, while xtask's inner
+        # `cargo build --target <triple>` picks up the action's target-scoped CC/linker env.
+        run: |
+          unset CARGO_BUILD_TARGET
+          cargo run -p xtask -- dist --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qfs-${{ matrix.target }}
+          path: |
+            packages/qfs/dist/qfs-${{ matrix.target }}.tar.gz
+            packages/qfs/dist/qfs-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+
+  # Note: there is no wasm artifact yet. The Cloudflare Workers entrypoint (a wasm cdylib) is
+  # parked — qfs-host builds as a wasm-clean *library* (verified in ci.yml) but does not yet
+  # produce a deployable `.wasm`. `install.sh` installs a native binary, so releases ship the
+  # four native tarballs below; the wasm artifact will be added when the Workers host lands.
+
+  # Collect every artifact and publish the GitHub Release.
+  release:
+    name: publish release
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Credential-shape gate (no live secrets in docs/examples)
+        run: bash scripts/check-no-live-credentials.sh
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: List artifacts
+        working-directory: dist
+        run: ls -l
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

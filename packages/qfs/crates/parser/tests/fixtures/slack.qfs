@@ -1,0 +1,37 @@
+-- slack.qfs — the SCRIPT TWIN of the compiled Slack driver (blueprint §13, tickets 145138 + tier-2).
+--
+-- The self-hosting ratchet's first conversion: a service the binary compiled natively
+-- (crates/driver-slack), re-expressed as a DECLARED driver — driver + type + view + post MAP,
+-- zero Rust. Installing it is an ordinary preview/commit (the effects are /sys/drivers rows);
+-- connecting evaluates it into a live wire mount.
+--
+-- TIER 2 (the honest twin): a declared view IS its stored query, so the five recorded parity parks
+-- dissolve. The view's `|> EXPAND messages` unwraps Slack's `{ok, messages}` envelope; the
+-- `OF slack/message` type shapes the delivered rows to the SAME columns the compiled driver
+-- yields; the mount path (`/slack/history`, `/slack/post`) is DECOUPLED from the dotted wire method
+-- (`conversations.history`, `chat.postMessage`) the body names; the cursor reads Slack's real NESTED
+-- `response_metadata.next_cursor`; and the post MAP maps a row into the exact `{channel, text}` body.
+--
+-- NOTE (parity): Slack's Web API method names are DOTTED (`conversations.history`,
+-- `chat.postMessage`). The `.` is a legal path-segment char, so a body source
+-- `/http/slack/conversations.history` addresses the same endpoint the compiled driver hits —
+-- `resolve_url` joins base_url + the method verbatim.
+
+CREATE DRIVER slack
+  AT 'https://slack.com/api'
+  AUTH BEARER
+  PAGINATE CURSOR (next 'response_metadata.next_cursor' param 'cursor' MAX 50)
+
+CREATE TYPE slack/message (
+  ts text PRIMARY KEY,
+  user text,
+  text text,
+  thread_ts text,
+  subtype text
+)
+
+CREATE VIEW /slack/history OF slack/message AS
+  /http/slack/conversations.history |> DECODE json |> EXPAND messages
+
+CREATE MAP INSERT /slack/post AS
+  INSERT INTO /http/slack/chat.postMessage VALUES ({channel: row.channel, text: row.text})

@@ -1,0 +1,191 @@
+//! [`MailPath`] — the parse of a qfs [`Path`](qfs_driver::Path) / `id:` address into the
+//! concrete Gmail node it names (blueprint §6). The mailbox maps onto the Append/log
+//! archetype: **labels = directories, messages = files, attachments = nested entries**.
+//!
+//! ## Addressing
+//! - `/mail` — the virtual root; lists **labels** (directories).
+//! - `/mail/<label>` — a label; lists **messages** (files). `<label>` is a Gmail label id
+//!   (e.g. `INBOX`, `SENT`, or a user label id).
+//! - `/mail/drafts` — the drafts collection (INSERT/UPSERT/SELECT/REMOVE target).
+//! - `id:<msg>` — a single message addressed by its Gmail message id.
+//! - `id:thread:<id>` — a whole thread addressed by its Gmail thread id.
+//! - `/mail/<label>/<msg>` — a message under a label (the file-under-directory form).
+//! - `/mail/<label>/<msg>/<att>` — an attachment nested under a message.
+//!
+//! Pure parsing only — no I/O. Owned data only; no vendor type crosses.
+
+use qfs_driver::Path;
+
+use crate::error::GmailError;
+
+/// The mount this driver answers for. The virtual root lists labels; sub-paths list
+/// messages and attachments.
+pub const MOUNT: &str = "/mail";
+
+/// The reserved label segment naming the drafts collection (the INSERT/UPSERT target).
+pub const DRAFTS_SEGMENT: &str = "drafts";
+
+/// The reserved label segment naming the label-management collection (the label-create INSERT
+/// target, gmail-ftp `mkdir`).
+pub const LABELS_SEGMENT: &str = "labels";
+
+/// The reserved final segment naming a message's reply append-log (`/mail/<label>/<msg>/replies`).
+/// An `INSERT` here threads a reply onto the parent — the cross-service-composable sibling of the
+/// `<msg> |> CALL mail.reply(...)` form (an `INSERT … FROM <pipeline>` reply can source its
+/// `attachments` from another service, which a CALL's literal args cannot). Reserved, so an
+/// attachment id literally `replies` is not addressable as an attachment node.
+pub const REPLIES_SEGMENT: &str = "replies";
+
+/// A parsed Gmail address — what a `/mail/...` path or an `id:` selector resolves to.
+/// Owned, vendor-free. The applier and the introspective methods branch on this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MailPath {
+    /// `/mail` — the virtual root (lists labels).
+    Root,
+    /// `/mail/<label>` — a label node (lists messages); `name` is the Gmail label id.
+    Label {
+        /// The Gmail label id (e.g. `INBOX`).
+        name: String,
+    },
+    /// `/mail/drafts` — the drafts collection.
+    Drafts,
+    /// `/mail/drafts/<id>` — a single draft, addressed by its Gmail **draft id** (the
+    /// `drafts.send`/`drafts.update` key, distinct from the draft's message id). This is what
+    /// `/mail/drafts` lists (`id` = draft id) and what `|> CALL mail.send` sends.
+    Draft {
+        /// The Gmail draft id.
+        id: String,
+    },
+    /// `/mail/labels` — the label-management collection (`INSERT` creates a new label; gmail-ftp
+    /// `mkdir`). Reserved, so a Gmail label literally named `labels` is not addressable here.
+    Labels,
+    /// A single message addressed by `id:<msg>` or `/mail/<label>/<msg>`.
+    Message {
+        /// The Gmail message id.
+        id: String,
+    },
+    /// A whole thread addressed by `id:thread:<id>`.
+    Thread {
+        /// The Gmail thread id.
+        id: String,
+    },
+    /// An attachment nested under a message (`/mail/<label>/<msg>/<att>`).
+    Attachment {
+        /// The owning message id.
+        message: String,
+        /// The attachment id.
+        attachment: String,
+    },
+    /// A message's reply append-log (`/mail/<label>/<msg>/replies`). An `INSERT` here threads a
+    /// reply onto `parent` — the cross-service-composable sibling of `<msg> |> CALL mail.reply(...)`
+    /// (a pipeline-sourced INSERT can materialize its `attachments` from another service).
+    Replies {
+        /// The parent message id the reply threads onto.
+        parent: String,
+    },
+}
+
+impl MailPath {
+    /// Parse a driver [`Path`] string into a [`MailPath`].
+    ///
+    /// # Errors
+    /// [`GmailError::InvalidPath`] if the path is not under `/mail`, an `id:` selector is
+    /// empty/malformed, or it has too many segments.
+    pub fn parse(path: &Path) -> Result<Self, GmailError> {
+        Self::parse_str(path.as_str())
+    }
+
+    /// Parse a raw path/selector string into a [`MailPath`] (the core parse).
+    ///
+    /// # Errors
+    /// [`GmailError::InvalidPath`] on a malformed address.
+    pub fn parse_str(raw: &str) -> Result<Self, GmailError> {
+        // `id:` addressing — a message or a thread by id, independent of any label.
+        if let Some(rest) = raw.strip_prefix("id:") {
+            return Self::parse_id(raw, rest);
+        }
+
+        let trimmed = raw.trim_end_matches('/');
+        // The bare mount (with or without a trailing slash) is the virtual root.
+        if trimmed == MOUNT || raw == MOUNT {
+            return Ok(MailPath::Root);
+        }
+        let Some(after) = trimmed.strip_prefix(&format!("{MOUNT}/")) else {
+            return Err(GmailError::InvalidPath {
+                path: raw.to_string(),
+                reason: "path is not under the /mail mount",
+            });
+        };
+
+        let segments: Vec<&str> = after.split('/').filter(|s| !s.is_empty()).collect();
+        match segments.as_slice() {
+            [] => Ok(MailPath::Root),
+            [one] if *one == DRAFTS_SEGMENT => Ok(MailPath::Drafts),
+            [one] if *one == LABELS_SEGMENT => Ok(MailPath::Labels),
+            // `/mail/drafts/<id>` is a DRAFT node (addressed by draft id), NOT a message under a
+            // label named `drafts` — the drafts collection is reserved (see `Drafts`/`Labels`).
+            [first, id] if *first == DRAFTS_SEGMENT => Ok(MailPath::Draft {
+                id: (*id).to_string(),
+            }),
+            [label] => Ok(MailPath::Label {
+                // The segment is the label name VERBATIM — no case normalization. It reaches Gmail
+                // as a `label:<name>` SEARCH term (see `query::build_query`), and Gmail matches that
+                // case-insensitively, so `/mail/inbox` reads the inbox exactly as written.
+                name: (*label).to_string(),
+            }),
+            // `/mail/<label>/<msg>` — a message under a label.
+            [_label, msg] => Ok(MailPath::Message {
+                id: (*msg).to_string(),
+            }),
+            // `/mail/<label>/<msg>/replies` — the reply append-log (reserved final segment), threaded
+            // onto the parent message. Checked BEFORE the generic attachment arm.
+            [_label, msg, seg] if *seg == REPLIES_SEGMENT => Ok(MailPath::Replies {
+                parent: (*msg).to_string(),
+            }),
+            // `/mail/<label>/<msg>/<att>` — an attachment nested under a message.
+            [_label, msg, att] => Ok(MailPath::Attachment {
+                message: (*msg).to_string(),
+                attachment: (*att).to_string(),
+            }),
+            _ => Err(GmailError::InvalidPath {
+                path: raw.to_string(),
+                reason: "too many path segments for a /mail address",
+            }),
+        }
+    }
+
+    /// Parse the part after the `id:` prefix into a [`MailPath::Message`]/[`MailPath::Thread`].
+    fn parse_id(raw: &str, rest: &str) -> Result<Self, GmailError> {
+        if let Some(thread_id) = rest.strip_prefix("thread:") {
+            if thread_id.is_empty() {
+                return Err(GmailError::InvalidPath {
+                    path: raw.to_string(),
+                    reason: "id:thread: selector carries no thread id",
+                });
+            }
+            return Ok(MailPath::Thread {
+                id: thread_id.to_string(),
+            });
+        }
+        if rest.is_empty() {
+            return Err(GmailError::InvalidPath {
+                path: raw.to_string(),
+                reason: "id: selector carries no message id",
+            });
+        }
+        Ok(MailPath::Message {
+            id: rest.to_string(),
+        })
+    }
+
+    /// Whether this node is a *collection* (root, a label, or drafts) vs. a single
+    /// message/thread/attachment — used to key capabilities and the archetype schema.
+    #[must_use]
+    pub const fn is_collection(&self) -> bool {
+        matches!(
+            self,
+            MailPath::Root | MailPath::Label { .. } | MailPath::Drafts
+        )
+    }
+}

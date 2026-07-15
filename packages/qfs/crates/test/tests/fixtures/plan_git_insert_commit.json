@@ -1,0 +1,488 @@
+{
+  "deps": [
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      2,
+      3
+    ]
+  ],
+  "nodes": [
+    {
+      "args": {
+        "rows": [
+          {
+            "values": [
+              {
+                "Text": "write_object"
+              },
+              {
+                "Text": "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+              },
+              {
+                "Text": "tree"
+              },
+              {
+                "Bytes": []
+              }
+            ]
+          }
+        ],
+        "schema": {
+          "columns": [
+            {
+              "name": "effect_kind",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "oid",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "object_kind",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "payload",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Bytes"
+            }
+          ]
+        }
+      },
+      "est_affected": {
+        "exact": 1
+      },
+      "id": 0,
+      "irreversible": false,
+      "kind": "insert",
+      "target": {
+        "driver": "git",
+        "path": "/git/myrepo/commits"
+      }
+    },
+    {
+      "args": {
+        "rows": [
+          {
+            "values": [
+              {
+                "Text": "write_object"
+              },
+              {
+                "Text": "f7638971c6ff0ba19d333bb323fd3486624eed13"
+              },
+              {
+                "Text": "commit"
+              },
+              {
+                "Bytes": [
+                  116,
+                  114,
+                  101,
+                  101,
+                  32,
+                  52,
+                  98,
+                  56,
+                  50,
+                  53,
+                  100,
+                  99,
+                  54,
+                  52,
+                  50,
+                  99,
+                  98,
+                  54,
+                  101,
+                  98,
+                  57,
+                  97,
+                  48,
+                  54,
+                  48,
+                  101,
+                  53,
+                  52,
+                  98,
+                  102,
+                  56,
+                  100,
+                  54,
+                  57,
+                  50,
+                  56,
+                  56,
+                  102,
+                  98,
+                  101,
+                  101,
+                  52,
+                  57,
+                  48,
+                  52,
+                  10,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  32,
+                  113,
+                  102,
+                  115,
+                  32,
+                  60,
+                  113,
+                  102,
+                  115,
+                  64,
+                  108,
+                  111,
+                  99,
+                  97,
+                  108,
+                  104,
+                  111,
+                  115,
+                  116,
+                  62,
+                  32,
+                  48,
+                  32,
+                  43,
+                  48,
+                  48,
+                  48,
+                  48,
+                  10,
+                  99,
+                  111,
+                  109,
+                  109,
+                  105,
+                  116,
+                  116,
+                  101,
+                  114,
+                  32,
+                  113,
+                  102,
+                  115,
+                  32,
+                  60,
+                  113,
+                  102,
+                  115,
+                  64,
+                  108,
+                  111,
+                  99,
+                  97,
+                  108,
+                  104,
+                  111,
+                  115,
+                  116,
+                  62,
+                  32,
+                  48,
+                  32,
+                  43,
+                  48,
+                  48,
+                  48,
+                  48,
+                  10,
+                  10,
+                  97,
+                  100,
+                  100,
+                  32,
+                  102,
+                  101,
+                  97,
+                  116,
+                  117,
+                  114,
+                  101,
+                  10
+                ]
+              }
+            ]
+          }
+        ],
+        "schema": {
+          "columns": [
+            {
+              "name": "effect_kind",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "oid",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "object_kind",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "payload",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Bytes"
+            }
+          ]
+        }
+      },
+      "est_affected": {
+        "exact": 1
+      },
+      "id": 1,
+      "irreversible": false,
+      "kind": "insert",
+      "target": {
+        "driver": "git",
+        "path": "/git/myrepo/commits"
+      }
+    },
+    {
+      "args": {
+        "rows": [
+          {
+            "values": [
+              {
+                "Text": "update_ref"
+              },
+              {
+                "Text": "refs/heads/main"
+              },
+              {
+                "Text": ""
+              },
+              {
+                "Text": "f7638971c6ff0ba19d333bb323fd3486624eed13"
+              },
+              {
+                "Text": "false"
+              }
+            ]
+          }
+        ],
+        "schema": {
+          "columns": [
+            {
+              "name": "effect_kind",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "ref_name",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "old_oid",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "new_oid",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "force",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            }
+          ]
+        }
+      },
+      "est_affected": {
+        "exact": 1
+      },
+      "id": 2,
+      "irreversible": false,
+      "kind": "update",
+      "target": {
+        "driver": "git",
+        "path": "/git/myrepo/commits"
+      }
+    },
+    {
+      "args": {
+        "rows": [
+          {
+            "values": [
+              {
+                "Text": "write_reflog"
+              },
+              {
+                "Text": "refs/heads/main"
+              },
+              {
+                "Text": "0000000000000000000000000000000000000000"
+              },
+              {
+                "Text": "f7638971c6ff0ba19d333bb323fd3486624eed13"
+              },
+              {
+                "Text": "qfs <qfs@localhost>"
+              },
+              {
+                "Text": "commit: add feature"
+              },
+              {
+                "Timestamp": "<redacted>"
+              }
+            ]
+          }
+        ],
+        "schema": {
+          "columns": [
+            {
+              "name": "effect_kind",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "ref_name",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "old_oid",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "new_oid",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "who",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "message",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Text"
+            },
+            {
+              "name": "time",
+              "nullable": false,
+              "provenance": {
+                "driver": null,
+                "source_col": null
+              },
+              "ty": "Timestamp"
+            }
+          ]
+        }
+      },
+      "est_affected": {
+        "exact": 1
+      },
+      "id": 3,
+      "irreversible": false,
+      "kind": "update",
+      "target": {
+        "driver": "git",
+        "path": "/git/myrepo/commits"
+      }
+    }
+  ],
+  "returning": null
+}

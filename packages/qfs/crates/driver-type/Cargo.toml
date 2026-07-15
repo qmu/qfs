@@ -1,0 +1,20 @@
+[package]
+name = "qfs-driver-type"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "qfs /type declared-type catalog driver (blueprint §5.4/§5.5): the CATALOG face of the type namespace — the rows a `CREATE TYPE <name> (…)` declaration stores, exposed as the ordinary qfs relation /type. `SELECT`/`ls /type` is SHOW TYPES and `DESCRIBE /type/<name>` teaches a declared type's shape. The mount is the catalog, never the REFERENCE: a type is referenced by NAME (`of customer`, a column type `email email`), so the pipe and the DDL never apply a /type path (§5.5) and this driver is READ-ONLY — install/update/remove are ordinary previewed writes to /sys/drivers (kind='type'). Introspection is PURE — a stable, credential-free schema with NO DB and NO secrets, mirroring the /transform definition registry's split; the System-DB read source is INJECTED from the qfs binary, so this crate stays tokio-free and DB-free."
+
+[dependencies]
+# The introspective Driver contract: trait, archetype/capability DTOs, CfsError, Path adapter.
+qfs-driver = { path = "../driver" }
+# The effect substrate: the synchronous PlanApplier seam the Driver contract slots.
+qfs-plan = { path = "../plan" }
+# The typed row model + Schema/Column the describe schema and scanned rows speak.
+qfs-types = { path = "../types" }
+
+[lints]
+workspace = true

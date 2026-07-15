@@ -1,0 +1,30 @@
+# OAuth secrets and cached tokens — never commit these
+.env
+.env.*
+!.env.example
+credentials.json
+token.json
+*.token.json
+# Local live-credential env files (e.g. CF_API_TOKEN for /cf smoke checks)
+.env
+
+# Build artifacts (Cargo) — match at any depth under packages/*/
+target/
+dist/
+# Scratch TMPDIR for cargo/test runs on the big disk (build logs, test tempdirs)
+.cargo-tmp/
+.tmp/
+
+# Node / VitePress docs site
+node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
+# Editor / OS noise
+*.swp
+.DS_Store
+.cargo/config.toml
+.qfs-state/
+
+# The release-scan leak denylist is a list of external names, so it must never itself ship.
+.workaholic/leak-denylist

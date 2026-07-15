@@ -1,0 +1,267 @@
+//! The `/sys/*` node model: the [`SysNode`] sum type, its path↔segment mapping, the
+//! single-source-of-truth [`sys_node_schema`], and the per-node [`sys_node_capabilities`].
+//!
+//! This is the **pure, credential-free** introspective surface (blueprint §3 purity / §6). It
+//! mirrors the closed-core `server_node_schema(node)` pattern: `DESCRIBE /sys/users` returns a
+//! stable typed [`Schema`] with **no DB and no secrets**, so describe (and the parse-time
+//! capability gate) read one source of truth that can never drift from the rows the backend
+//! later scans. NOTHING here opens a connection or reads the vault.
+//!
+//! ## Redaction is structural (roadmap §3.2)
+//! `/sys/connections` declares ONLY `driver` / `connection` / `created_at` — names + metadata.
+//! There is **no column** for a secret, a nonce, or a ciphertext, so a credential cannot surface
+//! through this path even by accident: the schema is the boundary.
+
+use qfs_types::{Column, ColumnType, Schema};
+
+/// One administrative `/sys/<node>` relation — the deployment's own state surfaced as a path
+/// (roadmap §3.4 / M3). A **closed set**; a new admin view adds a variant here, never a
+/// side-channel API (the one-engine constraint).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SysNode {
+    /// `/sys/users` — the human identities (t45 `users`), READ-only metadata.
+    Users,
+    /// `/sys/projects` — the host's projects (t42 `projects`), READ-only metadata.
+    Projects,
+    /// `/sys/audit` — the hash-chained audit live tail (t76 `audit_tail`). APPEND-ONLY: read
+    /// only, never `UPDATE`/`REMOVE` — every `/sys` mutation appends here, so administration
+    /// observes itself.
+    Audit,
+    /// `/sys/connections` — the connection **registry**: names + metadata ONLY (driver +
+    /// connection label + created_at), NEVER secret material (the vault is never read here).
+    Connections,
+    /// `/sys/paths` — the DEFINED-PATH binding registry (EPIC 20260701100000 / t100020, the
+    /// `CONNECT` model): a user-chosen path bound to a driver + credential REFERENCE, or an ALIAS
+    /// reusing another defined path's connection. The gated WRITES on this node are the desugar
+    /// targets of the `CONNECT`/`DISCONNECT` statements: `INSERT/UPSERT INTO /sys/paths` (bind /
+    /// re-bind) and `REMOVE /sys/paths/<path>` (disconnect). SELECTORS + METADATA only — the
+    /// `secret_ref` column is a REFERENCE (`env:`/`vault:`), NEVER a secret value.
+    Paths,
+    /// `/sys/policies` — the policy grants (the path façade over the policy model). The one
+    /// gated WRITE in this slice: `INSERT INTO /sys/policies`.
+    Policies,
+    /// `/sys/metrics` — the telemetry counter live view (t77): the current process's metric
+    /// counters (`name`/`kind`/`value`), READ-only. qfs EMITS metrics to the configured sink and
+    /// does not store the stream (decision V); this is the bounded in-process snapshot, not a
+    /// durable time series (retention is the consumer's, via the sink).
+    Metrics,
+    /// `/sys/settings` — the deployment SETTINGS key/value (t59): the home of the selectable AI
+    /// safety mode (`key`/`value`/`updated_at`). The second gated WRITE in this surface: SELECT to
+    /// review, an upsert-on-`key` `INSERT INTO /sys/settings` to set a value (super-admin only).
+    Settings,
+    /// `/sys/billing` — the per-team billing PLAN (t67, roadmap §3.4 / M9): the recorded tier +
+    /// subscription status, surfaced as DATA (`team_id`/`tier`/`status`/`current_period_end`/
+    /// `updated_at`). The third gated WRITE in this surface: SELECT to review, an upsert-on-`team_id`
+    /// `INSERT INTO /sys/billing` to record/grant a tier (super-admin only). NEVER a payment secret —
+    /// the provider keys + webhook signing secrets live envelope-encrypted in the vault, never here.
+    Billing,
+    /// `/sys/drivers` — the DECLARED-DRIVER registry (blueprint §13, self-hosting integrations):
+    /// the rows a `CREATE DRIVER`/`CREATE TYPE`/declared `CREATE VIEW`/`CREATE MAP` script desugars
+    /// to (`INSERT INTO /sys/drivers`), plus qfs table contract rows (`kind='table'`) recorded by
+    /// `CREATE TABLE ... OF`. Each row is one declaration tagged by `kind`
+    /// (driver/type/view/map/table); the evaluator reads the integration declarations to build a
+    /// live wire mount and the SQL apply facet reads table contracts for write membership.
+    /// SELECTORS + declaration TEXT only — the auth descriptor names a SCHEME, never a token (the
+    /// credential-free-script contract): there is structurally no column a secret value could ride in.
+    Drivers,
+    /// `/sys/accounts` — the service-account CONSENT registry (20260703040000, the `CREATE ACCOUNT`
+    /// model): the rows a `CREATE ACCOUNT <provider> '<label>'` statement records (its desugar target
+    /// is `INSERT INTO /sys/accounts`), and the target of `REMOVE /sys/accounts/<provider>/<label>`.
+    /// SELECTORS + METADATA only (provider/account/subject/scope/created_at) — there is structurally
+    /// NO token column; the credential itself is sealed out-of-band in the vault, never here.
+    Accounts,
+}
+
+impl SysNode {
+    /// Resolve a path segment (`users`/`projects`/`audit`/`connections`/`policies`) to its node.
+    #[must_use]
+    pub fn from_segment(seg: &str) -> Option<Self> {
+        match seg {
+            "users" => Some(Self::Users),
+            "projects" => Some(Self::Projects),
+            "audit" => Some(Self::Audit),
+            "connections" => Some(Self::Connections),
+            "paths" => Some(Self::Paths),
+            "policies" => Some(Self::Policies),
+            "metrics" => Some(Self::Metrics),
+            "settings" => Some(Self::Settings),
+            "billing" => Some(Self::Billing),
+            "drivers" => Some(Self::Drivers),
+            "accounts" => Some(Self::Accounts),
+            _ => None,
+        }
+    }
+
+    /// The path segment naming this node (`users`, `audit`, …).
+    #[must_use]
+    pub fn segment(self) -> &'static str {
+        match self {
+            Self::Users => "users",
+            Self::Projects => "projects",
+            Self::Audit => "audit",
+            Self::Connections => "connections",
+            Self::Paths => "paths",
+            Self::Policies => "policies",
+            Self::Metrics => "metrics",
+            Self::Settings => "settings",
+            Self::Billing => "billing",
+            Self::Drivers => "drivers",
+            Self::Accounts => "accounts",
+        }
+    }
+
+    /// The full mount-qualified path of this node (`/sys/users`, …).
+    #[must_use]
+    pub fn path(self) -> String {
+        format!("{SYS_MOUNT}/{}", self.segment())
+    }
+
+    /// Whether this node is the append-only audit log (read-only; no `UPDATE`/`REMOVE`).
+    #[must_use]
+    pub fn is_append_log(self) -> bool {
+        matches!(self, Self::Audit)
+    }
+}
+
+/// The reserved mount point for the administration-as-a-driver (roadmap §3.4 / decision P:
+/// `/sys` is a closed singleton realm).
+pub const SYS_MOUNT: &str = "/sys";
+
+/// Resolve a `/sys/...` path to its [`SysNode`], if the path names a known admin relation.
+/// `/sys/audit` and `/sys/audit/<x>` both resolve to [`SysNode::Audit`]. Returns `None` for
+/// `/sys` itself or an unknown segment.
+#[must_use]
+pub fn node_for_path(path: &str) -> Option<SysNode> {
+    let rest = path
+        .strip_prefix("/sys/")
+        .or_else(|| path.strip_prefix("sys/"))?;
+    let segment = rest.split('/').next().unwrap_or(rest);
+    SysNode::from_segment(segment)
+}
+
+/// The typed [`Schema`] of a `/sys/<node>` relation — the **canonical** source of truth
+/// `DESCRIBE /sys/<node>` and the backend scan both read. Pure data; no live backend, no creds.
+///
+/// `/sys/connections` carries ONLY name/metadata columns — there is structurally **no** column
+/// for a secret (the redaction contract, roadmap §3.2).
+#[must_use]
+pub fn sys_node_schema(node: SysNode) -> Schema {
+    let col = |name: &str, ty: ColumnType, nullable: bool| Column::new(name, ty, nullable);
+    match node {
+        // t45 `users`: the human identity (authentication handle), metadata only.
+        SysNode::Users => Schema::new(vec![
+            col("id", ColumnType::Int, false),
+            col("primary_email", ColumnType::Text, false),
+            col("status", ColumnType::Text, false),
+            col("created_at", ColumnType::Text, true),
+        ]),
+        // t42 `projects`: the host's projects.
+        SysNode::Projects => Schema::new(vec![
+            col("id", ColumnType::Int, false),
+            col("slug", ColumnType::Text, false),
+            col("created_at", ColumnType::Text, true),
+        ]),
+        // t76 `audit_tail`: the hash-chained live tail — METADATA ONLY (actor/connection/verb/
+        // path/committed/ts), the same boundary `describe` enforces. Never a secret, never a row
+        // payload, so it is safe to render as a relation.
+        SysNode::Audit => Schema::new(vec![
+            col("seq", ColumnType::Int, false),
+            col("actor", ColumnType::Text, false),
+            col("connection", ColumnType::Text, false),
+            col("verb", ColumnType::Text, false),
+            col("path", ColumnType::Text, false),
+            col("committed", ColumnType::Bool, false),
+            col("ts", ColumnType::Text, false),
+        ]),
+        // The connection REGISTRY: names + metadata ONLY (roadmap §3.2). Reads the registry, not
+        // the vault — there is no `nonce`/`ciphertext`/`secret` column here BY DESIGN.
+        SysNode::Connections => Schema::new(vec![
+            col("driver", ColumnType::Text, false),
+            col("connection", ColumnType::Text, false),
+            col("created_at", ColumnType::Text, true),
+        ]),
+        // The DEFINED-PATH binding registry (t100020, the CONNECT model): the user path, the
+        // canonical driver id it mounts (NULL for an alias), the non-secret `AT` locator, the secret
+        // REFERENCE (`env:`/`vault:` — NEVER a value), and the alias target (NULL for a full
+        // connect). There is structurally NO column a secret value could ride in (the redaction
+        // contract, §3.2): `secret_ref` names WHERE the secret lives, never the secret.
+        SysNode::Paths => Schema::new(vec![
+            col("path", ColumnType::Text, false),
+            col("driver", ColumnType::Text, true),
+            col("at", ColumnType::Text, true),
+            col("secret_ref", ColumnType::Text, true),
+            col("alias_of", ColumnType::Text, true),
+            // ADR 0008 — the mount coordinate: which qfs host owns the mount (`local` = the
+            // implicit embedded host) and the service-account LABEL it binds (never a token).
+            col("host", ColumnType::Text, false),
+            col("account", ColumnType::Text, true),
+            col("app", ColumnType::Text, true),
+            col("created_at", ColumnType::Text, true),
+        ]),
+        // The policy grants — the path façade over the policy model. `allow` is the granted verb
+        // (e.g. `SELECT`); `target` is the driver/path glob the grant applies to.
+        SysNode::Policies => Schema::new(vec![
+            col("name", ColumnType::Text, false),
+            col("allow", ColumnType::Text, true),
+            col("target", ColumnType::Text, true),
+            col("created_at", ColumnType::Text, true),
+        ]),
+        // t77 telemetry counters: the current process's metric snapshot — METADATA ONLY
+        // (instrument name + kind + numeric value). No secret, no row payload; safe to render as a
+        // relation, the same boundary `describe` enforces.
+        SysNode::Metrics => Schema::new(vec![
+            col("name", ColumnType::Text, false),
+            col("kind", ColumnType::Text, false),
+            col("value", ColumnType::Int, false),
+        ]),
+        // t59 deployment settings: a generic key/value (the safety-mode home). Metadata only — a
+        // setting name + its value + when it changed; no secret, no row payload.
+        SysNode::Settings => Schema::new(vec![
+            col("key", ColumnType::Text, false),
+            col("value", ColumnType::Text, false),
+            col("updated_at", ColumnType::Text, true),
+        ]),
+        // t67 billing plan: the per-team recorded tier + subscription status (the gate's authority),
+        // surfaced as DATA. Metadata only — a team id, the tier/status labels, the period end, when
+        // it changed. There is structurally NO column a payment secret / card / provider key could
+        // ride in (the redaction contract, §3.2): the provider material lives in the vault.
+        SysNode::Billing => Schema::new(vec![
+            col("team_id", ColumnType::Text, false),
+            col("tier", ColumnType::Text, false),
+            col("status", ColumnType::Text, false),
+            col("current_period_end", ColumnType::Text, true),
+            col("updated_at", ColumnType::Text, true),
+        ]),
+        // §13 declared-driver registry plus qfs table contracts: one row per declaration, tagged by
+        // `kind`. `base_url`/`auth`/`pagination` are the driver's wire config (auth is a SCHEME
+        // descriptor, never a token); `of_type` is a declared view or table contract; `verb`/
+        // `irreversible` a declared map's mapping; `body` is the type's columns, an inline table
+        // contract, or the view/map body as serde JSON. Declaration text + selectors ONLY —
+        // structurally no secret-value column (the credential-free-script contract).
+        SysNode::Drivers => Schema::new(vec![
+            col("kind", ColumnType::Text, false),
+            col("name", ColumnType::Text, false),
+            col("base_url", ColumnType::Text, true),
+            col("auth", ColumnType::Text, true),
+            col("pagination", ColumnType::Text, true),
+            col("of_type", ColumnType::Text, true),
+            col("verb", ColumnType::Text, true),
+            col("body", ColumnType::Text, true),
+            col("irreversible", ColumnType::Bool, false),
+            col("created_at", ColumnType::Text, true),
+        ]),
+        // The service-account consent registry (20260703040000, the CREATE ACCOUNT model): the
+        // user-facing PROVIDER (google/github/…), the account label (a Google email or a credential
+        // label), the operator who granted consent, the §10 scope hint, and when. There is
+        // structurally NO column a token could ride in (the redaction contract, §3.2): the credential
+        // is sealed out-of-band in the vault; this registry records only that consent happened.
+        SysNode::Accounts => Schema::new(vec![
+            col("provider", ColumnType::Text, false),
+            col("account", ColumnType::Text, false),
+            col("subject", ColumnType::Text, true),
+            col("scope", ColumnType::Text, true),
+            col("app", ColumnType::Text, true),
+            col("created_at", ColumnType::Text, true),
+        ]),
+    }
+}

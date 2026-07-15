@@ -1,0 +1,27 @@
+[package]
+name = "qfs-provision"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "qfs declarative provisioning (blueprint §16, Decision X): the pure fetch -> diff -> reconcile core over BOTH config stores. Emits the /server ServerState plus the /sys system-DB collections (declared drivers, sys policies, non-secretish settings, path bindings) as one canonical `.qfs` source-of-truth document, loads such a document back into a desired ConfigState through the same lower/apply paths boot uses, diffs desired-vs-current into a Terraform-style add/change/destroy plan, builds the batch Plan, and routes its commit through the dispatching ReconcileApplier. Config projection only — runtime fields and secretish settings never emit, never drift."
+
+[dependencies]
+# ServerNode/ServerWriteOp plan coordinates, the canonical config-row -> RowBatch build,
+# the deferred-body StatementSpec (canonical() drift equality), Plan/PlanBuilder/preview/commit,
+# and the shared secretish-settings predicate. No I/O.
+qfs-core = { path = "../core" }
+# The owned /server config DTOs (ServerState + the Def types), the boot lower/apply seam
+# (lower_statement, ServerConfigApplier, commit re-export) and the shared statement splitter.
+qfs-server = { path = "../server" }
+# Parse a `.qfs` source-of-truth document with the same parser the CLI/boot use.
+qfs-parser = { path = "../parser" }
+# NOTE: this crate deliberately does NOT depend on qfs-driver-sys. That crate is a qfs-runtime
+# consumer, and the leaf-confinement guard forbids a non-terminal crate depending onto a runtime
+# consumer. The dispatching `ReconcileApplier` is therefore GENERIC over the /sys `PlanApplier`;
+# the terminal binary (the leaf where the runtime dead-ends) injects the concrete `SysApplier`.
+
+[lints]
+workspace = true

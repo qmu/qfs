@@ -1,0 +1,50 @@
+{
+  "ast": {
+    "Query": {
+      "ops": [
+        {
+          "Decode": {
+            "fmt": "json",
+            "span": [
+              19,
+              23
+            ]
+          }
+        },
+        {
+          "Call": {
+            "action": "merge",
+            "args": [],
+            "driver": "git",
+            "span": [
+              27,
+              41
+            ]
+          }
+        }
+      ],
+      "source": {
+        "Path": {
+          "as_of": null,
+          "segments": [
+            {
+              "glob": false,
+              "name": "s3",
+              "version": null
+            },
+            {
+              "glob": false,
+              "name": "data",
+              "version": null
+            }
+          ],
+          "span": [
+            0,
+            8
+          ]
+        }
+      }
+    }
+  },
+  "source": "/s3/data |> DECODE json |> CALL git.merge()"
+}
