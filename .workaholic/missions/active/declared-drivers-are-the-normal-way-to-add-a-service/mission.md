@@ -58,14 +58,18 @@ with no env var; SQL passwords resolve lazily from `env:`/`vault:` references; t
 4. **Re-installing a declaration does not heal it.** Repeated `qfs run -f <driver>.qfs` *appends*
    `sys_drivers` rows. Only the `type` lookup went newest-wins; duplicate `driver` and `view`/`map`
    rows still resolve **oldest-first**, so a re-install silently keeps the stale row.
-5. **A `--` comment stripper truncates paths containing `--`** — in the **server config/job
-   loader**, `server/src/runtime.rs:533 strip_line_comment`, which cuts at the first `--` on a line
-   with no quote or token awareness. (Corrected 2026-07-16: the original text blamed "the
-   declaration file's own parser". `connections.qfs`'s splitter,
-   `core/src/ddl/connections.rs:65 split_statements`, is already quote-aware and has a regression
-   test — it is not the defect.) The blast radius is wider than the concern records: `statements()`
-   also feeds the provisioning desired-state loader at `provision/src/load.rs:108`, so a path
-   carrying `--` breaks silently in the source-of-truth document too.
+5. **Three `.qfs` readers disagree on the same text, and none matches the lexer.** The server
+   config/job loader (`server/src/runtime.rs:533 strip_line_comment`) cuts at the first `--` on a
+   line with no quote or token awareness, and splits on any `;` (`:503`) the same way; it is shared
+   with the provisioning desired-state loader (`provision/src/load.rs:108`), so a `--`-bearing path
+   breaks the source-of-truth document too. `core/src/ddl/connections.rs:65 split_statements` is
+   quote-aware but escape-blind, token-blind, `#`-blind and line-number-less. Only
+   `lang/src/lex.rs` is token-accurate. `statements()`'s own doc comment (`runtime.rs:491-493`)
+   asserts "the reconcile loop never forks a second, drifting statement chunker" while
+   `split_statements` is exactly that fork — and the correct one on the quote axis, the broken one
+   on `#` and line numbers. (Corrected 2026-07-16: the original text blamed "the declaration file's
+   own parser" and a later draft over-credited `connections.rs` as simply "correct". Both were
+   wrong; the defect is the fork itself.)
 6. **Config writes are not uniformly events.** System DB-backed writes append DDL events
    transactionally; Project DB-backed `path_binding` / account-consent state cannot share that
    transaction boundary, so those configuration events never reach the DDL event log.
@@ -106,12 +110,23 @@ stops truncating, and Project DB config writes are events like every other confi
       same replace-on-install (preferred) or newest-wins semantic the `type` lookup already has, so
       re-running a declaration file is idempotent rather than append-only
       (concern `duplicate-declaration-rows-still-resolve-oldest`)
-- [ ] **The server config/job loader stops truncating paths containing `--`** —
-      `server/src/runtime.rs:533 strip_line_comment` becomes quote/token-aware (the correct
-      implementation already exists in-repo at `core/src/ddl/connections.rs:65`), with the fix
-      covering the provisioning loader (`provision/src/load.rs:108`) that shares `statements()`
-      (concern `the-config-comment-stripper-truncates-paths`; retargeted 2026-07-16 — the concern
-      and this item both named the wrong parser)
+- [ ] **The `.qfs` config document gets one correct statement splitter** — `--` and `#` start a
+      comment only at a token boundary, `'…'` (with `\'` escapes) is opaque, and a `/`-led path
+      token consumes to a real delimiter, so neither `--` nor `;` inside a path or locator
+      truncates or splits. Today three readers disagree on the same text: the server config/job
+      loader (`server/src/runtime.rs:533`, shared with the provisioning loader at
+      `provision/src/load.rs:108`) truncates at the first `--` and splits at any `;`;
+      `core/src/ddl/connections.rs:65` is quote-aware but escape-blind, token-blind (an **unquoted**
+      `/local/a--b.txt` is still cut, though `lang/src/lex.rs:659 is_path_delimiter` excludes `-`,
+      making it a legal path), `#`-blind, and line-number-less. `lang/src/lex.rs:156-173,254-296`
+      is the only token-accurate authority and is the semantics to mirror. (Corrected 2026-07-16:
+      an earlier draft of this item called `connections.rs:65` "the correct implementation" and
+      told a driver to reuse it — reusing it verbatim would break every `#`-only fixture and every
+      line-located error.)
+      (concern `the-config-comment-stripper-truncates-paths`; retargeted 2026-07-16 — **this item**
+      named the wrong parser. The concern itself says "the `.qfs` config statement splitter", which
+      is right; it also records the repro this item lacked: two `qfs` job tests fail whenever
+      `$TMPDIR` contains `--`, green under a clean TMPDIR and in CI.)
 - [ ] **Project DB configuration writes append DDL events** with the same secret-redaction and
       hash-chain discipline as System DB writes — via a Project DB event writer or an explicit
       cross-store event envelope (concern `project-db-configuration-events-are-not`)
@@ -132,7 +147,10 @@ stops truncating, and Project DB config writes are events like every other confi
   - **Item 5 named the wrong parser.** `connections.qfs`'s own splitter is already quote-aware with
     a regression test (`core/src/ddl/connections.rs:65`); the truncation is in the server config/job
     loader (`server/src/runtime.rs:533`), which also feeds the provisioning loader
-    (`provision/src/load.rs:108`). Read as written, the item was satisfiable by a correct file.
+    (`provision/src/load.rs:108`). Read as written, the item was satisfiable by a correct file. The
+    concern was not at fault here — it says "the `.qfs` config statement splitter", which points the
+    right way, and it carries a repro the item had dropped (`$TMPDIR` containing `--` fails two job
+    tests). Only this mission's paraphrase went wrong.
   - **Item 2 was stale in both directions.** `/cf` is not a cred-free placeholder — it is a live
     compiled driver requiring `qfs account add` (`cf.rs:86`, `cloud_mounts.rs:53`), i.e. the
     mission's counter-example rather than an unfinished mount. REST's per-resource declaration is
@@ -142,3 +160,15 @@ stops truncating, and Project DB config writes are events like every other confi
   item 4 is visible at `declared_driver.rs:125` vs `:532`/`:586`). Gate fields and assignee added
   the same day; `gate.sh` reports the gate valid, with empty ports because this mission has no
   worktree.
+- 2026-07-16 — Item 5 corrected a **second** time, during its own `/ticket` discovery. The first
+  correction over-swung: having found that `connections.rs:65` was not the defect, it recorded that
+  splitter as "the correct implementation" and pointed the fix at reusing it. Verification against
+  the source showed it is correct only on the quote axis — it is escape-blind, token-blind (an
+  **unquoted** `/local/a--b.txt` is truncated, though `lex.rs:659 is_path_delimiter` excludes `-`,
+  and bare paths are how every fixture is written), `#`-blind (every server/provision fixture uses
+  `#` exclusively), and line-number-less (`LoadError::Parse{line}` depends on the attribution).
+  Reusing it verbatim would have broken every boot fixture. The item is re-framed around the real
+  defect — three `.qfs` readers disagreeing, none matching `lang/src/lex.rs` — and now also carries
+  the `;`-in-quote and trailing-`#` defects of the same class, both reproduced through the shipped
+  binary during discovery. Recorded because the same item has now been mis-stated twice in two days
+  by paraphrase, in both directions.
