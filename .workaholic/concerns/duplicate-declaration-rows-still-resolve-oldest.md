@@ -1,6 +1,6 @@
 ---
 type: Concern
-mission: qfs-capability-tryout-file-handling-transformation-and-platform-hardening
+mission: declared-drivers-are-the-normal-way-to-add-a-service
 tickets: [20260712005100-chatwork-declared-live-read-empty-columns.md]
 origin_pr: 34
 origin_pr_url: https://github.com/qmu/qfs/pull/34

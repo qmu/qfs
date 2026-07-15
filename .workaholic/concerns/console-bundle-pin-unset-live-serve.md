@@ -12,6 +12,7 @@ severity: low
 status: active
 resolved_by_pr: 
 resolved_by_commit: 
+mission:
 ---
 
 # Console bundle pin unset; live serve + release stamp pending the plgg bundle

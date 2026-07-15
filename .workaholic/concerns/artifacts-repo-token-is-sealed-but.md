@@ -1,6 +1,6 @@
 ---
 type: Concern
-mission: language-design-review-layering-principles-and-semantic-gaps
+mission:
 tickets: [20260708013532-cf-artifacts-repositories-as-a-resource.md, 20260708192730-transform-definition-ddl-storage.md, 20260708192731-transform-plan-spine.md, 20260708192732-transform-execution-routing.md, 20260708192733-transform-docs-versioning-live-run.md, 20260709024731-fix-sqlite-busy-flake-pragma-order.md, 20260709054542-resume-transform-epic-review-fixes-and-t3-t4.md, 20260709104254-blueprint-type-system-chapter.md, 20260709104255-two-layer-model-stage-admission-test.md, 20260709104256-reference-convention-transform-surface.md, 20260709104257-arithmetic-operators.md, 20260709104258-stdlib-naming-resolution-like-eq.md, 20260709104259-pipeline-valued-lambdas-decision.md, 20260709104300-transform-one-seam-lock.md, 20260709140000-column-type-refined-name-resolution.md]
 origin_pr: 32
 origin_pr_url: https://github.com/qmu/qfs/pull/32

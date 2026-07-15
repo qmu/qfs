@@ -8,6 +8,7 @@ origin_pr: 30
 origin_pr_url: https://github.com/qmu/qfs/pull/30
 origin_branch: work-20260707-180554
 origin_commit: e7e44ee
+mission:
 ---
 
 # Bearer-gated (non-loopback) reconcile round is not live-verified

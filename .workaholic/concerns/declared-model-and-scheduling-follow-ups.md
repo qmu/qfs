@@ -1,6 +1,6 @@
 ---
 type: Concern
-mission: qfs-capability-tryout-file-handling-transformation-and-platform-hardening
+mission: declared-drivers-are-the-normal-way-to-add-a-service
 tickets: [20260711121526-chatwork-declared-driver-with-file-handling.md, 20260711121534-oauth-style-declared-driver-rewrite.md, 20260711121535-server-scheduling-semantics-revisit.md, 20260711121528-reply-with-attachment-cross-service.md]
 origin_pr: 33
 origin_pr_url: https://github.com/qmu/qfs/pull/33

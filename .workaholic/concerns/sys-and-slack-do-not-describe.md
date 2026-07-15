@@ -1,7 +1,7 @@
 ---
 type: Concern
 concern_id: sys-and-slack-do-not-describe
-mission: language-design-review-layering-principles-and-semantic-gaps
+mission:
 tickets: [20260713195008-effect-selector-channel-folder-rename.md, 20260714120000-effect-selector-uniform-migration.md, 20260714154144-general-of-type-assertion.md, 20260714182710-shell-face-slice1-ls-cat-describe-typed.md, 20260714182720-shell-face-slice2-cd-gate-enumerable-children.md, 20260714182730-shell-face-slice3-mutation-verbs-per-kind.md, 20260714182740-shell-face-type-mount-and-describe-builtin.md, 20260714220213-resume-shell-face-slices-and-report.md]
 origin_pr: 41
 origin_pr_url: https://github.com/qmu/qfs/pull/41

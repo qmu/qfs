@@ -2,7 +2,7 @@
 type: Mission
 title: Language design review: layering principles and semantic gaps
 slug: language-design-review-layering-principles-and-semantic-gaps
-status: active
+status: achieved
 created_at: 2026-07-09T05:12:09+09:00
 author: a@qmu.jp
 tickets: []
@@ -393,3 +393,22 @@ carried into the type-system chapter's considered-alternatives section:
 - 2026-07-15 — concern deferred (stuck) — definition-catalog-cp-clone-and-mv.md
 - 2026-07-15 — concern deferred (stuck) — the-type-catalog-and-the-type.md
 - 2026-07-15 — concern deferred (stuck) — the-carried-create-account-ships-the.md
+- 2026-07-15 — **Mission achieved and archived** by the missions/tickets reframing (owner-approved).
+  All 11 acceptance items are ticked and the 2026-07-14 entry above already recorded that the open
+  design questions were exhausted; the three shell-face slices that remained were implementation
+  follow-ups and have since shipped and archived. Nothing here was cut short.
+
+  **The nine concerns that hung off this mission were re-homed BEFORE this archive, deliberately.**
+  This mission was framed as an *activity* ("design review"), and an activity ends while its residue
+  does not — which is exactly how the earlier `qfs-capability-tryout-…` mission archived `achieved`
+  while its goal #2 was unfinished, orphaning seven concerns that no one owned for four days. Six of
+  the nine (`cd`-into-blob, `/sys`+`/slack` root describe, definition-catalog `cp`/`mv`, `/type`
+  catalog-vs-resolver key, shell `/local` cwd-vs-root, plus the span-buffer flake) moved to the
+  **mission-free backlog** — a state the reframing makes legitimate, so residue no longer needs a
+  fictional parent to stay alive. `the-carried-create-account-ships-the` was resolved outright (its
+  recorded fix was performed and verified against v0.0.71). `artifacts-repo-token…` and the
+  branch-safety scanner false-positive (a cross-repo fix) are mission-free too.
+
+  Successor framing: missions are now **standing product properties**, not episodes — see
+  `declared-drivers-are-the-normal-way-to-add-a-service`, which adopts the tryout mission's
+  unfinished goal #2.
