@@ -144,3 +144,60 @@ cut from its first (squashed) commit.
 **Known gap to expect in the new repo:** `cargo run -p xtask -- check-migrations` needs release tags, and
 a fresh repo has none until step 4.4. Expect it to fail or no-op on the first commit; that is the squash's
 cost, not a defect.
+
+## Final Report — steps 4 and 5 done (2026-07-15). Only the visibility flip remains.
+
+This file now lives in the **new** repository; the text above was written from the predecessor and its
+"this repo becomes qfs-legacy" phrasing refers to that one.
+
+**A hazard found while switching over, worth recording because it nearly undid everything.** After the
+rename, the predecessor's `origin` still read `https://github.com/qmu/qfs`. GitHub redirects a renamed
+repo's old URL — **but creating a new repo under the old name silently kills that redirect**, so the
+predecessor's remote had come to point at the *new, empty, about-to-be-public* repository. A routine
+`git push origin main` from the old checkout would have pushed all 863 commits — including the two this
+ticket exists to keep out — straight into the public vessel. The remote was repointed at
+`git@github.com:qmu/qfs-legacy.git` before anything else was done. **Any other checkout or worktree of the
+predecessor still has the poisoned remote.**
+
+**Step 4, as performed:**
+
+1. Predecessor renamed to `qfs-legacy`. Private, 863 commits, remote repointed. It is the historical record.
+2. The tree was exported with `git archive main` (tracked files only — `.env`, `.qfs-state/`, and the
+   git-ignored `leak-denylist` are structurally excluded) and committed as one root commit, no parents.
+   **The new tree's hash is identical to the predecessor `main`'s tree hash** — the strongest available
+   proof the copy is faithful.
+3. Pushed to `qmu/qfs`, which was **created private**. This is what made the order safe: pushing is not
+   the one-way door. Flipping to public is.
+
+**Step 5, verified against a fresh clone (not the working tree):**
+
+| gate | result |
+| --- | --- |
+| `git log --oneline \| wc -l` | **1** (root commit, no parents) |
+| every `.workaholic/leak-denylist` term, in tree **and** `git log --all -S` | **0 hits, all 14** |
+| `git grep -n "/home/ec2-user/projects/"` | only this ticket quoting the check itself; no real sibling paths |
+| `.env` / `.qfs-state/` / `leak-denylist` present? | no (`.env.example` holds an empty key only) |
+| extra live-resource terms swept by hand | 0 |
+
+One residual was removed after the first push and before any of this was public: an owner-owned D1 name
+survived inside the "not a leak, checked" note above. Owner-owned and marginal, but removed for the same
+reason the owner's own zone names were — consistency about live resource names. The root commit was
+amended and force-pushed (owner-authorized), then **re-verified from a second fresh clone**, since the
+first clone was stale and the working tree is not what readers get.
+
+**`v0.0.71` released** from the root commit: run `29405094072`, four native tarballs plus sha256s,
+`isDraft: false`. This satisfies the post-merge promotion check in `.workaholic/deployments/github-release.md`.
+
+### The one thing left, and it is the owner's
+
+**`qmu/qfs` is still PRIVATE.** Flipping it to public is the irreversible act this whole ticket was
+written around. Everything checkable has been checked; what cannot be checked mechanically is the step-2
+question — *would a stranger learn something about someone else's systems from this?* — which is why the
+sweep was a read, and why the last look belongs to a person.
+
+### Standing obligation this creates
+
+`.workaholic/` publishes from here on. Every future ticket, story, and live-round note lands in a public
+tree, and the Gmail/Drive/Slack/Cloudflare accounts that produced three of the four findings are still
+live-connected. Records must describe values by **shape and location**, never quote them — including
+records *about* leaks, which is the mistake this ticket's own first draft made.
