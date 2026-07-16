@@ -187,7 +187,8 @@ mod tests {
         let sessions = d.describe(&Path::new("/claude/sessions")).unwrap();
         assert_eq!(sessions.archetype, Archetype::RelationalTable);
         assert!(sessions.schema.column("status").is_some());
-        assert!(sessions.schema.column("task").is_some());
+        assert!(sessions.schema.column("cwd").is_some());
+        assert!(sessions.schema.column("last_message").is_some());
         // The schema carries NO secret/credential/transcript column — structurally cred-free.
         assert!(sessions.schema.column("token").is_none());
         assert!(sessions.schema.column("transcript").is_none());
@@ -239,9 +240,9 @@ mod tests {
                     claude_node_schema(ClaudeNode::Sessions),
                     vec![Row::new(vec![
                         Value::Text("s-1".into()),
-                        Value::Text("write the t64 driver".into()),
+                        Value::Text("/home/dev/proj".into()),
+                        Value::Text("t64-driver".into()),
                         Value::Text("running".into()),
-                        Value::Text("3/5".into()),
                         Value::Text("scanning crates/driver".into()),
                     ])],
                 ))

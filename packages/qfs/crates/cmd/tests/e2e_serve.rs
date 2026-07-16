@@ -582,3 +582,136 @@ fn secret_hygiene_logged_projections_never_render_a_canary_verbatim() {
     };
     assert!(!probe_entry.summary().contains(CANARY));
 }
+
+// ---------------------------------------------------------------------------
+// Claude sessions endpoint (mission claude-code-sessions-…, gate-surface ticket
+// 20260717010300): `create endpoint … as /claude/sessions` serves one row per live
+// session from a FIXTURE store over real HTTP. Hermetic: a tempdir shaped exactly like
+// `~/.claude` (never the developer's real store); the liveness record carries THIS test
+// process's pid, alive by definition. The mission's live gate itself runs against the
+// real store out-of-band — this test pins the serve wiring that makes it possible.
+// ---------------------------------------------------------------------------
+
+/// One raw HTTP/1.1 GET over std TcpStream (no client crate): returns (status_line, body).
+fn http_get(addr: &str, path: &str, deadline: Duration) -> (String, String) {
+    use std::io::Write as _;
+    use std::net::TcpStream;
+    let started = Instant::now();
+    // Poll-connect until the daemon binds (boot is asynchronous).
+    let mut stream = loop {
+        match TcpStream::connect(addr) {
+            Ok(s) => break s,
+            Err(e) => {
+                assert!(
+                    started.elapsed() < deadline,
+                    "serve did not bind {addr} within {deadline:?}: {e}"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    };
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .expect("write request");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+    let status = response.lines().next().unwrap_or_default().to_string();
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default();
+    (status, body)
+}
+
+/// Spawn `qfs serve` over `config` on `addr`, with an optional fixture claude store.
+fn spawn_serve(
+    config: &std::path::Path,
+    addr: &str,
+    claude_store: Option<&std::path::Path>,
+) -> std::process::Child {
+    let mut cmd = Command::new(qfs_bin());
+    cmd.args(["serve", config.to_str().unwrap()])
+        .env("RUST_LOG", "off")
+        .env("QFS_HTTP_ADDR", addr)
+        .env("QFS_STATE_DIR", config.parent().unwrap().join("state"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match claude_store {
+        Some(store) => cmd.env("QFS_CLAUDE_SESSIONS", store),
+        None => cmd.env_remove("QFS_CLAUDE_SESSIONS"),
+    };
+    cmd.spawn().expect("spawn qfs serve")
+}
+
+#[test]
+fn serve_endpoint_over_claude_sessions_serves_fixture_rows() {
+    let pid = std::process::id();
+    let base = std::env::temp_dir().join(format!("qfs-serve-claude-{pid}"));
+    let _ = std::fs::remove_dir_all(&base);
+    // The fixture store: a live-pid registry record + the matching transcript.
+    let sessions = base.join("store").join("sessions");
+    std::fs::create_dir_all(&sessions).expect("fixture sessions dir");
+    std::fs::write(
+        sessions.join(format!("{pid}.json")),
+        format!(
+            r#"{{"pid":{pid},"sessionId":"e2e-serve-session","cwd":"/tmp/e2e-serve-proj","name":"serve-e2e","status":"busy","kind":"interactive"}}"#
+        ),
+    )
+    .expect("fixture record");
+    let project = base
+        .join("store")
+        .join("projects")
+        .join("-tmp-e2e-serve-proj");
+    std::fs::create_dir_all(&project).expect("fixture project dir");
+    std::fs::write(
+        project.join("e2e-serve-session.jsonl"),
+        concat!(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"gate row served"}]}}"#,
+            "\n"
+        ),
+    )
+    .expect("fixture transcript");
+    // The serve config: one endpoint bound over the sessions query.
+    let config = base.join("gate.qfs");
+    std::fs::write(
+        &config,
+        "create endpoint sessions on 'GET /sessions' as /claude/sessions\n",
+    )
+    .expect("write serve config");
+
+    // A pid-derived loopback port keeps parallel runs off each other.
+    let addr = format!("127.0.0.1:{}", 20000 + (pid % 20000));
+
+    // Leg 1 — configured: the endpoint serves the fixture session row.
+    let mut child = spawn_serve(&config, &addr, Some(&base.join("store")));
+    let (status, body) = http_get(&addr, "/sessions", Duration::from_secs(20));
+    send_sigint(child.id());
+    let out = child.wait().expect("wait serve");
+    assert!(out.success(), "serve shuts down cleanly after the fetch");
+    assert!(status.contains("200"), "endpoint serves: {status}\n{body}");
+    assert!(
+        body.contains(r#""id":"e2e-serve-session""#),
+        "one row per live fixture session: {body}"
+    );
+    assert!(
+        body.contains(r#""last_message":"gate row served""#),
+        "the row carries the transcript's last visible message: {body}"
+    );
+
+    // Leg 2 — unconfigured (no QFS_CLAUDE_SESSIONS): the same endpoint fails closed with the
+    // structured unregistered-source error, never a fabricated empty result.
+    let mut child = spawn_serve(&config, &addr, None);
+    let (status, body) = http_get(&addr, "/sessions", Duration::from_secs(20));
+    send_sigint(child.id());
+    let _ = child.wait();
+    assert!(
+        !status.contains("200"),
+        "an unconfigured store must NOT serve rows: {status}\n{body}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}

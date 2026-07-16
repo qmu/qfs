@@ -32,6 +32,25 @@ pub fn run_serve(config: &Path) -> i32 {
     let mut reads = ReadRegistry::new();
     crate::serve_builtins::register_builtins(&mut engine, &mut reads);
 
+    // Claude sessions (mission claude-code-sessions-…, live-app gate): the `/claude` facade is a
+    // LOCAL, credential-free surface like `/status`, so serve mounts its pure introspective face
+    // unconditionally and wires the live read facet only when the operator opted in
+    // (QFS_CLAUDE_SESSIONS names the real `~/.claude` store) — an ENDPOINT over
+    // `/claude/sessions` then serves one row per live session; unconfigured it stays the
+    // structured unregistered-source error (fail-closed).
+    if let Err(e) = engine
+        .mounts
+        .register(Arc::new(qfs_driver_claude::ClaudeDriver::new()))
+    {
+        tracing::warn!(target: "qfs::serve", error = %e, "could not register the /claude mount");
+    }
+    if let Some(source) = crate::claude::ClaudeStoreSource::open_default() {
+        reads.register(
+            qfs_core::DriverId::new("claude"),
+            Arc::new(crate::claude::ClaudeReadDriver::new(Arc::new(source))),
+        );
+    }
+
     // Blueprint §16 "The face, named": the shared LIVE ServerState lock is created FIRST so the
     // three legs share one truth — the /server read facet (mounted into THIS engine + registry),
     // the statement-bridge commit path (ServeMcpEngine's live seam below), and the Runtime the

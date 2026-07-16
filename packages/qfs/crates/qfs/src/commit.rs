@@ -315,15 +315,17 @@ fn live_registry() -> DriverRegistry {
     }
 
     // Claude (t64): the `/claude/...` AI-sessions applier — `INSERT INTO /claude/sessions/<id>/
-    // instructions` appends a steering instruction (a REVERSIBLE append; steering an agent never
-    // removes state). Wired only when a session source is configured (QFS_CLAUDE_SESSIONS, opt-in);
-    // an unconfigured `/claude` commit fails closed (no driver) rather than silently steering
-    // nothing. The on-disk SessionSource lives in the binary (src/claude.rs); the driver crate stays
-    // tokio-free, with its applier bridged here like every other runtime leaf. Decision W: the
-    // `/claude` applier appends a message the agent reads — it calls no LLM. (qfs's model-calling
-    // surface is `|> transform`, §15; the `/transform` DDL applier above manages definitions, and
-    // the model call itself runs exec-side through the injected provider, not in any applier.)
-    if let Some(source) = crate::claude::DirSessionSource::open_default() {
+    // instructions` is the steering verb (a REVERSIBLE append; steering an agent never removes
+    // state). Wired only when a session source is configured (QFS_CLAUDE_SESSIONS, opt-in); an
+    // unconfigured `/claude` commit fails closed (no driver). NOTE: even configured, the source's
+    // append itself currently fails closed — the retired on-disk append-log was read by no session
+    // (rewire ticket 20260717010500); see src/claude.rs. The on-disk SessionSource lives in the
+    // binary (src/claude.rs); the driver crate stays tokio-free, with its applier bridged here
+    // like every other runtime leaf. Decision W: the `/claude` applier hands the agent a message —
+    // it calls no LLM. (qfs's model-calling surface is `|> transform`, §15; the `/transform` DDL
+    // applier above manages definitions, and the model call itself runs exec-side through the
+    // injected provider, not in any applier.)
+    if let Some(source) = crate::claude::ClaudeStoreSource::open_default() {
         let applier = qfs_driver_claude::ClaudeApplier::new(std::sync::Arc::new(source));
         reg = reg.with(
             DriverId::new("claude"),
