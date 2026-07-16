@@ -11,9 +11,11 @@ last_seen: 2026-07-16T16:14:56+09:00
 first_seen: 2026-07-12T11:45:00+09:00
 concern_id: redirect-off-a-follow-url-is
 severity: low
-status: active
+status: accepted
 resolved_by_pr: 
 resolved_by_commit: 
+closed_reason: Refusing redirects off a FOLLOW URL is the confined transport's security design; revisit only if a security review approves redirect handling (2026-07-16 triage, owner-directed).
+closed_at: 2026-07-16T21:19:14+09:00
 ---
 
 # Redirect off a follow URL is refused by the confined transport

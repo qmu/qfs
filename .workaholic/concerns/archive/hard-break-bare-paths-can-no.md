@@ -11,9 +11,11 @@ created_at: 2026-07-16T15:16:32+09:00
 first_seen: 2026-07-16T15:16:32+09:00
 last_seen: 2026-07-16T16:14:56+09:00
 severity: moderate
-status: active
+status: resolved
 resolved_by_pr: 
 resolved_by_commit: 
+closed_reason: The break shipped as v0.0.72 and its release note documents it explicitly; the only prescribed action (quote the locator; nothing else to do) is complete.
+closed_at: 2026-07-16T21:19:14+09:00
 ---
 
 # Hard break: bare paths can no longer carry a literal semicolon

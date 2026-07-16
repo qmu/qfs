@@ -11,9 +11,11 @@ created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
 last_seen: 2026-07-16T16:14:56+09:00
 severity: low
-status: active
+status: accepted
 resolved_by_pr: 
 resolved_by_commit: 
+closed_reason: cp=clone and mv=rename refusing on the definition catalog is an owner-approved floor; revisit when the floor is lifted (2026-07-16 triage, owner-directed).
+closed_at: 2026-07-16T21:19:14+09:00
 ---
 
 # Definition-catalog `cp`=clone and `mv`=rename are refused, not implemented

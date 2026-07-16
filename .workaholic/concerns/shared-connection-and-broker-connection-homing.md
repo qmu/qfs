@@ -12,8 +12,8 @@ first_seen: 2026-07-16T16:14:56+09:00
 last_seen: 2026-07-16T16:14:56+09:00
 severity: low
 status: active
-resolved_by_pr:
-resolved_by_commit:
+resolved_by_pr: 
+resolved_by_commit: 
 ---
 
 # shared_connection and broker_connection homing is the same question, deferred

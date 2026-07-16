@@ -8,10 +8,12 @@ last_seen: 2026-07-16T16:14:56+09:00
 first_seen: 2026-07-02T01:21:00+09:00
 concern_id: extend-on-the-read-path-is
 severity: moderate
-status: active
+status: accepted
 resolved_by_pr: 
 resolved_by_commit: 
 mission: 
+closed_reason: EXTEND's read-path behavior is the shipped, canonical semantics rendered into the generated language docs; the watch has no remaining trigger (2026-07-16 triage, owner-directed).
+closed_at: 2026-07-16T21:19:14+09:00
 ---
 
 # EXTEND on the read path is now a real operation (behaviour change)

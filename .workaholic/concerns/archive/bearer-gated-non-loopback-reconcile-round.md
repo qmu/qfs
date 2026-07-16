@@ -1,5 +1,5 @@
 ---
-status: active
+status: superseded
 severity: low
 last_seen: 2026-07-16T16:14:56+09:00
 first_seen: 
@@ -9,6 +9,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/30
 origin_branch: work-20260707-180554
 origin_commit: e7e44ee
 mission: 
+superseded_by: owner-attended-live-verification-backlog
 ---
 
 # Bearer-gated (non-loopback) reconcile round is not live-verified

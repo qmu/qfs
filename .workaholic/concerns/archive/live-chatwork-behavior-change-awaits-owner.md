@@ -11,9 +11,10 @@ created_at: 2026-07-16T15:16:32+09:00
 first_seen: 2026-07-16T15:16:32+09:00
 last_seen: 2026-07-16T16:14:56+09:00
 severity: low
-status: active
+status: superseded
 resolved_by_pr: 
 resolved_by_commit: 
+superseded_by: owner-attended-live-verification-backlog
 ---
 
 # Live /chatwork behavior change awaits owner-attended verification

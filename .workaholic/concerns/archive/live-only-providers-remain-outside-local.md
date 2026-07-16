@@ -11,9 +11,10 @@ last_seen: 2026-07-16T16:14:56+09:00
 first_seen: 2026-07-07T04:35:44+09:00
 concern_id: live-only-providers-remain-outside-local
 severity: low
-status: active
+status: superseded
 resolved_by_pr: 
 resolved_by_commit: 
+superseded_by: owner-attended-live-verification-backlog
 ---
 
 # Live-only providers remain outside local proof

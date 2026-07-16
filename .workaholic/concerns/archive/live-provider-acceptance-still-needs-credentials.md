@@ -11,9 +11,10 @@ last_seen: 2026-07-16T16:14:56+09:00
 first_seen: 2026-07-07T05:42:51+09:00
 concern_id: live-provider-acceptance-still-needs-credentials
 severity: moderate
-status: active
+status: superseded
 resolved_by_pr: 
 resolved_by_commit: 
+superseded_by: owner-attended-live-verification-backlog
 ---
 
 # Live provider acceptance still needs credentials
