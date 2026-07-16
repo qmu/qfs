@@ -89,11 +89,12 @@ fn restore_jsonl(input: &str, commit: bool) -> Result<RestoreReport, String> {
     let system = crate::store::open_system_db()
         .map_err(|e| format!("opening the system database: {e}"))?
         .ok_or("cannot determine the system database path (set HOME or XDG_CONFIG_HOME)")?;
-    let project = crate::store::open_project_db()
-        .map_err(|e| format!("opening the project database: {e}"))?
-        .map(|p| p.into_db().into_connection());
     let backend = crate::sys::SystemDbBackend::new(system.into_db().into_connection(), None);
-    let project_conn = project.as_ref();
+    // A second System-DB connection for the re-homed config registry (20260716143641): binding
+    // and consent replays land their audit row + `ddl_event` in the same transaction as the row —
+    // the events restore's header promises ("a committed restore records new local audit/DDL
+    // events") and previously never delivered for bindings.
+    let config_conn = crate::connection::open_system_conn()?;
 
     for record in records {
         match record_type(&record)? {
@@ -202,26 +203,89 @@ fn restore_jsonl(input: &str, commit: bool) -> Result<RestoreReport, String> {
                 }
             }
             "path_binding" => {
-                let Some(conn) = project_conn else {
-                    return Err("cannot restore path_binding without a project database".into());
-                };
                 let path = required_string(&record, "path")?;
-                if let Some(alias_of) = optional_string(&record, "alias_of") {
-                    crate::path_binding::db_upsert_alias(conn, &path, &alias_of)
+                let tx = config_conn
+                    .unchecked_transaction()
+                    .map_err(|e| format!("opening the binding-restore transaction: {e}"))?;
+                let payload = if let Some(alias_of) = optional_string(&record, "alias_of") {
+                    crate::path_binding::db_upsert_alias(&tx, &path, &alias_of)
                         .map_err(|e| format!("restoring path_binding alias: {e}"))?;
-                } else {
-                    crate::path_binding::db_upsert_binding(
-                        conn,
+                    crate::sys::binding_payload_json(
                         &path,
-                        &required_string(&record, "driver_id")?,
-                        optional_string(&record, "at_locator").as_deref(),
-                        optional_string(&record, "secret_ref").as_deref(),
-                        optional_string(&record, "host").as_deref(),
-                        optional_string(&record, "account").as_deref(),
-                        optional_string(&record, "app").as_deref(),
+                        None,
+                        None,
+                        None,
+                        Some(&alias_of),
+                        None,
+                        None,
+                        None,
+                    )
+                } else {
+                    let driver = required_string(&record, "driver_id")?;
+                    let at = optional_string(&record, "at_locator");
+                    let secret_ref = optional_string(&record, "secret_ref");
+                    let host = optional_string(&record, "host");
+                    let account = optional_string(&record, "account");
+                    let app = optional_string(&record, "app");
+                    crate::path_binding::db_upsert_binding(
+                        &tx,
+                        &path,
+                        &driver,
+                        at.as_deref(),
+                        secret_ref.as_deref(),
+                        host.as_deref(),
+                        account.as_deref(),
+                        app.as_deref(),
                     )
                     .map_err(|e| format!("restoring path_binding: {e}"))?;
-                }
+                    crate::sys::binding_payload_json(
+                        &path,
+                        Some(&driver),
+                        at.as_deref(),
+                        secret_ref.as_deref(),
+                        None,
+                        host.as_deref(),
+                        account.as_deref(),
+                        app.as_deref(),
+                    )
+                };
+                crate::sys::ledgered_paths_write_tx(&tx, "INSERT", &path, payload)
+                    .map_err(|e| format!("recording the binding-restore ledger event: {e}"))?;
+                tx.commit()
+                    .map_err(|e| format!("committing the binding restore: {e}"))?;
+                report.applied += 1;
+            }
+            "connection_consent" => {
+                // The accounts/consent section (new with the 20260716143641 dump): replay the
+                // consent row with its ledger events — selectors + metadata only, no token exists
+                // in the record to restore.
+                let driver = required_string(&record, "driver")?;
+                let connection = required_string(&record, "connection")?;
+                let subject = required_string(&record, "subject")?;
+                let scope = optional_string(&record, "scope").unwrap_or_default();
+                let app = optional_string(&record, "app");
+                let tx = config_conn
+                    .unchecked_transaction()
+                    .map_err(|e| format!("opening the consent-restore transaction: {e}"))?;
+                crate::secret_store::db_record_consent_with_app(
+                    &tx,
+                    &driver,
+                    &connection,
+                    &subject,
+                    &scope,
+                    app.as_deref(),
+                )
+                .map_err(|e| format!("restoring connection_consent: {e}"))?;
+                crate::sys::ledgered_accounts_write_tx(
+                    &tx,
+                    "INSERT",
+                    &driver,
+                    &connection,
+                    crate::sys::account_payload_json(&driver, &connection, app.as_deref()),
+                )
+                .map_err(|e| format!("recording the consent-restore ledger event: {e}"))?;
+                tx.commit()
+                    .map_err(|e| format!("committing the consent restore: {e}"))?;
                 report.applied += 1;
             }
             other => return Err(format!("unsupported dump record type `{other}`")),
@@ -330,7 +394,7 @@ fn jsonish_text_value(record: &JsonValue, key: &str) -> Value {
 mod tests {
     use super::*;
     use crate::testenv::HomeGuard;
-    use qfs_store::{FileSource, ProjectDb, SystemDb};
+    use qfs_store::{FileSource, SystemDb};
 
     #[test]
     fn restore_previews_then_commits_a_dump_idempotently() {
@@ -360,13 +424,8 @@ mod tests {
                     [],
                 )
                 .unwrap();
-            drop(sys);
-            let project = ProjectDb::open(&FileSource::new(
-                home.system_db_path().with_file_name("project.db"),
-            ))
-            .unwrap();
-            project
-                .db()
+            // The re-homed declarative tables (20260716143641) live in the System DB.
+            sys.db()
                 .conn()
                 .execute(
                     "INSERT INTO path_binding (path, driver_id, at_locator, secret_ref, host, account) \
@@ -375,8 +434,7 @@ mod tests {
                     [],
                 )
                 .unwrap();
-            project
-                .db()
+            sys.db()
                 .conn()
                 .execute(
                     "INSERT INTO path_binding (path, driver_id, at_locator, secret_ref, host, account) \
@@ -384,7 +442,15 @@ mod tests {
                     [],
                 )
                 .unwrap();
-            drop(project);
+            sys.db()
+                .conn()
+                .execute(
+                    "INSERT INTO connection_consent (driver, connection, subject, scope, app) \
+                     VALUES ('chatwork', 'work', 'op@example.com', '', NULL)",
+                    [],
+                )
+                .unwrap();
+            drop(sys);
             crate::dump::dump_jsonl(true, "2026-07-07T00:00:00Z").unwrap()
         };
 
@@ -396,7 +462,7 @@ mod tests {
             .contains(r#""record":"header""#));
 
         let committed = restore_jsonl(&dump, true).unwrap();
-        assert_eq!(committed.applied, 5);
+        assert_eq!(committed.applied, 6);
         let second = restore_jsonl(&dump, true).unwrap();
         assert!(second.skipped_existing >= 2);
 
@@ -405,11 +471,75 @@ mod tests {
         assert!(restored.contains(r#""record":"sys_policy""#));
         assert!(restored.contains(r#""record":"sys_driver""#));
         assert!(restored.contains(r#""record":"path_binding""#));
+        assert!(restored.contains(r#""record":"connection_consent""#));
         assert!(restored.contains("vault:chatwork/work"));
         assert!(restored.contains(r#""driver_id":"cf""#));
         assert!(restored.contains(r#""at_locator":"cloudflare-account""#));
         assert!(restored.contains(r#""account":"mycf""#));
         assert!(!restored.contains("PLAINTEXT"));
+    }
+
+    /// Ticket 20260716143641 QG4: a committed restore of a binding (and a consent) record lands
+    /// LOCAL audit + `ddl_event` rows — the asymmetry restore's own module header promised ("a
+    /// committed restore records new local audit/DDL events") but never delivered for bindings
+    /// while they replayed through the eventless Project-DB `insert_binding`. Written against the
+    /// pre-move code first: there this test fails (0 events land).
+    #[test]
+    fn committed_restore_of_a_binding_lands_local_ledger_events() {
+        let dump = concat!(
+            "{\"record\":\"header\",\"format\":\"qfs-state-jsonl-v1\"}\n",
+            "{\"record\":\"path_binding\",\"path\":\"/chat\",\"driver_id\":\"chatwork\",",
+            "\"at_locator\":\"https://api.chatwork.com/v2\",\"secret_ref\":\"vault:chatwork/work\",",
+            "\"host\":\"local\",\"account\":\"work\"}\n",
+            "{\"record\":\"connection_consent\",\"driver\":\"chatwork\",\"connection\":\"work\",",
+            "\"subject\":\"op@example.com\",\"scope\":\"\"}\n",
+        );
+        let _dest = HomeGuard::with_passphrase("dest-pass");
+        let report = restore_jsonl(dump, true).unwrap();
+        assert_eq!(report.applied, 2);
+
+        let conn = crate::connection::open_system_conn().unwrap();
+        let paths_events: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sys_ddl_events WHERE target_path = '/sys/paths' \
+                 AND verb = 'INSERT'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            paths_events, 1,
+            "the binding replay lands a local ddl_event"
+        );
+        let accounts_events: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sys_ddl_events WHERE target_path = '/sys/accounts' \
+                 AND verb = 'INSERT'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            accounts_events, 1,
+            "the consent replay lands a local ddl_event"
+        );
+        let audit: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_tail WHERE path LIKE '/sys/paths%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(audit >= 1, "the binding replay lands its audit row too");
+        // And the replayed state is readable from the System DB.
+        let row = crate::path_binding::db_get_binding(&conn, "/chat")
+            .unwrap()
+            .expect("binding restored");
+        assert_eq!(row.secret_ref.as_deref(), Some("vault:chatwork/work"));
+        assert!(
+            crate::secret_store::db_get_consent(&conn, "chatwork", "work").is_some(),
+            "consent restored"
+        );
     }
 
     #[test]

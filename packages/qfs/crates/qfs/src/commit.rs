@@ -647,8 +647,8 @@ pub(crate) fn google_stack_for_mount(
 }
 
 fn google_consent_app(driver: &str, email: &str) -> Option<String> {
-    let proj = crate::store::open_project_db().ok().flatten()?;
-    let conn = proj.into_db().into_connection();
+    let sys = crate::store::open_system_db().ok().flatten()?;
+    let conn = sys.into_db().into_connection();
     crate::secret_store::db_get_consent_app(&conn, driver, email)
 }
 
@@ -764,12 +764,13 @@ fn operator_signed_in() -> bool {
 
 /// Is consent recorded for this cloud `(driver, connection)` in the Project-DB consent ledger
 /// (`connection_consent`, written by `qfs account add`)? Best-effort + passphrase-free (the row carries
-/// no key material); an unreadable Project DB reads as NO consent (fail closed).
+/// no key material); an unreadable System DB reads as NO consent (fail closed; the consent ledger
+/// was re-homed there by 20260716143641).
 fn consent_recorded(driver: &str, connection: &str) -> bool {
-    let Some(proj) = crate::store::open_project_db().ok().flatten() else {
+    let Some(sys) = crate::store::open_system_db().ok().flatten() else {
         return false;
     };
-    let conn = proj.into_db().into_connection();
+    let conn = sys.into_db().into_connection();
     crate::secret_store::db_get_consent(&conn, driver, connection).is_some()
 }
 
@@ -1016,7 +1017,7 @@ mod tests {
         // Two authorized accounts (consent keyed by email — what `qfs account add google --app …` does)
         // and two connect-created mounts, one per account.
         {
-            let proj = crate::connection::open_project_conn().unwrap();
+            let proj = crate::connection::open_system_conn().unwrap();
             for email in ["work@example.com", "home@example.com"] {
                 crate::secret_store::db_record_consent_with_app(
                     &proj,

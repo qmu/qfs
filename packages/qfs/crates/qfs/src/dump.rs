@@ -78,9 +78,10 @@ pub(crate) fn dump_jsonl(include_events: bool, generated_at: &str) -> Result<Str
     dump_sys_settings(&mut out, sys)?;
     dump_sys_policies(&mut out, sys)?;
     dump_sys_billing(&mut out, sys)?;
-    if let Some(project) = project {
-        dump_path_bindings(&mut out, project.db().conn())?;
-    }
+    // Both re-homed declarative tables (20260716143641) dump from the System DB — including the
+    // previously-missing accounts/consent section (selectors + metadata, never a token).
+    dump_path_bindings(&mut out, sys)?;
+    dump_accounts(&mut out, sys)?;
     if include_events {
         dump_ddl_events(&mut out, sys)?;
     }
@@ -200,6 +201,34 @@ fn dump_path_bindings(out: &mut String, conn: &rusqlite::Connection) -> Result<(
     push_rows(out, rows)
 }
 
+/// The accounts/consent section (20260716143641 — previously missing from the dump entirely):
+/// one `connection_consent` row per record. Selectors + metadata only — subject/scope/app are
+/// labels; the token lives ENCRYPTED in the Project-DB vault and is never here (the same
+/// secret-free discipline as every other section).
+fn dump_accounts(out: &mut String, conn: &rusqlite::Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT driver, connection, subject, scope, app, granted_at \
+             FROM connection_consent ORDER BY driver, connection",
+        )
+        .map_err(|e| format!("reading connection_consent: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(json!({
+                "record": "connection_consent",
+                "driver": r.get::<_, String>(0)?,
+                "connection": r.get::<_, String>(1)?,
+                "subject": r.get::<_, String>(2)?,
+                "scope": r.get::<_, String>(3)?,
+                "app": r.get::<_, Option<String>>(4)?,
+                "granted_at": r.get::<_, Option<String>>(5)?,
+                "credential_note": "consent metadata only; the token is excluded",
+            }))
+        })
+        .map_err(|e| format!("reading connection_consent: {e}"))?;
+    push_rows(out, rows)
+}
+
 fn dump_ddl_events(out: &mut String, conn: &rusqlite::Connection) -> Result<(), String> {
     let mut stmt = conn
         .prepare(
@@ -312,6 +341,26 @@ mod tests {
             [],
         )
         .unwrap();
+        // The re-homed declarative tables (20260716143641) dump from the System DB.
+        conn.execute(
+            "INSERT INTO path_binding (path, driver_id, at_locator, secret_ref, host, account) \
+             VALUES ('/chat', 'chatwork', 'https://api.chatwork.com/v2', 'vault:chatwork/work', \
+                     'local', 'work')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO path_binding (path, driver_id, at_locator, secret_ref, host, account) \
+             VALUES ('/cf', 'cf', 'cloudflare-account', NULL, 'local', 'mycf')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO connection_consent (driver, connection, subject, scope, app) \
+             VALUES ('github', 'work', 'op@example.com', '', NULL)",
+            [],
+        )
+        .unwrap();
         drop(sys);
 
         let project = ProjectDb::open(&FileSource::new(
@@ -327,25 +376,6 @@ mod tests {
                 rusqlite::params![b"PLAINTEXT-TOKEN-CANARY".to_vec()],
             )
             .unwrap();
-        project
-            .db()
-            .conn()
-            .execute(
-                "INSERT INTO path_binding (path, driver_id, at_locator, secret_ref, host, account) \
-                 VALUES ('/chat', 'chatwork', 'https://api.chatwork.com/v2', 'vault:chatwork/work', \
-                         'local', 'work')",
-                [],
-            )
-            .unwrap();
-        project
-            .db()
-            .conn()
-            .execute(
-                "INSERT INTO path_binding (path, driver_id, at_locator, secret_ref, host, account) \
-                 VALUES ('/cf', 'cf', 'cloudflare-account', NULL, 'local', 'mycf')",
-                [],
-            )
-            .unwrap();
         drop(project);
 
         let a = dump_jsonl(true, "2026-07-07T00:00:00Z").unwrap();
@@ -354,6 +384,8 @@ mod tests {
         assert!(a.contains(r#""record":"header""#));
         assert!(a.contains(r#""record":"sys_driver""#));
         assert!(a.contains(r#""record":"path_binding""#));
+        assert!(a.contains(r#""record":"connection_consent""#));
+        assert!(a.contains(r#""subject":"op@example.com""#));
         assert!(a.contains(r#""record":"ddl_event""#));
         assert!(a.contains("vault:chatwork/work"));
         assert!(a.contains(r#""driver_id":"cf""#));

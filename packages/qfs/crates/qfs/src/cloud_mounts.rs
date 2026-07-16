@@ -78,13 +78,14 @@ pub fn cloud_mounts_from(bindings: &[PathBindingRow]) -> Vec<CloudMount> {
 }
 
 /// Load the cloud mounts from the Project DB `path_binding` registry (best-effort, cred-free):
-/// an absent/unreadable Project DB is an empty list — nothing is pre-mounted, so every cloud
-/// registry facet fails closed exactly like the CONNECT model demands.
+/// an absent/unreadable System DB is an empty list — nothing is pre-mounted, so every cloud
+/// registry facet fails closed exactly like the CONNECT model demands (the binding registry was
+/// re-homed to the System DB by 20260716143641).
 #[must_use]
 pub fn load_cloud_mounts() -> Vec<CloudMount> {
-    match crate::store::open_project_db() {
-        Ok(Some(proj)) => {
-            let conn = proj.into_db().into_connection();
+    match crate::store::open_system_db() {
+        Ok(Some(sys)) => {
+            let conn = sys.into_db().into_connection();
             crate::path_binding::db_list_bindings(&conn)
                 .map(|rows| cloud_mounts_from(&rows))
                 .unwrap_or_default()

@@ -53,6 +53,17 @@ pub(crate) fn open_project_conn() -> Result<Connection, String> {
     Ok(proj.into_db().into_connection())
 }
 
+/// Open the migrated System DB and return its **owned** connection. The home of the re-homed
+/// declarative config registry (`path_binding` + `connection_consent`, ticket 20260716143641) and
+/// the ledger that observes it (`audit_tail` + `sys_ddl_events`) — every config read and every
+/// ledgered config write goes through a connection from here, never the Project DB (the vault).
+pub(crate) fn open_system_conn() -> Result<Connection, String> {
+    let sys = crate::store::open_system_db()
+        .map_err(|e| format!("opening the system database: {e}"))?
+        .ok_or("cannot determine the system database path (set HOME or XDG_CONFIG_HOME)")?;
+    Ok(sys.into_db().into_connection())
+}
+
 /// Has the credential store already been initialized on this host? True once any vault-key slot
 /// exists (the first [`SqliteSecrets::open_or_init`] enrolls the passphrase slot; migration #10
 /// forward-copied the pre-slot `secret_meta` wrap). Passphrase-free — it reads only a presence
@@ -372,9 +383,23 @@ fn run_inner(action: &ConnectionAction) -> Result<String, String> {
             app.as_deref(),
         ),
         ConnectionAction::Disconnect { path } => {
-            let conn = open_project_conn()?;
-            let n = crate::path_binding::db_remove_binding(&conn, path)
+            // The remove + its audit row + ddl_event commit atomically (20260716143641) — the same
+            // ledger shape the `DISCONNECT` statement lands through the /sys/paths backend.
+            let conn = open_system_conn()?;
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("opening the disconnect transaction: {e}"))?;
+            let n = crate::path_binding::db_remove_binding(&tx, path)
                 .map_err(|e| format!("removing the defined path: {e}"))?;
+            crate::sys::ledgered_paths_write_tx(
+                &tx,
+                "REMOVE",
+                path,
+                crate::sys::remove_payload_json("binding", "path", path),
+            )
+            .map_err(|e| format!("recording the disconnect ledger event: {e}"))?;
+            tx.commit()
+                .map_err(|e| format!("committing the disconnect: {e}"))?;
             Ok(if n == 0 {
                 format!("{path} was not connected (idempotent)")
             } else {
@@ -382,7 +407,7 @@ fn run_inner(action: &ConnectionAction) -> Result<String, String> {
             })
         }
         ConnectionAction::ListPaths => {
-            let conn = open_project_conn()?;
+            let conn = open_system_conn()?;
             let rows = crate::path_binding::db_list_bindings(&conn)
                 .map_err(|e| format!("listing defined paths: {e}"))?;
             let rendered = render_path_bindings(&rows);
@@ -430,8 +455,9 @@ fn render_path_bindings(rows: &[crate::path_binding::PathBindingRow]) -> String 
 }
 
 /// Bind a defined path (`qfs connect`): validate the arms (exactly one of `driver` / `alias_of`),
-/// then UPSERT the binding into the Project DB `path_binding` table. A `vault:`/`env:` secret is
-/// stored as a REFERENCE only (resolved at use time) — nothing secret touches argv or the row.
+/// then UPSERT the binding into the System DB `path_binding` table in one transaction with its
+/// audit row + `ddl_event` (20260716143641). A `vault:`/`env:` secret is stored as a REFERENCE
+/// only (resolved at use time) — nothing secret touches argv or the row.
 #[allow(clippy::too_many_arguments)]
 fn run_connect(
     path: &str,
@@ -475,7 +501,9 @@ fn run_connect_with_cf_resolver(
     // records it; binding a mount to a remote host fails closed at bind time (the remote protocol
     // is deferred, ADR §6) — validated here so an unknown host is caught at connect, not at use.
     crate::hosts::require_known_host(host)?;
-    let conn = open_project_conn()?;
+    // The binding + its audit row + ddl_event commit atomically in the System DB (20260716143641)
+    // — the same ledger shape the `CONNECT` statement lands through the /sys/paths backend.
+    let conn = open_system_conn()?;
     match (driver, alias_of) {
         (Some(_), Some(_)) => {
             Err("give either --driver (full connect) or --alias-of (alias), not both".into())
@@ -490,18 +518,42 @@ fn run_connect_with_cf_resolver(
             require_account_for_cloud_connect(driver, account)?;
             let resolved_at = resolve_connect_at(driver, at, account, resolve_cf_account)?;
             let at = resolved_at.as_deref().or(at);
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("opening the connect transaction: {e}"))?;
             // ADR 0008: the mount carries the (host, driver, account) coordinate — an omitted
             // --host is the implicit `local` host (defaulted in the binding I/O).
             crate::path_binding::db_upsert_binding(
-                &conn, path, driver, at, secret_ref, host, account, app,
+                &tx, path, driver, at, secret_ref, host, account, app,
             )
             .map_err(|e| format!("connecting {path}: {e}"))?;
+            crate::sys::ledgered_paths_write_tx(
+                &tx,
+                "INSERT",
+                path,
+                crate::sys::binding_payload_json(
+                    path,
+                    Some(driver),
+                    at,
+                    secret_ref,
+                    None,
+                    host,
+                    account,
+                    app,
+                ),
+            )
+            .map_err(|e| format!("recording the connect ledger event: {e}"))?;
+            tx.commit()
+                .map_err(|e| format!("committing the connect: {e}"))?;
             let acct = account.map_or(String::new(), |a| format!(" ({a})"));
             let app = app.map_or(String::new(), |a| format!(" via app {a}"));
             Ok(format!("connected {path} -> {driver}{acct}{app}"))
         }
         (None, Some(target)) => {
-            crate::path_binding::db_upsert_alias(&conn, path, target).map_err(|e| {
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("opening the connect transaction: {e}"))?;
+            crate::path_binding::db_upsert_alias(&tx, path, target).map_err(|e| {
                 // A foreign-key failure means the alias target is not a defined path (fail-closed).
                 if matches!(&e, rusqlite::Error::SqliteFailure(err, _)
                     if err.code == rusqlite::ErrorCode::ConstraintViolation)
@@ -511,6 +563,24 @@ fn run_connect_with_cf_resolver(
                     format!("aliasing {path}: {e}")
                 }
             })?;
+            crate::sys::ledgered_paths_write_tx(
+                &tx,
+                "INSERT",
+                path,
+                crate::sys::binding_payload_json(
+                    path,
+                    None,
+                    None,
+                    None,
+                    Some(target),
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            .map_err(|e| format!("recording the connect ledger event: {e}"))?;
+            tx.commit()
+                .map_err(|e| format!("committing the connect: {e}"))?;
             Ok(format!("connected {path} -> {target} (alias)"))
         }
     }
@@ -743,7 +813,7 @@ mod tests {
         .expect("single-account connect should succeed");
 
         assert_eq!(msg, "connected /cf -> cf (mycf)");
-        let rows = crate::path_binding::db_list_bindings(&open_project_conn().unwrap()).unwrap();
+        let rows = crate::path_binding::db_list_bindings(&open_system_conn().unwrap()).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].path, "/cf");
         assert_eq!(rows[0].at_locator.as_deref(), Some("acct-one"));
@@ -782,7 +852,7 @@ mod tests {
         assert!(err.contains("acct-two (Staging)"), "{err}");
         assert!(err.contains("pass `--at <id>`"), "{err}");
         assert!(!err.contains(PLANTED_CF_TOKEN), "{err}");
-        let rows = crate::path_binding::db_list_bindings(&open_project_conn().unwrap()).unwrap();
+        let rows = crate::path_binding::db_list_bindings(&open_system_conn().unwrap()).unwrap();
         assert!(rows.is_empty(), "ambiguous connect must not write binding");
         assert_eq!(backend.recorded(), vec![RecordedCall::AccountDiscovery]);
     }
@@ -809,7 +879,7 @@ mod tests {
         assert!(err.contains("can see no accounts"), "{err}");
         assert!(err.contains("pass `--at <id>`"), "{err}");
         assert!(!err.contains(PLANTED_CF_TOKEN), "{err}");
-        let rows = crate::path_binding::db_list_bindings(&open_project_conn().unwrap()).unwrap();
+        let rows = crate::path_binding::db_list_bindings(&open_system_conn().unwrap()).unwrap();
         assert!(rows.is_empty(), "empty discovery must not write binding");
         assert_eq!(backend.recorded(), vec![RecordedCall::AccountDiscovery]);
     }
@@ -833,7 +903,7 @@ mod tests {
         )
         .expect("explicit account id should keep existing offline behavior");
 
-        let rows = crate::path_binding::db_list_bindings(&open_project_conn().unwrap()).unwrap();
+        let rows = crate::path_binding::db_list_bindings(&open_system_conn().unwrap()).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].at_locator.as_deref(), Some("explicit-account"));
         assert!(
@@ -862,7 +932,7 @@ mod tests {
             "error should tell the operator how to create the account first: {err}"
         );
 
-        let conn = open_project_conn().unwrap();
+        let conn = open_system_conn().unwrap();
         let rows = crate::path_binding::db_list_bindings(&conn).unwrap();
         assert!(
             rows.iter().all(|r| r.path != "/slack"),

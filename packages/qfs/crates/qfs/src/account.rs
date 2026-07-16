@@ -32,7 +32,7 @@ use qfs_cmd::AccountAction;
 use qfs_secrets::{is_cloud_driver, ConnectionId, CredentialKey, DriverId, Secret, Secrets};
 use rusqlite::Connection;
 
-use crate::connection::{open_project_conn, open_store, require_signed_in};
+use crate::connection::{open_store, open_system_conn, require_signed_in};
 use crate::secret_store;
 
 /// The Google provider's three drivers — one account authorization serves them all (the shared
@@ -233,8 +233,8 @@ fn add_google(label: Option<&str>, app: Option<&str>) -> Result<String, String> 
     // §4 — the mount carries the account, so the commit-time bind gate consults the mount's
     // `(driver, account)`). No selection is made: the account becomes usable by connecting a
     // mount to it (`qfs connect /mail --driver gmail --account <email>`).
-    let proj = open_project_conn()?;
-    record_google_consents(&proj, &subject, &email, app)?;
+    let sys = open_system_conn()?;
+    record_account_consent(&sys, "google", &email, &subject, Some(app))?;
     Ok(format!(
         "authorized google account {email} (one authorization serves mail, drive, and analytics; \
          consent granted by {subject} through app {app}) — mount it with `qfs connect /mail --driver gmail --account {email}`"
@@ -242,16 +242,17 @@ fn add_google(label: Option<&str>, app: Option<&str>) -> Result<String, String> 
 }
 
 /// Consent rows for the three Google drivers, keyed by the account email — what the mount-bound
-/// bind gate consults for a `(kind, account)` cloud mount (see the module doc).
+/// bind gate consults for a `(kind, account)` cloud mount (see the module doc). Row writes only;
+/// the caller supplies the (System-DB) connection or transaction and owns the ledger event.
 fn record_google_consents(
-    proj: &Connection,
+    conn: &Connection,
     subject: &str,
     email: &str,
     app: &str,
 ) -> Result<(), String> {
     for driver in GOOGLE_DRIVERS {
         secret_store::db_record_consent_with_app(
-            proj,
+            conn,
             driver,
             email,
             subject,
@@ -294,9 +295,8 @@ fn add_cloud(provider: &str, label: &str) -> Result<String, String> {
     store
         .put(&key, Secret::from(token))
         .map_err(|e| format!("storing the token: {e}"))?;
-    let proj = open_project_conn()?;
-    secret_store::db_record_consent(&proj, provider, label, &subject, "")
-        .map_err(|e| format!("recording consent: {e}"))?;
+    let sys = open_system_conn()?;
+    record_account_consent(&sys, provider, label, &subject, None)?;
     Ok(format!(
         "authorized {provider} account `{label}` (consent granted by {subject})"
     ))
@@ -345,10 +345,8 @@ fn remove_google(email: &str) -> Result<String, String> {
     store
         .remove(&key)
         .map_err(|e| format!("removing the refresh token: {e}"))?;
-    let proj = open_project_conn()?;
-    for driver in GOOGLE_DRIVERS {
-        delete_consent(&proj, driver, email)?;
-    }
+    let sys = open_system_conn()?;
+    delete_account_consent(&sys, "google", email)?;
     Ok(format!(
         "removed google account {email} (token and consents deleted)"
     ))
@@ -362,8 +360,8 @@ fn remove_cloud(provider: &str, label: &str) -> Result<String, String> {
     store
         .remove(&key)
         .map_err(|e| format!("removing the token: {e}"))?;
-    let proj = open_project_conn()?;
-    delete_consent(&proj, provider, label)?;
+    let sys = open_system_conn()?;
+    delete_account_consent(&sys, provider, label)?;
     Ok(format!(
         "removed {provider} account `{label}` (token and consent deleted)"
     ))
@@ -377,22 +375,64 @@ fn remove_cloud(provider: &str, label: &str) -> Result<String, String> {
 // consent + enforces the operator gate; the token VALUE stays out-of-band (never in a statement).
 
 /// Record an account's consent — Google's three drivers (one consent, many drivers; ADR 0008 §4) or
-/// one cloud row. The single writer behind `qfs account add`'s consent step AND the `CREATE ACCOUNT`
-/// statement. Does NOT seal a token (that stays out-of-band).
+/// one cloud row — in ONE System-DB transaction with its t76 audit row and `ddl_event` (ticket
+/// 20260716143641: the consent lives beside the ledger that observes it). The single writer behind
+/// `qfs account add`'s consent step AND the `CREATE ACCOUNT` statement. Does NOT seal a token
+/// (that stays out-of-band, in the Project-DB vault).
 pub(crate) fn record_account_consent(
-    proj: &Connection,
+    conn: &Connection,
     provider: &str,
     account: &str,
     subject: &str,
     app: Option<&str>,
 ) -> Result<(), String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("opening the consent transaction: {e}"))?;
     if provider == "google" {
         let app = app.ok_or("google account declarations need APP '<label>'")?;
-        record_google_consents(proj, subject, account, app)
+        record_google_consents(&tx, subject, account, app)?;
     } else {
-        secret_store::db_record_consent(proj, provider, account, subject, "")
-            .map_err(|e| format!("recording consent: {e}"))
+        secret_store::db_record_consent(&tx, provider, account, subject, "")
+            .map_err(|e| format!("recording consent: {e}"))?;
     }
+    crate::sys::ledgered_accounts_write_tx(
+        &tx,
+        "INSERT",
+        provider,
+        account,
+        crate::sys::account_payload_json(provider, account, app),
+    )
+    .map_err(|e| format!("recording the consent ledger event: {e}"))?;
+    tx.commit()
+        .map_err(|e| format!("committing the consent: {e}"))?;
+    Ok(())
+}
+
+/// Delete an account's consent row(s) — Google's three drivers or one cloud row — in ONE System-DB
+/// transaction with the audit row + `ddl_event` (the REMOVE twin of [`record_account_consent`]).
+fn delete_account_consent(conn: &Connection, provider: &str, account: &str) -> Result<(), String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("opening the consent-removal transaction: {e}"))?;
+    if provider == "google" {
+        for driver in GOOGLE_DRIVERS {
+            delete_consent(&tx, driver, account)?;
+        }
+    } else {
+        delete_consent(&tx, provider, account)?;
+    }
+    crate::sys::ledgered_accounts_write_tx(
+        &tx,
+        "REMOVE",
+        provider,
+        account,
+        crate::sys::account_payload_json(provider, account, None),
+    )
+    .map_err(|e| format!("recording the consent-removal ledger event: {e}"))?;
+    tx.commit()
+        .map_err(|e| format!("committing the consent removal: {e}"))?;
+    Ok(())
 }
 
 /// Whether `provider` names a token-backed account provider: compiled cloud drivers plus declared
@@ -412,7 +452,7 @@ fn is_declared_driver_provider(provider: &str) -> bool {
     {
         return true;
     }
-    let Ok(conn) = open_project_conn() else {
+    let Ok(conn) = open_system_conn() else {
         return false;
     };
     crate::path_binding::db_list_bindings(&conn)
@@ -455,8 +495,8 @@ pub(crate) fn declare_account(
     // The t54 gate: recording consent needs a signed-in operator (the `subject`). Resolved BEFORE any
     // write — a declaration by an unauthenticated operator is refused, exactly as `qfs account add`.
     let subject = require_signed_in(provider)?;
-    let proj = open_project_conn()?;
-    record_account_consent(&proj, provider, account, &subject, app)?;
+    let sys = open_system_conn()?;
+    record_account_consent(&sys, provider, account, &subject, app)?;
     Ok(format!(
         "declared {provider} account `{account}` (consent granted by {subject}; seal the token \
          out-of-band with `qfs account add {provider}`)"
@@ -478,9 +518,10 @@ pub(crate) fn remove_account(provider: &str, account: &str) -> Result<String, St
 }
 
 /// Delete one consent row (the t54 ledger keeps history via the audit chain; the LIVE row gates
-/// binds, so a removed account must not keep gating open).
-fn delete_consent(proj: &Connection, driver: &str, connection: &str) -> Result<(), String> {
-    proj.execute(
+/// binds, so a removed account must not keep gating open). Row delete only; the caller owns the
+/// (System-DB) transaction and the ledger event.
+fn delete_consent(conn: &Connection, driver: &str, connection: &str) -> Result<(), String> {
+    conn.execute(
         "DELETE FROM connection_consent WHERE driver = ?1 AND connection = ?2",
         rusqlite::params![driver, connection],
     )
@@ -522,7 +563,7 @@ mod tests {
             let store = open_store().unwrap();
             let key = qfs_google_auth::refresh_token_key("you@example.com").unwrap();
             store.put(&key, Secret::from("1//refresh")).unwrap();
-            let proj = open_project_conn().unwrap();
+            let proj = open_system_conn().unwrap();
             record_google_consents(&proj, "op@example.com", "you@example.com", "client").unwrap();
 
             for driver in GOOGLE_DRIVERS {
@@ -539,7 +580,7 @@ mod tests {
 
             let out = remove_google("you@example.com").unwrap();
             assert!(out.contains("you@example.com"));
-            let proj = open_project_conn().unwrap();
+            let proj = open_system_conn().unwrap();
             for driver in GOOGLE_DRIVERS {
                 assert!(
                     secret_store::db_get_consent(&proj, driver, "you@example.com").is_none(),
@@ -584,7 +625,7 @@ mod tests {
 
             let msg = declare_account("google", "you@example.com", Some("client")).unwrap();
             assert!(msg.contains("consent granted by op@example.com"), "{msg}");
-            let proj = open_project_conn().unwrap();
+            let proj = open_system_conn().unwrap();
             for driver in GOOGLE_DRIVERS {
                 let consent = secret_store::db_get_consent(&proj, driver, "you@example.com")
                     .expect("google consent recorded per driver");
@@ -621,7 +662,7 @@ mod tests {
                 is_token_account_provider("chatwork"),
                 "installed declared drivers accept account tokens"
             );
-            let proj = open_project_conn().unwrap();
+            let proj = open_system_conn().unwrap();
             record_account_consent(&proj, "chatwork", "work", "op@example.com", None).unwrap();
             assert!(
                 secret_store::db_get_consent(&proj, "chatwork", "work").is_some(),
@@ -651,7 +692,7 @@ mod tests {
                 "the gate asks for sign-in: {err}"
             );
             // And nothing was written (fail closed BEFORE any consent row).
-            let proj = open_project_conn().unwrap();
+            let proj = open_system_conn().unwrap();
             assert!(
                 secret_store::db_get_consent(&proj, "gmail", "you@example.com").is_none(),
                 "a refused declaration records no consent"
@@ -670,6 +711,77 @@ mod tests {
         });
     }
 
+    /// Ticket 20260716143641 QG1: account declare + remove land their consent rows, t76 audit
+    /// rows, and replayable `ddl_event`s in ONE System-DB transaction each. Written against the
+    /// pre-move code first: consent wrote to the Project DB with only a best-effort post-commit
+    /// AuditEvent and NO DdlEvent, so the ddl_events assertions fail there (both-directions proof).
+    #[test]
+    fn declare_and_remove_account_are_ledger_transactional() {
+        with_fresh_home(|| {
+            sign_in("op@example.com");
+            declare_account("github", "work", None).unwrap();
+
+            fn account_events(sys: &Connection, verb: &str) -> i64 {
+                sys.query_row(
+                    "SELECT COUNT(*) FROM sys_ddl_events WHERE target_path = '/sys/accounts' \
+                     AND verb = ?1",
+                    [verb],
+                    |r| r.get(0),
+                )
+                .unwrap()
+            }
+            let sys = open_system_conn().unwrap();
+            assert_eq!(
+                account_events(&sys, "INSERT"),
+                1,
+                "declare lands a replayable ddl_event"
+            );
+            let audit: i64 = sys
+                .query_row(
+                    "SELECT COUNT(*) FROM audit_tail WHERE path = '/sys/accounts/github/work'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(audit >= 1, "declare lands its audit row in the same store");
+            let payload: String = sys
+                .query_row(
+                    "SELECT payload_json FROM sys_ddl_events WHERE target_path = '/sys/accounts' \
+                     AND verb = 'INSERT'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                payload.contains("github") && payload.contains("work"),
+                "{payload}"
+            );
+            drop(sys);
+
+            // Seed the token so the complete-deletion path has one to remove, then remove.
+            let key = CredentialKey::new(
+                DriverId("github".into()),
+                ConnectionId::new("work").unwrap(),
+            );
+            open_store()
+                .unwrap()
+                .put(&key, Secret::from("ghp_x"))
+                .unwrap();
+            remove_account("github", "work").unwrap();
+
+            let sys = open_system_conn().unwrap();
+            assert_eq!(
+                account_events(&sys, "REMOVE"),
+                1,
+                "remove lands a replayable ddl_event"
+            );
+            assert!(
+                secret_store::db_get_consent(&sys, "github", "work").is_none(),
+                "consent deleted in the same transaction"
+            );
+        });
+    }
+
     /// 20260703040000: `REMOVE /sys/accounts/<provider>/<account>` (via `remove_account`) deletes the
     /// token AND the consent — the SAME complete deletion `qfs account remove` does.
     #[test]
@@ -680,7 +792,7 @@ mod tests {
             let key = CredentialKey::new(DriverId("github".into()), conn_id);
             let store = open_store().unwrap();
             store.put(&key, Secret::from("ghp_token")).unwrap();
-            let proj = open_project_conn().unwrap();
+            let proj = open_system_conn().unwrap();
             record_account_consent(&proj, "github", "work", "op@example.com", None).unwrap();
             drop(proj);
 
@@ -688,7 +800,7 @@ mod tests {
 
             let store = open_store().unwrap();
             assert!(store.get(&key).is_err(), "token deleted");
-            let proj = open_project_conn().unwrap();
+            let proj = open_system_conn().unwrap();
             assert!(
                 secret_store::db_get_consent(&proj, "github", "work").is_none(),
                 "consent deleted"
@@ -722,7 +834,7 @@ mod tests {
                 .record_account(&row)
                 .expect("record_account applies");
             assert!(
-                secret_store::db_get_consent(&open_project_conn().unwrap(), "github", "work")
+                secret_store::db_get_consent(&open_system_conn().unwrap(), "github", "work")
                     .is_some(),
                 "the backend adapter recorded consent through declare_account"
             );
@@ -731,7 +843,7 @@ mod tests {
                 .remove_account("github", "work")
                 .expect("remove_account applies");
             assert!(
-                secret_store::db_get_consent(&open_project_conn().unwrap(), "github", "work")
+                secret_store::db_get_consent(&open_system_conn().unwrap(), "github", "work")
                     .is_none(),
                 "the backend adapter deleted consent through remove_account"
             );

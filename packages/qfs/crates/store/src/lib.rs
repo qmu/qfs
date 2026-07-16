@@ -444,6 +444,19 @@ pub const SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "system_transforms",
         sql: include_str!("schema/system_transforms.sql"),
     },
+    // Ticket 20260716143641 (owner ruling 2026-07-16): re-home `path_binding` +
+    // `connection_consent` from the Project DB into the System DB, so a config write shares ONE
+    // transaction with its t76 audit row and `sys_ddl_events` entry (the `insert_driver` pattern)
+    // — the Project DB becomes the vault proper. The Project-DB originals go dead-but-not-dropped;
+    // a one-shot boot copy in the binary (`crates/qfs/src/store.rs`) moves existing rows. Appended
+    // as a NEW version (#17) — migrations #1–#16 stay frozen (the checksum guard forbids editing a
+    // shipped migration). The ALTER history of the originals (#9 mount coordinate, #12 app) is
+    // folded into these fresh CREATEs.
+    Migration {
+        version: 17,
+        name: "system_config_registry",
+        sql: include_str!("schema/system_config_registry.sql"),
+    },
 ];
 
 /// The Project DB's ordered migration set (forward-only; append, never edit a shipped entry).
@@ -950,7 +963,10 @@ mod tests {
         assert!(table_exists(sys.db(), "sys_ddl_events"));
         // §15 migration #16: the transform-definition registry.
         assert!(table_exists(sys.db(), "sys_transforms"));
-        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 16);
+        // 20260716143641 migration #17: the re-homed declarative config registry.
+        assert!(table_exists(sys.db(), "path_binding"));
+        assert!(table_exists(sys.db(), "connection_consent"));
+        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 17);
     }
 
     #[test]
@@ -1104,7 +1120,7 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "data persisted across reopen");
-        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 16);
+        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 17);
     }
 
     #[cfg(unix)]

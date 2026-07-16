@@ -287,13 +287,13 @@ pub fn conn_registry() -> ConnRegistry {
 /// The `qfs connect` sql connections from the project-DB `path_binding` registry (the canonical
 /// source): each FULL-connect binding whose path is under `/sql/` and whose driver is a relational
 /// backend, as `(conn, driver, at_locator, secret_ref)`. `conn` is the segment after `/sql/`, so a
-/// `CONNECT /sql/shop TO sqlite …` mounts at `/sql/shop/<table>`. Empty when no project DB / no sql
+/// `CONNECT /sql/shop TO sqlite …` mounts at `/sql/shop/<table>`. Empty when no system DB / no sql
 /// binding (best-effort, never panics — a persisted-but-unresolvable binding just fails closed).
 fn path_binding_sql_connections() -> Vec<(String, String, String, Option<String>)> {
-    let Ok(Some(proj)) = crate::store::open_project_db() else {
+    let Ok(Some(sys)) = crate::store::open_system_db() else {
         return Vec::new();
     };
-    let conn = proj.into_db().into_connection();
+    let conn = sys.into_db().into_connection();
     crate::path_binding::db_list_bindings(&conn)
         .unwrap_or_default()
         .into_iter()

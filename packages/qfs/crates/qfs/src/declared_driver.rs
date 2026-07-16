@@ -466,10 +466,10 @@ pub(crate) fn declared_mounts() -> Vec<DeclaredMount> {
     if declared.is_empty() {
         return Vec::new();
     }
-    let Ok(Some(proj)) = crate::store::open_project_db() else {
+    let Ok(Some(sys)) = crate::store::open_system_db() else {
         return Vec::new();
     };
-    let conn = proj.into_db().into_connection();
+    let conn = sys.into_db().into_connection();
     let bindings = crate::path_binding::db_list_bindings(&conn).unwrap_or_default();
     bindings
         .into_iter()
