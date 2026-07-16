@@ -20,11 +20,12 @@
 //! stored path would print the one spelling the grammar REJECTS (`of /type/x` is a parse error).
 //!
 //! ## Newest declaration wins
-//! `sys_drivers` is append-shaped: re-installing a type inserts a *second* row with the same name.
-//! The resolution paths (`load_declared_types` / `load_declared_type_defs` / the describe path) all
-//! take `ORDER BY id DESC` newest-first, so the catalog listing does the same and collapses to ONE
-//! row per name. A listing that showed the superseded rows too would contradict what `of <name>`
-//! actually resolves.
+//! Installing a declaration now REPLACES its `(kind, name, verb)` row (owner ruling 2026-07-16),
+//! but `sys_drivers` was append-shaped before that, so a registry from that era still carries
+//! superseded same-name rows. The resolution paths (`load_declared_types` /
+//! `load_declared_type_defs` / the describe path, and the driver-model assembly) all resolve
+//! newest-first, so the catalog listing does the same and collapses to ONE row per name. A listing
+//! that showed the superseded rows too would contradict what `of <name>` actually resolves.
 
 use std::sync::{Arc, Mutex};
 

@@ -519,6 +519,58 @@ impl SysBackend for SystemDbBackend {
 
         let conn = self.system.lock().map_err(poisoned)?;
         let tx = conn.unchecked_transaction().map_err(backend)?;
+
+        // Re-install REPLACES (owner ruling 2026-07-16). A declaration's identity is
+        // `(kind, name, verb)` — the key the read paths group by — so the superseded row is
+        // deleted in the SAME transaction the new one lands in, converging the store to one row
+        // per key instead of appending forever. This is a SUPERSEDE, not a destroy: the same
+        // replace-by-key `/sys/settings` and `/sys/paths` upserts already perform, so it carries
+        // no irreversibility gate. The delete leg is audited exactly like `remove_system_row` —
+        // administration observes itself, deletes included — and a first install (nothing
+        // superseded) emits no delete event.
+        let superseded = tx
+            .execute(
+                "DELETE FROM sys_drivers WHERE kind = ?1 AND name = ?2 AND verb IS ?3",
+                rusqlite::params![kind, name, verb],
+            )
+            .map_err(backend)?;
+        if superseded > 0 {
+            let ts = now_rfc3339();
+            let mut key = JsonMap::new();
+            key.insert("kind".to_string(), JsonValue::String(kind.clone()));
+            key.insert("name".to_string(), JsonValue::String(name.clone()));
+            key.insert(
+                "verb".to_string(),
+                verb.clone().map_or(JsonValue::Null, JsonValue::String),
+            );
+            key.insert(
+                "superseded_rows".to_string(),
+                JsonValue::from(superseded as u64),
+            );
+            append_audit_tx(
+                &tx,
+                AuditEvent {
+                    actor: ACTOR_CLI.to_string(),
+                    connection: "default".to_string(),
+                    verb: "REMOVE".to_string(),
+                    path: SysNode::Drivers.path(),
+                    committed: true,
+                    ts: ts.clone(),
+                },
+            )
+            .map_err(backend)?;
+            append_ddl_event_tx(
+                &tx,
+                ddl_event(
+                    &SysNode::Drivers.path(),
+                    "REMOVE",
+                    JsonValue::Object(key).to_string(),
+                    ts,
+                ),
+            )
+            .map_err(backend)?;
+        }
+
         tx.execute(
             "INSERT INTO sys_drivers \
                  (kind, name, base_url, auth, pagination, of_type, verb, body, irreversible) \
@@ -1591,6 +1643,113 @@ mod tests {
         assert!(events[0].payload_json.contains(r#""kind":"driver""#));
         assert!(events[0].payload_json.contains(r#""name":"chatwork""#));
         assert!(!events[0].payload_json.contains("SUPER-SECRET-TOKEN"));
+    }
+
+    /// Re-installing a declaration REPLACES its `(kind, name, verb)` row (owner ruling
+    /// 2026-07-16): the superseded row is deleted in the SAME transaction as the new insert, both
+    /// legs land in the DDL event log (administration observes itself — deletes included), and a
+    /// first install emits no delete. A map differing only in verb is a different declaration and
+    /// survives its sibling's re-install.
+    #[test]
+    fn insert_driver_replaces_the_same_key_row_and_records_both_legs() {
+        let (_d, backend) = fixture_backend();
+
+        let decl = |kind: &str, name: &str, base_url: &str, verb: Option<&str>, body: &str| {
+            let schema = Schema::new(vec![
+                Column::new("kind", ColumnType::Text, false),
+                Column::new("name", ColumnType::Text, false),
+                Column::new("base_url", ColumnType::Text, true),
+                Column::new("auth", ColumnType::Text, true),
+                Column::new("pagination", ColumnType::Text, true),
+                Column::new("of_type", ColumnType::Text, true),
+                Column::new("verb", ColumnType::Text, true),
+                Column::new("body", ColumnType::Text, true),
+                Column::new("irreversible", ColumnType::Bool, false),
+            ]);
+            RowBatch::new(
+                schema,
+                vec![Row::new(vec![
+                    Value::Text(kind.into()),
+                    Value::Text(name.into()),
+                    Value::Text(base_url.into()),
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    verb.map_or(Value::Null, |v| Value::Text(v.into())),
+                    Value::Text(body.into()),
+                    Value::Bool(false),
+                ])],
+            )
+        };
+
+        // Two installs of one driver key, then a verb-keyed pair of maps, then a re-install of
+        // one map — six installs, two of them supersedes.
+        for (kind, name, base_url, verb, body) in [
+            ("driver", "demo", "https://first.example", None, ""),
+            ("driver", "demo", "https://second.example", None, ""),
+            ("map", "/demo/things", "", Some("INSERT"), "MAP-V1"),
+            ("map", "/demo/things", "", Some("REMOVE"), "MAP-RM"),
+            ("map", "/demo/things", "", Some("INSERT"), "MAP-V2"),
+        ] {
+            backend
+                .insert_driver(&decl(kind, name, base_url, verb, body))
+                .unwrap();
+        }
+
+        // Storage converged: one `demo` driver row carrying the SECOND locator; the two maps are
+        // distinct keys, and the INSERT map carries its re-installed body.
+        let drivers = backend.scan(SysNode::Drivers).unwrap();
+        let names = texts(&drivers, "name");
+        assert_eq!(
+            names.iter().filter(|n| n.as_str() == "demo").count(),
+            1,
+            "a re-install must replace, not append: {names:?}"
+        );
+        let demo_idx = names.iter().position(|n| n == "demo").unwrap();
+        assert_eq!(
+            texts(&drivers, "base_url")[demo_idx],
+            "https://second.example",
+            "the newest locator is the one on disk"
+        );
+        assert_eq!(
+            names
+                .iter()
+                .filter(|n| n.as_str() == "/demo/things")
+                .count(),
+            2,
+            "maps differing in verb are distinct declarations: {names:?}"
+        );
+        let bodies = texts(&drivers, "body");
+        assert!(
+            bodies.iter().any(|b| b == "MAP-V2") && !bodies.iter().any(|b| b == "MAP-V1"),
+            "the re-installed map body replaced its predecessor: {bodies:?}"
+        );
+        assert!(
+            bodies.iter().any(|b| b == "MAP-RM"),
+            "the other-verb map survived its sibling's re-install: {bodies:?}"
+        );
+
+        // Both legs of each supersede are in the DDL event log, in operation order; the two
+        // first-time installs of each key emitted no delete.
+        let events = ddl_events(&backend);
+        let verbs: Vec<&str> = events.iter().map(|e| e.verb.as_str()).collect();
+        assert_eq!(
+            verbs,
+            vec![
+                "INSERT", // demo v1 (first install: no delete leg)
+                "REMOVE", "INSERT", // demo v2 supersedes v1
+                "INSERT", // map INSERT v1
+                "INSERT", // map REMOVE (different key: no delete leg)
+                "REMOVE", "INSERT", // map INSERT v2 supersedes v1
+            ],
+            "every supersede records its delete leg, first installs record none"
+        );
+        let supersede = &events[1];
+        assert!(
+            supersede.payload_json.contains(r#""name":"demo""#),
+            "the delete leg names the superseded key: {}",
+            supersede.payload_json
+        );
     }
 
     #[test]
