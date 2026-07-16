@@ -9,9 +9,9 @@ assignee: a@qmu.jp
 tickets: []
 stories: []
 concerns: []
-gate_type: documentation
+gate_type:
 gate_target: /guide/connect
-gate_assert: Every service on the page connects through a committed declaration with a referenced secret — no qfs account add prerequisite for cloud, and no QFS_* env var presented as a working path.
+gate_assert: North star, not a machine check — every service connects through a committed declaration with a referenced secret, with no qfs account add prerequisite for cloud and no QFS_* env var as a working path. Verified per ticket, not by reading the page.
 ---
 
 # Declared drivers are the normal way to add a service
@@ -191,4 +191,13 @@ stops truncating, and Project DB config writes are events like every other confi
   and trailing-`#` defects at once. Verified in both directions: with the fix stashed and `$TMPDIR`
   carrying `--`, exactly the two job tests the concern named fail; with it restored the `qfs` crate
   passes 368 under the same TMPDIR.
+- 2026-07-16 — Gate demoted from `documentation` to none (owner directive: thin at the start,
+  revised as the tickets run). `/guide/connect` is hand-written prose, so a docs gate over it checks
+  that **someone wrote the right words**, not that a cloud mount actually binds from a committed
+  declaration — and `gate.sh` resolves no port for this mission anyway, so nothing could have been
+  driven. `gate_target`/`gate_assert` stay as the north star. This is not a loss: item 5 shipped
+  today verified by its **ticket's** gate — the `--`-bearing TMPDIR reproduction, the three
+  binary reproductions, and both loaders agreeing — and the mission-level docs assertion played no
+  part in it. A ticket's gate is written after reading the source; a mission's is written from a
+  summary, which is the same reason three of the seven items above were wrong.
 - 2026-07-16 — ticket archived — 20260716005029-unify-the-qfs-statement-splitter.md
