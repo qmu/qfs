@@ -129,9 +129,18 @@ stops truncating, and Project DB config writes are events like every other confi
       named the wrong parser. The concern itself says "the `.qfs` config statement splitter", which
       is right; it also records the repro this item lacked: two `qfs` job tests fail whenever
       `$TMPDIR` contains `--`, green under a clean TMPDIR and in CI.)
-- [ ] **Project DB configuration writes append DDL events** with the same secret-redaction and
-      hash-chain discipline as System DB writes — via a Project DB event writer or an explicit
-      cross-store event envelope (concern `project-db-configuration-events-are-not`)
+- [ ] **Config writes are ledger-transactional because the declarative tables live beside the
+      ledger** — `path_binding` and `connection_consent` re-home into the System DB, the Project DB
+      becomes the vault proper, and CONNECT/DISCONNECT/account writes land audit + DDL event in one
+      transaction like every other config write
+      (`20260716143641-rehome-declarative-tables-into-the-system-db.md`). (Ruled 2026-07-16,
+      superseding this item's original text: the concern's two bridging options — a second
+      Project-DB chain, or a cross-store envelope — were both declined. A second chain forks the
+      config history across two WAL files with no total order; an envelope builds backfill
+      machinery the re-homing retires. WAL rules out a shared cross-file transaction, and both
+      mis-homed tables declare "never a secret" in their own schema headers — the boundary was
+      drawn in the wrong place, so it moves. Concern
+      `project-db-configuration-events-are-not`'s How-to-Fix is superseded accordingly.)
 - [ ] **The declared-secrets adapter carries the OAuth app**, closing the declared-model follow-up
       left by the capability-tryout mission (concern `declared-model-and-scheduling-follow-ups`; its
       Chatwork live-encoding and Slack-threading remainders hand over to the live backlog)
@@ -204,3 +213,14 @@ stops truncating, and Project DB config writes are events like every other confi
   summary, which is the same reason three of the seven items above were wrong.
 - 2026-07-16 — ticket archived — 20260716005029-unify-the-qfs-statement-splitter.md
 - 2026-07-16 — ticket archived — 20260716120200-reinstall-replaces-a-declaration.md
+- 2026-07-16 — **Item 6 ruled: re-draw the boundary instead of bridging it** (design brief, owner
+  choice C over a second Project-DB chain and a cross-store envelope). The investigation corrected
+  the record twice more: `qfs dump` does NOT miss bindings (`dump.rs:82` emits them — the earlier
+  claim was wrong; the real gaps are the ledger, dump's missing accounts section, and restore's
+  eventless binding replay), and WAL mode rules out a shared cross-file transaction outright, so
+  "cannot share one transaction" is a hard fact, not a shortcut. Both mis-homed tables carry
+  "never a secret" in their own schema headers; the ruling's boundary principle — one file holds
+  secret material, the other holds everything declarative plus the ledger — goes to the blueprint
+  when the ticket ships. Sequencing note recorded: items 1 and 3 both write `path_binding`, so
+  neither starts before the re-homing lands. Ticket:
+  `20260716143641-rehome-declarative-tables-into-the-system-db.md`.
