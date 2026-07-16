@@ -12,7 +12,7 @@ first_seen: 2026-07-07T04:35:44+09:00
 concern_id: project-db-configuration-events-are-not
 severity: moderate
 status: resolved
-resolved_by_pr: 
+resolved_by_pr: 2
 resolved_by_commit: ada28be
 ---
 
