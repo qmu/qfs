@@ -25,3 +25,4 @@
 * [ls /type is SHOW TYPES: the shell face lands, and the effect selector goes uniform](work-20260714-111817.md)
 * [Sample output in the Cloudflare cookbook is now a neutral example](work-20260715-163500.md)
 * [Unify the qfs statement splitter onto the lexer etc](work-20260715-205333.md)
+* [Re-home the declarative tables into the System DB etc](work-20260716-152000.md)
