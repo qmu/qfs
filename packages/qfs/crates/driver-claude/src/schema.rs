@@ -15,10 +15,11 @@
 //! surface — blueprint §15 / decision W — but that lives in `qfs-driver-transform` + the binary,
 //! never here.)
 //!
-//! ## Redaction is structural (roadmap §3.2)
-//! `/claude/sessions` declares ONLY `id` / `task` / `status` / `progress` / `last_message` — task
-//! metadata. There is **no column** for a token, a key, or a transcript secret, so a credential
-//! cannot surface through this path even by accident: the schema is the boundary.
+//! ## Redaction is structural
+//! `/claude/sessions` declares ONLY `id` / `cwd` / `name` / `status` / `last_message` — session
+//! metadata the store actually records, plus the latest visible message text. There is **no
+//! column** for a token, a key, or a raw transcript, so a credential cannot surface through this
+//! path even by accident: the schema is the boundary.
 
 use qfs_types::{Column, ColumnType, Schema};
 
@@ -33,8 +34,8 @@ pub const CLAUDE_MOUNT: &str = "/claude";
 /// adds a variant here, never a side-channel API (the one-engine constraint).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaudeNode {
-    /// `/claude/sessions` — the agent SESSIONS relation: what each Claude Code session is doing
-    /// (`id`/`task`/`status`/`progress`/`last_message`), READ-ONLY metadata. The model runs
+    /// `/claude/sessions` — the agent SESSIONS relation: what each live Claude Code session is
+    /// doing (`id`/`cwd`/`name`/`status`/`last_message`), READ-ONLY metadata. The model runs
     /// elsewhere; this is a façade over its session state, never an inference call (decision W: the /claude façade calls no model).
     Sessions,
     /// `/claude/sessions/<id>/instructions` — the per-session INSTRUCTIONS append-log: the
@@ -101,19 +102,21 @@ pub fn instruction_session(path: &str) -> Option<String> {
 /// The typed [`Schema`] of a `/claude/<node>` relation — the **canonical** source of truth
 /// `DESCRIBE` and the backend scan both read. Pure data; no live source, no creds.
 ///
-/// Neither relation carries a column for a token, a key, or a raw transcript secret — task
-/// metadata + a steering message only (the redaction contract, roadmap §3.2).
+/// Neither relation carries a column for a token, a key, or a raw transcript secret — session
+/// metadata + a steering message only (the redaction contract).
 #[must_use]
 pub fn claude_node_schema(node: ClaudeNode) -> Schema {
     let col = |name: &str, ty: ColumnType, nullable: bool| Column::new(name, ty, nullable);
     match node {
-        // The agent sessions relation: what each session is doing. METADATA ONLY — no secret, no
-        // raw transcript, so it is safe to render as a relation (the boundary `describe` enforces).
+        // The agent sessions relation: one row per LIVE session, the fields Claude Code's own
+        // store records (`~/.claude/sessions/<pid>.json`) plus the transcript's latest visible
+        // message text. METADATA ONLY — no secret, no raw transcript, so it is safe to render as
+        // a relation (the boundary `describe` enforces).
         ClaudeNode::Sessions => Schema::new(vec![
             col("id", ColumnType::Text, false),
-            col("task", ColumnType::Text, true),
+            col("cwd", ColumnType::Text, true),
+            col("name", ColumnType::Text, true),
             col("status", ColumnType::Text, false),
-            col("progress", ColumnType::Text, true),
             col("last_message", ColumnType::Text, true),
         ]),
         // The per-session instructions append-log: a steering message + when it was appended.

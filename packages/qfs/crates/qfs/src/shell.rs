@@ -233,8 +233,9 @@ fn transform_vault_resolver() -> crate::transform::VaultResolver {
 /// cross-driver `cp /local/x /drive/y` could not resolve `/drive` to build a canonical write node.
 fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> ReadRegistry {
     // t100040 (the CONNECT model): NOTHING third-party is pre-mounted. Only the minimal system set
-    // (`/local`, wired by `local_engine_and_reads`, plus `/sys` below) is always present; every
-    // third-party driver (gmail/gdrive/ga/github/slack/s3/r2/cf/rest/fs/claude) is reachable ONLY
+    // (`/local`, wired by `local_engine_and_reads`, plus `/sys`, `/transform`, `/type` and the
+    // local credential-free `/claude` facade below) is always present; every third-party driver
+    // (gmail/gdrive/ga/github/slack/s3/r2/cf/rest/fs) is reachable ONLY
     // after a `CONNECT`, mounted at its user path from the project DB `path_binding` registry. The
     // read + apply facets stay keyed by canonical driver id (`commit.rs`, the reads below), so THIS
     // path-keyed planning registry is the gate: an un-CONNECTed path simply does not resolve.
@@ -325,7 +326,16 @@ fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> Re
     engine
         .mounts
         .set_declared_types(crate::declared_driver::load_declared_type_defs());
-    if let Some(source) = crate::claude::DirSessionSource::open_default() {
+    // Claude sessions (mission claude-code-sessions-…): register the `/claude` introspective
+    // mount UNCONDITIONALLY, like `/sys` and `/transform` — describe is pure and credential-free,
+    // and without this registration the planner raised `unknown_source` before the read facet was
+    // ever consulted (the pre-mission one-line omission that made the whole driver unreachable).
+    // The LIVE read facet stays opt-in (QFS_CLAUDE_SESSIONS names the real `~/.claude` store), so
+    // an unconfigured scan fails closed with the read-registry's structured error.
+    let _ = engine
+        .mounts
+        .register(Arc::new(qfs_driver_claude::ClaudeDriver::new()));
+    if let Some(source) = crate::claude::ClaudeStoreSource::open_default() {
         reads = reads.with(
             DriverId::new("claude"),
             Arc::new(crate::claude::ClaudeReadDriver::new(std::sync::Arc::new(

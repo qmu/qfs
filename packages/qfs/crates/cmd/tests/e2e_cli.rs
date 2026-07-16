@@ -355,15 +355,108 @@ fn local_run_at_default_log_level_emits_no_cloud_bind_noise() {
 
 #[test]
 fn unknown_source_is_capability_exit_three() {
-    // No read driver registered → an absolute source resolves to a structured capability error.
-    // `/claude` (no QFS_CLAUDE_SESSIONS configured) leaves its read facet UNregistered, so it is the
-    // genuine unknown_source case. The cloud sources (`/mail`, `/github`, …) now carry actionable
-    // connect-account capability errors (still exit 3) rather than the raw unknown_source (t5/t6).
-    let o = qfs(&["run", "-e", "/claude/sessions |> LIMIT 1", "--json"]);
+    // No mount registered at all → the PLANNER resolves the source to a synthetic id and raises
+    // the structured unknown_source capability error. This must be a path with genuinely no
+    // driver: `/claude` no longer qualifies — its introspective mount is now always registered
+    // (the mission fix), so it fails later at the READ registry, which the next test pins.
+    let o = qfs(&["run", "-e", "/no-such-mount/rows |> LIMIT 1", "--json"]);
     assert_eq!(o.code, 3, "unsupported-op/capability is exit 3");
     let v = json(&o.stderr);
     assert_eq!(v["error"]["kind"], "capability");
     assert_eq!(v["error"]["code"], "unknown_source");
+}
+
+#[test]
+fn claude_sessions_without_store_fails_closed_at_the_read_registry() {
+    // The `/claude` mount now ALWAYS resolves and plans (describe is pure); with no
+    // QFS_CLAUDE_SESSIONS configured the READ facet stays unregistered, so the scan fails closed
+    // with the read-registry's structured capability error — same kind/exit as before the mount
+    // fix (the operator-visible contract holds), but no longer the planner's unknown-mount case.
+    // History: until 2026-07-17 this exact query asserted the planner's `unknown_source` as
+    // intended behaviour, silently pinning the missing `engine.mounts.register(...)` as correct.
+    let o = qfs(&["run", "-e", "/claude/sessions |> LIMIT 1", "--json"]);
+    assert_eq!(o.code, 3, "capability is exit 3");
+    let v = json(&o.stderr);
+    assert_eq!(v["error"]["kind"], "capability");
+    assert_eq!(v["error"]["code"], "unknown_source");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no read driver registered"),
+        "must be the read-registry miss, not the planner's unknown mount: {}",
+        o.stderr
+    );
+}
+
+/// THE regression guard for the mount registration (mission
+/// `claude-code-sessions-are-queryable-and-steerable-as-qfs-paths`, acceptance item 2): with a
+/// FIXTURE store configured, `/claude/sessions` returns real rows through the whole
+/// parse→resolve→plan→scan path of the spawned binary. Remove the `engine.mounts.register(...)`
+/// for `/claude` in shell.rs and this fails with the planner's `unknown_source` — exactly the
+/// omission that shipped unreachable for three weeks while a wrong-reason test held the door.
+#[test]
+fn claude_sessions_reads_a_fixture_store_end_to_end() {
+    // A hermetic ~/.claude-shaped store in a tempdir: the liveness registry record carries THIS
+    // test process's pid (alive by definition), and the matching transcript ends in a visible
+    // assistant message. Never the developer's real store.
+    let base = std::env::temp_dir().join(format!("qfs-e2e-claude-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let sessions = base.join("sessions");
+    std::fs::create_dir_all(&sessions).expect("create fixture sessions dir");
+    let pid = std::process::id();
+    std::fs::write(
+        sessions.join(format!("{pid}.json")),
+        format!(
+            r#"{{"pid":{pid},"sessionId":"e2e-fixture-session","cwd":"/tmp/e2e-proj","name":"e2e","status":"busy","kind":"interactive"}}"#
+        ),
+    )
+    .expect("write fixture session record");
+    let project = base.join("projects").join("-tmp-e2e-proj");
+    std::fs::create_dir_all(&project).expect("create fixture project dir");
+    std::fs::write(
+        project.join("e2e-fixture-session.jsonl"),
+        concat!(
+            r#"{"type":"user","message":{"role":"user","content":"drive the mission"}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"reading the real store"}]}}"#,
+            "\n",
+        ),
+    )
+    .expect("write fixture transcript");
+
+    let mut child = Command::new(qfs_bin())
+        .args(["run", "-e", "/claude/sessions |> LIMIT 10", "--json"])
+        .env("RUST_LOG", "off")
+        .env("XDG_CONFIG_HOME", hermetic_config_home())
+        .env("QFS_CLAUDE_SESSIONS", &base)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn qfs binary");
+    drop(child.stdin.take());
+    let out = child.wait_with_output().expect("wait qfs");
+    let _ = std::fs::remove_dir_all(&base);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the mounted read path must serve rows; stdout={stdout} stderr={stderr}"
+    );
+    let v = json(&stdout);
+    let rows = v["rows"].as_array().expect("rows array");
+    let row = rows
+        .iter()
+        .find(|r| r["id"] == "e2e-fixture-session")
+        .unwrap_or_else(|| panic!("fixture session row present; got {stdout}"));
+    assert_eq!(row["cwd"], "/tmp/e2e-proj");
+    assert_eq!(row["status"], "busy");
+    assert_eq!(
+        row["last_message"], "reading the real store",
+        "last_message comes from the transcript's final visible entry"
+    );
 }
 
 #[test]
