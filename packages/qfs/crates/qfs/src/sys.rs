@@ -159,9 +159,10 @@ impl SysBackend for SystemDbBackend {
                     ]))
                 },
             )?,
-            // t100020 (the CONNECT model): the DEFINED-PATH binding registry, from the Project DB.
-            // Metadata only — `secret_ref` is a REFERENCE (`env:`/`vault:`), never a secret value.
-            SysNode::Paths => self.scan_project(
+            // t100020 (the CONNECT model): the DEFINED-PATH binding registry, from the System DB
+            // (re-homed by 20260716143641). Metadata only — `secret_ref` is a REFERENCE
+            // (`env:`/`vault:`), never a secret value.
+            SysNode::Paths => self.scan_system(
                 "SELECT path, driver_id, at_locator, secret_ref, alias_of, host, account, app, \
                         created_at \
                  FROM path_binding ORDER BY path",
@@ -253,11 +254,12 @@ impl SysBackend for SystemDbBackend {
                 },
             )?,
             // 20260703040000 (the CREATE ACCOUNT model): the service-account consent registry, from
-            // the Project DB `connection_consent` ledger. USER-FACING provider grain: Google's three
-            // driver rows (gmail/gdrive/ga, one consent many drivers) COLLAPSE to one `google` row per
-            // email (scope = the union); a cloud account is one row as-is. SELECTORS + METADATA only —
-            // there is structurally no token column (the credential is sealed out-of-band).
-            SysNode::Accounts => self.scan_project(
+            // the System DB `connection_consent` ledger (re-homed by 20260716143641). USER-FACING
+            // provider grain: Google's three driver rows (gmail/gdrive/ga, one consent many drivers)
+            // COLLAPSE to one `google` row per email (scope = the union); a cloud account is one row
+            // as-is. SELECTORS + METADATA only — there is structurally no token column (the
+            // credential is sealed out-of-band).
+            SysNode::Accounts => self.scan_system(
                 "SELECT 'google' AS provider, connection AS account, MIN(subject) AS subject, \
                         group_concat(DISTINCT scope) AS scope, MIN(app) AS app, \
                         MIN(granted_at) AS created_at \
@@ -417,19 +419,17 @@ impl SysBackend for SystemDbBackend {
     }
 
     fn upsert_binding(&self, row: &RowBatch) -> Result<u64, SysError> {
-        // t100020 (the CONNECT model): bind / re-bind a defined path in the PROJECT DB `path_binding`
-        // table (upsert on `path`). A row carrying `alias_of` is an ALIAS (reuse another defined
-        // path's connection); otherwise it is a FULL connect and MUST name a driver.
+        // t100020 (the CONNECT model): bind / re-bind a defined path in the SYSTEM DB `path_binding`
+        // table (upsert on `path`; re-homed by ticket 20260716143641). A row carrying `alias_of` is
+        // an ALIAS (reuse another defined path's connection); otherwise it is a FULL connect and
+        // MUST name a driver. The binding row, its t76 audit row, and its `ddl_event` land in ONE
+        // transaction — the `insert_driver` pattern (administration observes itself, atomically).
         let path = required_text(row, "path")?;
         let alias_of = optional_text(row, "alias_of");
-        let Some(project) = &self.project else {
-            return Err(SysError::Backend(
-                "no project database (set HOME or XDG_CONFIG_HOME) to persist a connection".into(),
-            ));
-        };
-        let conn = project.lock().map_err(poisoned)?;
-        let affected = if let Some(target) = alias_of {
-            crate::path_binding::db_upsert_alias(&conn, &path, &target).map_err(binding_err)?
+        let conn = self.system.lock().map_err(poisoned)?;
+        let tx = conn.unchecked_transaction().map_err(backend)?;
+        let affected = if let Some(target) = &alias_of {
+            crate::path_binding::db_upsert_alias(&tx, &path, target).map_err(binding_err)?
         } else {
             let driver = required_text(row, "driver").map_err(|_| SysError::MalformedEffect {
                 reason: "a full CONNECT needs a driver (or a `/path` alias target)".into(),
@@ -442,7 +442,7 @@ impl SysBackend for SystemDbBackend {
             let account = optional_text(row, "account");
             let app = optional_text(row, "app");
             crate::path_binding::db_upsert_binding(
-                &conn,
+                &tx,
                 &path,
                 &driver,
                 at.as_deref(),
@@ -453,25 +453,26 @@ impl SysBackend for SystemDbBackend {
             )
             .map_err(binding_err)?
         };
-        drop(conn);
-        // Administration observes itself (t76). The binding lives in the Project DB and the audit
-        // chain in the System DB, so — unlike the single-DB /sys writes — this appends best-effort
-        // AFTER the binding commits (a cross-DB write cannot share one transaction).
-        self.audit_paths_write("INSERT", &path);
+        ledgered_paths_write_tx(&tx, "INSERT", &path, row_payload_json("binding", row))
+            .map_err(backend)?;
+        tx.commit().map_err(backend)?;
         Ok(affected)
     }
 
     fn remove_binding(&self, path: &str) -> Result<u64, SysError> {
-        // t100020: `DISCONNECT` — remove the defined path from the PROJECT DB (aliases cascade).
-        let Some(project) = &self.project else {
-            return Err(SysError::Backend(
-                "no project database (set HOME or XDG_CONFIG_HOME) to remove a connection".into(),
-            ));
-        };
-        let conn = project.lock().map_err(poisoned)?;
-        let affected = crate::path_binding::db_remove_binding(&conn, path).map_err(binding_err)?;
-        drop(conn);
-        self.audit_paths_write("REMOVE", path);
+        // t100020: `DISCONNECT` — remove the defined path from the SYSTEM DB (aliases cascade),
+        // with the audit row + `ddl_event` in the same transaction (20260716143641).
+        let conn = self.system.lock().map_err(poisoned)?;
+        let tx = conn.unchecked_transaction().map_err(backend)?;
+        let affected = crate::path_binding::db_remove_binding(&tx, path).map_err(binding_err)?;
+        ledgered_paths_write_tx(
+            &tx,
+            "REMOVE",
+            path,
+            remove_payload_json("binding", "path", path),
+        )
+        .map_err(backend)?;
+        tx.commit().map_err(backend)?;
         Ok(affected)
     }
 
@@ -631,17 +632,16 @@ impl SysBackend for SystemDbBackend {
         let app = optional_text(row, "app");
         crate::account::declare_account(&provider, &account, app.as_deref())
             .map_err(SysError::Backend)?;
-        // Administration observes itself (t76): best-effort after the write, like /sys/paths (the
-        // consent lives in the Project DB, the audit chain in the System DB — no shared transaction).
-        self.audit_accounts_write("INSERT", &provider, &account);
+        // The consent write is ledgered INSIDE `declare_account`'s own System-DB transaction
+        // (audit + ddl_event; ticket 20260716143641) — nothing to append here.
         Ok(1)
     }
 
     fn remove_account(&self, provider: &str, account: &str) -> Result<u64, SysError> {
         // Complete deletion (token + consent) via the shared `crate::account::remove_account` — the
         // same path `qfs account remove` takes (data sovereignty: deletion is first-class + complete).
+        // The consent delete is ledgered inside that shared writer's System-DB transaction.
         crate::account::remove_account(provider, account).map_err(SysError::Backend)?;
-        self.audit_accounts_write("REMOVE", provider, account);
         Ok(1)
     }
 
@@ -752,55 +752,6 @@ impl SystemDbBackend {
         Ok(())
     }
 
-    /// Append a best-effort t76 audit row for a `/sys/accounts` mutation (mirrors
-    /// [`Self::audit_paths_write`]): the consent lives in the Project DB, so this cannot share the
-    /// write's transaction — it runs after, and never fails the mutation. Metadata only (verb +
-    /// node path), never a token.
-    fn audit_accounts_write(&self, verb: &str, provider: &str, account: &str) {
-        let Ok(conn) = self.system.lock() else {
-            return;
-        };
-        let Ok(tx) = conn.unchecked_transaction() else {
-            return;
-        };
-        let event = AuditEvent {
-            actor: ACTOR_CLI.to_string(),
-            connection: "default".to_string(),
-            verb: verb.to_string(),
-            path: format!("{}/{provider}/{account}", SysNode::Accounts.path()),
-            committed: true,
-            ts: now_rfc3339(),
-        };
-        if append_audit_tx(&tx, event).is_ok() {
-            let _ = tx.commit();
-        }
-    }
-
-    /// Append a best-effort t76 audit row (into the System DB) for a `/sys/paths` mutation. The
-    /// binding lives in the Project DB, so this cannot share the write's transaction; it runs after
-    /// the binding commits and NEVER fails the mutation (administration still observes itself, but a
-    /// torn audit does not roll back a committed connect). Metadata only — verb + node path, never
-    /// the binding row.
-    fn audit_paths_write(&self, verb: &str, user_path: &str) {
-        let Ok(conn) = self.system.lock() else {
-            return;
-        };
-        let Ok(tx) = conn.unchecked_transaction() else {
-            return;
-        };
-        let event = AuditEvent {
-            actor: ACTOR_CLI.to_string(),
-            connection: "default".to_string(),
-            verb: verb.to_string(),
-            // The defined path is the subject; record it under the /sys/paths node it was written to.
-            path: format!("{}{}", SysNode::Paths.path(), user_path),
-            committed: true,
-            ts: now_rfc3339(),
-        };
-        if append_audit_tx(&tx, event).is_ok() {
-            let _ = tx.commit();
-        }
-    }
     /// Resolve a team's recorded **billing plan** (t67) from `/sys/billing` — the authority the
     /// ENTITLEMENT GATE reads. **Fail-closed (default-deny toward the free floor):** a missing row, a
     /// read error, or a garbled tier/status all resolve to the FREE plan
@@ -1083,6 +1034,113 @@ pub(crate) fn append_ddl_event_tx(
     Ok(())
 }
 
+/// Append the t76 audit row + `ddl_event` for a `/sys/paths` mutation INSIDE the caller's
+/// System-DB transaction — the binding row and its ledger entries commit atomically (ticket
+/// 20260716143641; the audit `path` records the defined path under the `/sys/paths` node).
+/// Shared by the runtime `/sys/paths` backend, the `qfs connect`/`disconnect` CLI, and restore's
+/// binding replay, so every config writer lands the same ledger shape. Metadata + references
+/// only — never a secret value.
+pub(crate) fn ledgered_paths_write_tx(
+    tx: &rusqlite::Transaction<'_>,
+    verb: &str,
+    user_path: &str,
+    payload_json: String,
+) -> rusqlite::Result<()> {
+    let ts = now_rfc3339();
+    append_audit_tx(
+        tx,
+        AuditEvent {
+            actor: ACTOR_CLI.to_string(),
+            connection: "default".to_string(),
+            verb: verb.to_string(),
+            path: format!("{}{}", SysNode::Paths.path(), user_path),
+            committed: true,
+            ts: ts.clone(),
+        },
+    )?;
+    append_ddl_event_tx(
+        tx,
+        ddl_event(&SysNode::Paths.path(), verb, payload_json, ts),
+    )
+}
+
+/// Append the t76 audit row + `ddl_event` for a `/sys/accounts` mutation INSIDE the caller's
+/// System-DB transaction (ticket 20260716143641) — shared by `qfs account add/remove` and the
+/// `CREATE ACCOUNT` / `REMOVE /sys/accounts/…` statement path (one writer, one ledger shape).
+/// The payload carries selectors only (provider / account label / app), never a token.
+pub(crate) fn ledgered_accounts_write_tx(
+    tx: &rusqlite::Transaction<'_>,
+    verb: &str,
+    provider: &str,
+    account: &str,
+    payload_json: String,
+) -> rusqlite::Result<()> {
+    let ts = now_rfc3339();
+    append_audit_tx(
+        tx,
+        AuditEvent {
+            actor: ACTOR_CLI.to_string(),
+            connection: "default".to_string(),
+            verb: verb.to_string(),
+            path: format!("{}/{provider}/{account}", SysNode::Accounts.path()),
+            committed: true,
+            ts: ts.clone(),
+        },
+    )?;
+    append_ddl_event_tx(
+        tx,
+        ddl_event(&SysNode::Accounts.path(), verb, payload_json, ts),
+    )
+}
+
+/// The secret-free `ddl_event` payload for a full-connect binding write — selectors, a locator
+/// hint, and the secret REFERENCE (`env:`/`vault:` — never a value), mirroring what `qfs dump`
+/// emits for the same row.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn binding_payload_json(
+    path: &str,
+    driver: Option<&str>,
+    at: Option<&str>,
+    secret_ref: Option<&str>,
+    alias_of: Option<&str>,
+    host: Option<&str>,
+    account: Option<&str>,
+    app: Option<&str>,
+) -> String {
+    let mut map = JsonMap::new();
+    map.insert("kind".to_string(), JsonValue::String("binding".to_string()));
+    map.insert("path".to_string(), JsonValue::String(path.to_string()));
+    let opt = |v: Option<&str>| v.map_or(JsonValue::Null, |s| JsonValue::String(s.to_string()));
+    map.insert("driver".to_string(), opt(driver));
+    map.insert("at".to_string(), opt(at));
+    map.insert("secret_ref".to_string(), opt(secret_ref));
+    map.insert("alias_of".to_string(), opt(alias_of));
+    map.insert("host".to_string(), opt(host));
+    map.insert("account".to_string(), opt(account));
+    map.insert("app".to_string(), opt(app));
+    JsonValue::Object(map).to_string()
+}
+
+/// The secret-free `ddl_event` payload for an account consent write — provider + account label +
+/// optional app label (the subject rides in the consent row itself; no token exists to leak).
+pub(crate) fn account_payload_json(provider: &str, account: &str, app: Option<&str>) -> String {
+    let mut map = JsonMap::new();
+    map.insert("kind".to_string(), JsonValue::String("account".to_string()));
+    map.insert(
+        "provider".to_string(),
+        JsonValue::String(provider.to_string()),
+    );
+    map.insert(
+        "account".to_string(),
+        JsonValue::String(account.to_string()),
+    );
+    map.insert(
+        "app".to_string(),
+        app.map_or(JsonValue::Null, |s| JsonValue::String(s.to_string())),
+    );
+    JsonValue::Object(map).to_string()
+}
+
 pub(crate) fn ddl_event(
     target_path: &str,
     verb: &str,
@@ -1114,7 +1172,7 @@ fn row_payload_json(kind: &str, row: &RowBatch) -> String {
 
 /// The `ddl_event` payload for a reconcile REMOVE of a single-keyed `/sys` row — the row's key
 /// only (a delete carries no other data), tagged by kind. Secret-free by construction.
-fn remove_payload_json(kind: &str, key_col: &str, key: &str) -> String {
+pub(crate) fn remove_payload_json(kind: &str, key_col: &str, key: &str) -> String {
     let mut map = JsonMap::new();
     map.insert("kind".to_string(), JsonValue::String(kind.to_string()));
     map.insert(key_col.to_string(), JsonValue::String(key.to_string()));
@@ -1513,6 +1571,67 @@ mod tests {
         )
     }
 
+    /// Ticket 20260716143641 QG1: `CONNECT` / `DISCONNECT` land the binding row, its t76 audit
+    /// row, AND its replayable `ddl_event` in ONE System-DB transaction — the history the ledger
+    /// could never hold while the registry lived in the Project DB. Written against the pre-move
+    /// code first: the binding wrote only a best-effort post-commit AuditEvent and NO DdlEvent, so
+    /// the ddl_events assertions below fail there (both-directions proof).
+    #[test]
+    fn connect_and_disconnect_are_ledger_transactional() {
+        let (_d, backend) = fixture_backend();
+        let schema = Schema::new(vec![
+            Column::new("path", ColumnType::Text, false),
+            Column::new("driver", ColumnType::Text, false),
+            Column::new("secret_ref", ColumnType::Text, true),
+            Column::new("account", ColumnType::Text, true),
+        ]);
+        let row = RowBatch::new(
+            schema,
+            vec![Row::new(vec![
+                Value::Text("/chat".into()),
+                Value::Text("chatwork".into()),
+                Value::Text("vault:chatwork/work".into()),
+                Value::Text("work".into()),
+            ])],
+        );
+        backend.upsert_binding(&row).unwrap();
+
+        // The registry row is read back from the SYSTEM DB (the re-homed home).
+        let paths = backend.scan(SysNode::Paths).unwrap();
+        assert_eq!(texts(&paths, "path"), vec!["/chat"]);
+        // The ddl_event landed, with the secret REFERENCE (never a value) in the payload.
+        let events = ddl_events(&backend);
+        let insert = events
+            .iter()
+            .find(|e| e.target_path == "/sys/paths" && e.verb == "INSERT")
+            .expect("CONNECT lands a replayable ddl_event");
+        assert!(insert.payload_json.contains("/chat"), "{insert:?}");
+        assert!(
+            insert.payload_json.contains("vault:chatwork/work"),
+            "the payload carries the reference form: {insert:?}"
+        );
+        // The audit row landed in the same store, naming the defined path under /sys/paths.
+        let audit = backend.scan(SysNode::Audit).unwrap();
+        assert!(
+            texts(&audit, "path").iter().any(|p| p == "/sys/paths/chat"),
+            "{audit:?}"
+        );
+
+        backend.remove_binding("/chat").unwrap();
+        assert!(backend.scan(SysNode::Paths).unwrap().rows.is_empty());
+        let events = ddl_events(&backend);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.target_path == "/sys/paths" && e.verb == "REMOVE"),
+            "DISCONNECT lands a replayable ddl_event: {events:?}"
+        );
+        // Secret-free discipline across every payload (the planted vault canary never appears).
+        for e in &events {
+            assert!(!e.payload_json.contains("SUPER-SECRET-TOKEN"), "{e:?}");
+        }
+    }
+
     #[test]
     fn scans_users_projects_audit_rows() {
         let (_d, backend) = fixture_backend();
@@ -1557,29 +1676,26 @@ mod tests {
             .unwrap()
             .into_db()
             .into_connection();
-        let proj = ProjectDb::open(&FileSource::new(dir.path().join("p.db")))
-            .unwrap()
-            .into_db()
-            .into_connection();
+        // The consent ledger lives in the SYSTEM DB (re-homed by 20260716143641).
         for (driver, scope) in [
             ("gmail", "gmail.modify gmail.compose"),
             ("gdrive", "drive"),
             ("ga", "analytics.readonly"),
         ] {
-            proj.execute(
+            sys.execute(
                 "INSERT INTO connection_consent (driver, connection, subject, scope) \
                  VALUES (?1, 'you@example.com', 'op@example.com', ?2)",
                 rusqlite::params![driver, scope],
             )
             .unwrap();
         }
-        proj.execute(
+        sys.execute(
             "INSERT INTO connection_consent (driver, connection, subject, scope) \
              VALUES ('github', 'work', 'op@example.com', 'repo')",
             [],
         )
         .unwrap();
-        let backend = SystemDbBackend::new(sys, Some(proj));
+        let backend = SystemDbBackend::new(sys, None);
 
         let accounts = backend.scan(SysNode::Accounts).unwrap();
         // The google trio collapses to ONE `google` account; github is one row → 2 total.

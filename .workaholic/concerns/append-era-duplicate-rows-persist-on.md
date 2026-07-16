@@ -12,8 +12,8 @@ first_seen: 2026-07-16T15:16:32+09:00
 last_seen: 2026-07-16T15:16:32+09:00
 severity: low
 status: active
-resolved_by_pr:
-resolved_by_commit:
+resolved_by_pr: 
+resolved_by_commit: 
 ---
 
 # Append-era duplicate rows persist on disk but resolve correctly
