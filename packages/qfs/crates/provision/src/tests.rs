@@ -298,6 +298,33 @@ fn runtime_fields_are_excluded_and_not_drift() {
 }
 
 #[test]
+fn a_double_dash_in_a_path_does_not_truncate_the_document() {
+    // The twin of the server crate's boot test: both `.qfs` consumers share one splitter, so a
+    // `--` inside a path must be path text here too. It used to cut the statement at the `--`,
+    // swallow the `;`, and merge the next statement in — a bogus parse error on the wrong line.
+    let doc = "\
+CREATE POLICY readers ALLOW SELECT ON /local/a--b/*;
+UPSERT INTO /server/webhooks VALUES (name, route) ('ingest', '/hooks/ingest');
+";
+    let state = load(doc).expect("a `--` inside a path must not break the document");
+    assert_eq!(state.server.policies.len(), 1, "the `--` policy loaded");
+    assert_eq!(
+        state.server.webhooks.len(),
+        1,
+        "the statement after the `--` path loaded too — its `;` was not swallowed"
+    );
+}
+
+#[test]
+fn a_trailing_hash_comment_containing_a_semicolon_does_not_split_the_document() {
+    // The old stripper honoured `#` only at the start of a trimmed line, so the `;` inside this
+    // trailing comment split off a bogus statement and raised UNEXPECTED_EOF.
+    let doc = "CREATE POLICY readers ALLOW SELECT; # note; more\n";
+    let state = load(doc).expect("a trailing `#` comment must be a comment");
+    assert_eq!(state.server.policies.len(), 1);
+}
+
+#[test]
 fn cosmetic_formatting_is_not_drift() {
     // Two documents differing only in whitespace, blank lines, and comments.
     let tidy = "\
