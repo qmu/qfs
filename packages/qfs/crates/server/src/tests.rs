@@ -671,14 +671,32 @@ fn reconfigure_handle_commits_notify_the_runtime_to_audit_and_reconcile() {
     assert_eq!(runtime.audit().len(), 1, "no change, no audit entry");
 }
 
+// The splitter itself moved to `qfs_core::ddl::document` and is tested there against the full
+// comment/string/path table. What belongs HERE is that boot — this crate's `.qfs` consumer —
+// actually reaches it: a `--` inside a path used to truncate the statement, swallow its
+// terminating `;`, and merge the next statement into it, surfacing as a bogus parse error on the
+// wrong line. The provisioning loader has the twin of this test, so the two consumers are pinned
+// to the same answer.
 #[test]
-fn statement_splitter_handles_comments_and_semicolons() {
-    // A `;` inside a comment must NOT split a statement; whole-line and trailing comments
-    // are stripped; the reported line is where the statement's content starts.
-    let text = "# a comment with ; inside\nCREATE POLICY p; -- trailing\nCREATE JOB j EVERY '1h';";
-    let stmts = super::runtime::statements_for_test(text);
-    assert_eq!(stmts.len(), 2, "two statements, comment `;` ignored");
-    assert_eq!(stmts[0].0, 2, "first statement starts on line 2");
-    assert!(stmts[0].1.starts_with("CREATE POLICY"));
-    assert!(stmts[1].1.starts_with("CREATE JOB"));
+fn boot_applies_a_statement_whose_path_contains_a_double_dash() {
+    let dir = std::env::temp_dir().join("qfs-boot-dashes");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let cfg = dir.join("boot_dashes.qfs");
+    std::fs::write(
+        &cfg,
+        "CREATE POLICY p ALLOW SELECT ON /local/a--b/*;\nCREATE JOB j EVERY '1h';\n",
+    )
+    .expect("write config");
+
+    let mut rt = Runtime::new();
+    rt.boot(&cfg)
+        .expect("a `--` inside a path must not break boot");
+
+    let snap = rt.snapshot();
+    assert_eq!(snap.policies.len(), 1, "the policy statement applied");
+    assert_eq!(
+        snap.jobs.len(),
+        1,
+        "the statement after the `--` path applied too — its `;` was not swallowed"
+    );
 }

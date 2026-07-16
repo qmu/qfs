@@ -30,7 +30,11 @@ pub struct DeclaredConnection {
 #[must_use]
 pub fn parse_connections(source: &str) -> Vec<DeclaredConnection> {
     let mut out = Vec::new();
-    for stmt_src in split_statements(source) {
+    // Best-effort, as documented: a document that does not tokenize declares nothing.
+    let Ok(stmts) = super::document::split_document(source) else {
+        return out;
+    };
+    for (_line, stmt_src) in stmts {
         let trimmed = stmt_src.trim();
         if trimmed.is_empty() {
             continue;
@@ -55,42 +59,6 @@ pub fn parse_connections(source: &str) -> Vec<DeclaredConnection> {
         });
     }
     out
-}
-
-/// Split a config into statements on top-level `;` — outside single-quoted strings, so a `;` inside
-/// an `AT '…'` / `SECRET '…'` locator never splits a statement. A `--` outside a quoted string
-/// starts a line comment: the rest of that line is dropped (the newline is kept), so a
-/// `connections.qfs` can carry `-- notes` without corrupting the next declaration. A `--` INSIDE a
-/// quoted locator is literal.
-fn split_statements(source: &str) -> Vec<String> {
-    let mut stmts = Vec::new();
-    let mut cur = String::new();
-    let mut in_quote = false;
-    let mut chars = source.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\'' => {
-                in_quote = !in_quote;
-                cur.push(ch);
-            }
-            // A `--` line comment (only outside a quoted string): consume the second `-` and the
-            // rest of the line, keeping the terminating newline so statement bodies stay separable.
-            '-' if !in_quote && chars.peek() == Some(&'-') => {
-                for c in chars.by_ref() {
-                    if c == '\n' {
-                        cur.push('\n');
-                        break;
-                    }
-                }
-            }
-            ';' if !in_quote => stmts.push(std::mem::take(&mut cur)),
-            _ => cur.push(ch),
-        }
-    }
-    if !cur.trim().is_empty() {
-        stmts.push(cur);
-    }
-    stmts
 }
 
 #[cfg(test)]

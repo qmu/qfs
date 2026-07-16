@@ -5,9 +5,13 @@ slug: support-create-agent-semantics-that-introduce-a-new-user-principal-with-qu
 status: active
 created_at: 2026-07-12T04:34:26+09:00
 author: a@qmu.jp
+assignee: a@qmu.jp
 tickets: []
 stories: []
 concerns: []
+gate_type:
+gate_target: /blueprint
+gate_assert: North star, not a machine check — an agent is a principal with its own grant and audit trail, and the blueprint's agent-model chapter rules it. Verified per ticket, not by reading the page.
 ---
 
 # support CREATE AGENT semantics that introduce a new user principal with query functions, scheduled launch, and access control to resources
@@ -102,3 +106,23 @@ the agent subject, and the whole loop is verified live at least once in an owner
 ## Changelog
 
 - 2026-07-12 — mission created; goal/scope/acceptance drafted for owner review — mission.md
+- 2026-07-16 — Gate demoted from `documentation` to none (owner directive: a mission's gate should
+  be thin at the start and revised as its tickets run). Two reasons it was never a real check.
+  A documentation gate verifies that **someone wrote the right words**, not that the product works —
+  and the words here are hand-written prose, so it passes whenever the page is edited to agree with
+  itself. Worse, the sibling `claude-code-sessions-…` mission proved the failure mode is not
+  hypothetical: `DESCRIBE` and `docs/drivers.md` render from `compiled_describe_registry`
+  (`describe.rs:283`), which never touches the mount registry, so a docs gate there would pass
+  **today** against a driver that cannot be read at all. Separately, `gate.sh` returns no port for
+  any mission here, so a live gate could not be driven either. `gate_target`/`gate_assert` are kept
+  as the mission's north star; the real verification lives in each ticket's Quality Gate, which is
+  written when the source has actually been read.
+- 2026-07-16 — **These six acceptance items have never been re-litigated against the source.** They
+  were drafted on 2026-07-12 from the owner directive, in the same "write the checklist up front from
+  a summary" style that the sibling `declared-drivers-…` mission used — and when that one was
+  checked against the source on 2026-07-16, **three of its seven items were wrong**: one named a
+  parser that was already correct, one described a mount as a cred-free placeholder when it is a
+  live compiled driver, and a correction to a third over-credited a splitter that is blind to
+  escapes, path tokens, `#` comments and line numbers. Treat the items below as headings, not
+  findings. Re-check each against the code before cutting its ticket; do not paraphrase them into a
+  ticket.

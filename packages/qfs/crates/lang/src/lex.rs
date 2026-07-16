@@ -656,10 +656,19 @@ fn is_ident_continue(c: char) -> bool {
 }
 
 /// Whether `c` ends a path segment / version run (operator or structural char).
+///
+/// `;` is here because it is **structural punctuation** — the transaction grammar's item separator
+/// (`transaction { effect_stmt ; effect_stmt }`) and the `.qfs` document format's statement
+/// separator. Before it was listed, a path swallowed the `;` glued to its right, so a
+/// documented `transaction { … |> insert into /a/b; … }` raised UNEXPECTED_TOKEN while the same
+/// text with one space before the `;` parsed — and the `.qfs` document splitter could not use the
+/// lexer at all, because the terminator it needed to find never became a token. The cost is that a
+/// bare path can no longer carry a literal `;`, which puts `;` in exactly the same class as the
+/// `#` and `,` already listed here.
 fn is_path_delimiter(c: char) -> bool {
     c.is_whitespace()
         || matches!(
             c,
-            '|' | '=' | '<' | '>' | '~' | '(' | ')' | ',' | '\'' | '#'
+            '|' | '=' | '<' | '>' | '~' | '(' | ')' | ',' | '\'' | '#' | ';'
         )
 }

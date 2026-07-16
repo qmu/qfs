@@ -1,7 +1,7 @@
 ---
 type: Concern
 concern_id: slack-workspace-namespace-still-advertises-verb
-mission: qfs-capability-tryout-file-handling-transformation-and-platform-hardening
+mission: 
 tickets: [20260713234132-slack-file-detach-verb-mismatch.md, 20260713234133-gmail-attachment-id-not-exposed.md]
 origin_pr: 39
 origin_pr_url: https://github.com/qmu/qfs/pull/39

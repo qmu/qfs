@@ -4,6 +4,7 @@
 //! driver concern). See [`server`].
 
 pub mod connections;
+pub mod document;
 pub mod server;
 pub mod transform;
 pub mod types;

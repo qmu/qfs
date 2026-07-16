@@ -106,8 +106,10 @@ pub(crate) fn load_declared_drivers() -> Vec<DeclaredDriver> {
     drivers
 }
 
-/// Row shape read back from `sys_drivers` (mirrors the desugar's columns).
+/// Row shape read back from `sys_drivers` (mirrors the desugar's columns, plus the rowid the
+/// newest-wins resolution keys on).
 struct DriverRow {
+    id: i64,
     kind: String,
     name: String,
     base_url: Option<String>,
@@ -121,7 +123,7 @@ struct DriverRow {
 
 fn load_from_conn(conn: &rusqlite::Connection) -> Result<Vec<DeclaredDriver>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT kind, name, base_url, auth, pagination, of_type, verb, body, irreversible \
+        "SELECT kind, name, base_url, auth, pagination, of_type, verb, body, irreversible, id \
          FROM sys_drivers ORDER BY id",
     )?;
     let rows: Vec<DriverRow> = stmt
@@ -136,6 +138,7 @@ fn load_from_conn(conn: &rusqlite::Connection) -> Result<Vec<DeclaredDriver>, ru
                 verb: r.get(6)?,
                 body: r.get(7)?,
                 irreversible: r.get::<_, i64>(8)? != 0,
+                id: r.get(9)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -145,10 +148,37 @@ fn load_from_conn(conn: &rusqlite::Connection) -> Result<Vec<DeclaredDriver>, ru
 /// Group flat `sys_drivers` rows into per-driver models. A `driver` row seeds a [`DeclaredDriver`];
 /// `view`/`map` rows attach to the driver named by their path's leading segment. Rows that name no
 /// known driver are dropped (fail-open — one dangling declaration cannot sink the registry).
+///
+/// **Newest row per `(kind, name, verb)` wins** (owner ruling 2026-07-16), matching
+/// `types_from_conn`'s `ORDER BY id DESC`: installs now replace on that key, but a registry from
+/// the append era still carries superseded duplicates, and resolving them oldest-first is what
+/// silently kept a stale declaration live after a re-install. Ascending id order is preserved
+/// among the survivors, so distinct declarations still assemble in install order.
 fn assemble(rows: Vec<DriverRow>) -> Vec<DeclaredDriver> {
+    let mut newest: std::collections::HashMap<(&str, &str, &str), i64> =
+        std::collections::HashMap::new();
+    for r in &rows {
+        let key = (
+            r.kind.as_str(),
+            r.name.as_str(),
+            r.verb.as_deref().unwrap_or(""),
+        );
+        let e = newest.entry(key).or_insert(r.id);
+        if r.id > *e {
+            *e = r.id;
+        }
+    }
+    let survives = |r: &DriverRow| {
+        newest[&(
+            r.kind.as_str(),
+            r.name.as_str(),
+            r.verb.as_deref().unwrap_or(""),
+        )] == r.id
+    };
+
     let mut drivers: Vec<DeclaredDriver> = rows
         .iter()
-        .filter(|r| r.kind == "driver")
+        .filter(|r| r.kind == "driver" && survives(r))
         .map(|r| DeclaredDriver {
             name: r.name.clone(),
             base_url: r.base_url.clone().unwrap_or_default(),
@@ -163,6 +193,9 @@ fn assemble(rows: Vec<DriverRow>) -> Vec<DeclaredDriver> {
         .collect();
 
     for r in &rows {
+        if !survives(r) {
+            continue;
+        }
         match r.kind.as_str() {
             "view" => {
                 if let Some(d) =
@@ -857,6 +890,7 @@ mod tests {
 
     fn base_row(kind: &str, name: &str) -> DriverRow {
         DriverRow {
+            id: 0,
             kind: kind.into(),
             name: name.into(),
             base_url: None,
@@ -2239,5 +2273,60 @@ mod tests {
             vec!["room_id".to_string(), "name".to_string()],
             "the re-installed (newest) declaration wins over the stale array-body row"
         );
+    }
+
+    /// Re-installing must heal EVERY row kind, not just `type`: with duplicate rows on disk
+    /// (ascending ids = install order, differing bodies — the shape a real registry accumulated),
+    /// the newest row per `(kind, name, verb)` wins assembly. A `view` and a `map` sharing a name
+    /// stay distinct, as do two `map`s differing only in verb.
+    #[test]
+    fn duplicate_declaration_rows_resolve_newest_per_key() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sys_drivers (
+                 id INTEGER PRIMARY KEY, kind TEXT, name TEXT, base_url TEXT, auth TEXT,
+                 pagination TEXT, of_type TEXT, verb TEXT, body TEXT, irreversible INTEGER
+             );
+             INSERT INTO sys_drivers (kind, name, base_url, auth, verb, body, irreversible) VALUES
+               ('driver', 'chatwork', 'https://old.example',  '{\"kind\":\"none\"}', NULL, NULL, 0),
+               ('view',   '/chatwork/rooms', NULL, NULL, NULL, 'OLD-VIEW', 0),
+               ('map',    '/chatwork/rooms/{room}/messages', NULL, NULL, 'INSERT', 'OLD-MAP', 0),
+               ('driver', 'chatwork', 'https://new.example',  '{\"kind\":\"none\"}', NULL, NULL, 0),
+               ('view',   '/chatwork/rooms', NULL, NULL, NULL, 'NEW-VIEW', 0),
+               ('map',    '/chatwork/rooms/{room}/messages', NULL, NULL, 'INSERT', 'NEW-MAP', 0),
+               ('map',    '/chatwork/rooms/{room}/messages', NULL, NULL, 'REMOVE', 'OTHER-VERB', 1),
+               ('view',   '/chatwork/rooms/{room}/messages', NULL, NULL, NULL, 'VIEW-SHARING-NAME', 0);",
+        )
+        .unwrap();
+
+        let drivers = load_from_conn(&conn).unwrap();
+        assert_eq!(drivers.len(), 1, "one driver entry, not one per install");
+        let d = &drivers[0];
+        assert_eq!(
+            d.base_url, "https://new.example",
+            "the re-installed driver row wins"
+        );
+
+        let view_bodies: Vec<&str> = d.views.iter().map(|v| v.body.as_str()).collect();
+        assert!(
+            view_bodies.contains(&"NEW-VIEW") && !view_bodies.contains(&"OLD-VIEW"),
+            "the re-installed view body wins: {view_bodies:?}"
+        );
+        assert!(
+            view_bodies.contains(&"VIEW-SHARING-NAME"),
+            "a view sharing a map's name is its own declaration: {view_bodies:?}"
+        );
+        assert_eq!(d.views.len(), 2, "one row per view key: {view_bodies:?}");
+
+        let map_bodies: Vec<&str> = d.maps.iter().map(|m| m.body.as_str()).collect();
+        assert!(
+            map_bodies.contains(&"NEW-MAP") && !map_bodies.contains(&"OLD-MAP"),
+            "the re-installed map body wins: {map_bodies:?}"
+        );
+        assert!(
+            map_bodies.contains(&"OTHER-VERB"),
+            "a map differing only in verb is its own declaration: {map_bodies:?}"
+        );
+        assert_eq!(d.maps.len(), 2, "one row per map key: {map_bodies:?}");
     }
 }

@@ -12,6 +12,7 @@ severity: low
 status: active
 resolved_by_pr: 
 resolved_by_commit: 
+mission: 
 ---
 
 # 170000 Quality Gate #5 — owner live vault-unlock confirmation

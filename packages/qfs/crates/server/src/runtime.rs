@@ -287,7 +287,16 @@ impl Runtime {
             path: cfg.display().to_string(),
             source: e,
         })?;
-        for (line, src) in statements(&text) {
+        // One splitter for every `.qfs` surface (qfs-core): the lexer decides what a comment, a
+        // string and a path token are, so a `--`/`#`/`;` inside a path or locator is content.
+        // A document that does not tokenize applies nothing rather than its prefix.
+        let stmts =
+            qfs_core::ddl::document::split_document(&text).map_err(|e| ServerError::Parse {
+                line: e.line,
+                code: e.code,
+                message: e.message,
+            })?;
+        for (line, src) in stmts {
             self.apply_source("boot", line, &src)?;
         }
         // A final reconcile so a binding converges even if the config was empty.
@@ -472,70 +481,5 @@ async fn shutdown_signal() {
 impl Default for Runtime {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Test-only accessor for the statement splitter.
-#[cfg(test)]
-pub(crate) fn statements_for_test(text: &str) -> Vec<(usize, String)> {
-    statements(text)
-}
-
-/// Split config-file text into `(line, statement_source)` pairs. Comments are stripped
-/// **first** (a whole-line `#` comment, or a trailing `--`/`#` comment), then statements are
-/// separated by `;` — so a `;` *inside a comment* never splits a statement. The `line` is the
-/// 1-based line the statement's first non-blank content appears on, for line-located errors.
-/// This is a deliberately small splitter (the parser owns real grammar); it just chunks the
-/// file so each statement parses alone.
-///
-/// Exposed (blueprint §16) so the provisioning **desired-state loader** parses a `.qfs`
-/// source-of-truth document with the *same* splitter boot uses — the reconcile loop never
-/// forks a second, drifting statement chunker.
-pub fn statements(text: &str) -> Vec<(usize, String)> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    let mut start_line: Option<usize> = None;
-
-    for (idx, raw_line) in text.lines().enumerate() {
-        let line_no = idx + 1;
-        let code = strip_line_comment(raw_line);
-        // Split this (comment-free) line on `;`, flushing a statement at each separator.
-        let mut rest = code;
-        while let Some(pos) = rest.find(';') {
-            let (head, tail) = rest.split_at(pos);
-            if !head.trim().is_empty() && start_line.is_none() {
-                start_line = Some(line_no);
-            }
-            current.push_str(head);
-            if !current.trim().is_empty() {
-                out.push((start_line.unwrap_or(line_no), current.trim().to_string()));
-            }
-            current.clear();
-            start_line = None;
-            rest = &tail[1..]; // skip the ';'
-        }
-        if !rest.trim().is_empty() && start_line.is_none() {
-            start_line = Some(line_no);
-        }
-        if !rest.is_empty() {
-            current.push_str(rest);
-            current.push('\n');
-        }
-    }
-    if !current.trim().is_empty() {
-        out.push((start_line.unwrap_or(1), current.trim().to_string()));
-    }
-    out
-}
-
-/// Strip a trailing `--` comment and a whole-line `#` comment from one line. A `#` is only a
-/// comment at the start of the (trimmed) line; `--` truncates the rest of the line.
-fn strip_line_comment(line: &str) -> &str {
-    if line.trim_start().starts_with('#') {
-        return "";
-    }
-    match line.find("--") {
-        Some(i) => &line[..i],
-        None => line,
     }
 }

@@ -11,6 +11,7 @@ severity: low
 status: active
 resolved_by_pr: 
 resolved_by_commit: 
+mission: declared-drivers-are-the-normal-way-to-add-a-service
 ---
 
 # Postgres/MySQL declarations for the declared-registry path are partial

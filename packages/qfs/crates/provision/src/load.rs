@@ -6,8 +6,10 @@
 //! `ServerState`. The `/sys` half decodes the write twins (`INSERT/UPSERT INTO /sys/<node>
 //! VALUES …`) — including the `CONNECT` sugar, which the **parser itself** desugars to the same
 //! `/sys/paths` write — into the owned [`SysState`] rows. The document is split with the same
-//! [`qfs_server::statements`] splitter boot uses, so cosmetic differences (whitespace, comments)
-//! collapse away and an emitted document reloads to the identical config projection.
+//! [`qfs_core::ddl::document::split_document`] splitter boot uses, so cosmetic differences
+//! (whitespace, comments) collapse away and an emitted document reloads to the identical config
+//! projection. That splitter runs the real lexer, so a `--`/`#`/`;` inside a path or a quoted
+//! locator is content rather than punctuation.
 //!
 //! ## The exclusions hold at the door (blueprint §16, amended)
 //! A document naming a **secretish setting** is rejected (secretish settings are outside the
@@ -22,7 +24,7 @@ use qfs_core::{commit, secretish_setting_key};
 use qfs_parser::{
     parse_statement, EffectBody, EffectStmt, EffectVerb, Expr, Literal, Statement, Values,
 };
-use qfs_server::{lower_statement, statements, ServerConfigApplier, ServerState};
+use qfs_server::{lower_statement, ServerConfigApplier, ServerState};
 
 use crate::state::{
     ConfigState, PathBindingRow, SysDriverRow, SysPolicyRow, SysState, TransformRow,
@@ -105,7 +107,14 @@ impl std::error::Error for LoadError {}
 pub fn load(document: &str) -> Result<ConfigState, LoadError> {
     let server = Arc::new(RwLock::new(ServerState::new()));
     let mut sys = SysState::default();
-    for (line, src) in statements(document) {
+    // The same qfs-core splitter boot uses — the reconcile loop never forks its own chunker.
+    let stmts =
+        qfs_core::ddl::document::split_document(document).map_err(|e| LoadError::Parse {
+            line: e.line,
+            code: e.code,
+            message: e.message,
+        })?;
+    for (line, src) in stmts {
         let stmt = parse_statement(&src).map_err(|e| LoadError::Parse {
             line,
             code: e.code.as_str().to_string(),
