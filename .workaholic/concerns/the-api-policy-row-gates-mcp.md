@@ -1,7 +1,7 @@
 ---
 status: active
 severity: low
-last_seen: 2026-07-16T15:16:32+09:00
+last_seen: 2026-07-16T16:14:56+09:00
 first_seen: 
 concern_id: the-api-policy-row-gates-mcp
 origin_pr: 30

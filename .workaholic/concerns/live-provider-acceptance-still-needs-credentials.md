@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/26
 origin_branch: work-20260707-045409
 origin_commit: d8442ef
 created_at: 2026-07-07T05:42:51+09:00
-last_seen: 2026-07-16T15:16:32+09:00
+last_seen: 2026-07-16T16:14:56+09:00
 first_seen: 2026-07-07T05:42:51+09:00
 concern_id: live-provider-acceptance-still-needs-credentials
 severity: moderate

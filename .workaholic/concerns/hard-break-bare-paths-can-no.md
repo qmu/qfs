@@ -9,7 +9,7 @@ origin_branch: work-20260715-205333
 origin_commit: ddb419e
 created_at: 2026-07-16T15:16:32+09:00
 first_seen: 2026-07-16T15:16:32+09:00
-last_seen: 2026-07-16T15:16:32+09:00
+last_seen: 2026-07-16T16:14:56+09:00
 severity: moderate
 status: active
 resolved_by_pr: 
@@ -25,3 +25,4 @@ Commit [0afaf2b](https://github.com/qmu/qfs/commit/0afaf2b) added `;` to the lex
 ## How to Fix
 
 Any `.qfs` file that relies on a literal `;` inside an unquoted path must quote the locator; nothing else to do — the break is intended
+

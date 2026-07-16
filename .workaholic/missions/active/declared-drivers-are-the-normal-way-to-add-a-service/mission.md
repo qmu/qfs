@@ -235,3 +235,6 @@ stops truncating, and Project DB config writes are events like every other confi
 - 2026-07-16 — ticket archived — 20260716144816-RESUME-report-and-ship-work-20260715-205333.md
 - 2026-07-16 — concern resolved (unstuck) — project-db-configuration-events-are-not.md
 - 2026-07-16 — story reported — work-20260716-152000.md
+- 2026-07-16 — concern deferred (stuck) — the-dead-project-db-config-tables.md
+- 2026-07-16 — concern deferred (stuck) — shared-connection-and-broker-connection-homing.md
+- 2026-07-16 — concern deferred (stuck) — the-operator-s-live-box-runs.md

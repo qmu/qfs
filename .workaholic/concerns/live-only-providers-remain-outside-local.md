@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/25
 origin_branch: work-20260707-025845
 origin_commit: 37bb365
 created_at: 2026-07-07T04:35:44+09:00
-last_seen: 2026-07-16T15:16:32+09:00
+last_seen: 2026-07-16T16:14:56+09:00
 first_seen: 2026-07-07T04:35:44+09:00
 concern_id: live-only-providers-remain-outside-local
 severity: low
