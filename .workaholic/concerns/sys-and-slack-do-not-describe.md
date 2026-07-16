@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-15T16:35:34+09:00
+last_seen: 2026-07-16T15:16:32+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,8 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-`describe /sys` returns `unsupported_verb` and `/slack`'s root is not a node at all, so `cd /sys` fails at describe rather than at the enumerable-children gate. Slack additionally has no "channel tree" node — every addressable node is a leaf, and `files` is already navigable as a `BlobNamespace` (see [fb664b5](https://github.com/qmu/qfs/commit/fb664b5)).
+/sys and /slack roots still are not describable catalog nodes, so cd there fails at describe; that new driver surface was not added on this branch
 
 ## How to Fix
 
-Decide whether `/sys` and `/slack` roots should become describable catalog nodes; that is new driver surface (a root node plus its schema), not a flag, which is why slice 2's quality gate named only the four reachable interiors.
+Implement root-level describe for the /sys and /slack catalog nodes
+

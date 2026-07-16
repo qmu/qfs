@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-15T16:35:34+09:00
+last_seen: 2026-07-16T15:16:32+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,8 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-`sys_drivers` stores a declared type's key in **path** form (`/type/chatwork/message`), which is what `of` normalises a bare name into; the catalog listing strips that prefix back to the **reference name** so it can be pasted into `of`. The two representations now coexist deliberately, and the first cut of the catalog got it wrong — printing the one spelling the grammar rejects (see [c20b6c4](https://github.com/qmu/qfs/commit/c20b6c4) in `packages/qfs/crates/qfs/src/type_catalog.rs`).
+The path-form vs reference-name translation boundary for sys_drivers kind='type' rows still stands as a live encoding rule for any future surface; this branch only rewrote a stale comment in type_catalog.rs, it did not remove the divergence
 
 ## How to Fix
 
-Any future user-facing surface reading `sys_drivers` `kind='type'` rows owes the same translation; the §5.5 "paths are data, names are definitions" rule is a live encoding boundary here, not just a concept.
+Unify path-form and reference-name translation for type catalog keys
+

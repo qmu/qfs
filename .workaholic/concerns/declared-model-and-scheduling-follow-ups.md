@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/33
 origin_branch: work-20260711-121525
 origin_commit: f1a3d21
 created_at: 2026-07-12T01:52:23+09:00
-last_seen: 2026-07-15T16:35:34+09:00
+last_seen: 2026-07-16T15:16:32+09:00
 first_seen: 2026-07-12T01:52:23+09:00
 concern_id: declared-model-and-scheduling-follow-ups
 severity: low
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-Partially resolved by PR #35 (v0.0.59): sub-item (1)'s two generic declared-evaluator primitives (`FOLLOW <field>` for the cross-host download URL, `ENCODE multipart` for upload) landed, and sub-item (3)'s daemon real-clock sweeper + `/server/jobs/<name>/runs` read-back collection landed in `crates/qfs/src/sweeper.rs`. Still remaining: (1-live) verify live that Chatwork message POST tolerates the… (`declared-model-and-scheduling-follow-ups.md`, origin `f1a3d21`)
+Remaining live Chatwork-encoding verification, OAuth-app plumbing and Slack threading follow-ups are untouched; branch changed the declaration-row resolution, not these surfaces
 
 ## How to Fix
 
-Each remainder is a scoped follow-up ticket when prioritized: live-verify the Chatwork encoding (rounds 3/10 of the owner-attended live rounds); plumb the OAuth app into the declared-secrets adapter; extend the reply surfaces for Slack threading.
+Complete live Chatwork-encoding verification, OAuth-app plumbing, and Slack threading
 

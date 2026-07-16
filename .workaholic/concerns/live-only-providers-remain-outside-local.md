@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/25
 origin_branch: work-20260707-025845
 origin_commit: 37bb365
 created_at: 2026-07-07T04:35:44+09:00
-last_seen: 2026-07-15T16:35:34+09:00
+last_seen: 2026-07-16T15:16:32+09:00
 first_seen: 2026-07-07T04:35:44+09:00
 concern_id: live-only-providers-remain-outside-local
 severity: low
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-The design snapshot intentionally documents live-only gates for external providers, but local tests still prove only parser, preview, registry, and hermetic mock behavior for those services (see [e8c0d82](https://github.com/qmu/qfs/commit/e8c0d82) in `docs/guide/design-snapshot.md`). (`live-only-providers-remain-outside-local.md`, origin `37bb365`)
+Live-only provider gates remain outside local proof by design; branch added no credentialed acceptance and touched no provider driver
 
 ## How to Fix
 
-Keep owner-live acceptance tickets for provider-specific paths such as Cloudflare, Postgres, and Google Drive, and record each credentialed verification separately from the hermetic release gate.
+Implement local proof for live-only providers if the design choice changes
 

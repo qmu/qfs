@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/32
 origin_branch: work-20260709-023822
 origin_commit: 22c61e4
 created_at: 2026-07-11T04:39:49+09:00
-last_seen: 2026-07-15T16:35:34+09:00
+last_seen: 2026-07-16T15:16:32+09:00
 first_seen: 2026-07-11T04:39:49+09:00
 concern_id: artifacts-repo-token-is-sealed-but
 severity: moderate
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-Cloudflare Artifacts repository create/delete surface is fully hermetic and the minted repo token is sealed in the vault, but the required live beta-access round-trip verification is unreachable (unverified Artifacts access on the connected account) and deferred to a full-context session for token-handling security (see [8ca0522](https://github.com/qmu/qfs/commit/8ca0522) in packages/qfs). (`artifacts-repo-token-is-sealed-but.md`, origin `22c61e4`)
+Live Cloudflare Artifacts beta round-trip is still owner-gated and unrun; branch touched only the splitter and declaration-row areas
 
 ## How to Fix
 
-In a dedicated session with explicit owner go-ahead, verify the connected Cloudflare account has Artifacts beta access; run a live create/clone/delete round-trip and record evidence on the archived ticket; do not perform autonomously due to beta-access and security-critical token handling.
+In a dedicated session with explicit owner go-ahead, verify Artifacts beta access and run a live create/clone/delete round-trip
 

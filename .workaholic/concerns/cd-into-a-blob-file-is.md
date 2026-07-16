@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-15T16:35:34+09:00
+last_seen: 2026-07-16T15:16:32+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,8 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-`cd README.md` moves the cwd into a file. `Driver::describe` is pure — no I/O — so `LocalFsDriver` cannot stat a path to tell a file from a directory and answers `BlobNamespace` for every path. Pre-existing and unchanged by this branch, which only tightened the row-set case (see [fb664b5](https://github.com/qmu/qfs/commit/fb664b5) in `packages/qfs/crates/driver-local/`).
+driver-local's pure describe still answers BlobNamespace for every path; the branch did not touch driver-local
 
 ## How to Fix
 
-Either have describe report per-path kind from a cached listing, or accept it and document the limit in blueprint §9 — it is structurally unfixable at describe time without breaking the purity invariant.
+Add a describe-time gate to refuse namespace=BlobNamespace at cd time
+

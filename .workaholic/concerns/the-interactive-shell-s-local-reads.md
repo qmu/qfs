@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-15T16:35:34+09:00
+last_seen: 2026-07-16T15:16:32+09:00
 severity: moderate
 status: active
 resolved_by_pr: 
@@ -20,8 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-`shell.rs` roots the REPL's `/local` READ mount at `current_dir()`, while `commit.rs:246` roots the apply driver at `/`. A REPL `mv a.md b.md` therefore previews against `$CWD/a.md` and then commits into `/b.md` — observed as `PermissionDenied`, but it would **succeed as root**. Pre-existing and untouched by this branch (the blob→blob lowering is byte-identical), found only by driving a real COMMIT rather than trusting the preview (see [fc99572](https://github.com/qmu/qfs/commit/fc99572) in `packages/qfs/crates/qfs/src/shell.rs` and `commit.rs`).
+The REPL /local read mount (rooted at cwd) vs commit-side applier (rooted at /) mismatch is unfixed — a REPL cp/mv COMMIT still mis-targets and would write to the filesystem root as root; shell.rs/commit.rs were not touched on this branch
 
 ## How to Fix
 
-Root the commit-side local applier at the same directory the shell's read mount uses (or root both at `/` and make the shell's cwd purely a prompt-level convenience). It means no `cp`/`mv` COMMIT in the REPL has ever worked as the operator reads it, so it deserves its own ticket rather than a drive-by fix.
+Unify the /local root between REPL reads and applier writes
+

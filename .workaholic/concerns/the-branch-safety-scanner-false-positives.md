@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-15T16:35:34+09:00
+last_seen: 2026-07-16T15:16:32+09:00
 severity: moderate
 status: active
 resolved_by_pr: 
@@ -20,8 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-`scan-branch-safety.sh` returns `block` with 7 `secret`/`credential` findings on this branch, all false positives — five are **doc comments** (`/// \`Token::Path\` there fails`). The cause is in the workaholic plugin's `skills/release-scan/scripts/lib/secret-patterns.sh`: `_SP_KEY` (line 46) matches the bare word `token`, then `[:=]` binds to the *first* colon of Rust's `::` and `[^[:space:]]{6,}` swallows the variant name, so every `Token::Variant` in a parser reads as `token=<secret>`. Reproduced in isolation; the rule still matches real assignments, so it is a precision bug, not a broken rule (flagged lines rode in on [ba06534](https://github.com/qmu/qfs/commit/ba06534) in `packages/qfs/crates/parser/`).
+The precision bug is in the workaholic plugin's secret-patterns.sh (a different repo) and cannot be fixed from qfs; unaddressed and still hard-blocks /ship on Rust Token::Variant tokens — this branch adds lexer Token:: usages in document.rs that may trip it
 
 ## How to Fix
 
-In the **workaholic plugin repo** (not qfs), subtract the scope-resolution operator in pass 2 — e.g. exclude `"${_SP_KEY}[[:space:]]*::"` — alongside the existing reference-shaped exclusions. Since the `secret` tier is non-overridable by design in `gate-decision.sh`, `/ship` will hard-block this branch until that lands.
+Fix the false-positive pattern in the workaholic plugin's secret-patterns.sh (ticket already filed in qmu/workaholic)
+

@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/25
 origin_branch: work-20260707-025845
 origin_commit: 37bb365
 created_at: 2026-07-07T04:35:44+09:00
-last_seen: 2026-07-15T16:35:34+09:00
+last_seen: 2026-07-16T15:16:32+09:00
 first_seen: 2026-07-07T04:35:44+09:00
 concern_id: project-db-configuration-events-are-not
 severity: moderate
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-System DB-backed writes append DDL events transactionally, but Project DB-backed path/account state cannot share that transaction boundary yet (see [3385eb3](https://github.com/qmu/qfs/commit/3385eb3) in `packages/qfs/crates/qfs/src/sys.rs`). (`project-db-configuration-events-are-not.md`, origin `37bb365`)
+Judged against the owner's choice-C ruling, not this concern's own How-to-Fix: the fix is now to re-home path_binding + connection_consent into the System DB (Project DB becomes the vault proper) so config writes share the insert_driver-style ledger transaction, superseding the cross-store-envelope suggestion. Ticket 20260716143641 is in todo/ and unimplemented — sys.rs path_binding/connection_consent writes still emit only a best-effort post-commit AuditEvent and no DdlEvent
 
 ## How to Fix
 
-Add a Project DB event writer for `path_binding` and account/app consent mutations, with the same secret-redaction and hash-chain discipline, or introduce a cross-store event envelope that makes the two stores' boundaries explicit.
+Implement ticket 20260716143641 (re-home the declarative tables into the System DB) on its own branch
 

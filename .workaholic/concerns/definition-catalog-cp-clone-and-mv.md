@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-15T16:35:34+09:00
+last_seen: 2026-07-16T15:16:32+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,8 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-An owner-approved deviation from slice 3's settled design. A definition row **carries its own name**, so `cp /transform/a /transform/b` would re-insert `a` rather than clone it to `b`; and no in-place rename exists to lower onto (`/type` exposes no write verb at all, `/transform` has no `UPDATE`). Both refuse, naming re-declaration instead (see [fc99572](https://github.com/qmu/qfs/commit/fc99572) in `packages/qfs/crates/exec/src/shell/desugar.rs`).
+Definition-catalog cp=clone and mv=rename still refuse (owner-approved floor); desugar.rs was not modified on this branch
 
 ## How to Fix
 
-If def-rename is wanted, add a name-rewriting projection the shell can build; until then the refusal is the honest floor, since a silent copy+delete would leave every reference to the old name dangling.
+Implement definition-catalog cp and mv when the floor is lifted
+

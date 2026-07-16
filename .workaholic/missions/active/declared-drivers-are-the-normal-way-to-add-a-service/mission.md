@@ -227,3 +227,7 @@ stops truncating, and Project DB config writes are events like every other confi
 - 2026-07-16 — concern resolved (unstuck) — duplicate-declaration-rows-still-resolve-oldest.md
 - 2026-07-16 — concern resolved (unstuck) — the-config-comment-stripper-truncates-paths.md
 - 2026-07-16 — story reported — work-20260715-205333.md
+- 2026-07-16 — concern deferred (stuck) — create-account-s-secret-reference-form.md
+- 2026-07-16 — concern deferred (stuck) — hard-break-bare-paths-can-no.md
+- 2026-07-16 — concern deferred (stuck) — append-era-duplicate-rows-persist-on.md
+- 2026-07-16 — concern deferred (stuck) — live-chatwork-behavior-change-awaits-owner.md
