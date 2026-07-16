@@ -11,9 +11,9 @@ last_seen: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-12T02:45:19+09:00
 concern_id: duplicate-declaration-rows-still-resolve-oldest
 severity: low
-status: active
-resolved_by_pr: 
-resolved_by_commit: 
+status: resolved
+resolved_by_pr: 1
+resolved_by_commit: 3bc2710
 ---
 
 # Duplicate declaration rows still resolve oldest-first outside the type lookup

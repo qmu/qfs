@@ -1,5 +1,7 @@
 ---
-status: active
+status: resolved
+resolved_by_pr: 1
+resolved_by_commit: 0afaf2b
 severity: low
 last_seen: 2026-07-15T16:35:34+09:00
 first_seen: 
