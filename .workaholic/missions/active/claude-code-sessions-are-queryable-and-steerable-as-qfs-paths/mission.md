@@ -6,7 +6,14 @@ status: active
 created_at: 2026-07-16T01:50:14+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
-tickets: []
+tickets:
+  - 20260717010100-claude-real-store-reader.md
+  - 20260717010200-claude-mount-registration-and-e2e-guard.md
+  - 20260717010300-claude-gate-endpoint-on-serve.md
+  - 20260717010400-claude-path-canon-hosts-move.md
+  - 20260717010500-claude-steering-rewire.md
+  - 20260717010600-claude-session-create-launch.md
+  - 20260717010700-claude-compiled-standing-recorded.md
 stories: []
 concerns: []
 gate_type: live-app
@@ -125,19 +132,27 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
       contradicted; `schema.rs:30` and `peel_scope` follow, and the dangling "roadmap §3.3 / M7,
       t64" citation at `lib.rs:1` is corrected against the roadmap that actually exists (owner
       ruling, 2026-07-16)
-- [ ] **The read path is mounted, and a test fails if it un-mounts.** `/claude/sessions` resolves
+- [x] **The read path is mounted, and a test fails if it un-mounts.** `/claude/sessions` resolves
       instead of raising `unknown_source` — the missing `engine.mounts.register(...)` in
       `shell.rs` alongside `/sys` (`:273`) — and `e2e_cli.rs:356-367`, which today asserts the bug
       as intended behaviour and passes for the wrong reason, is corrected into a guard that would
-      have caught it
-- [ ] **A real reader answers from Claude Code's actual store.** The invented `<base>/<id>/meta`
+      have caught it *(done 2026-07-17: mount registered unconditionally like `/sys`;
+      `claude_sessions_reads_a_fixture_store_end_to_end` proven to fail when the registration is
+      removed; the old test rewritten into planner- and read-registry-miss cases)*
+- [x] **A real reader answers from Claude Code's actual store.** The invented `<base>/<id>/meta`
       layout (`claude.rs:26-35`) is replaced behind the **unchanged** `SessionSource` seam by a
       reader over `~/.claude/projects/<slugified-cwd>/<uuid>.jsonl`, including session-liveness
       detection (a transcript on disk is not a running session). The seam is correctly shaped to
-      take this without touching the driver crate — that claim gets proven here
-- [ ] **Session count and latest message are answerable by query.** A qfs query returns one row per
+      take this without touching the driver crate — that claim gets proven here *(done
+      2026-07-17: `ClaudeStoreSource` joins the `~/.claude/sessions/<pid>.json` liveness registry
+      — the store's own record of running processes, pid-checked against `/proc` — with the
+      transcript tail. The SessionSource seam took it unchanged, as claimed; the driver crate's
+      pure SCHEMA module was deliberately changed in the same slice — `task`/`progress`, which
+      the real store does not record, gave way to `cwd`/`name`, which it does)*
+- [x] **Session count and latest message are answerable by query.** A qfs query returns one row per
       running session with a truthful `last_message` (`schema.rs:117`), read from the real store —
-      closing owner-named capabilities 1 and 3
+      closing owner-named capabilities 1 and 3 *(done 2026-07-17: verified live over the gate
+      endpoint — 37 rows = the 37 live registry records on this box, zero empty `last_message`)*
 - [ ] **Steering reaches a real session.** An INSERT into
       `/hosts/<host>/claude/sessions/<id>/instructions` is observed by the target session, rather
       than appending to a file nothing reads — closing owner-named capability 4, and turning the
@@ -172,3 +187,25 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
   blindness that let the unreachable read path ship. The gate drives an HTTP endpoint bound over
   the sessions query on the worktree's dev port, so it can only pass if the mount, the real reader,
   and the server surface are all true at once.
+- 2026-07-17 — Ticket set decomposed (7 tickets, `todo/a-qmu-jp/20260717010100`–`010700`): real
+  store reader → mount registration + e2e guard → gate endpoint on serve; path canon `/hosts`
+  move; steering rewire; session CREATE/launch (design first); `/claude` compiled standing named
+  in the declared-drivers mission. Ordered by `depends_on`. The developer explicitly approved
+  (AskUserQuestion, 2026-07-17) exposing real session transcripts' `last_message` — including
+  this driving session — through qfs queries and the local dev-port HTTP endpoint.
+- 2026-07-17 — First slice landed (tickets 20260717010100/010200/010300): `ClaudeStoreSource`
+  reads the REAL store (`~/.claude/sessions/<pid>.json` liveness registry joined with the
+  `projects/<slug>/<uuid>.jsonl` transcript tail; sessions schema now truthfully
+  `id`/`cwd`/`name`/`status`/`last_message`); the `/claude` mount registers unconditionally in
+  shell + serve; the wrong-reason e2e became a regression guard proven to fail when the mount is
+  removed; steering's append now FAILS CLOSED with a structured error naming the rewire ticket
+  (the old append wrote a file no session read — honest refusal over a write-only no-op). Gates:
+  workspace tests / clippy `-D warnings` / fmt / gen-docs / gen-skills / check-migrations all
+  exit 0; version 0.0.73 → 0.0.74.
+- 2026-07-17 — **Gate probe passed live**: `qfs serve` with
+  `create endpoint sessions on 'GET /sessions' as /claude/sessions` on this worktree's dev port
+  (`127.0.0.1:8794`; 8787 was occupied by an unrelated workerd) returned **37 rows = the 37 live
+  registry records on this box**, INCLUDING the driving session
+  (`7bd43a5c-edd8-49c4-8abb-5e543e70bfb5`, cwd `/home/ec2-user/projects/strategy`, status
+  `busy`), with **zero empty `last_message`**. Server torn down after the check. Remaining for
+  the mission gate proper: the canon ticket moves the bound path to `/hosts/<host>/claude/...`.
