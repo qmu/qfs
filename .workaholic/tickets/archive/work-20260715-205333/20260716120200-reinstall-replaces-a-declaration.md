@@ -5,7 +5,7 @@ type: bugfix
 layer: [Domain]
 effort:
 commit_hash:
-category:
+category: Changed
 depends_on:
 mission: declared-drivers-are-the-normal-way-to-add-a-service
 ---

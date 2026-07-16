@@ -106,10 +106,12 @@ stops truncating, and Project DB config writes are events like every other confi
 - [ ] **`sql`/`git` move onto the `path_binding` registry**, and declared-path column-type coverage
       broadens to NUMERIC / TIMESTAMP / UUID / JSON round-trips
       (concern `postgres-mysql-declarations-for-the-declared`)
-- [ ] **A re-install heals every declaration row kind** — `driver`, `view`, and `map` lookups get the
+- [x] **A re-install heals every declaration row kind** — `driver`, `view`, and `map` lookups get the
       same replace-on-install (preferred) or newest-wins semantic the `type` lookup already has, so
       re-running a declaration file is idempotent rather than append-only
-      (concern `duplicate-declaration-rows-still-resolve-oldest`)
+      (concern `duplicate-declaration-rows-still-resolve-oldest`; shipped as **both**, `3bc2710` —
+      installs replace on `(kind, name, verb)` in the audited transaction, and reads resolve newest
+      per key so append-era registries heal without a re-install)
 - [x] **The `.qfs` config document gets one correct statement splitter** — `--` and `#` start a
       comment only at a token boundary, `'…'` (with `\'` escapes) is opaque, and a `/`-led path
       token consumes to a real delimiter, so neither `--` nor `;` inside a path or locator
@@ -201,3 +203,4 @@ stops truncating, and Project DB config writes are events like every other confi
   part in it. A ticket's gate is written after reading the source; a mission's is written from a
   summary, which is the same reason three of the seven items above were wrong.
 - 2026-07-16 — ticket archived — 20260716005029-unify-the-qfs-statement-splitter.md
+- 2026-07-16 — ticket archived — 20260716120200-reinstall-replaces-a-declaration.md
