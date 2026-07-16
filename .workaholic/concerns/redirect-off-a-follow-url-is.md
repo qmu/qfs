@@ -1,6 +1,6 @@
 ---
 type: Concern
-mission:
+mission: 
 tickets: [20260712024651-resume-mission-close-out-gaps-and-live-rounds.md]
 origin_pr: 35
 origin_pr_url: https://github.com/qmu/qfs/pull/35

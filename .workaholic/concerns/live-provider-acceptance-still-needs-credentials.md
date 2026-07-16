@@ -1,6 +1,6 @@
 ---
 type: Concern
-mission:
+mission: 
 tickets: [20260630203090-cf-live-d1-kv-queue.md, 20260706120400-materialized-view-refresh-last-run.md, 20260706183441-postgres-value-round-trips.md, 20260707043312-drive-blob-upload-report-copy.md]
 origin_pr: 26
 origin_pr_url: https://github.com/qmu/qfs/pull/26

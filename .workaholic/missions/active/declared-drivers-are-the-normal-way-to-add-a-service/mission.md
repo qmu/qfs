@@ -224,3 +224,6 @@ stops truncating, and Project DB config writes are events like every other confi
   when the ticket ships. Sequencing note recorded: items 1 and 3 both write `path_binding`, so
   neither starts before the re-homing lands. Ticket:
   `20260716143641-rehome-declarative-tables-into-the-system-db.md`.
+- 2026-07-16 — concern resolved (unstuck) — duplicate-declaration-rows-still-resolve-oldest.md
+- 2026-07-16 — concern resolved (unstuck) — the-config-comment-stripper-truncates-paths.md
+- 2026-07-16 — story reported — work-20260715-205333.md

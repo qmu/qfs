@@ -1,6 +1,6 @@
 ---
 type: Concern
-mission:
+mission: 
 tickets: [20260711121532-switch-predicate-model-routing.md, 20260711121530-pdf-extraction-to-drive-pipeline.md, 20260711121536-command-execution-risk-assurance.md, 20260711121533-dependency-reduction-execution.md]
 origin_pr: 33
 origin_pr_url: https://github.com/qmu/qfs/pull/33

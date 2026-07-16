@@ -9,7 +9,6 @@
 * [CREATE ACCOUNT's SECRET reference form is unimplemented (no bind-time account credential resolution)](create-account-ships-the-core-two.md)
 * [Declared-model and scheduling follow-ups](declared-model-and-scheduling-follow-ups.md)
 * [Definition-catalog `cp`=clone and `mv`=rename are refused, not implemented](definition-catalog-cp-clone-and-mv.md)
-* [Duplicate declaration rows still resolve oldest-first outside the type lookup](duplicate-declaration-rows-still-resolve-oldest.md)
 * [EXTEND on the read path is now a real operation (behaviour change)](extend-on-the-read-path-is.md)
 * [Live-only providers remain outside local proof](live-only-providers-remain-outside-local.md)
 * [Live provider acceptance still needs credentials](live-provider-acceptance-still-needs-credentials.md)
@@ -25,7 +24,6 @@
 * [`/sys` and `/slack` do not describe their roots, so `cd` there fails before the gate](sys-and-slack-do-not-describe.md)
 * [The `api` policy row gates MCP, dashboard, and reconcile alike](the-api-policy-row-gates-mcp.md)
 * [The branch-safety scanner false-positives on Rust `Token::Variant`, hard-blocking `/ship`](the-branch-safety-scanner-false-positives.md)
-* [The config `--` comment stripper truncates paths containing `--`](the-config-comment-stripper-truncates-paths.md)
 * [The interactive shell's `/local` reads from the cwd but writes to the filesystem root](the-interactive-shell-s-local-reads.md)
 * [The `/type` catalog and the type resolver translate the stored key differently](the-type-catalog-and-the-type.md)
 
