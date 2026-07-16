@@ -282,6 +282,14 @@ pub fn compiled_describe_registry() -> MountRegistry {
         // surface is `|> transform`, §15). This is what makes `/claude/*` appear in the generated
         // `docs/drivers.md`.
         Arc::new(qfs_driver_claude::ClaudeDriver::new()),
+        // The markdown collection path (マークダウン収集パス, minimal slice): the
+        // `/markdown/<name>/{documents,links}` tables. DESCRIBE is PURE — MarkdownDriver owns
+        // NO root and NO creds (the declared roots feed only the binary's read facet), so it
+        // describes both tables cred-free for any tree name. This is what makes `/markdown`
+        // appear in the generated `docs/drivers.md`. The links schema deliberately carries NO
+        // relation-type column: the closed relation vocabulary is a later, separate mission
+        // layered on `source_section_path`.
+        Arc::new(qfs_driver_markdown::MarkdownDriver::new()),
         // §15 transform definitions (decision W): the `/transform` definition registry. DESCRIBE is
         // PURE — TransformDriver owns NO backend and NO creds (its read source + applier are injected
         // from the binary), so it describes `/transform` cred-free, exactly like the other

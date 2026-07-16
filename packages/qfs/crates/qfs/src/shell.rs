@@ -333,6 +333,14 @@ fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> Re
             ))),
         );
     }
+    // Markdown collection paths (hermetic, local): every declared `/markdown/<name>` root
+    // (a `CONNECT /markdown/<name> TO markdown AT '<dir>'` path_binding row — the declared-
+    // drivers convention, no env var) registers BOTH the mount (so the planner resolves) and
+    // the read facet (so the scan executes). Registering both is load-bearing: `/claude` above
+    // shipped read-facet-only and stayed describable but unqueryable (`unknown_source`) — the
+    // claude mission's documented finding. Skipped entirely when nothing is declared
+    // (fail-closed, like every mount).
+    reads = crate::markdown::register_markdown_mounts(engine, reads);
     // SQL (hermetic, no network): register the live SQLite-backed read facet when a connection is
     // configured, so `FROM /sql/<conn>/<table> |> WHERE … |> SELECT …` executes — the native SELECT
     // pushes the WHERE/ORDER/LIMIT into the database and the residual is re-filtered locally. Skipped

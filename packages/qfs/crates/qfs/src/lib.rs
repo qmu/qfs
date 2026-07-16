@@ -49,6 +49,7 @@ pub mod identity;
 pub mod init;
 pub mod invite;
 pub mod job;
+pub mod markdown;
 pub mod mcp;
 pub mod migration_guard;
 pub mod mount_adapter;

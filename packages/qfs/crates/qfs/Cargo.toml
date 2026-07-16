@@ -1,6 +1,6 @@
 [package]
 name = "qfs"
-version = "0.0.73"
+version = "0.0.74"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -182,6 +182,12 @@ qfs-provision = { path = "../provision" }
 # Decision W (superseding decision K): the /claude driver calls no LLM — a path façade + append-log,
 # no inference. qfs's model-calling surface is the `|> transform` stage (blueprint §15), elsewhere.
 qfs-driver-claude = { path = "../driver-claude" }
+# The markdown collection-path driver (mission markdown-trees-are-queryable-as-documents-and-links-
+# tables): the pure introspective + parser crate. The binary wires the declared `/markdown/<name>`
+# roots (path_binding rows — the declared-drivers convention, NO env var) and hosts the std::fs
+# tree walk (src/markdown.rs); the walk's file text feeds the crate's pure parse_document. The
+# crate is a pure leaf (no qfs-runtime dep — read-only, NoopApplier), so no allowlist edit applies.
+qfs-driver-markdown = { path = "../driver-markdown" }
 # The real in-process SQLite engine, confined to this terminal binary. `bundled` compiles
 # libsqlite3 from source (no system-lib dependency) — the same dep+feature qfs-driver-sql uses for
 # its in-memory test backend, so the artifact already builds in this workspace.
