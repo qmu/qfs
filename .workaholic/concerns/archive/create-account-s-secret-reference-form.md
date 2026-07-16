@@ -11,9 +11,10 @@ created_at: 2026-07-16T15:16:32+09:00
 first_seen: 2026-07-16T15:16:32+09:00
 last_seen: 2026-07-16T15:16:32+09:00
 severity: low
-status: active
-resolved_by_pr:
-resolved_by_commit:
+status: superseded
+resolved_by_pr: 
+resolved_by_commit: 
+superseded_by: create-account-ships-the-core-two
 ---
 
 # (carried from an unrecorded PR) CREATE ACCOUNT's SECRET reference form is unimplemented

@@ -5,7 +5,7 @@ origin_pr_url:
 origin_branch: work-20260705-173620
 origin_commit: 
 created_at: 2026-07-06T00:00:00+09:00
-last_seen: 2026-07-06T00:00:00+09:00
+last_seen: 2026-07-16T15:17:38+09:00
 first_seen: 2026-07-06T00:00:00+09:00
 concern_id: create-account-ships-the-core-two
 severity: low
