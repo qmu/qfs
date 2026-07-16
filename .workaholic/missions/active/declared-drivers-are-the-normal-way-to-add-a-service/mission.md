@@ -129,7 +129,7 @@ stops truncating, and Project DB config writes are events like every other confi
       named the wrong parser. The concern itself says "the `.qfs` config statement splitter", which
       is right; it also records the repro this item lacked: two `qfs` job tests fail whenever
       `$TMPDIR` contains `--`, green under a clean TMPDIR and in CI.)
-- [ ] **Config writes are ledger-transactional because the declarative tables live beside the
+- [x] **Config writes are ledger-transactional because the declarative tables live beside the
       ledger** — `path_binding` and `connection_consent` re-home into the System DB, the Project DB
       becomes the vault proper, and CONNECT/DISCONNECT/account writes land audit + DDL event in one
       transaction like every other config write
@@ -238,3 +238,4 @@ stops truncating, and Project DB config writes are events like every other confi
 - 2026-07-16 — concern deferred (stuck) — the-dead-project-db-config-tables.md
 - 2026-07-16 — concern deferred (stuck) — shared-connection-and-broker-connection-homing.md
 - 2026-07-16 — concern deferred (stuck) — the-operator-s-live-box-runs.md
+- 2026-07-16 — acceptance ticked manually (tick-acceptance.sh misses a ticket filename on a continuation line) — 20260716143641-rehome-declarative-tables-into-the-system-db.md
