@@ -231,3 +231,4 @@ stops truncating, and Project DB config writes are events like every other confi
 - 2026-07-16 — concern deferred (stuck) — hard-break-bare-paths-can-no.md
 - 2026-07-16 — concern deferred (stuck) — append-era-duplicate-rows-persist-on.md
 - 2026-07-16 — concern deferred (stuck) — live-chatwork-behavior-change-awaits-owner.md
+- 2026-07-16 — ticket archived — 20260716143641-rehome-declarative-tables-into-the-system-db.md

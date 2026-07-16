@@ -7,7 +7,6 @@
 * [`cd` into a blob file is still admitted](cd-into-a-blob-file-is.md)
 * [/cf live (203090) unimplemented; /cf and /rest are placeholder mounts](cf-live-203090-unimplemented-cf-and.md)
 * [Console bundle pin unset; live serve + release stamp pending the plgg bundle](console-bundle-pin-unset-live-serve.md)
-* [(carried from an unrecorded PR) CREATE ACCOUNT's SECRET reference form is unimplemented](create-account-s-secret-reference-form.md)
 * [CREATE ACCOUNT's SECRET reference form is unimplemented (no bind-time account credential resolution)](create-account-ships-the-core-two.md)
 * [Declared-model and scheduling follow-ups](declared-model-and-scheduling-follow-ups.md)
 * [Definition-catalog `cp`=clone and `mv`=rename are refused, not implemented](definition-catalog-cp-clone-and-mv.md)

@@ -5,7 +5,7 @@ type: enhancement
 layer: [Domain, DB]
 effort:
 commit_hash:
-category:
+category: Changed
 depends_on:
 mission: declared-drivers-are-the-normal-way-to-add-a-service
 ---
