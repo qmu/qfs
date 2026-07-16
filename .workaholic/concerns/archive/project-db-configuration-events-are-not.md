@@ -11,9 +11,9 @@ last_seen: 2026-07-16T15:16:32+09:00
 first_seen: 2026-07-07T04:35:44+09:00
 concern_id: project-db-configuration-events-are-not
 severity: moderate
-status: active
+status: resolved
 resolved_by_pr: 
-resolved_by_commit: 
+resolved_by_commit: ada28be
 ---
 
 # Project DB configuration events are not yet in the DDL event log

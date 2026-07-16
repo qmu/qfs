@@ -18,7 +18,6 @@
 * [/local write materialization is narrow](local-write-materialization-is-narrow.md)
 * [Policy-less or denied job re-fires every sweep](policy-less-or-denied-job-re.md)
 * [Postgres/MySQL declarations for the declared-registry path are partial](postgres-mysql-declarations-for-the-declared.md)
-* [Project DB configuration events are not yet in the DDL event log](project-db-configuration-events-are-not.md)
 * [qfs-runtime span-buffer test flakes under parallel workspace tests](qfs-runtime-span-buffer-test-flakes.md)
 * [Redirect off a follow URL is refused by the confined transport](redirect-off-a-follow-url-is.md)
 * [Remaining owner-attended live rounds](remaining-owner-attended-live-rounds.md)
