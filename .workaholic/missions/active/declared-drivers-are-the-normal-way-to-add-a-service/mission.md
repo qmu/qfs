@@ -110,7 +110,7 @@ stops truncating, and Project DB config writes are events like every other confi
       same replace-on-install (preferred) or newest-wins semantic the `type` lookup already has, so
       re-running a declaration file is idempotent rather than append-only
       (concern `duplicate-declaration-rows-still-resolve-oldest`)
-- [ ] **The `.qfs` config document gets one correct statement splitter** — `--` and `#` start a
+- [x] **The `.qfs` config document gets one correct statement splitter** — `--` and `#` start a
       comment only at a token boundary, `'…'` (with `\'` escapes) is opaque, and a `/`-led path
       token consumes to a real delimiter, so neither `--` nor `;` inside a path or locator
       truncates or splits. Today three readers disagree on the same text: the server config/job
@@ -172,3 +172,23 @@ stops truncating, and Project DB config writes are events like every other confi
   the `;`-in-quote and trailing-`#` defects of the same class, both reproduced through the shipped
   binary during discovery. Recorded because the same item has now been mis-stated twice in two days
   by paraphrase, in both directions.
+- 2026-07-16 — **Item 5 done** (`0afaf2b`, ticket `20260716005029-unify-the-qfs-statement-splitter.md`).
+  One splitter in `core/src/ddl/document.rs` runs the lexer and splits on the `Token::Semicolon`s it
+  emits; boot, the provisioning loader and `parse_connections` all call it, and both hand-rolled
+  scanners are deleted. The implementation overturned the ticket's own plan twice, so the record is
+  worth keeping: (1) the ticket ruled a lexer-based splitter out of scope because `qfs-server` and
+  `qfs-provision` lack a `qfs-lang` dep — irrelevant, since the splitter lives in `qfs-core`, which
+  **already** has that dep; (2) a hand-rolled scanner cannot mirror `lex.rs` "exactly" at all,
+  because `slash_starts_path` consults the preceding token stream and a **private** keyword table —
+  imitating it means writing a third lexer, the very fork the ticket exists to close.
+  The root cause turned out to be one line: `is_path_delimiter` (`lex.rs:659`) omitted `;`, so a
+  path swallowed the `;` glued to its right. That is why the splitter could not use the lexer — the
+  terminator it needed to find never became a token — **and it was a shipped language bug**:
+  `transaction { … |> insert into /a/b; … }`, exactly as `docs/language.md:113` documents it, raised
+  a parse error, while the same text with one space before the `;` parsed. Adding `;` to the
+  delimiter set (owner-approved hard break; a bare path can no longer carry a literal `;`, joining
+  the `#` and `,` already there) fixed the language bug, the config splitter, and the `;`-in-quote
+  and trailing-`#` defects at once. Verified in both directions: with the fix stashed and `$TMPDIR`
+  carrying `--`, exactly the two job tests the concern named fail; with it restored the `qfs` crate
+  passes 368 under the same TMPDIR.
+- 2026-07-16 — ticket archived — 20260716005029-unify-the-qfs-statement-splitter.md
