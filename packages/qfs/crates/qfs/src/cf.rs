@@ -474,7 +474,7 @@ mod tests {
             .unwrap()
             .create_user("op@example.com")
             .unwrap();
-        let conn = crate::connection::open_project_conn().unwrap();
+        let conn = crate::connection::open_system_conn().unwrap();
         crate::secret_store::db_record_consent(&conn, "cf", "mycf", "op@example.com", "").unwrap();
 
         let store = crate::connection::open_store().unwrap();

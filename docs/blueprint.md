@@ -536,6 +536,16 @@ mount carries `(host, driver, account)`**, so a statement's identity target is r
 statement. The vault key lives in guardian slots (passphrase today; keychain/agent/managed-KMS
 as slots, not forks).
 
+**The store boundary** *(re-drawn 2026-07-16, ticket 20260716143641)*: **one file holds secret
+material; the other holds everything declarative, plus the ledger that observes it.** The Project
+DB is the vault proper — `secret_store`, the key slots, rotation, E2E wraps. The System DB holds
+the declarative configuration (`path_binding`, `connection_consent`, `sys_drivers`, policies,
+settings) *beside* `audit_tail` and `sys_ddl_events`, so every config write — `CONNECT` /
+`DISCONNECT`, account declare/remove, driver install — lands its row, its audit event, and its
+replayable DDL event in **one** transaction. (Historically the two config tables lived in the
+Project DB and their writes could only append a best-effort post-commit audit event — two WAL
+files share no transaction; moving the tables dissolved that class instead of bridging it.)
+
 **Policy grants are path-aware** *(implemented 2026-07-04, ticket 20260704110923)*:
 
 - The grammar is already sufficient: `CREATE POLICY … ALLOW <verbs> [ON <driver>]
@@ -1265,9 +1275,10 @@ writing, and `qfs apply` recomputes and commits through the same gates. This sec
 implementation contract for that surface, extending §10 and §13 in place.)*
 
 **The thesis.** qfs already made its whole configuration data: bindings are rows under
-`/server/*` (§10), declared drivers and connections are rows under `/sys/*` and the project DB
-(§13, §8), and `DESCRIBE → write → PREVIEW → COMMIT` already *is* a fetch → desired → plan →
-apply loop for one statement at a time. This design makes the loop **total**: an agent fetches
+`/server/*` (§10), and declared drivers, defined-path connections, and account consents are rows
+in the System DB under `/sys/*` (§13, §8 — the Project DB is the vault proper, holding only
+secret material), and `DESCRIBE → write → PREVIEW → COMMIT` already *is* a fetch → desired →
+plan → apply loop for one statement at a time. This design makes the loop **total**: an agent fetches
 the whole current configuration as one editable "as code" document, edits it, and applies it
 back as the **authoritative desired state** — the interpreter computes the desired-vs-current
 diff and converges. Terraform's shape, with none of Terraform's apparatus: no state file, no

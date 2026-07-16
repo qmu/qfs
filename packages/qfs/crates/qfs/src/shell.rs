@@ -1136,7 +1136,7 @@ mod tests {
     #[test]
     fn cf_binding_falls_back_to_representative_mount_when_live_build_fails() {
         let _home = crate::testenv::HomeGuard::with_passphrase("cf-shell-fallback-test");
-        let conn = crate::connection::open_project_conn().unwrap();
+        let conn = crate::connection::open_system_conn().unwrap();
         crate::path_binding::db_upsert_binding(
             &conn,
             "/cf",

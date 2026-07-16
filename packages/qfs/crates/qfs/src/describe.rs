@@ -118,12 +118,13 @@ pub(crate) fn cred_free_driver(driver_id: &str) -> Option<Arc<dyn qfs_core::Driv
 }
 
 /// Load the persisted defined-path bindings (best-effort, cred-free): the `path_binding` rows the
-/// registration loop mounts. Returns an empty list when no Project DB resolves (a fresh binary has
-/// no third-party mounts — nothing is pre-mounted, exactly the CONNECT model).
+/// registration loop mounts. Returns an empty list when no System DB resolves (a fresh binary has
+/// no third-party mounts — nothing is pre-mounted, exactly the CONNECT model; re-homed by
+/// 20260716143641).
 fn load_bindings() -> Vec<crate::path_binding::PathBindingRow> {
-    match crate::store::open_project_db() {
-        Ok(Some(proj)) => {
-            let conn = proj.into_db().into_connection();
+    match crate::store::open_system_db() {
+        Ok(Some(sys)) => {
+            let conn = sys.into_db().into_connection();
             crate::path_binding::db_list_bindings(&conn).unwrap_or_default()
         }
         _ => Vec::new(),
@@ -477,8 +478,8 @@ mod tests {
             c.execute("CREATE TABLE items (id INTEGER, name TEXT)", [])
                 .unwrap();
         }
-        // Seed a `CONNECT /sql/shop TO sqlite AT '<db_path>'` binding in the project DB.
-        let proj = crate::store::open_project_db()
+        // Seed a `CONNECT /sql/shop TO sqlite AT '<db_path>'` binding in the system DB.
+        let proj = crate::store::open_system_db()
             .unwrap()
             .unwrap()
             .into_db()
@@ -552,8 +553,8 @@ mod tests {
         let repo_path = dir.path().join("app.git");
         std::fs::create_dir_all(&repo_path).unwrap();
 
-        // Seed a `CONNECT /git/app TO git AT '<repo_path>'` binding in the project DB.
-        let proj = crate::store::open_project_db()
+        // Seed a `CONNECT /git/app TO git AT '<repo_path>'` binding in the system DB.
+        let proj = crate::store::open_system_db()
             .unwrap()
             .unwrap()
             .into_db()

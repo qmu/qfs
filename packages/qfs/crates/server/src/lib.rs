@@ -62,8 +62,11 @@ pub use policy::{
 // The canonical config-row / plan-build primitives now live in closed core (t31); re-export
 // them from `qfs-core` so the server's public surface is unchanged for consumers.
 pub use qfs_core::{config_row_batch, server_write_plan, ConfigRow, RowBatch};
+// `statements` is gone: the `.qfs` splitter now lives in `qfs-core`
+// (`qfs_core::ddl::document::split_document`), so the serve arm no longer publishes a parser and
+// the provisioning loader reaches it through the core hub instead of through this crate.
 pub use runtime::{
-    reconfigure_channel, statements, ReconfigureHandle, ReconfigureRx, RefreshReport, Runtime,
+    reconfigure_channel, ReconfigureHandle, ReconfigureRx, RefreshReport, Runtime,
     ServerConfigApplier,
 };
 pub use state::{

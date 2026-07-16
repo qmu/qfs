@@ -652,9 +652,9 @@ pub fn fetch_sys_state() -> Result<(SysState, GenerationStamp), ProvisionError> 
     read_policies(conn, &mut sys)?;
     read_settings(conn, &mut sys)?;
     read_transforms(conn, &mut sys)?;
-    if let Some(project) = &project {
-        read_bindings(project.db().conn(), &mut sys)?;
-    }
+    // The binding registry lives in the System DB (re-homed by 20260716143641); the Project DB
+    // stays open above only for its migration count in the generation stamp.
+    read_bindings(conn, &mut sys)?;
 
     let ddl_event_head = conn
         .query_row(
@@ -845,7 +845,7 @@ pub fn reemit_boot_config(
 mod tests {
     use super::*;
     use crate::testenv::HomeGuard;
-    use qfs_store::{FileSource, ProjectDb, SystemDb};
+    use qfs_store::{FileSource, SystemDb};
 
     /// A loopback address nothing listens on (bind :0, capture the port, drop the listener).
     fn closed_addr() -> SocketAddr {
@@ -896,13 +896,8 @@ mod tests {
                 [],
             )
             .unwrap();
-        drop(sys);
-        let project = ProjectDb::open(&FileSource::new(
-            home.system_db_path().with_file_name("project.db"),
-        ))
-        .unwrap();
-        project
-            .db()
+        // The binding registry lives in the System DB (re-homed by 20260716143641).
+        sys.db()
             .conn()
             .execute(
                 "INSERT INTO path_binding (path, driver_id, at_locator, secret_ref, host, account) \
@@ -911,7 +906,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        drop(project);
+        drop(sys);
     }
 
     #[test]

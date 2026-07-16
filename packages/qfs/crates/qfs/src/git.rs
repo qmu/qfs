@@ -157,13 +157,13 @@ pub fn has_connections() -> bool {
 /// source, mirroring `sql.rs`'s `path_binding_sql_connections` — ticket 20260706170000): each
 /// FULL-connect binding whose `driver_id` is `git`, as `(repo, at_locator)`. `repo` is the segment
 /// after `/git/`, so a `CONNECT /git/app TO git AT '<path>'` mounts at `/git/app/...`. Git needs no
-/// secret, so no `SECRET` is carried. Empty when no project DB / no git binding (best-effort, never
+/// secret, so no `SECRET` is carried. Empty when no system DB / no git binding (best-effort, never
 /// panics — a persisted-but-unreadable repo just fails closed at read/commit time).
 fn path_binding_git_connections() -> Vec<(String, String)> {
-    let Ok(Some(proj)) = crate::store::open_project_db() else {
+    let Ok(Some(sys)) = crate::store::open_system_db() else {
         return Vec::new();
     };
-    let conn = proj.into_db().into_connection();
+    let conn = sys.into_db().into_connection();
     crate::path_binding::db_list_bindings(&conn)
         .unwrap_or_default()
         .into_iter()
