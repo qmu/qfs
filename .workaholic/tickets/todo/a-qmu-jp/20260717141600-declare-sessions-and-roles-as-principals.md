@@ -232,3 +232,119 @@ which masks failure).
    --workspace --all-targets -- -D warnings`, `cargo fmt --all --check`, and
    `cargo run -p xtask -- gen-docs --check` if any describable surface changed. Patch version
    bumped per CLAUDE.md if this reaches a PR.
+
+---
+
+## STATUS: BLOCKED — stopped and escalated 2026-07-17 (branch `work-20260717-160001`)
+
+**This ticket is NOT implemented, and is deliberately left in `todo/`.** Its central deliverable —
+the principal — is blocked on a question this ticket itself says must not be answered in passing.
+Only Gate 5 (the stale doc) was delivered; it is the one gate that needs no ruling.
+
+### Blocker 1 — "What may I administer" IS the open product decision (refused)
+
+Gate 2 asks for an answer that *"distinguishes the qfs-admin capability from an ordinary user"*, and
+Gate 3 asks to record which role model is authoritative **"with the developer's ruling"**. There is
+no ruling to record, and **deriving one is the decision itself**:
+
+- `identity::Role` (`invite.rs:135-149`) is flagged verbatim as an **"OPEN PRODUCT DECISION
+  (flagged, t55 — not baked in)"**, is *"a **label** on the membership for a LATER ACL (`POLICY`,
+  t57), **NOT** an authorization grant — identity ≠ authorization (§4.1)"*, and `Role::Admin` is
+  documented *"reserved for the t53/t57 admin split; **not privileged yet**"*.
+- `qfs/src/sys.rs:24-27` independently records the same gap: *"Until the super-admin vs.
+  project-admin split is settled (roadmap §3.4), the binary wires this loopback / local-CLI
+  super-admin only — the split is recorded as an open decision rather than baked into a model."*
+
+Any implementation of "what may I administer" must say **which principals are admins**. Ruling that
+`Role::Admin`/`Owner` ⇒ the qfs-admin menu would convert a label qfs explicitly calls *not a grant*
+into a grant, and would settle the t55-vs-t53 taxonomy **by fiat while implementing something
+else** — precisely what this ticket's own Scope and Policies forbid. **Refused; escalated.**
+
+Note this is not a gate that can be met halfway: a principal that always answers *"administers:
+nothing"* is fail-closed and honest, but it makes the signed-in **admin menu underivable**, so
+Gate 6 could not be met either. The shape of the answer is not separable from the ruling.
+
+### Blocker 2 — "Who am I" is not reachable from a `SysNode` today (architectural, not a decision)
+
+This is a **new finding**; the ticket assumed the pieces were merely "unconnected". They are, but the
+connector is a core seam, not a wire:
+
+- Gate 4 (and the repo's one-engine constraint) requires the read-back to be a `SysNode` variant read
+  **through the engine**. The engine's read seam is
+  `ReadDriver::scan(&self, scan: &ScanNode)` (`exec/src/read.rs:48`) — it carries **no request, no
+  cookie, no principal**. A `/sys/principal` node physically cannot see who is asking.
+- The engine and read registry are **process-wide**, built once at boot and shared across requests:
+  `handler.rs:37-39` holds `engine: Arc<Engine>` + `reads: Arc<ReadRegistry>`. There is no
+  per-request driver instance a principal could be bound into.
+- **The HTTP request path resolves no actor at all**, confirming the gap is not merely at the driver
+  seam: `http/src/policy.rs:76` calls `qfs_server::evaluate(&resolved, plan)` — the **back-compat**
+  entry point, which is *"equivalent to `evaluate_with_context` with `DecisionContext::anonymous`"*
+  (`server/src/policy/enforce.rs:172-179`). Its own doc states the consequence: *"a t57-narrowed rule
+  contributes nothing **until a real actor is resolved** (fail closed)."* The t57 who-axis is built
+  and correct; **no caller ever supplies it an actor.**
+- So Gate 1 (*"A request carrying a live session resolves to a principal"*) requires threading a
+  request-derived identity through a **core trait implemented by every driver** — the same seam M2 /
+  the policy work needs. That is a foundational change, not the enhancement this ticket is typed as.
+- **And its design is downstream of Blocker 1**: what the principal *carries* (which role set, whose
+  taxonomy) is exactly the unresolved question. Building the thread first would bake the answer into
+  a trait signature.
+
+### Corrections to this ticket's own "Verified against source"
+
+Verified in the tree at `f895c4a`; the ticket's corrections needed corrections.
+
+1. **"Nothing calls `authenticate()`"** — **imprecise**. `authenticate()` **is** called, at
+   `qfs/src/oauth.rs:232` and `:262` (the OAuth authorization-server / consent face). The true, and
+   narrower, statement: *nothing calls it on the **query** path, and nothing builds a
+   `DecisionContext` from its result.* Confirmed: outside tests, `DecisionContext` is constructed
+   only at `qfs/src/shared_connection.rs:167` (from an `actor` string, **not** a session) and via
+   `DecisionContext::anonymous()` at `server/src/policy/enforce.rs:178`.
+2. **"archived with `commit_hash: 651050a` — shipped"** — the ticket record says so, but **that hash
+   does not resolve in this repository**:
+   ```
+   $ git rev-parse --verify 651050a^{commit}   → fatal: Needed a single revision   EXIT=128
+   ```
+   The repo was **republished fresh** (`f9387de`, *"Publish qfs as a fresh repository"*), which is
+   the commit that introduces `crates/session/src/lib.rs` and the t46 ticket file alike. **t46 did
+   land** — `qfs-session` ships — but `651050a` is a pre-publication artifact. It must not be cited
+   as a live hash in shipped source (Gate 5 originally asked for exactly that citation).
+3. **The `Role`/`SoleUser` readings hold** as written, including that `model.rs:38-40`'s `"admin /"`
+   is a line-wrap artifact of *"admin / off-boarding path"*.
+
+### What WAS delivered — Gate 5 only (no ruling required)
+
+Two doc comments asserted a **shipped** milestone in the future tense. Both corrected:
+
+- `identity/src/model.rs:111-112` — `SoleUser`'s *"(sessions land in t46)"*. Rewritten: t46 has
+  shipped; the CLI `whoami` is session-less **by design** (the OS login is the authentication there,
+  ADR 0008), not pending a milestone. The `Many` variant's *"(no session yet)"* corrected likewise.
+- `cmd/src/lib.rs:255` — **a second instance the ticket did not list**: *"sessions land in t46"* in
+  `IdentityAction`'s doc. Same correction. (Gate 5: *"Any other doc comment this ticket's findings
+  falsify is corrected in the same PR."*)
+
+Neither touches behavior; no describable surface changed. **No `SysNode` variant was added, no
+principal was declared, and no role model was made authoritative.**
+
+### What the developer must rule before this ticket can proceed
+
+1. **Which role model is authoritative** for "what may I administer" — `identity::Role` (t55) or the
+   t57 `Subject::Role` set resolved through `DecisionContext`? The source flags these as
+   overlapping and unsettled (`invite.rs:135-139`).
+2. **Does a role grant anything?** Today `Role` is explicitly *not* a grant and `Admin` is *not
+   privileged*. The admin menu needs *some* principal to be an admin. Which one, and by what rule?
+3. **Super-admin vs. project-admin** (`sys.rs:24-27`, roadmap §3.4) — still open, and it decides
+   whether "administer" is one capability or a scoped set.
+4. **Is the request-principal thread (Blocker 2) in scope here, or its own ticket/mission?** It is a
+   core-trait change across every driver and is adjacent to M2 and to the active agent-principal
+   mission (which this ticket correctly declines to claim).
+
+Until (1)–(3) are ruled, a consumer's admin menu cannot be derived from a declared answer — and per
+this ticket's own *Ordering consequence*, it must not be **guessed**. The honest current state is
+that qfs-viewer's root column can derive **signed-out vs. signed-in** only once Blocker 2 is built,
+and cannot derive **admin vs. user** at all.
+
+### Gate
+
+`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test
+--workspace` — raw exit codes recorded in the commit. Patch bumped to `0.0.78` (shipped source
+changed). `gen-docs --check` unaffected: no describable surface changed.
