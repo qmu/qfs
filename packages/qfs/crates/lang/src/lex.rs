@@ -12,6 +12,13 @@
 //!   [`Token::Path`]; a `/` after an expression operand is [`Token::Slash`]. Glob
 //!   chars (`*`, `?`) inside a path segment set the segment's `glob` flag; raw segment
 //!   text is preserved.
+//! * **Quoted path segments (ticket 20260717120200).** A segment written `'…'` carries any
+//!   character literally — spaces, `?`, `#`, `&`, `(`, Unicode — so a real-world file name is
+//!   addressable as a single-file path (`/drive/my/'Q3 budget (final)?.xlsx'`). The one escape
+//!   is a doubled quote (`''` → `'`); a quoted segment never sets the `glob` flag (a quoted `?`
+//!   is a literal character, not a wildcard); a `/` inside quotes is refused, because the
+//!   rendered path carries raw segment names and every driver re-splits it on `/`. Unquoted
+//!   segments are untouched — the form is additive to the frozen grammar.
 //! * **Size literal `25 MB`.** A bare integer immediately followed (across
 //!   whitespace) by an uppercase word in the [`SizeUnit`] set folds into a
 //!   [`Token::Size`]. Any other following word is left as a separate token, so a
@@ -185,20 +192,95 @@ impl Lexer {
         }
     }
 
-    /// Lex a `/`-led path: `/seg/seg(@ver)`, with glob flags per segment.
+    /// Lex a `/`-led path: `/seg/seg(@ver)`, with glob flags per segment. A segment written
+    /// `'…'` is a **quoted segment** ([`Self::consume_quoted_path_segment_name`]) whose content
+    /// is wholly literal; anything else lexes exactly as it always has.
     fn lex_path(&mut self) -> Result<(), LexError> {
         let start = self.byte_at();
         let mut segs: Vec<PathSeg> = Vec::new();
         // Consume the leading '/' and each segment.
         while self.peek().is_some_and(|ch| ch.c == '/') {
             self.bump(); // consume '/'
-            let (name, glob) = self.consume_path_segment_name();
+            let (name, glob) = if self.peek().is_some_and(|ch| ch.c == '\'') {
+                // A quoted segment is a literal NAME: never a glob, whatever it contains.
+                (self.consume_quoted_path_segment_name()?, false)
+            } else {
+                self.consume_path_segment_name()
+            };
             let version = self.consume_path_version();
             // An empty leading segment (e.g. trailing '/') is preserved as an
             // empty name so spans round-trip; the parser validates structure.
             segs.push(PathSeg::new(name, version, glob));
         }
         self.push(start, Token::Path(segs));
+        Ok(())
+    }
+
+    /// Consume a **quoted path segment** name — `'…'` (ticket 20260717120200).
+    ///
+    /// Inside the quotes every character is literal: spaces, `?`, `*`, `#`, `&`, parentheses and
+    /// Unicode all belong to the NAME. Real Drive/mail/filesystem names routinely carry them, and
+    /// without this form such a file simply could not be written as a single-file path — the
+    /// statement died in the lexer with `UNEXPECTED_CHAR` before parsing began, which is what
+    /// pushed the operator onto the `remove <folder> where name == '…'` detour that then hit the
+    /// over-delete bug (ticket 20260717102000). Unquoted segments lex exactly as before, so this
+    /// is purely additive to the frozen grammar.
+    ///
+    /// The only escape is the SQL-style **doubled quote** (`''` → one literal `'`). There is
+    /// deliberately no backslash escape: a segment is a name, not prose, so every `\` stays a
+    /// literal `\` and a given name has exactly one spelling.
+    ///
+    /// A quoted segment never sets the glob flag — that is the whole point of the form:
+    /// `/drive/my/'report?.pdf'` addresses the ONE file whose name contains `?`, while
+    /// `/drive/my/report?.pdf` still globs, unchanged.
+    ///
+    /// # Errors
+    /// [`LexErrorKind::PathSeparatorInQuotedSegment`] on a `/` inside the quotes — the separator
+    /// is structural and every driver re-splits the rendered path on it (the rendered form
+    /// carries raw names, not quotes), so such a segment could not survive the trip to a driver.
+    /// [`LexErrorKind::UnterminatedString`] when the closing quote never arrives.
+    /// [`LexErrorKind::UnexpectedChar`] when a token is glued to the closing quote.
+    fn consume_quoted_path_segment_name(&mut self) -> Result<String, LexError> {
+        let open = self.byte_at();
+        self.bump(); // consume the opening quote
+        let mut name = String::new();
+        loop {
+            let Some(ch) = self.peek() else {
+                return Err(self.err(open, LexErrorKind::UnterminatedString));
+            };
+            match ch.c {
+                '\'' => {
+                    // A doubled quote is one literal quote; a lone quote closes the segment.
+                    self.bump();
+                    if self.peek().is_some_and(|n| n.c == '\'') {
+                        name.push('\'');
+                        self.bump();
+                        continue;
+                    }
+                    self.reject_token_glued_to_quoted_segment()?;
+                    return Ok(name);
+                }
+                '/' => return Err(self.err(ch.at, LexErrorKind::PathSeparatorInQuotedSegment)),
+                _ => {
+                    name.push(ch.c);
+                    self.bump();
+                }
+            }
+        }
+    }
+
+    /// After a quoted segment's closing quote only a separator (`/`), a version pin (`@`), or a
+    /// token boundary may follow. Without this guard `/x/'a'b` would quietly lex as the path
+    /// `/x/a` plus a stray identifier `b` — silently addressing something other than what was
+    /// written. Refusing is the honest answer.
+    fn reject_token_glued_to_quoted_segment(&mut self) -> Result<(), LexError> {
+        if let Some(ch) = self.peek() {
+            if ch.c != '/' && ch.c != '@' && !is_path_delimiter(ch.c) {
+                let at = ch.at;
+                self.bump();
+                return Err(self.err(at, LexErrorKind::UnexpectedChar(ch.c)));
+            }
+        }
         Ok(())
     }
 
