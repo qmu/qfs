@@ -4,7 +4,7 @@ author: a@qmu.jp
 type: refactoring
 layer: [Domain, UX]
 effort:
-commit_hash:
+commit_hash: 0b60908cbc6360a2e04e019693f0036a16586259
 category: Changed
 depends_on: [20260717010200-claude-mount-registration-and-e2e-guard.md]
 mission: claude-code-sessions-are-queryable-and-steerable-as-qfs-paths

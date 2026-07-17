@@ -256,3 +256,9 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
   owner (grammar veto, irreversible gate, a `name` column).
 - 2026-07-17 — ticket archived — 20260717010400-claude-path-canon-hosts-move.md
 - 2026-07-17 — ticket archived — 20260717010700-claude-compiled-standing-recorded.md
+- 2026-07-17 — **Canon proven live against the real store** (post-archive check, binary at
+  0b60908): `QFS_CLAUDE_SESSIONS=~/.claude qfs run -e '/hosts/local/claude/sessions |> SELECT
+  id, status |> LIMIT 3' --json` returned real live-session rows — including the driving
+  session (`19b46573-…`, status `busy`) — exit 0; the bare `/claude/sessions |> LIMIT 1`
+  returned `{"code":"retired_path","kind":"capability"}` naming
+  `/hosts/local/claude/sessions`, exit 3.
