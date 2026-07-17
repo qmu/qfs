@@ -65,6 +65,7 @@ pub mod client;
 mod effect;
 mod error;
 pub mod export;
+mod name;
 mod path;
 pub mod query;
 pub mod read;

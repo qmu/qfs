@@ -240,6 +240,153 @@ fn golden_glob_path_with_latest() {
     );
 }
 
+// ---- quoted path segments (ticket 20260717120200) ----------------------------------------
+
+#[test]
+fn golden_quoted_segment_carries_spaces_and_reserved_characters() {
+    // The incident's unwritable address: a space ends a bare segment and the `?` after it then
+    // cannot begin any token (UNEXPECTED_CHAR), which is what forced the WHERE-form detour.
+    let src = "/drive/my/Reports/'Q3 budget (final)?.xlsx'";
+    let toks = lex(src).expect("valid");
+    assert_spans_round_trip(src, &toks);
+    let got = nodes(src);
+    assert_eq!(
+        got[0],
+        Token::Path(vec![
+            PathSeg::new("drive", None, false),
+            PathSeg::new("my", None, false),
+            PathSeg::new("Reports", None, false),
+            // The `?` is part of the NAME, so the segment is NOT a glob.
+            PathSeg::new("Q3 budget (final)?.xlsx", None, false),
+        ]),
+        "quoted segment is one literal name, glob off"
+    );
+    assert_eq!(toks.len(), 1, "the whole address is a single Path token");
+}
+
+#[test]
+fn quoted_and_bare_globs_stay_distinct() {
+    // The distinction the form exists for: quoting turns a wildcard back into a character.
+    assert_eq!(
+        nodes("/drive/my/'report?.pdf'")[0],
+        Token::Path(vec![
+            PathSeg::new("drive", None, false),
+            PathSeg::new("my", None, false),
+            PathSeg::new("report?.pdf", None, false),
+        ]),
+        "a quoted `?` is a literal character"
+    );
+    assert_eq!(
+        nodes("/drive/my/report?.pdf")[0],
+        Token::Path(vec![
+            PathSeg::new("drive", None, false),
+            PathSeg::new("my", None, false),
+            PathSeg::new("report?.pdf", None, true),
+        ]),
+        "an unquoted `?` still globs — bare lexing is unchanged"
+    );
+}
+
+#[test]
+fn quoted_segment_escapes_a_quote_by_doubling_and_takes_unicode() {
+    assert_eq!(
+        nodes("/drive/my/'it''s here.txt'")[0],
+        Token::Path(vec![
+            PathSeg::new("drive", None, false),
+            PathSeg::new("my", None, false),
+            PathSeg::new("it's here.txt", None, false),
+        ]),
+        "'' is one literal quote"
+    );
+    assert_eq!(
+        nodes("/drive/my/'議事録 2026?.docx'")[0],
+        Token::Path(vec![
+            PathSeg::new("drive", None, false),
+            PathSeg::new("my", None, false),
+            PathSeg::new("議事録 2026?.docx", None, false),
+        ]),
+        "Unicode inside quotes is literal"
+    );
+    // A backslash is a literal character of the name — there is no backslash escape here.
+    assert_eq!(
+        nodes(r"/local/'a\b.txt'")[0],
+        Token::Path(vec![
+            PathSeg::new("local", None, false),
+            PathSeg::new(r"a\b.txt", None, false),
+        ]),
+        "no backslash escape in a quoted segment: a name has one spelling"
+    );
+}
+
+#[test]
+fn quoted_segment_takes_a_version_pin_and_composes_in_a_statement() {
+    let src = "remove /drive/my/'Q3 budget?.xlsx'";
+    let toks = lex(src).expect("valid");
+    assert_spans_round_trip(src, &toks);
+    let got = nodes(src);
+    assert_eq!(got[0], Token::Keyword(Keyword::Remove));
+    assert_eq!(
+        got[1],
+        Token::Path(vec![
+            PathSeg::new("drive", None, false),
+            PathSeg::new("my", None, false),
+            PathSeg::new("Q3 budget?.xlsx", None, false),
+        ]),
+        "the single-file REMOVE spelling the incident could not write"
+    );
+
+    // `@version` still binds to a quoted segment.
+    assert_eq!(
+        nodes("/git/repo/'my file.rs'@v1.2")[0],
+        Token::Path(vec![
+            PathSeg::new("git", None, false),
+            PathSeg::new("repo", None, false),
+            PathSeg::new("my file.rs", Some("v1.2".into()), false),
+        ])
+    );
+}
+
+#[test]
+fn error_slash_inside_a_quoted_segment() {
+    // The separator is structural: drivers re-split the RENDERED path (raw names, no quotes) on
+    // `/`, so a name carrying one could not survive the trip. Refuse loudly instead.
+    let err = lex("/drive/my/'a/b.txt'").expect_err("a `/` in a quoted segment is refused");
+    assert_eq!(err.kind, LexErrorKind::PathSeparatorInQuotedSegment);
+    assert_eq!(err.kind.as_str(), "PATH_SEPARATOR_IN_QUOTED_SEGMENT");
+}
+
+#[test]
+fn error_unterminated_quoted_segment() {
+    let err = lex("/drive/my/'never closed").expect_err("unterminated");
+    assert_eq!(err.kind, LexErrorKind::UnterminatedString);
+}
+
+#[test]
+fn error_token_glued_to_a_closing_quote() {
+    // `/x/'a'b` must not quietly become the path `/x/a` plus a stray ident `b`.
+    let err = lex("/drive/my/'a'b").expect_err("a glued token is refused");
+    assert_eq!(err.kind, LexErrorKind::UnexpectedChar('b'));
+}
+
+#[test]
+fn a_bare_quote_after_a_segment_still_starts_a_string_literal() {
+    // Only a quote IMMEDIATELY after `/` opens a quoted segment. This pins that the new form did
+    // not steal the existing `where name == '…'` spelling.
+    let got = nodes("/drive/my |> where name == 'q3.csv'");
+    assert_eq!(
+        got[0],
+        Token::Path(vec![
+            PathSeg::new("drive", None, false),
+            PathSeg::new("my", None, false),
+        ])
+    );
+    assert!(
+        matches!(got.last(), Some(Token::Str(s)) if s == "q3.csv"),
+        "the trailing string literal is unaffected, got {:?}",
+        got.last()
+    );
+}
+
 #[test]
 fn span_round_trips_to_exact_substring() {
     let src = "/mail/inbox |> SELECT id";

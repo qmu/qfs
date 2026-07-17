@@ -2261,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "qfs"
-version = "0.0.76"
+version = "0.0.77"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2464,6 +2464,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "unicode-normalization",
 ]
 
 [[package]]
