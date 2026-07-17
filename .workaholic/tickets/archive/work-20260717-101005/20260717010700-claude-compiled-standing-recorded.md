@@ -4,7 +4,7 @@ author: a@qmu.jp
 type: housekeeping
 layer: [Domain]
 effort:
-commit_hash:
+commit_hash: b239fb9bde2e27a45c2cc304b8873d2873bc7a7a
 category: Changed
 depends_on:
 mission: claude-code-sessions-are-queryable-and-steerable-as-qfs-paths

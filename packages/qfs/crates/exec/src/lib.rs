@@ -944,8 +944,16 @@ fn run_describe_inner(
     // `qfs run`. A relative path is a usage error (exit 2).
     addressing::validate_path(path)?;
 
+    // The host-realm path canon (decision P / owner ruling 2026-07-16): peel a
+    // `/hosts/local/<svc>/…` address to its service path before routing, and refuse the retired
+    // bare spelling of a host-realm-only mount with the canonical pointer — DESCRIBE teaches,
+    // so it must not keep teaching a retired address.
+    let canonical = describe.canonicalize_host_path(path).map_err(|e| {
+        ExecError::new(ErrorKind::Capability, e.code(), e.to_string()).with_path(path)
+    })?;
+
     // Resolve the path to its describe-only driver (longest-mount-prefix match).
-    let (driver, _rest) = describe.resolve_path(path).ok_or_else(|| {
+    let (driver, _rest) = describe.resolve_path(&canonical).ok_or_else(|| {
         ExecError::new(
             ErrorKind::Capability,
             "unknown_mount",
@@ -954,9 +962,11 @@ fn run_describe_inner(
         .with_path(path)
     })?;
 
-    // Fold the introspective half into the report — pure, no I/O, no creds.
-    let report = qfs_core::DescribeReport::from_driver(driver.as_ref(), &qfs_core::Path::new(path))
-        .map_err(|e| ExecError::from_qfs(&e))?;
+    // Fold the introspective half into the report — pure, no I/O, no creds (described at the
+    // peeled SERVICE path: the driver speaks its own mount namespace).
+    let report =
+        qfs_core::DescribeReport::from_driver(driver.as_ref(), &qfs_core::Path::new(&canonical))
+            .map_err(|e| ExecError::from_qfs(&e))?;
 
     let renderer = fmt.renderer();
     renderer.describe(&report, streams.out).map_err(io_err)?;

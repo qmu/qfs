@@ -127,11 +127,15 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
 
 ## Acceptance
 
-- [ ] **The path canon is ruled and implemented.** The blueprint records `/hosts/<host>/claude/...`
+- [x] **The path canon is ruled and implemented.** The blueprint records `/hosts/<host>/claude/...`
       as canonical and top-level `/claude` as retired, honouring t64's ruling that the code
       contradicted; `schema.rs:30` and `peel_scope` follow, and the dangling "roadmap §3.3 / M7,
       t64" citation at `lib.rs:1` is corrected against the roadmap that actually exists (owner
-      ruling, 2026-07-16)
+      ruling, 2026-07-16) *(done 2026-07-17: blueprint §8 records the ruling; the engine peels
+      `/hosts/local/<svc>` generally in `resolve_path` + planning + the write evaluator +
+      DESCRIBE; bare `/claude` fails `retired_path` naming the canonical form; a non-local host
+      fails `remote_host_not_executable`; `docs/roadmap.md` gains the "AI sessions as paths"
+      section with honest ✅/🧭 markers and `lib.rs:1` cites it)*
 - [x] **The read path is mounted, and a test fails if it un-mounts.** `/claude/sessions` resolves
       instead of raising `unknown_source` — the missing `engine.mounts.register(...)` in
       `shell.rs` alongside `/sys` (`:273`) — and `e2e_cli.rs:356-367`, which today asserts the bug
@@ -161,11 +165,13 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
       prior design. Needs a design brief first (what a launch *is*, whether it is irreversible and
       therefore gated, what identity it runs under, how its id becomes addressable) — closing
       owner-named capability 2
-- [ ] **`/claude`'s compiled standing is recorded, not left unnamed.** The `declared-drivers-…`
+- [x] **`/claude`'s compiled standing is recorded, not left unnamed.** The `declared-drivers-…`
       mission names `/claude` alongside `/cf` as a compiled counter-example, with blueprint §13's
       ratchet framing as what governs it — so the rule stops reading as absolute while two
       unnamed exceptions exist (the only "integration" between these missions that the evidence
-      supports)
+      supports) *(done 2026-07-17: recorded in that mission's Goal section with the §13 ratchet
+      quote and the mechanical why-not — no base URL, no auth, no wire; changelog line added
+      there pointing back at this mission's item 7)*
 
 ## Changelog
 
@@ -209,3 +215,50 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
   (`7bd43a5c-edd8-49c4-8abb-5e543e70bfb5`, cwd `/home/ec2-user/projects/strategy`, status
   `busy`), with **zero empty `last_message`**. Server torn down after the check. Remaining for
   the mission gate proper: the canon ticket moves the bound path to `/hosts/<host>/claude/...`.
+- 2026-07-17 — **Path canon shipped** (ticket 20260717010400, acceptance item 1 ticked):
+  `/hosts/<host>/claude/...` is canonical, top-level `/claude` retired as a hard break. The
+  general machinery: `MountRegistry::resolve_path` peels `/hosts/local/<svc>` via `peel_scope`
+  (any mount, not a claude special-case); `require_host_realm(mount)` marks a mount's bare
+  spelling retired; `canonicalize_host_path` enforces both and runs in read planning
+  (`plan_pipeline`, incl. JOIN/subquery/set-op sources — the ScanNode carries the peeled service
+  path), the write evaluator (`eval_write`), and DESCRIBE. Errors are structured and pointed:
+  `retired_path` names the canonical form, `remote_host_not_executable` names the local remedy
+  (the `require_known_host` precedent; the t63 tunnel hop stays out of scope). Blueprint §8
+  records the ruling; `docs/roadmap.md` gains "AI sessions as paths" (✅ read surface, 🧭
+  steering/launch/remote) and `lib.rs:1`'s dangling "roadmap §3.3 / M7" citation now points at
+  it; gen-docs renders the catalog entry as `/hosts/<host>/claude` with example
+  `/hosts/local/claude/sessions`; grep proves no doc teaches a bare `/claude/...` path. The
+  serve-endpoint e2e binds `as /hosts/local/claude/sessions`; new e2e pins the retirement error,
+  the remote-host refusal, and the canonical read over a fixture store. No skill teaches any
+  `/claude` surface (cookbook grep clean), so no plugin version bump — the binary patch bumps
+  0.0.74 → 0.0.75. Gates: workspace tests / clippy `-D warnings` / fmt / gen-docs / gen-skills /
+  check-migrations all exit 0.
+- 2026-07-17 — **Steering investigation recorded; the surface stays fail-closed** (ticket
+  20260717010500 NOT closed — findings appended to the ticket). Verified on this box: the
+  liveness registry records `peerProtocol: 1`, so a session-to-session peer transport exists in
+  the product, and `~/.claude/daemon/` (control.key, dispatch/, roster.json) plus `~/.claude/
+  teams/session-*/` and `~/.claude/tasks/<uuid>/` are candidate inboxes — but this session's
+  permission boundary blocked probing any of them (socket scan, team/task dir reads all denied
+  by the tool-permission classifier), and the public CLI surface exposes no send-to-session verb
+  (`claude --help` / `claude agents --help`: list/dispatch only). Per the ticket's own rule, the
+  append is NOT resurrected as a write-only log; it keeps failing closed naming the rewire
+  ticket. Next step is owner-attended: probe the peer transport / teams inbox from an
+  unrestricted shell, or rule the `claude --resume <id> -p` turn-running fallback in or out.
+- 2026-07-17 — **Session-launch design brief written, awaiting owner acknowledgment** (ticket
+  20260717010600 NOT implemented — its QG requires the owner's ruling before code):
+  `design-brief-session-launch.md` beside this mission. Recommends: a launch is `claude --bg`
+  (persistent background session, not a one-shot turn); the grammar is an INSERT into the
+  sessions relation (blueprint §3 "creating a resource is INSERT INTO its collection" — no
+  `CREATE SESSION` noun), widening `Sessions` capabilities to `Select+Insert` deliberately;
+  the launch is irreversible-gated (spends money, starts an autonomous actor); identity is the
+  operator (the agents-as-principals mission stays a separate axis); the id returns via
+  `RETURNING` and appears in the sessions relation on boot. Three open questions put to the
+  owner (grammar veto, irreversible gate, a `name` column).
+- 2026-07-17 — ticket archived — 20260717010400-claude-path-canon-hosts-move.md
+- 2026-07-17 — ticket archived — 20260717010700-claude-compiled-standing-recorded.md
+- 2026-07-17 — **Canon proven live against the real store** (post-archive check, binary at
+  0b60908): `QFS_CLAUDE_SESSIONS=~/.claude qfs run -e '/hosts/local/claude/sessions |> SELECT
+  id, status |> LIMIT 3' --json` returned real live-session rows — including the driving
+  session (`19b46573-…`, status `busy`) — exit 0; the bare `/claude/sessions |> LIMIT 1`
+  returned `{"code":"retired_path","kind":"capability"}` naming
+  `/hosts/local/claude/sessions`, exit 3.

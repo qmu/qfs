@@ -66,3 +66,29 @@ truthful).
 - The e2e must not steer the CI runner's own driving session into chaos — target a scratch
   session the test launches (couples to the CREATE ticket 20260717010600 if launch lands
   first; otherwise use a mock).
+
+## Investigation record (2026-07-17 — ticket NOT closed; surface stays fail-closed)
+
+Investigated on the real box during the canon drive (work-20260717-101005); the ticket stays in
+todo because the decisive probes need an owner-attended session:
+
+- **The peer protocol exists.** Every `~/.claude/sessions/<pid>.json` record carries
+  `peerProtocol: 1` (verified on a live record) — sessions do speak a local peer transport
+  (this is how one session's SendMessage reaches another).
+- **Candidate inboxes located, none verifiable from here.** `~/.claude/daemon/` (control.key,
+  dispatch/, roster.json — a dispatch surface with an auth key), `~/.claude/teams/session-*/`,
+  and `~/.claude/tasks/<uuid>/` all exist. This session's tool-permission classifier BLOCKED
+  every deeper probe (socket scan, /proc fd inspection, team/task dir reads), so the transport
+  and inbox formats remain unverified — "no verifiable medium from this session", which is NOT
+  the same finding as "no medium exists".
+- **No sanctioned public client.** `claude --help` / `claude agents --help` expose list/dispatch
+  surfaces (`--bg`, `claude agents --json`) but no send-to-session verb. `claude --resume <id>
+  -p '<msg>'` remains the ticket's named heavier fallback: it RUNS A TURN on the transcript
+  (spend + a race against the live process holding the session), it does not queue a message —
+  ruling it in or out is an owner call.
+- Per this ticket's own rule, the append was NOT resurrected as a write-only log:
+  `ClaudeStoreSource::append_instruction` keeps failing closed naming this ticket.
+
+Next step (owner-attended): probe the daemon dispatch / teams inbox formats from an
+unrestricted shell, or rule the `--resume -p` fallback; then wire the chosen medium behind the
+unchanged `SessionSource::append_instruction` seam with `scan_instructions` reading it back.

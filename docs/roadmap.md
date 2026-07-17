@@ -20,6 +20,7 @@ source, and you query it with a SQL-like, left-to-right pipe (`|>`). The sources
 | `/s3`, `/r2` | object storage — Amazon S3 and Cloudflare R2 |
 | `/ga` | Google Analytics |
 | `/sys` | qfs's own admin data (users, audit log, policies, settings) |
+| `/hosts/local/claude` | this machine's running Claude Code sessions (see *AI sessions as paths* below) |
 
 A few verbs you'll see below:
 
@@ -118,6 +119,27 @@ migration that prints the equivalent `CREATE CONNECTION` lines for you.
 | **Secret resolution** | ✅ SQL passwords resolve lazily from supported secret references |
 | **Env fallback** | ✅ `QFS_SQL_…` / `QFS_GIT_…` remain as warned deprecated fallbacks with import output |
 | **Cloud account declarations** | 🧭 still proposed; cloud mounts currently use `qfs account add` + `qfs connect` |
+
+## AI sessions as paths (`/hosts/<host>/claude`)
+
+A machine's running Claude Code agents are ordinary qfs paths, not a special case reachable only
+by sitting at a terminal (mission `claude-code-sessions-are-queryable-and-steerable-as-qfs-paths`;
+the driver was born as ticket t64). The canonical address is **`/hosts/<host>/claude/...`** —
+`/hosts/local/claude/sessions` on this machine (top-level `/claude/...` is retired; the error
+points at the canonical form). Status, per owner-named capability:
+
+- ✅ **shipped** — *how many sessions are running, and what each said last*:
+  `/hosts/local/claude/sessions` returns one row per live session (`id`/`cwd`/`name`/`status`/
+  `last_message`) from Claude Code's real on-disk store, opt-in via `QFS_CLAUDE_SESSIONS`
+  (fail-closed when unset). An HTTP `CREATE ENDPOINT` over the same query serves it.
+- 🧭 **proposed** — *send a message to a running session* (`INSERT INTO
+  …/sessions/<id>/instructions`): the write leg exists and is gated, but no delivery medium a
+  live session actually reads has been verified, so the append **fails closed** rather than
+  writing where nothing listens.
+- 🧭 **proposed** — *launch a session*: needs a design ruling first (grammar, cost/irreversibility
+  gating, identity, addressability of the new id).
+- 🧭 **proposed** — *another machine's sessions* (`/hosts/<remote>/claude/...`): rides the future
+  tunnel; a non-local host fails closed today (`remote_host_not_executable`).
 
 ## Near-term backlog: known gaps
 

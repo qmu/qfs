@@ -585,7 +585,8 @@ fn secret_hygiene_logged_projections_never_render_a_canary_verbatim() {
 
 // ---------------------------------------------------------------------------
 // Claude sessions endpoint (mission claude-code-sessions-…, gate-surface ticket
-// 20260717010300): `create endpoint … as /claude/sessions` serves one row per live
+// 20260717010300): `create endpoint … as /hosts/local/claude/sessions` (the canonical
+// hosts-realm address, ticket 20260717010400) serves one row per live
 // session from a FIXTURE store over real HTTP. Hermetic: a tempdir shaped exactly like
 // `~/.claude` (never the developer's real store); the liveness record carries THIS test
 // process's pid, alive by definition. The mission's live gate itself runs against the
@@ -679,7 +680,7 @@ fn serve_endpoint_over_claude_sessions_serves_fixture_rows() {
     let config = base.join("gate.qfs");
     std::fs::write(
         &config,
-        "create endpoint sessions on 'GET /sessions' as /claude/sessions\n",
+        "create endpoint sessions on 'GET /sessions' as /hosts/local/claude/sessions\n",
     )
     .expect("write serve config");
 

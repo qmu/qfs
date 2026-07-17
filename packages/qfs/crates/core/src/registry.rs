@@ -173,6 +173,98 @@ impl PathScopeError {
     }
 }
 
+/// The implicit **local host** principal under the `/hosts` realm (decision P / §1.3, blueprint
+/// §8's "local is an implicit host"): `/hosts/local/<svc>/…` addresses THIS machine's own service
+/// mounts. It is the one host principal that is executable today — a non-local host rides the
+/// (unwired) tunnel seam and fails closed. Mirrors the binary's client-side hosts registry, which
+/// seeds `local` and cannot remove it.
+pub const LOCAL_HOST: &str = "local";
+
+/// The structured, machine-readable failure of **host-realm path canonicalization**
+/// ([`MountRegistry::canonicalize_host_path`], blueprint §6 error posture). Owner ruling
+/// 2026-07-16 (mission `claude-code-sessions-are-queryable-and-steerable-as-qfs-paths`):
+/// `/hosts/<host>/<svc>/…` is the canonical address of a host-scoped service, and a mount marked
+/// [`MountRegistry::require_host_realm`] retires its bare top-level spelling — the retired alias
+/// fails with a pointer at the canonical form, never a silent second path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HostScopeError {
+    /// `/hosts` appeared without its single host principal, so *which machine* is undetermined
+    /// (the `MissingPrincipal` arm of [`peel_scope`], surfaced with the local-host remedy).
+    MissingHost {
+        /// The offending path.
+        path: String,
+    },
+    /// `/hosts/<host>/…` named a host other than the implicit [`LOCAL_HOST`]. Remote hosts are
+    /// **not yet executable** — the cross-machine hop rides the t63 tunnel and re-checks POLICY
+    /// at the destination, a documented seam that is not wired (the `require_known_host`
+    /// precedent: fail closed, never a silent non-functional route).
+    RemoteHostNotExecutable {
+        /// The non-local host principal as written.
+        host: String,
+        /// The offending path.
+        path: String,
+    },
+    /// The service path under `/hosts/<host>` re-entered a reserved realm (§1.3: a path names
+    /// exactly one realm) — the same rejection [`peel_scope`] already makes, carried through.
+    CrossRealm {
+        /// The realm name found in service position.
+        realm: &'static str,
+        /// The offending path.
+        path: String,
+    },
+    /// A bare (realm-less) path addressed a mount that is reachable **only under the hosts
+    /// realm** ([`MountRegistry::require_host_realm`]). The bare spelling is retired (owner
+    /// ruling 2026-07-16, honouring t64); the error names the canonical form.
+    RetiredBarePath {
+        /// The retired bare path as written.
+        path: String,
+        /// The canonical `/hosts/<host>/…` spelling of the same node (local form).
+        canonical: String,
+    },
+}
+
+impl HostScopeError {
+    /// A stable, machine-readable code an AI-facing caller branches on (blueprint §6).
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::MissingHost { .. } => "missing_principal",
+            Self::RemoteHostNotExecutable { .. } => "remote_host_not_executable",
+            Self::CrossRealm { .. } => "cross_realm",
+            Self::RetiredBarePath { .. } => "retired_path",
+        }
+    }
+}
+
+impl std::fmt::Display for HostScopeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingHost { path } => write!(
+                f,
+                "`{path}`: the /hosts realm needs a host segment — `/hosts/{LOCAL_HOST}/…` \
+                 addresses this machine"
+            ),
+            Self::RemoteHostNotExecutable { host, path } => write!(
+                f,
+                "`{path}`: host `{host}` is not executable from here — remote hosts are not yet \
+                 wired (the tunnel seam is future work); use `/hosts/{LOCAL_HOST}/…` for this \
+                 machine"
+            ),
+            Self::CrossRealm { realm, path } => write!(
+                f,
+                "`{path}`: the service path re-enters the reserved realm `{realm}` — a path \
+                 names exactly one realm"
+            ),
+            Self::RetiredBarePath { path, canonical } => write!(
+                f,
+                "`{path}` is retired — this surface is canonical under the hosts realm; use \
+                 `{canonical}` (owner ruling 2026-07-16)"
+            ),
+        }
+    }
+}
+
 /// How a bare leading **name** resolves under the decision-P precedence ladder (§1.3).
 /// A reserved realm name is fixed and outranks every user-introduced name; below it sit
 /// (in order) a lexical `LET` binding (t60), a driver mount, and a connection — then
@@ -293,6 +385,11 @@ pub fn peel_scope(path: &str) -> Result<ScopeResolution, PathScopeError> {
     })
 }
 
+/// The first path segment of `path` (empty for `/` or the empty path). Pure string work.
+fn leading_segment(path: &str) -> &str {
+    path.trim_start_matches('/').split('/').next().unwrap_or("")
+}
+
 /// Render a service segment slice back into a `/seg/seg` path (a `/` for the empty slice).
 fn join_service(segments: &[&str]) -> String {
     if segments.is_empty() {
@@ -340,6 +437,11 @@ pub struct MountRegistry {
     ///
     /// [`transform_defs`]: MountRegistry::transform_defs
     declared_types: DeclaredTypeDefs,
+    /// Mounts reachable **only under the hosts realm** (`/hosts/<host>/<svc>/…`) — their bare
+    /// top-level spelling is retired (owner ruling 2026-07-16; today `/claude` is the one
+    /// member). Enforced by [`MountRegistry::canonicalize_host_path`], the canonicalization the
+    /// planner, the write evaluator, and DESCRIBE all run before routing.
+    host_realm_only: std::collections::BTreeSet<String>,
 }
 
 /// The resolved declared-type definitions the planner/evaluator resolve `|> of <name>` assertions
@@ -462,8 +564,34 @@ impl MountRegistry {
     /// must continue with `/` after it — so `/git` does not capture `/gitlab/x`. Returns
     /// `None` when no mount is a boundary-prefix of `path` (the caller raises
     /// [`CfsError::UnknownMount`] with context it owns).
+    ///
+    /// **The hosts realm peels here** (decision P / §1.3; owner ruling 2026-07-16): a
+    /// `/hosts/local/<svc>/…` path addresses this machine's own service mounts, so the
+    /// `/hosts/local` realm prefix is stripped via [`peel_scope`] and the remaining service
+    /// path routes as usual — the general `/hosts/<h>/<svc>` rule, never a per-driver special
+    /// case (no mount may itself start with a realm segment, so the peel cannot shadow one).
+    /// A non-local host has no executable mount here and resolves to `None` (fail closed; the
+    /// structured `remote_host_not_executable` error surfaces from
+    /// [`MountRegistry::canonicalize_host_path`], which planning/eval/DESCRIBE run first).
     #[must_use]
     pub fn resolve_path(&self, path: &str) -> Option<(Arc<dyn Driver>, String)> {
+        if leading_segment(path) == "hosts" {
+            return match peel_scope(path) {
+                Ok(res) if res.scope.principal.as_deref() == Some(LOCAL_HOST) => {
+                    self.resolve_service_path(&res.service)
+                }
+                _ => None,
+            };
+        }
+        self.resolve_service_path(path)
+    }
+
+    /// The raw longest-prefix router over the mount table — [`resolve_path`] after realm
+    /// peeling (and the bare-path check [`canonicalize_host_path`] uses, which must NOT peel).
+    ///
+    /// [`resolve_path`]: MountRegistry::resolve_path
+    /// [`canonicalize_host_path`]: MountRegistry::canonicalize_host_path
+    fn resolve_service_path(&self, path: &str) -> Option<(Arc<dyn Driver>, String)> {
         let mut best: Option<(&String, &Arc<dyn Driver>)> = None;
         for (mount, driver) in &self.mounts {
             let matches = path == mount
@@ -482,6 +610,68 @@ impl MountRegistry {
                 .to_string();
             (Arc::clone(driver), sub)
         })
+    }
+
+    /// Mark `mount` as reachable **only under the hosts realm**: its bare top-level spelling is
+    /// retired and [`MountRegistry::canonicalize_host_path`] fails it with a `retired_path`
+    /// pointer at the canonical `/hosts/<host>{mount}` form (owner ruling 2026-07-16 — one
+    /// canonical address per surface; a retired alias fails with a pointer, never a silent
+    /// second path). Registration-site configuration, like the mount itself.
+    pub fn require_host_realm(&mut self, mount: &str) {
+        self.host_realm_only.insert(mount.to_string());
+    }
+
+    /// Whether `mount` was marked host-realm-only via [`MountRegistry::require_host_realm`].
+    #[must_use]
+    pub fn is_host_realm_only(&self, mount: &str) -> bool {
+        self.host_realm_only.contains(mount)
+    }
+
+    /// Canonicalize an addressed path for routing under the host-realm path canon (decision P /
+    /// §1.3; owner ruling 2026-07-16): a `/hosts/<host>/<svc>/…` path peels to its service path
+    /// when `<host>` is the implicit [`LOCAL_HOST`] (this machine), fails closed for any other
+    /// host (`remote_host_not_executable` — the tunnel seam is not wired), and a **bare** path
+    /// addressing a [`MountRegistry::require_host_realm`] mount fails with `retired_path`
+    /// naming the canonical spelling. Every other path passes through unchanged — non-hosts
+    /// realms keep their existing behaviour (no accidental widening).
+    ///
+    /// # Errors
+    /// [`HostScopeError`] per the rules above.
+    pub fn canonicalize_host_path(&self, path: &str) -> Result<String, HostScopeError> {
+        if leading_segment(path) == "hosts" {
+            return match peel_scope(path) {
+                Ok(res) => match res.scope.principal.as_deref() {
+                    Some(LOCAL_HOST) => Ok(res.service),
+                    Some(host) => Err(HostScopeError::RemoteHostNotExecutable {
+                        host: host.to_string(),
+                        path: path.to_string(),
+                    }),
+                    // `hosts` is a collection realm: peel_scope always yields a principal or
+                    // the MissingPrincipal error, so this arm is unreachable — kept total.
+                    None => Err(HostScopeError::MissingHost {
+                        path: path.to_string(),
+                    }),
+                },
+                Err(PathScopeError::MissingPrincipal { .. }) => Err(HostScopeError::MissingHost {
+                    path: path.to_string(),
+                }),
+                Err(PathScopeError::CrossRealm { realm, .. }) => Err(HostScopeError::CrossRealm {
+                    realm,
+                    path: path.to_string(),
+                }),
+            };
+        }
+        // A bare path: reject a retired spelling of a host-realm-only mount (raw match — the
+        // whole point is that this path did NOT come through the hosts realm).
+        if let Some((driver, _)) = self.resolve_service_path(path) {
+            if self.host_realm_only.contains(driver.mount()) {
+                return Err(HostScopeError::RetiredBarePath {
+                    path: path.to_string(),
+                    canonical: format!("/hosts/{LOCAL_HOST}{path}"),
+                });
+            }
+        }
+        Ok(path.to_string())
     }
 
     /// Iterate every registered driver (deterministic mount order). Used by name
@@ -778,6 +968,88 @@ mod tests {
         assert_eq!(sub2, "x");
         // …while a different child of the shorter mount still routes to it.
         assert_eq!(reg.resolve_path("/work/budget").unwrap().0.mount(), "/work");
+    }
+
+    /// The host-realm peel in `resolve_path` (decision P / owner ruling 2026-07-16):
+    /// `/hosts/local/<svc>/…` routes to the same mount as the bare service path — the GENERAL
+    /// `/hosts/<h>/<svc>` rule (proven over an ordinary fake mount, not a claude special-case) —
+    /// while a non-local host, a missing host segment, and a cross-realm service path all
+    /// resolve to `None` (fail closed; the structured error comes from canonicalization).
+    #[test]
+    fn resolve_path_peels_the_local_host_realm() {
+        let mut reg = MountRegistry::new();
+        reg.register(Arc::new(FakeDriver::at("/fake"))).unwrap();
+
+        let (driver, sub) = reg.resolve_path("/hosts/local/fake/rows").unwrap();
+        assert_eq!(driver.mount(), "/fake");
+        assert_eq!(sub, "rows");
+        // The exact peeled mount resolves with an empty sub-path.
+        assert_eq!(reg.resolve_path("/hosts/local/fake").unwrap().1, "");
+
+        // A non-local host has no executable mount here (the tunnel seam is not wired).
+        assert!(reg.resolve_path("/hosts/qfs.cloud/fake/rows").is_none());
+        // `/hosts` with no principal, and a cross-realm service path, both fail closed.
+        assert!(reg.resolve_path("/hosts").is_none());
+        assert!(reg.resolve_path("/hosts/local/members/alice").is_none());
+    }
+
+    /// The host-realm path canon (`canonicalize_host_path`, owner ruling 2026-07-16): the local
+    /// host peels to the service path; a non-local host is `remote_host_not_executable`; a
+    /// missing host is `missing_principal`; a cross-realm service path is `cross_realm`; a bare
+    /// spelling of a `require_host_realm` mount is `retired_path` NAMING the canonical form; and
+    /// every other bare path passes through unchanged (no accidental widening).
+    #[test]
+    fn canonicalize_host_path_rules() {
+        let mut reg = MountRegistry::new();
+        reg.register(Arc::new(FakeDriver::at("/fake"))).unwrap();
+        reg.register(Arc::new(FakeDriver::at("/plain"))).unwrap();
+        reg.require_host_realm("/fake");
+        assert!(reg.is_host_realm_only("/fake"));
+        assert!(!reg.is_host_realm_only("/plain"));
+
+        // The local host peels to the service path — for ANY mount, marked or not.
+        assert_eq!(
+            reg.canonicalize_host_path("/hosts/local/fake/rows")
+                .unwrap(),
+            "/fake/rows"
+        );
+        assert_eq!(
+            reg.canonicalize_host_path("/hosts/local/plain/x").unwrap(),
+            "/plain/x"
+        );
+
+        // A non-local host fails closed with the structured remote error.
+        let err = reg
+            .canonicalize_host_path("/hosts/qfs.cloud/fake/rows")
+            .unwrap_err();
+        assert_eq!(err.code(), "remote_host_not_executable");
+        assert!(err.to_string().contains("qfs.cloud"));
+
+        // `/hosts` with no host segment.
+        let err = reg.canonicalize_host_path("/hosts").unwrap_err();
+        assert_eq!(err.code(), "missing_principal");
+
+        // The service path must not re-enter a reserved realm (§1.3, the existing rejection).
+        let err = reg
+            .canonicalize_host_path("/hosts/local/members/alice")
+            .unwrap_err();
+        assert_eq!(err.code(), "cross_realm");
+
+        // The retired bare spelling of a host-realm-only mount names the canonical form.
+        let err = reg.canonicalize_host_path("/fake/rows").unwrap_err();
+        assert_eq!(err.code(), "retired_path");
+        assert!(matches!(
+            &err,
+            HostScopeError::RetiredBarePath { canonical, .. } if canonical == "/hosts/local/fake/rows"
+        ));
+        assert!(err.to_string().contains("/hosts/local/fake/rows"));
+
+        // An unmarked mount's bare path passes through unchanged, as does an unrouted path.
+        assert_eq!(reg.canonicalize_host_path("/plain/x").unwrap(), "/plain/x");
+        assert_eq!(
+            reg.canonicalize_host_path("/nowhere/x").unwrap(),
+            "/nowhere/x"
+        );
     }
 
     #[test]

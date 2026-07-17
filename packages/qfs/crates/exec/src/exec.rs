@@ -136,6 +136,9 @@ fn map_pushdown_error(err: qfs_core::PushdownError) -> ExecError {
     let kind = match err {
         // PlanError::CapabilityDenied / UnknownSource — both "this source/op is unavailable".
         PushdownError::Plan(_) => ErrorKind::Capability,
+        // A host-realm canon violation (retired bare path, non-local host) is "this address is
+        // unavailable from here" — the same capability class, with the canonical pointer.
+        PushdownError::HostScope(_) => ErrorKind::Capability,
         // A lowering failure (a malformed/unsupported query shape) is a usage-class problem.
         PushdownError::Lower(_) | PushdownError::NotAQuery => ErrorKind::Usage,
         // PushdownError is #[non_exhaustive]: an unmodeled future arm degrades to usage.
@@ -147,6 +150,7 @@ fn map_pushdown_error(err: qfs_core::PushdownError) -> ExecError {
         PushdownError::NotAQuery => "expected a read query (/path |> …)".to_string(),
         PushdownError::Lower(l) => l.to_string(),
         PushdownError::Plan(p) => p.to_string(),
+        PushdownError::HostScope(h) => h.to_string(),
         other => format!("{other:?}"),
     };
     ExecError::new(kind, err.code(), message)
@@ -273,6 +277,9 @@ fn map_eval_error(err: qfs_core::EvalError) -> ExecError {
         // A resolve-time capability denial / unknown driver / unknown proc is exit 3.
         EvalError::Resolve(_) => ErrorKind::Capability,
         EvalError::UnroutedPath { .. } => ErrorKind::Capability,
+        // A host-realm canon violation on an effect target (retired bare path, non-local host)
+        // is the same "this address is unavailable from here" capability class.
+        EvalError::HostScope(_) => ErrorKind::Capability,
         // A type error in the query is a usage-class problem.
         EvalError::Type(_) | EvalError::Fn(_) | EvalError::UnknownTypeAnnotation { .. } => {
             ErrorKind::Usage
@@ -293,8 +300,13 @@ fn map_eval_error(err: qfs_core::EvalError) -> ExecError {
         }
         _ => ErrorKind::Internal,
     };
-    // EvalError has no Display; its owned, secret-free Debug is the machine-facing message.
-    ExecError::new(kind, err.code(), format!("{err:?}"))
+    // EvalError has no Display; its owned, secret-free Debug is the machine-facing message. The
+    // host-realm arm's inner error DOES Display — render it so the canonical pointer reads clean.
+    let message = match &err {
+        EvalError::HostScope(h) => h.to_string(),
+        other => format!("{other:?}"),
+    };
+    ExecError::new(kind, err.code(), message)
 }
 
 /// Re-map a [`CfsError`] through [`ExecError::from_qfs`] (re-exported for the CLI).

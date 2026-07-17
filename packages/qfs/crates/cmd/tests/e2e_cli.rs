@@ -368,13 +368,19 @@ fn unknown_source_is_capability_exit_three() {
 
 #[test]
 fn claude_sessions_without_store_fails_closed_at_the_read_registry() {
-    // The `/claude` mount now ALWAYS resolves and plans (describe is pure); with no
-    // QFS_CLAUDE_SESSIONS configured the READ facet stays unregistered, so the scan fails closed
-    // with the read-registry's structured capability error — same kind/exit as before the mount
-    // fix (the operator-visible contract holds), but no longer the planner's unknown-mount case.
-    // History: until 2026-07-17 this exact query asserted the planner's `unknown_source` as
-    // intended behaviour, silently pinning the missing `engine.mounts.register(...)` as correct.
-    let o = qfs(&["run", "-e", "/claude/sessions |> LIMIT 1", "--json"]);
+    // The claude mount ALWAYS resolves and plans under its canonical hosts-realm address
+    // (describe is pure); with no QFS_CLAUDE_SESSIONS configured the READ facet stays
+    // unregistered, so the scan fails closed with the read-registry's structured capability
+    // error — same kind/exit as before the mount fix (the operator-visible contract holds), but
+    // no longer the planner's unknown-mount case. History: until 2026-07-17 this query (in its
+    // then-bare `/claude/sessions` spelling) asserted the planner's `unknown_source` as intended
+    // behaviour, silently pinning the missing `engine.mounts.register(...)` as correct.
+    let o = qfs(&[
+        "run",
+        "-e",
+        "/hosts/local/claude/sessions |> LIMIT 1",
+        "--json",
+    ]);
     assert_eq!(o.code, 3, "capability is exit 3");
     let v = json(&o.stderr);
     assert_eq!(v["error"]["kind"], "capability");
@@ -389,12 +395,61 @@ fn claude_sessions_without_store_fails_closed_at_the_read_registry() {
     );
 }
 
+/// Path canon (owner ruling 2026-07-16, ticket 20260717010400): the bare `/claude/...` spelling
+/// is RETIRED — it fails with a structured `retired_path` error NAMING the canonical
+/// `/hosts/local/claude/...` form, never a silent second path (and never the internal-sounding
+/// `unknown_source`).
+#[test]
+fn bare_claude_path_is_retired_with_the_canonical_pointer() {
+    let o = qfs(&["run", "-e", "/claude/sessions |> LIMIT 1", "--json"]);
+    assert_eq!(
+        o.code, 3,
+        "a retired path is a capability-class error, exit 3"
+    );
+    let v = json(&o.stderr);
+    assert_eq!(v["error"]["kind"], "capability");
+    assert_eq!(v["error"]["code"], "retired_path");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("/hosts/local/claude/sessions"),
+        "the error must point at the canonical hosts-realm form: {}",
+        o.stderr
+    );
+}
+
+/// A non-local host fails closed at plan time (`remote_host_not_executable`) — the cross-machine
+/// hop is the unwired t63 tunnel seam, and the error says what to use instead.
+#[test]
+fn non_local_host_fails_closed_as_remote_not_executable() {
+    let o = qfs(&[
+        "run",
+        "-e",
+        "/hosts/qfs.cloud/claude/sessions |> LIMIT 1",
+        "--json",
+    ]);
+    assert_eq!(o.code, 3, "capability is exit 3");
+    let v = json(&o.stderr);
+    assert_eq!(v["error"]["kind"], "capability");
+    assert_eq!(v["error"]["code"], "remote_host_not_executable");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("/hosts/local"),
+        "the error must name the local-host remedy: {}",
+        o.stderr
+    );
+}
+
 /// THE regression guard for the mount registration (mission
 /// `claude-code-sessions-are-queryable-and-steerable-as-qfs-paths`, acceptance item 2): with a
-/// FIXTURE store configured, `/claude/sessions` returns real rows through the whole
-/// parse→resolve→plan→scan path of the spawned binary. Remove the `engine.mounts.register(...)`
-/// for `/claude` in shell.rs and this fails with the planner's `unknown_source` — exactly the
-/// omission that shipped unreachable for three weeks while a wrong-reason test held the door.
+/// FIXTURE store configured, `/hosts/local/claude/sessions` (the canonical hosts-realm address,
+/// ticket 20260717010400) returns real rows through the whole parse→resolve→plan→scan path of
+/// the spawned binary. Remove the `engine.mounts.register(...)` for `/claude` in shell.rs and
+/// this fails with the planner's `unknown_source` — exactly the omission that shipped
+/// unreachable for three weeks while a wrong-reason test held the door.
 #[test]
 fn claude_sessions_reads_a_fixture_store_end_to_end() {
     // A hermetic ~/.claude-shaped store in a tempdir: the liveness registry record carries THIS
@@ -426,7 +481,12 @@ fn claude_sessions_reads_a_fixture_store_end_to_end() {
     .expect("write fixture transcript");
 
     let mut child = Command::new(qfs_bin())
-        .args(["run", "-e", "/claude/sessions |> LIMIT 10", "--json"])
+        .args([
+            "run",
+            "-e",
+            "/hosts/local/claude/sessions |> LIMIT 10",
+            "--json",
+        ])
         .env("RUST_LOG", "off")
         .env("XDG_CONFIG_HOME", hermetic_config_home())
         .env("QFS_CLAUDE_SESSIONS", &base)

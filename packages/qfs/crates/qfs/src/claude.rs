@@ -290,11 +290,10 @@ fn read_tail(path: &Path, max_bytes: u64) -> Option<String> {
     file.read_to_end(&mut buf).ok()?;
     let mut text = String::from_utf8_lossy(&buf).into_owned();
     if start > 0 {
-        // Drop the partial first line of the window (its head lies before the seek point).
-        match text.find('\n') {
-            Some(idx) => text.drain(..=idx),
-            None => return None,
-        };
+        // Drop the partial first line of the window (its head lies before the seek point); a
+        // window with no newline at all has no complete line to offer.
+        let idx = text.find('\n')?;
+        text.drain(..=idx);
     }
     Some(text)
 }

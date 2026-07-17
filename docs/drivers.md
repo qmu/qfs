@@ -9,31 +9,6 @@ The verbs are always `select` / `insert` / `upsert` / `update` / `remove` (plus 
 
 ## Drivers
 
-### `/claude` — RelationalTable
-
-- example node: `/claude/sessions`
-- native verbs: SELECT
-
-Universal verbs (✓ supported / ✗ rejected at parse time):
-
-| verb | supported |
-|------|-----------|
-| `select` | ✓ |
-| `insert` | ✗ |
-| `upsert` | ✗ |
-| `update` | ✗ |
-| `remove` | ✗ |
-| `ls` | ✗ |
-| `cp` | ✗ |
-| `mv` | ✗ |
-| `rm` | ✗ |
-
-Procedures: _none_
-
-Prelude aliases: _none_
-
-Pushdown: where=false project=false limit=false order=false join=false aggregate=false distinct=false group_by=false
-
 ### `/drive` — BlobNamespace
 
 - example node: `/drive/my/Reports/report.pdf`
@@ -143,6 +118,31 @@ Procedures: _none_
 Prelude aliases: _none_
 
 Pushdown: where=true project=true limit=true order=true join=false aggregate=true distinct=false group_by=true
+
+### `/hosts/<host>/claude` — RelationalTable
+
+- example node: `/hosts/local/claude/sessions`
+- native verbs: SELECT
+
+Universal verbs (✓ supported / ✗ rejected at parse time):
+
+| verb | supported |
+|------|-----------|
+| `select` | ✓ |
+| `insert` | ✗ |
+| `upsert` | ✗ |
+| `update` | ✗ |
+| `remove` | ✗ |
+| `ls` | ✗ |
+| `cp` | ✗ |
+| `mv` | ✗ |
+| `rm` | ✗ |
+
+Procedures: _none_
+
+Prelude aliases: _none_
+
+Pushdown: where=false project=false limit=false order=false join=false aggregate=false distinct=false group_by=false
 
 ### `/local` — BlobNamespace
 

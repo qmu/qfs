@@ -13,13 +13,13 @@
 //! [`Pipeline`], not the schema-threading `PlanSource`.
 
 use qfs_driver::{Driver, Path, PushdownProfile};
-use qfs_parser::{Pipeline, Statement};
+use qfs_parser::{PipeOp, Pipeline, Source, Statement};
 use qfs_pushdown::{
     lower_query, partition_by_source, LowerError, PhysicalPlan, PlanError, SourceId, SourceRegistry,
 };
 use qfs_types::Schema;
 
-use crate::registry::MountRegistry;
+use crate::registry::{HostScopeError, MountRegistry};
 
 /// A structured error from the pushdown integration: either the AST could not be lowered
 /// (`LowerError`) or the partition rejected at plan time (`PlanError`). A query that does
@@ -34,6 +34,10 @@ pub enum PushdownError {
     Plan(PlanError),
     /// The statement was not a pure read query, so there is nothing to push down.
     NotAQuery,
+    /// A `FROM` path violated the host-realm path canon (decision P / owner ruling
+    /// 2026-07-16): a non-local `/hosts/<h>/…` host, a `/hosts` with no host segment, a
+    /// cross-realm service path, or a retired bare spelling of a host-realm-only mount.
+    HostScope(HostScopeError),
 }
 
 impl PushdownError {
@@ -44,6 +48,7 @@ impl PushdownError {
             PushdownError::Lower(e) => e.code(),
             PushdownError::Plan(e) => e.code(),
             PushdownError::NotAQuery => "not_a_query",
+            PushdownError::HostScope(e) => e.code(),
         }
     }
 }
@@ -97,6 +102,12 @@ pub fn plan_pipeline(
     pipeline: &Pipeline,
     mounts: &MountRegistry,
 ) -> Result<PhysicalPlan, PushdownError> {
+    // The host-realm path canon (decision P / owner ruling 2026-07-16) runs BEFORE lowering, so
+    // every `FROM /hosts/local/<svc>/…` leaf lowers with its peeled SERVICE path — the scan the
+    // read driver later receives must speak the mount's own namespace, and the retired bare
+    // spelling of a host-realm-only mount fails here with the canonical pointer.
+    let pipeline = canonicalize_hosts(pipeline, mounts).map_err(PushdownError::HostScope)?;
+    let pipeline = &pipeline;
     let source_of = |segs: &[String]| -> SourceId {
         let full = render_path(segs);
         match mounts.resolve_path(&full) {
@@ -125,6 +136,61 @@ pub fn plan_pipeline(
     let reg = source_registry(mounts);
     let physical = partition_by_source(&logical, &reg)?;
     Ok(physical)
+}
+
+/// Canonicalize the host realm in every `FROM` path of `pipeline` (decision P / §1.3; owner
+/// ruling 2026-07-16): `/hosts/local/<svc>/…` peels to its service path (the general
+/// `/hosts/<h>/<svc>` rule, never a per-driver special case), a non-local host fails closed
+/// (`remote_host_not_executable` — the tunnel seam is not wired), and a retired bare spelling of
+/// a host-realm-only mount fails with the canonical pointer. Walks every source position —
+/// pipeline source, subquery, `JOIN` source, and each set-op branch. Clones only because the
+/// planner takes `&Pipeline`; pipelines are small ASTs.
+///
+/// # Errors
+/// [`HostScopeError`] per [`MountRegistry::canonicalize_host_path`].
+fn canonicalize_hosts(
+    pipeline: &Pipeline,
+    mounts: &MountRegistry,
+) -> Result<Pipeline, HostScopeError> {
+    let mut p = pipeline.clone();
+    canonicalize_pipeline_mut(&mut p, mounts)?;
+    Ok(p)
+}
+
+fn canonicalize_pipeline_mut(
+    p: &mut Pipeline,
+    mounts: &MountRegistry,
+) -> Result<(), HostScopeError> {
+    canonicalize_source_mut(&mut p.source, mounts)?;
+    for op in &mut p.ops {
+        match op {
+            PipeOp::Join(join) => canonicalize_source_mut(&mut join.source, mounts)?,
+            PipeOp::Union(sub) | PipeOp::Except(sub) | PipeOp::Intersect(sub) => {
+                canonicalize_pipeline_mut(sub, mounts)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn canonicalize_source_mut(s: &mut Source, mounts: &MountRegistry) -> Result<(), HostScopeError> {
+    match s {
+        Source::Path(path) => {
+            let names: Vec<String> = path.segments.iter().map(|s| s.name.clone()).collect();
+            let full = render_path(&names);
+            let canonical = mounts.canonicalize_host_path(&full)?;
+            if canonical != full {
+                // The peel dropped exactly the `/hosts/<host>` realm prefix — drop the same two
+                // leading segments from the AST path (their `@version` coordinates, were any
+                // written, name the realm, not the service node — they go with them).
+                path.segments.drain(..2);
+            }
+            Ok(())
+        }
+        Source::Subquery(inner) => canonicalize_pipeline_mut(inner, mounts),
+        Source::Values(_) | Source::Name(_) => Ok(()),
+    }
 }
 
 /// Describe a driver's root node schema via its **pure** `describe` (no I/O). An
@@ -266,5 +332,59 @@ mod tests {
         let stmt = parse_statement("INSERT INTO /db/users VALUES (1, 'a')").unwrap();
         let err = plan_query(&stmt, &mounts).unwrap_err();
         assert_eq!(err.code(), "not_a_query");
+    }
+
+    /// The host-realm path canon in planning (decision P / owner ruling 2026-07-16): a
+    /// `/hosts/local/<svc>/…` FROM peels to the service path — the ScanNode the read driver
+    /// receives speaks the mount's own namespace — and the peel is the GENERAL `/hosts/<h>/<svc>`
+    /// rule (proven over the ordinary `/db` fake, not a claude special-case).
+    #[test]
+    fn hosts_local_from_plans_as_the_peeled_service_scan() {
+        let mounts = registry();
+        let stmt = parse_statement("/hosts/local/db/users |> WHERE id > 0 |> SELECT id").unwrap();
+        let phys = plan_query(&stmt, &mounts).unwrap();
+        assert_eq!(phys.scan_count(), 1);
+        assert_eq!(explain(&phys), "Scan[db] pushed=[where, project(id)]\n");
+        // The scan's addressed VFS path is the PEELED service path (what a read driver parses).
+        assert_eq!(phys.scans()[0].path, "/db/users");
+    }
+
+    /// A non-local host fails closed at plan time with the structured remote error (the tunnel
+    /// seam is not wired), and `/hosts` with no host segment is a missing principal.
+    #[test]
+    fn hosts_remote_and_missing_principal_fail_closed_at_plan_time() {
+        let mounts = registry();
+        let stmt = parse_statement("/hosts/qfs.cloud/db/users |> LIMIT 1").unwrap();
+        let err = plan_query(&stmt, &mounts).unwrap_err();
+        assert_eq!(err.code(), "remote_host_not_executable");
+        assert!(matches!(&err, PushdownError::HostScope(h) if h.to_string().contains("qfs.cloud")));
+
+        let stmt = parse_statement("/hosts |> LIMIT 1").unwrap();
+        let err = plan_query(&stmt, &mounts).unwrap_err();
+        assert_eq!(err.code(), "missing_principal");
+    }
+
+    /// The retired bare spelling of a host-realm-only mount fails at plan time with the
+    /// canonical pointer — and the check reaches a JOIN source, not only the FROM position.
+    #[test]
+    fn retired_bare_path_fails_with_the_canonical_pointer() {
+        let mut mounts = registry();
+        mounts.require_host_realm("/db");
+
+        let stmt = parse_statement("/db/users |> LIMIT 1").unwrap();
+        let err = plan_query(&stmt, &mounts).unwrap_err();
+        assert_eq!(err.code(), "retired_path");
+        assert!(
+            matches!(&err, PushdownError::HostScope(h) if h.to_string().contains("/hosts/local/db/users"))
+        );
+
+        // The canonical spelling still plans (the peel, not a lockout).
+        let stmt = parse_statement("/hosts/local/db/users |> LIMIT 1").unwrap();
+        assert_eq!(plan_query(&stmt, &mounts).unwrap().scan_count(), 1);
+
+        // A JOIN source is walked too.
+        let stmt = parse_statement("/git/commits |> JOIN /db/users ON id == id").unwrap();
+        let err = plan_query(&stmt, &mounts).unwrap_err();
+        assert_eq!(err.code(), "retired_path");
     }
 }

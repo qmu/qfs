@@ -335,6 +335,10 @@ fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> Re
     let _ = engine
         .mounts
         .register(Arc::new(qfs_driver_claude::ClaudeDriver::new()));
+    // Path canon (owner ruling 2026-07-16, ticket 20260717010400): the session surface is
+    // canonical under the hosts realm — `/hosts/<host>/claude/...`; the bare `/claude/...`
+    // spelling is retired and fails with a `retired_path` pointer at the canonical form.
+    engine.mounts.require_host_realm("/claude");
     if let Some(source) = crate::claude::ClaudeStoreSource::open_default() {
         reads = reads.with(
             DriverId::new("claude"),

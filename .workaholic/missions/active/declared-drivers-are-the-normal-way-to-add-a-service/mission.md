@@ -23,6 +23,21 @@ compiled-Rust driver and never a name-shaped environment variable. A connection 
 can read, review, and check in; secrets are *referenced*, never inlined; and re-reading the
 declaration is what heals state.
 
+**The "never a compiled-Rust driver" rule is a ratchet, not a partition** (blueprint §13, "the
+self-hosting ratchet, honestly tiered": *"Compiled drivers remain until their script twin passes
+the conformance suite; then they may be deleted — that ratchet, not rewrites, is the migration
+path"*). Two compiled counter-examples exist today, named here so the rule stops reading as
+absolute while unnamed exceptions ride it:
+
+- **`/cf`** — REST-shaped, so the ratchet *can* reach it; doing so is this mission's own item 2.
+- **`/claude`** — the AI-sessions façade (mission
+  `claude-code-sessions-are-queryable-and-steerable-as-qfs-paths`, acceptance item 7, recorded
+  2026-07-17). It **mechanically cannot be declared today**: the declared shape is REST-shaped
+  (`base_url`/`auth`/`pagination`/`verb`/`body`) and `/claude` has no base URL, no auth, and no
+  wire — it reads a local on-disk store. It is not in violation; the ratchet has not reached it.
+  Converting it stays out of this mission's scope; if the declared shape ever grows a non-REST
+  arm, the question reopens there — it is not pre-ruled here.
+
 This mission is **framed as a standing property of the product, not an episode of work** — see the
 2026-07-15 reframing. It exists because the property is *half-true today*, and because the previous
 mission that carried it (`qfs-capability-tryout-…`, goal #2 "less platform, more language: push
@@ -239,3 +254,7 @@ stops truncating, and Project DB config writes are events like every other confi
 - 2026-07-16 — concern deferred (stuck) — shared-connection-and-broker-connection-homing.md
 - 2026-07-16 — concern deferred (stuck) — the-operator-s-live-box-runs.md
 - 2026-07-16 — acceptance ticked manually (tick-acceptance.sh misses a ticket filename on a continuation line) — 20260716143641-rehome-declarative-tables-into-the-system-db.md
+- 2026-07-17 — `/claude` named as the second compiled counter-example beside `/cf`, with blueprint
+  §13's ratchet framing as what governs both (Goal section). Requested by the claude-code-sessions
+  mission's acceptance item 7 (ticket `20260717010700-claude-compiled-standing-recorded.md`) — the
+  only integration between the two missions the evidence supports. No code change.

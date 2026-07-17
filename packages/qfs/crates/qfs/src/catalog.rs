@@ -121,6 +121,17 @@ pub fn driver_catalog() -> Catalog {
         let Ok(report) = DescribeReport::from_driver(driver.as_ref(), &path) else {
             continue;
         };
+        // Path canon (owner ruling 2026-07-16): a host-realm-only mount is ADDRESSED as
+        // `/hosts/<host>/<svc>/…` — the catalog teaches the canonical spelling (describe above
+        // ran on the service path, which is the namespace the driver itself speaks).
+        let (mount, example_path) = if reg.is_host_realm_only(&mount) {
+            (
+                format!("/hosts/<host>{mount}"),
+                format!("/hosts/{}{example_path}", qfs_core::LOCAL_HOST),
+            )
+        } else {
+            (mount, example_path)
+        };
         drivers.push(DriverDoc {
             mount,
             example_path,
