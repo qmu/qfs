@@ -119,7 +119,15 @@ pipeline      = source , { "|>" , stage } ;
 
 source        = path | id_ref | name ;   (* name = a let-bound relation *)
 path          = "/" , segment , { "/" , segment } ;   (* absolute only, no cwd *)
+segment       = bare_segment | quoted_segment ;
+quoted_segment = "'" , { any_char_except_quote_or_slash | "''" } , "'" ;
 id_ref        = "id:" , token ;
+
+(* A QUOTED segment carries any character literally — spaces, `?`, `#`, `&`, `(`, Unicode —  *)
+(* so a real file name is addressable as one path: /drive/my/'Q3 budget (final)?.xlsx'.      *)
+(* Escape a quote by doubling it (''). A quoted `?`/`*` is a LITERAL character, never a      *)
+(* glob: /drive/my/'report?.pdf' is one file, /drive/my/report?.pdf still globs. A `/` may   *)
+(* not appear inside quotes (the separator is structural). Bare segments are unchanged.      *)
 
 stage         = query_stage | effect_stage | codec_stage | call_stage ;
 
@@ -248,7 +256,7 @@ transform_def = "transform" , name ,
                 "provider" , word_or_string , "model" , word_or_string ,
                 [ "effort" , word_or_string ] , [ "secret" , string ] ;
 
-(* Lowercase nonterminals (segment, token, projection, assignment, agg_list,       *)
+(* Lowercase nonterminals (bare_segment, token, projection, assignment, agg_list,  *)
 (* column_list, sort_list, integer, target, row_list, column, arg_list, action,    *)
 (* driver_id, name, event, interval, literal, column_type_list, word_or_string,    *)
 (* string) are E1's lexical/structural detail.                                      *)

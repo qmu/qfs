@@ -42,6 +42,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # Structured, secret-free DriveError taxonomy (RFD §5, AI-consumable).
 thiserror = { workspace = true }
+# Unicode NFC/NFD canonical normalization for the name→id walk: Drive stores a name in whatever
+# form the uploading client sent (macOS sends NFD), while a listing name pasted into a path
+# arrives NFC, so an exact-bytes `name =` lookup misses a file that is plainly in the listing.
+unicode-normalization = { workspace = true }
 # Structured request/lifecycle logging at debug, with token values redacted by the
 # HttpRequest Debug.
 tracing = { workspace = true }

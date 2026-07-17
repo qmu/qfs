@@ -432,6 +432,36 @@ fn path_at_version_is_preserved() {
 }
 
 #[test]
+fn quoted_path_segment_reaches_the_ast_as_a_raw_name() {
+    // Ticket 20260717120200. Quoting is purely LEXICAL: the AST (and therefore the `/seg/seg`
+    // string every driver re-splits) carries the raw name, with no quotes and no glob flag. That
+    // is what lets drivers keep splitting on `/` unchanged.
+    let stmt = parse_ok("/drive/my/Reports/'Q3 budget (final)?.xlsx'");
+    let Statement::Query(p) = stmt else { panic!() };
+    let Source::Path(path) = p.source else {
+        panic!()
+    };
+    let names: Vec<&str> = path.segments.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["drive", "my", "Reports", "Q3 budget (final)?.xlsx"]
+    );
+    assert!(
+        path.segments.iter().all(|s| !s.glob),
+        "a quoted `?` is a literal character, so no segment globs"
+    );
+}
+
+#[test]
+fn quoted_path_segment_addresses_a_single_file_remove() {
+    // The spelling the incident could not write, which forced the `where name == '…'` detour
+    // onto the over-delete bug (ticket 20260717102000).
+    let stmt = parse_ok("remove /drive/my/'Q3 budget?.xlsx'");
+    let Statement::Effect(e) = stmt else { panic!() };
+    assert_eq!(target_path(&e), "/drive/my/Q3 budget?.xlsx");
+}
+
+#[test]
 fn path_as_of_temporal() {
     let stmt = parse_ok("/sql/pg/orders AS OF '2026-01-01'");
     let Statement::Query(p) = stmt else { panic!() };

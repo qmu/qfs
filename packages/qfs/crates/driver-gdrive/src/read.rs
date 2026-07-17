@@ -14,6 +14,7 @@ use qfs_types::{Predicate, Row, Value};
 use crate::client::GDriveClient;
 use crate::error::DriveError;
 use crate::export::{default_export_target, override_export_target, ExportTarget};
+use crate::name::match_forms;
 use crate::path::DrivePath;
 use crate::query::build_query;
 use crate::schema::{FileMeta, FOLDER_MIME};
@@ -232,7 +233,7 @@ fn list_children(
 
 /// Walk `segments` from `start_id`, resolving each name to its child node, returning the FINAL
 /// node's [`FileMeta`] (folder OR file — the caller lists a folder's children or downloads a file's
-/// content). Each step is one `name = '<seg>' and '<parent>' in parents` lookup against Drive;
+/// content). Each step is one [`name_term`] + `'<parent>' in parents` lookup against Drive;
 /// intermediate segments must be folders (a file has no children, so the next lookup finds nothing
 /// and fails closed). `segments` is non-empty (the empty-path roots are handled by the caller).
 fn resolve_node(
@@ -246,13 +247,16 @@ fn resolve_node(
     let mut node: Option<FileMeta> = None;
     for segment in segments {
         let query = format!(
-            "name = '{}' and '{}' in parents and trashed = false",
-            q_escape(segment),
+            "{} and '{}' in parents and trashed = false",
+            name_term(segment),
             q_escape(&current),
         );
         // Fetch up to 2 to detect ambiguity: Drive names are not unique, so a name that resolves to
         // more than one node is refused (ticket 20260708000100) rather than silently resolving to
         // whichever the API returned first — the guard against acting on the wrong same-named file.
+        // The cap covers the normalization forms too: when a folder holds BOTH an NFC- and an
+        // NFD-spelled child of the same name, `name_term` matches both and this refuses as
+        // ambiguous rather than picking one (ticket 20260717120100).
         let page = client.list_files(&query, drive_id, Some(2))?;
         if page.files.len() >= 2 {
             return Err(DriveError::AmbiguousTarget {
@@ -336,6 +340,29 @@ fn q_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
+/// The Drive `q` term matching a path segment / name selector against `name`, absorbing Unicode
+/// canonical composition (ticket 20260717120100).
+///
+/// Drive matches `name = '…'` by exact bytes and stores whatever form the uploading client sent —
+/// macOS uploads **NFD**, while a listing name pasted into a path arrives **NFC** — so the single
+/// exact term this replaces answered `not_found` for a file the listing plainly showed. The term
+/// now matches every canonical spelling the name could be stored under ([`match_forms`]) in ONE
+/// query, so the walk costs the same round-trip it always did.
+///
+/// An ASCII (or otherwise single-form) name yields the byte-identical single term, so the common
+/// path is untouched. Ambiguity is unaffected: the caller still caps at 2 and refuses two matches,
+/// which is exactly the right answer when a folder holds both spellings of one name.
+fn name_term(name: &str) -> String {
+    let terms: Vec<String> = match_forms(name)
+        .iter()
+        .map(|form| format!("name = '{}'", q_escape(form)))
+        .collect();
+    match terms.as_slice() {
+        [single] => single.clone(),
+        _ => format!("({})", terms.join(" or ")),
+    }
+}
+
 /// The client-backed [`WriteResolver`]: the SAME name→id walk the read path uses
 /// ([`resolve_node`] / [`resolve_shared_drive`]), lent to the apply leg so a path-addressed
 /// write resolves its `parent_id`/`file_id` live at apply time (the planner snapshots ids only
@@ -406,10 +433,13 @@ impl crate::effect::WriteResolver for ClientResolver<'_> {
     fn child_id(&self, parent_id: &str, name: &str) -> Result<Option<String>, DriveError> {
         // One targeted lookup of the leaf directly under the already-resolved parent — the
         // create-only INSERT probe. Any hit means the name is taken (a create refuses), so the
-        // first id is enough; no ambiguity walk is needed here.
+        // first id is enough; no ambiguity walk is needed here. The lookup matches every canonical
+        // spelling of the name ([`name_term`], ticket 20260717120100) so a create cannot slip a
+        // second, NFC-spelled copy in beside an NFD-stored file of the same name — the probe and
+        // the read walk must agree on what "already exists" means.
         let query = format!(
-            "name = '{}' and '{}' in parents and trashed = false",
-            q_escape(name),
+            "{} and '{}' in parents and trashed = false",
+            name_term(name),
             q_escape(parent_id),
         );
         let page = self.client.list_files(&query, None, Some(2))?;
@@ -433,7 +463,7 @@ mod read_rows_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use crate::client::{FilePage, MockDriveClient, RecordedCall};
-    use crate::schema::FOLDER_MIME;
+    use crate::schema::{SharedDrive, FOLDER_MIME};
 
     fn page(files: Vec<FileMeta>) -> FilePage {
         FilePage {
@@ -529,6 +559,315 @@ mod read_rows_tests {
             Value::Bytes(b"hello drive\n".to_vec()),
             "the content column holds the file's raw bytes"
         );
+    }
+
+    /// The NFC (precomposed) spelling of `ぎじろく.txt` — `ぎ` = U+304E, `じ` = U+3058.
+    const NFC_NAME: &str = "\u{304E}\u{3058}\u{308D}\u{304F}.txt";
+    /// The NFD (decomposed) spelling of the SAME name — each dakuten split into its base
+    /// character plus the combining mark U+3099. This is what a macOS client uploads.
+    const NFD_NAME: &str = "\u{304D}\u{3099}\u{3057}\u{3099}\u{308D}\u{304F}.txt";
+
+    #[test]
+    fn a_walk_query_matches_both_canonical_spellings_of_a_composable_name() {
+        // Ticket 20260717120100: the walk's `name =` term is exact-bytes against whatever form the
+        // uploading client stored, so it must offer BOTH spellings. `だ` (U+3060) is NFC; its NFD
+        // spelling is `た` + U+3099.
+        let file = FileMeta::for_test("f1", "だ.txt", "text/plain", vec!["root".to_string()]);
+        let client = MockDriveClient::new()
+            .with_list_page(page(vec![file]))
+            .with_download("f1", b"x".to_vec());
+        read_rows(&client, "/drive/my/だ.txt", None).unwrap();
+
+        let queries: Vec<String> = client
+            .recorded()
+            .iter()
+            .filter_map(|c| match c {
+                RecordedCall::ListFiles { query, .. } => Some(query.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            queries[0].contains("name = 'だ.txt'")
+                && queries[0].contains("name = 'た\u{3099}.txt'"),
+            "both the NFC and NFD spellings must be offered to Drive, got: {}",
+            queries[0]
+        );
+        assert!(
+            queries[0].contains(" or ") && queries[0].contains("'root' in parents"),
+            "the forms OR together inside the parent-scoped term, got: {}",
+            queries[0]
+        );
+    }
+
+    #[test]
+    fn an_ascii_walk_query_is_byte_identical_to_the_unnormalized_form() {
+        // The no-widening guarantee: normalization must not perturb the ASCII query at all.
+        let file = FileMeta::for_test("f1", "q3.csv", "text/csv", vec!["root".to_string()]);
+        let client = MockDriveClient::new()
+            .with_list_page(page(vec![file]))
+            .with_download("f1", b"a,b\n".to_vec());
+        read_rows(&client, "/drive/my/q3.csv", None).unwrap();
+
+        let queries: Vec<String> = client
+            .recorded()
+            .iter()
+            .filter_map(|c| match c {
+                RecordedCall::ListFiles { query, .. } => Some(query.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            queries[0], "name = 'q3.csv' and 'root' in parents and trashed = false",
+            "an ASCII name yields one form and no parentheses"
+        );
+    }
+
+    /// A **query-aware** stand-in for `files.list`, and the reason the normalization tests below
+    /// mean anything.
+    ///
+    /// [`MockDriveClient`] replays pre-seeded pages FIFO and ignores the `q` string entirely, so a
+    /// resolution test written against it passes no matter WHAT the driver asked Drive for — it
+    /// would go green against the very bug this ticket fixes. This client instead INTERPRETS the
+    /// query the driver built and answers it the way Drive does: `name = '…'` matches by **exact
+    /// bytes**, alternatives OR together, `'<id>' in parents` scopes to a parent, trashed files
+    /// never appear. A driver that offered only the NFC spelling therefore finds nothing here,
+    /// exactly as it found nothing against the live API (ticket 20260717120100).
+    struct QueryingDriveClient {
+        files: Vec<FileMeta>,
+        body: Vec<u8>,
+    }
+
+    impl QueryingDriveClient {
+        fn new(files: Vec<FileMeta>) -> Self {
+            Self {
+                files,
+                body: b"minutes\n".to_vec(),
+            }
+        }
+    }
+
+    /// Read one `q`-escaped literal up to its closing quote; returns `(unescaped, remainder)`.
+    fn take_quoted(s: &str) -> (String, &str) {
+        let mut lit = String::new();
+        let mut chars = s.char_indices();
+        while let Some((i, c)) = chars.next() {
+            match c {
+                // `q_escape` backslash-escapes `\` and `'`.
+                '\\' => {
+                    if let Some((_, esc)) = chars.next() {
+                        lit.push(esc);
+                    }
+                }
+                '\'' => return (lit, &s[i + 1..]),
+                _ => lit.push(c),
+            }
+        }
+        (lit, "")
+    }
+
+    /// Every `name = '<literal>'` alternative a Drive `q` offers.
+    fn name_literals(q: &str) -> Vec<String> {
+        const NEEDLE: &str = "name = '";
+        let mut out = Vec::new();
+        let mut rest = q;
+        while let Some(at) = rest.find(NEEDLE) {
+            let (lit, tail) = take_quoted(&rest[at + NEEDLE.len()..]);
+            out.push(lit);
+            rest = tail;
+        }
+        out
+    }
+
+    /// The parent id a `'<id>' in parents` term scopes to, if any.
+    fn parent_scope(q: &str) -> Option<String> {
+        let at = q.find("' in parents")?;
+        let head = &q[..at];
+        let start = head.rfind('\'')?;
+        Some(head[start + 1..].to_string())
+    }
+
+    impl GDriveClient for QueryingDriveClient {
+        fn list_files(
+            &self,
+            query: &str,
+            _drive_id: Option<&str>,
+            page_size: Option<u32>,
+        ) -> Result<FilePage, DriveError> {
+            let names = name_literals(query);
+            let parent = parent_scope(query);
+            let cap = page_size.map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX));
+            let files: Vec<FileMeta> = self
+                .files
+                .iter()
+                // Drive's `name =` is exact-BYTES equality — the whole premise of the bug.
+                .filter(|f| names.is_empty() || names.contains(&f.name))
+                .filter(|f| {
+                    parent
+                        .as_ref()
+                        .is_none_or(|p| f.parents.iter().any(|fp| fp == p))
+                })
+                .filter(|f| !f.trashed)
+                .take(cap)
+                .cloned()
+                .collect();
+            Ok(FilePage {
+                files,
+                next_page_token: None,
+            })
+        }
+
+        fn get_file(&self, id: &str) -> Result<FileMeta, DriveError> {
+            self.files
+                .iter()
+                .find(|f| f.id == id)
+                .cloned()
+                .ok_or(DriveError::NotFound {
+                    path: id.to_string(),
+                    segment: String::new(),
+                    reason: "no such id in the fixture",
+                })
+        }
+
+        fn download(&self, _id: &str, _revision: Option<&str>) -> Result<Vec<u8>, DriveError> {
+            Ok(self.body.clone())
+        }
+
+        fn list_drives(&self) -> Result<Vec<SharedDrive>, DriveError> {
+            Ok(Vec::new())
+        }
+
+        fn export(&self, _id: &str, _export_mime: &str) -> Result<Vec<u8>, DriveError> {
+            panic!("these tests never export")
+        }
+
+        fn upload(
+            &self,
+            _parent: &str,
+            _name: &str,
+            _mime: &str,
+            _bytes: &[u8],
+        ) -> Result<String, DriveError> {
+            panic!("these tests never write")
+        }
+
+        fn update_content(&self, _id: &str, _mime: &str, _bytes: &[u8]) -> Result<(), DriveError> {
+            panic!("these tests never write")
+        }
+
+        fn modify_file(
+            &self,
+            _id: &str,
+            _new_name: Option<&str>,
+            _add_parents: &[String],
+            _remove_parents: &[String],
+        ) -> Result<(), DriveError> {
+            panic!("these tests never write")
+        }
+
+        fn copy_file(&self, _id: &str, _parent: &str, _name: &str) -> Result<String, DriveError> {
+            panic!("these tests never write")
+        }
+
+        fn trash(&self, _id: &str) -> Result<(), DriveError> {
+            panic!("these tests never write")
+        }
+
+        fn delete(&self, _id: &str) -> Result<(), DriveError> {
+            panic!("these tests never write")
+        }
+    }
+
+    #[test]
+    fn the_querying_client_matches_names_by_exact_bytes_like_drive() {
+        // Guard the guard: if this fixture ever went normalization-INSENSITIVE it would silently
+        // re-vacuum the tests below (they would pass without the fix). Pin its premise.
+        let stored = FileMeta::for_test("m1", NFD_NAME, "text/plain", vec!["root".to_string()]);
+        let client = QueryingDriveClient::new(vec![stored]);
+        let hit = client
+            .list_files(
+                &format!("name = '{NFD_NAME}' and 'root' in parents and trashed = false"),
+                None,
+                Some(2),
+            )
+            .unwrap();
+        assert_eq!(hit.files.len(), 1, "the stored spelling matches");
+        let miss = client
+            .list_files(
+                &format!("name = '{NFC_NAME}' and 'root' in parents and trashed = false"),
+                None,
+                Some(2),
+            )
+            .unwrap();
+        assert!(
+            miss.files.is_empty(),
+            "the other canonical spelling must NOT match by exact bytes — that is the bug"
+        );
+    }
+
+    #[test]
+    fn an_nfd_stored_file_resolves_from_an_nfc_written_path() {
+        // The reported bug (ticket 20260717120100): Drive holds the NFD name (a macOS upload); the
+        // operator pastes the listing name, which the terminal delivers as NFC. The file is found.
+        assert_ne!(
+            NFC_NAME, NFD_NAME,
+            "the fixture must be two distinct spellings"
+        );
+        let stored = FileMeta::for_test("m1", NFD_NAME, "text/plain", vec!["root".to_string()]);
+        let client = QueryingDriveClient::new(vec![stored]);
+
+        let batch = read_rows(&client, &format!("/drive/my/{NFC_NAME}"), None).unwrap();
+        assert_eq!(batch.rows.len(), 1);
+        let content_idx = batch
+            .schema
+            .columns
+            .iter()
+            .position(|c| c.name.as_str() == "content")
+            .expect("content column");
+        assert_eq!(
+            batch.rows[0].values[content_idx],
+            Value::Bytes(b"minutes\n".to_vec()),
+            "the NFD-stored file is reachable by its NFC-written name"
+        );
+    }
+
+    #[test]
+    fn an_nfc_stored_file_resolves_from_an_nfd_written_path() {
+        // The symmetric direction: a path pasted from a macOS source (NFD) reaching an NFC-stored
+        // file. Normalization must absorb the difference in both directions, never one.
+        let stored = FileMeta::for_test("m2", NFC_NAME, "text/plain", vec!["root".to_string()]);
+        let client = QueryingDriveClient::new(vec![stored]);
+
+        let batch = read_rows(&client, &format!("/drive/my/{NFD_NAME}"), None).unwrap();
+        assert_eq!(batch.rows.len(), 1);
+    }
+
+    #[test]
+    fn two_normalization_equivalent_children_refuse_as_ambiguous() {
+        // The fail-closed guard the ticket requires: absorbing normalization must never weaken the
+        // ambiguity refusal into a first-hit guess. A folder holding BOTH spellings of one name is
+        // genuinely ambiguous — refuse.
+        let nfc = FileMeta::for_test("a1", NFC_NAME, "text/plain", vec!["root".to_string()]);
+        let nfd = FileMeta::for_test("a2", NFD_NAME, "text/plain", vec!["root".to_string()]);
+        let client = QueryingDriveClient::new(vec![nfc, nfd]);
+
+        let err = read_rows(&client, &format!("/drive/my/{NFC_NAME}"), None).unwrap_err();
+        assert_eq!(err.code(), "ambiguous_target");
+    }
+
+    #[test]
+    fn a_remove_name_selector_resolves_an_nfd_stored_child_from_an_nfc_value() {
+        // Quality Gate 2: `remove /drive/my where name == '<NFC>'` must reach the NFD-stored child.
+        // The selector rides `path.child(name)` into the same walk, so this pins that the REMOVE
+        // seam inherits normalization rather than needing its own.
+        let stored = FileMeta::for_test("r1", NFD_NAME, "text/plain", vec!["root".to_string()]);
+        let client = QueryingDriveClient::new(vec![stored]);
+        let resolver = ClientResolver { client: &client };
+        let child = DrivePath::MyRoot.child(NFC_NAME).expect("a child address");
+
+        let found = crate::effect::WriteResolver::existing(&resolver, &child, "/drive/my")
+            .unwrap()
+            .expect("the NFD-stored child resolves from its NFC-written selector value");
+        assert_eq!(found.id, "r1");
     }
 
     #[test]
