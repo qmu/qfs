@@ -199,6 +199,31 @@ Prelude aliases: `SEND` → `mail.send`
 
 Pushdown: where=true project=false limit=true order=false join=false aggregate=false distinct=false group_by=false
 
+### `/markdown` — RelationalTable
+
+- example node: `/markdown/tree/documents`
+- native verbs: SELECT
+
+Universal verbs (✓ supported / ✗ rejected at parse time):
+
+| verb | supported |
+|------|-----------|
+| `select` | ✓ |
+| `insert` | ✗ |
+| `upsert` | ✗ |
+| `update` | ✗ |
+| `remove` | ✗ |
+| `ls` | ✗ |
+| `cp` | ✗ |
+| `mv` | ✗ |
+| `rm` | ✗ |
+
+Procedures: _none_
+
+Prelude aliases: _none_
+
+Pushdown: where=false project=false limit=false order=false join=false aggregate=false distinct=false group_by=false
+
 ### `/r2` — BlobNamespace
 
 - example node: `/r2/bucket/key`

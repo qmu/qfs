@@ -344,6 +344,15 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // driver shape, like the pure introspective half of qfs-driver-sys minus the apply bridge.
         // The binary is the allowlisted leaf that may carry the `qfs-driver-*` edge; qfs-cmd stays off it.
         "qfs-driver-directory",
+        // The markdown collection-path driver (mission markdown-trees-are-queryable-as-documents-
+        // and-links-tables): the binary is the composition root that loads the declared
+        // `/markdown/<name>` roots from `path_binding` and hosts the std::fs tree walk
+        // (src/markdown.rs) behind the qfs-exec read facet. qfs-driver-markdown is READ-ONLY: it
+        // carries a NoopApplier and NO qfs-runtime dep, so it is NOT a runtime consumer (it never
+        // appears in `runtime_consumers_allowed`) — the same lightest driver shape as
+        // qfs-driver-directory. The binary is the allowlisted leaf that may carry the
+        // `qfs-driver-*` edge; qfs-cmd stays off it.
+        "qfs-driver-markdown",
         // t39 CO-t39-1: the binary links the embedded agent skill so `qfs skill` ships SKILL.md in
         // the artifact (the NORMAL dep edge that keeps the `include_str!` consts from being
         // dead-stripped). qfs-skill's own `[dependencies]` is EMPTY — it carries no runtime/driver

@@ -2283,6 +2283,7 @@ dependencies = [
  "qfs-driver-gmail",
  "qfs-driver-http",
  "qfs-driver-local",
+ "qfs-driver-markdown",
  "qfs-driver-objstore",
  "qfs-driver-slack",
  "qfs-driver-sql",
@@ -2546,6 +2547,17 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "qfs-driver-markdown"
+version = "0.0.0"
+dependencies = [
+ "qfs-driver",
+ "qfs-plan",
+ "qfs-types",
+ "serde_json",
+ "serde_yaml_ng",
 ]
 
 [[package]]
