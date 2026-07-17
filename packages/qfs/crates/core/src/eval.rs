@@ -210,6 +210,11 @@ pub enum EvalError {
         /// The path that failed to route to a mounted driver.
         path: String,
     },
+    /// An effect-target path violated the host-realm path canon (decision P / owner ruling
+    /// 2026-07-16): a non-local `/hosts/<h>/…` host, a `/hosts` with no host segment, a
+    /// cross-realm service path, or a retired bare spelling of a host-realm-only mount. The
+    /// inner error carries the canonical pointer for AI recovery.
+    HostScope(crate::registry::HostScopeError),
     /// An `INSERT … VALUES` cell was not a constant the planner can lower to a literal effect
     /// payload (a function call, column reference, or other runtime expression). VALUES must be
     /// constants — use an `INSERT … FROM <query>` for computed rows. Carries a secret-free detail.
@@ -349,6 +354,7 @@ impl EvalError {
             EvalError::Type(e) => e.code(),
             EvalError::Fn(e) => e.code(),
             EvalError::UnroutedPath { .. } => "unrouted_path",
+            EvalError::HostScope(e) => e.code(),
             EvalError::NonLiteralValues { .. } => "non_literal_values",
             EvalError::DriverWrite { .. } => "driver_write",
             EvalError::IrreversibleInTransaction { .. } => "irreversible_in_transaction",
@@ -984,6 +990,14 @@ impl<'r> Evaluator<'r> {
                 .map(|s| s.name.clone())
                 .collect::<Vec<_>>(),
         );
+        // The host-realm path canon (decision P / owner ruling 2026-07-16): peel a
+        // `/hosts/local/<svc>/…` target to its service path so the effect node's canonical VFS
+        // path speaks the mount's own namespace; a non-local host and the retired bare spelling
+        // of a host-realm-only mount both fail closed here with the structured pointer.
+        let full = self
+            .mounts
+            .canonicalize_host_path(&full)
+            .map_err(EvalError::HostScope)?;
         let routed = self.mounts.resolve_path(&full);
         let (driver, vfs) = match &routed {
             Some((driver, sub)) => (driver.id(), format!("/{}/{}", driver.id().as_str(), sub)),

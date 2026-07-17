@@ -536,6 +536,22 @@ mount carries `(host, driver, account)`**, so a statement's identity target is r
 statement. The vault key lives in guardian slots (passphrase today; keychain/agent/managed-KMS
 as slots, not forks).
 
+**The host-realm path canon** *(ruled 2026-07-16 by the owner; implemented 2026-07-17, mission
+`claude-code-sessions-are-queryable-and-steerable-as-qfs-paths`)*: a host-scoped service is
+addressed **`/hosts/<host>/<svc>/…`**, and the engine peels `/hosts/local` generally — any
+service mount resolves under the local host's realm, never a per-driver special case. Today the
+one host-scoped service is the machine's **Claude Code sessions**:
+`/hosts/<host>/claude/sessions` (+ `…/sessions/<id>/instructions`), and **top-level `/claude/…`
+is retired** — the t64 ticket had ruled `/hosts/<host>/claude/...` canonical in its own title
+while the shipped code mounted bare `/claude`, and the contradiction was never reconciled until
+this ruling; qfs is experimental, so the retirement is a hard break: the bare spelling fails
+with a structured `retired_path` error naming the canonical form (one canonical address per
+surface — a retired alias fails with a pointer, never a silent second path). A **non-local**
+host fails closed as `remote_host_not_executable` — the cross-machine hop rides the t63 tunnel
+and re-checks POLICY at the destination, a documented seam that is not wired (the same
+fail-closed posture as `qfs connect --host <remote>`). Other realms (`/members`, `/projects`,
+`/directories`) keep their existing behaviour — the peel deliberately widens nothing.
+
 **The store boundary** *(re-drawn 2026-07-16, ticket 20260716143641)*: **one file holds secret
 material; the other holds everything declarative, plus the ledger that observes it.** The Project
 DB is the vault proper — `secret_store`, the key slots, rotation, E2E wraps. The System DB holds

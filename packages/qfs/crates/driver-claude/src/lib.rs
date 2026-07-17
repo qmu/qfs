@@ -1,12 +1,17 @@
-//! `qfs-driver-claude` — the **AI-sessions driver** (blueprint §6; roadmap §3.3 / M7, t64).
+//! `qfs-driver-claude` — the **AI-sessions driver** (blueprint §6 driver contract, §8 host
+//! realm; `docs/roadmap.md` "AI sessions as paths"; mission
+//! `claude-code-sessions-are-queryable-and-steerable-as-qfs-paths`, born as t64).
 //!
 //! Each machine's Claude Code sessions become queryable qfs paths under the host realm.
-//! [`ClaudeDriver`] exposes two nodes: `/claude/sessions` (READ — what each agent is doing) and
-//! `/claude/sessions/<id>/instructions` (APPEND — steer a running agent). Reached BARE
-//! (`/claude/...`, the `/me` realm) or under the host realm (`/hosts/<host>/claude/...`, decision
-//! P / §1.3), `peel_scope` strips the realm and routes the `/claude/...` service path here; the
-//! cross-machine `<host>` hop rides the t63 tunnel and re-checks `POLICY` at the destination (a
-//! DOCUMENTED SEAM, fail-closed by default).
+//! [`ClaudeDriver`] exposes two nodes: `sessions` (READ — what each agent is doing) and
+//! `sessions/<id>/instructions` (APPEND — steer a running agent). The **canonical address is
+//! `/hosts/<host>/claude/...`** (owner ruling 2026-07-16, honouring t64's own title): the
+//! engine's host-realm peel strips `/hosts/local` and routes the `/claude/...` **service** path
+//! here, so the driver mounts at `/claude` and names no host segment itself. The bare top-level
+//! `/claude/...` spelling is **retired** — it fails with a structured `retired_path` error
+//! naming the canonical form, never a silent second path. The cross-machine `<host>` hop rides
+//! the t63 tunnel and re-checks `POLICY` at the destination (a DOCUMENTED SEAM, fail-closed:
+//! a non-local host is `remote_host_not_executable` today).
 //!
 //! ## The `/claude` driver calls no model (blueprint §15, decision W supersedes decision K)
 //! A `/claude` path is NOT qfs calling the Claude API. `/claude/sessions` is a **path façade over

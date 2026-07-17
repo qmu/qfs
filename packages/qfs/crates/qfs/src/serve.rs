@@ -36,14 +36,16 @@ pub fn run_serve(config: &Path) -> i32 {
     // LOCAL, credential-free surface like `/status`, so serve mounts its pure introspective face
     // unconditionally and wires the live read facet only when the operator opted in
     // (QFS_CLAUDE_SESSIONS names the real `~/.claude` store) — an ENDPOINT over
-    // `/claude/sessions` then serves one row per live session; unconfigured it stays the
-    // structured unregistered-source error (fail-closed).
+    // `/hosts/local/claude/sessions` then serves one row per live session; unconfigured it stays
+    // the structured unregistered-source error (fail-closed). Path canon (owner ruling
+    // 2026-07-16): the surface is canonical under the hosts realm; bare `/claude/...` is retired.
     if let Err(e) = engine
         .mounts
         .register(Arc::new(qfs_driver_claude::ClaudeDriver::new()))
     {
         tracing::warn!(target: "qfs::serve", error = %e, "could not register the /claude mount");
     }
+    engine.mounts.require_host_realm("/claude");
     if let Some(source) = crate::claude::ClaudeStoreSource::open_default() {
         reads.register(
             qfs_core::DriverId::new("claude"),

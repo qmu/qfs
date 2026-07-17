@@ -336,6 +336,10 @@ pub fn compiled_describe_registry() -> MountRegistry {
             Arc::new(qfs_secrets::InMemoryStore::new()),
         )));
     }
+    // Path canon (owner ruling 2026-07-16, ticket 20260717010400): `/claude` is reachable only
+    // under the hosts realm — `DESCRIBE /claude/...` fails with the `retired_path` pointer and
+    // the t40 catalog renders the canonical `/hosts/<host>/claude/...` address.
+    reg.require_host_realm("/claude");
     reg
 }
 

@@ -314,8 +314,9 @@ fn live_registry() -> DriverRegistry {
         );
     }
 
-    // Claude (t64): the `/claude/...` AI-sessions applier — `INSERT INTO /claude/sessions/<id>/
-    // instructions` is the steering verb (a REVERSIBLE append; steering an agent never removes
+    // Claude (t64): the AI-sessions applier — `INSERT INTO /hosts/local/claude/sessions/<id>/
+    // instructions` is the steering verb (the canonical hosts-realm address, ticket
+    // 20260717010400; a REVERSIBLE append — steering an agent never removes
     // state). Wired only when a session source is configured (QFS_CLAUDE_SESSIONS, opt-in); an
     // unconfigured `/claude` commit fails closed (no driver). NOTE: even configured, the source's
     // append itself currently fails closed — the retired on-disk append-log was read by no session

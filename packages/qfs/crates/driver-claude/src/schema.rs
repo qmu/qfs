@@ -23,11 +23,14 @@
 
 use qfs_types::{Column, ColumnType, Schema};
 
-/// The reserved mount point for the AI-sessions driver. The session service is reached BARE
-/// (`/claude/...`, sugar for the `/me` realm) or under the host realm
-/// (`/hosts/<host>/claude/...`, decision P / §1.3) — in both cases `peel_scope` strips the realm
-/// and routes the `/claude/...` **service** path here, so the driver mounts at `/claude` and
-/// names no host segment itself. `claude` is NOT a reserved realm, so the mount is admitted.
+/// The reserved mount point for the AI-sessions driver. The session service is reached ONLY
+/// under the host realm — `/hosts/<host>/claude/...` (decision P / §1.3; owner ruling
+/// 2026-07-16, honouring t64): the engine's host-realm peel strips `/hosts/local` and routes the
+/// `/claude/...` **service** path here, so the driver mounts at `/claude` and names no host
+/// segment itself. The bare top-level `/claude/...` spelling is retired — the binary marks this
+/// mount host-realm-only (`MountRegistry::require_host_realm`), so a bare address fails with a
+/// `retired_path` pointer at the canonical form. `claude` is NOT a reserved realm, so the mount
+/// is admitted.
 pub const CLAUDE_MOUNT: &str = "/claude";
 
 /// One addressable `/claude/<node>` relation (roadmap §3.3 / M7). A **closed set**; a new view

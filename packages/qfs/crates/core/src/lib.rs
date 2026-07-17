@@ -51,8 +51,9 @@ pub use lambda::{
 pub use membership::{check_membership, MembershipError};
 pub use plan::{plan_pipeline, plan_query, source_registry, PushdownError};
 pub use registry::{
-    peel_scope, resolve_name, CodecRegistry, DeclaredTypeDefs, MountRegistry, NameRealm, PathScope,
-    PathScopeError, ProcRegistry, Realm, ScopeResolution, RESERVED_REALMS,
+    peel_scope, resolve_name, CodecRegistry, DeclaredTypeDefs, HostScopeError, MountRegistry,
+    NameRealm, PathScope, PathScopeError, ProcRegistry, Realm, ScopeResolution, LOCAL_HOST,
+    RESERVED_REALMS,
 };
 pub use resolve::{capability_verb_for, write_verb_for, ResolveError, ResolvedCall, Resolver};
 pub use security::{
