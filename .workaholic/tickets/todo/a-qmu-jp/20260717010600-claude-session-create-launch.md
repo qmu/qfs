@@ -66,3 +66,14 @@ a configured store.
   binary path is configuration, nothing user-supplied is interpolated into a shell line.
 - A launched session that immediately exits (bad prompt) must still be visible post-mortem —
   decide what the sessions relation shows for it (the liveness filter hides dead pids).
+
+## Status (2026-07-17 — brief delivered; implementation awaits the owner)
+
+The first deliverable is done: the design brief is recorded at
+`.workaholic/missions/active/claude-code-sessions-are-queryable-and-steerable-as-qfs-paths/design-brief-session-launch.md`
+(recommends: launch = `claude --bg` persistent background session; grammar = INSERT into the
+sessions relation per blueprint §3, no `CREATE SESSION` noun; irreversible-gated; runs as the
+operator; id via `RETURNING`; three open questions listed). Quality gate 1 requires owner
+acknowledgment BEFORE any implementing commit, so this ticket stays in todo until the owner
+rules. Also blocked serially: QG 2's live proof composes launch with steering (capability 4),
+and the steering ticket (20260717010500) is itself pending a medium ruling.
