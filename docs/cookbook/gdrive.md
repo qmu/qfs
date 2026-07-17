@@ -231,7 +231,13 @@ PREVIEW: 1 effect(s)
 ```
 
 The `(!)` marks the irreversible gate: a one-shot needs `--commit --commit-irreversible` to apply it.
-Trashing a **folder path** trashes the folder with its subtree.
+The `where name == …` trashes **only the matching child** under the addressed folder — a name that
+matches nothing refuses (`not_found`), and two same-named children refuse as `ambiguous_target`.
+
+A **folder** is never trashed through a name path (fail-closed: a folder-path `remove` is refused
+so a filter mishap can never widen to the folder's whole subtree). To deliberately trash a folder
+with its subtree, address it explicitly by id: `remove /drive/id:<folder-id>` (the id is the `id`
+column of any listing row).
 
 **Rename a file** (gdrive-ftp `mv`) — an `UPDATE` setting the new name:
 

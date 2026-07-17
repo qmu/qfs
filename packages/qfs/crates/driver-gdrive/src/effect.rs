@@ -513,9 +513,16 @@ impl DriveEffect {
     /// WHERE-**selector** (blueprint §7) — a REMOVE writes nothing, so it carries no `args` row to
     /// index into, which is why this takes no row index:
     /// - **no filter columns at all** — the path itself names the node (`remove
-    ///   /drive/my/old.txt`, or a folder path — trashing a folder trashes its subtree).
+    ///   /drive/my/old.txt`). A path that resolves to a FOLDER is **refused** (fail-closed,
+    ///   ticket 20260717102000): a bare name-path REMOVE is indistinguishable from a filtered
+    ///   REMOVE whose selector was lost or never resolved, so widening it to the folder (and
+    ///   its whole subtree) is exactly the over-delete this guard exists to stop. Trashing a
+    ///   folder with its subtree stays possible ONLY through the explicit id-addressed form
+    ///   (`remove /drive/id:<folder-id>`).
     /// - **exactly one `name` filter key** — the child of that name under the path (`remove
-    ///   /drive/my where name == 'old.txt'`, the cookbook's trash-by-name recipe).
+    ///   /drive/my where name == 'old.txt'`, the cookbook's trash-by-name recipe). Only the
+    ///   resolved MATCH is trashed; a name resolving to nothing refuses (`not_found`), and ≥2
+    ///   same-named children refuse as ambiguous — never a first-hit guess.
     /// - **anything else** — fail closed. A richer filter cannot be resolved to ids here, and
     ///   trashing the folder while silently ignoring the filter would over-delete.
     fn remove_target_id(
@@ -532,9 +539,37 @@ impl DriveEffect {
             .map(|s| s.schema.columns.iter().map(|c| c.name.as_str()).collect())
             .unwrap_or_default();
         let target = match filter_cols.as_slice() {
-            [] => res.existing(path, raw)?,
+            [] => {
+                let meta = res.existing(path, raw)?;
+                if let Some(meta) = &meta {
+                    if meta.is_folder() {
+                        return Err(DriveError::MalformedEffect {
+                            verb: "REMOVE",
+                            path: raw.to_string(),
+                            reason: format!(
+                                "the path names a FOLDER; a bare name-path REMOVE would trash \
+                                 the folder with its entire subtree. To trash one child, filter \
+                                 it: `remove {raw} where name == '<child>'`. To trash the folder \
+                                 itself with its subtree, address it explicitly by id \
+                                 (`remove /drive/id:{}`).",
+                                meta.id
+                            ),
+                        });
+                    }
+                }
+                meta
+            }
             [only] if *only == NAME_COL => {
-                let name = node.selector_text(NAME_COL).unwrap_or_default();
+                let name =
+                    node.selector_text(NAME_COL)
+                        .ok_or_else(|| DriveError::MalformedEffect {
+                            verb: "REMOVE",
+                            path: raw.to_string(),
+                            reason: format!(
+                                "the `WHERE` carries no usable `{NAME_COL}` value — refusing \
+                                 rather than widening the REMOVE to the folder"
+                            ),
+                        })?;
                 let child = path
                     .child(&name)
                     .ok_or_else(|| DriveError::CapabilityDenied {

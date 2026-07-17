@@ -190,10 +190,32 @@ pub fn compile_endpoint(
         })?;
     let query = spec.statement().clone();
 
+    let pattern = RoutePattern::parse(&def.route);
+    let params = pattern.param_names();
+
     // Registration-time read-only policy gate (the plan-assertion acceptance). Build the
     // lowered plan from the query: a pure read lowers to `Plan::pure()` (no effects → passes);
     // a write lowers to an effect plan and is refused unless `policy` grants it.
-    let plan = qfs_exec::build_plan(&query, engine).map_err(|e| {
+    //
+    // The gate lowers a REPRESENTATIVE of the request-time statement: each declared route
+    // param slot is bound to a placeholder literal first, exactly as [`crate::rewrite::
+    // bind_params`] does per request. Lowering the RAW spec instead would present a param slot
+    // as a bare column reference — which the evaluator's fail-closed selector rule (ticket
+    // 20260717102000) rightly refuses in an effect `WHERE` (`REMOVE … WHERE id == p_id` is not
+    // a `col == const` equality until the param binds). The injection-safe identical-plan
+    // guarantee makes the placeholder plan structurally identical to every request's plan, so
+    // the assertion's verdict is the request-time verdict.
+    let mut gate_query = query.clone();
+    if !params.is_empty() {
+        let mut placeholder = crate::params::QueryArgs::new();
+        for p in &params {
+            // `Null` is the type-neutral placeholder: it compares against any column type, so
+            // the gate never trips a spurious Int-vs-Text mismatch a real request would not have.
+            placeholder = placeholder.with(p.clone(), qfs_core::Value::Null);
+        }
+        crate::rewrite::bind_params(&mut gate_query, &placeholder);
+    }
+    let plan = qfs_exec::build_plan(&gate_query, engine).map_err(|e| {
         // A query that cannot even be planned at registration is treated as a bad spec
         // (sanitised) rather than silently registering an un-evaluable route.
         CompileError::BadSpec {
@@ -202,9 +224,6 @@ pub fn compile_endpoint(
         }
     })?;
     assert_read_only(&plan, policy).map_err(CompileError::Policy)?;
-
-    let pattern = RoutePattern::parse(&def.route);
-    let params = pattern.param_names();
 
     // Param-shadow gate (the t32 security fix): a route param whose name collides with a column
     // the query reads would make the typed-AST rewrite replace the WRONG `Expr::Col` node and
