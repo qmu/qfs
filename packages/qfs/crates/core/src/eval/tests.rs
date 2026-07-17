@@ -807,6 +807,46 @@ fn a_remove_carries_an_empty_args_and_a_populated_selector() {
 }
 
 #[test]
+fn a_write_filter_the_selector_cannot_carry_is_refused_at_plan_time() {
+    // Fail-closed (ticket 20260717102000): the selector channel is the ONLY filter an applier
+    // sees, and it carries `col == const` equalities only. Any filter form it cannot represent
+    // must refuse the WHOLE statement at plan time — previously the unsupported leaves were
+    // silently dropped, so `REMOVE … WHERE size > 100` reached the applier as an UNFILTERED
+    // REMOVE (whole-table delete / whole-folder trash), and `WHERE name == 'a' AND size > 100`
+    // reached it under-constrained.
+    for stmt in [
+        "REMOVE /db/users WHERE id > 100", // non-equality comparison
+        "REMOVE /db/users WHERE id == 1 OR id == 2", // OR is not a single-row binding
+        "REMOVE /db/users WHERE id == 1 AND name <> 'keep'", // partial capture would widen
+        "UPDATE /db/users SET name = 'x' WHERE id > 100", // UPDATE shares the channel
+        "REMOVE /db/users WHERE id == 1 AND id == 2", // contradictory duplicate binding
+    ] {
+        let err = eval(stmt).expect_err(stmt);
+        assert_eq!(
+            err.code(),
+            "write_filter_unsupported",
+            "{stmt} must fail closed, got {err:?}"
+        );
+    }
+    // The supported conjunctive-equality form still lowers (both keys on the selector).
+    let plan = eval("REMOVE /db/users WHERE id == 1 AND name == 'x'")
+        .unwrap()
+        .as_plan()
+        .cloned()
+        .unwrap();
+    let sel = plan.nodes()[0].selector.as_ref().expect("selector");
+    assert_eq!(sel.schema.columns.len(), 2, "both WHERE keys are carried");
+    // A redundant duplicate binding (`id == 1 AND id == 1`) stays accepted, deduped to one key.
+    let plan = eval("REMOVE /db/users WHERE id == 1 AND id == 1")
+        .unwrap()
+        .as_plan()
+        .cloned()
+        .unwrap();
+    let sel = plan.nodes()[0].selector.as_ref().expect("selector");
+    assert_eq!(sel.schema.columns.len(), 1);
+}
+
+#[test]
 fn insert_from_query_emits_a_read_dependency() {
     // `INSERT INTO /db/users /mail/inbox |> SELECT id, subject` should build a Read
     // node (the sub-pipeline) the Insert depends on — the plan DAG with a dependency edge.

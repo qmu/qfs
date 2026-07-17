@@ -44,6 +44,14 @@ pub struct EffectInput {
     pub target: qfs_plan::Target,
     /// The rows the effect writes (empty for reads/filter-removes).
     pub args: qfs_types::RowBatch,
+    /// The `WHERE`-selector — *which* existing rows/nodes the effect addresses, distinct from
+    /// the `args` payload (blueprint §7). Carried through verbatim from the plan node: a driver
+    /// that resolves a filtered `UPDATE`/`REMOVE` reads its match from here. Dropping this field
+    /// was the incident-grade over-delete bug (ticket 20260717102000): the plan (and its
+    /// PREVIEW) carried the selector, but the applier received an unfiltered effect — a
+    /// `REMOVE <folder> WHERE name == …` trashed the folder itself, and a filtered SQL `REMOVE`
+    /// deleted the whole table.
+    pub selector: Option<qfs_types::RowBatch>,
     /// Whether this leg is irreversible (the runtime already vetoed retries; the driver
     /// may use it for its own safety checks).
     pub irreversible: bool,
@@ -63,6 +71,7 @@ impl EffectInput {
             kind: node.kind.clone(),
             target: node.target.clone(),
             args: node.args.clone(),
+            selector: node.selector.clone(),
             irreversible: node.irreversible,
             est_affected: node.est_affected,
         }

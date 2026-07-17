@@ -284,8 +284,11 @@ fn map_eval_error(err: qfs_core::EvalError) -> ExecError {
         EvalError::Type(_) | EvalError::Fn(_) | EvalError::UnknownTypeAnnotation { .. } => {
             ErrorKind::Usage
         }
-        // A non-constant VALUES cell or a driver write-lowering rejection are usage problems.
-        EvalError::NonLiteralValues { .. } | EvalError::DriverWrite { .. } => ErrorKind::Usage,
+        // A non-constant VALUES cell, a driver write-lowering rejection, or a WHERE filter the
+        // selector channel cannot carry (fail-closed, ticket 20260717102000) are usage problems.
+        EvalError::NonLiteralValues { .. }
+        | EvalError::DriverWrite { .. }
+        | EvalError::WriteFilterUnsupported { .. } => ErrorKind::Usage,
         // A mis-shaped switch (blueprint §18) — mid-pipe, missing/duplicate arm, unknown
         // discriminant, non-effect or unsupported arm — is a usage-class problem the author fixes.
         EvalError::SwitchNotTerminal

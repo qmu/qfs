@@ -229,6 +229,18 @@ pub enum EvalError {
         /// A machine-facing description of why the driver could not lower the write.
         detail: String,
     },
+    /// An `UPDATE`/`REMOVE`'s `WHERE` filter could not be carried to the applier as **complete**
+    /// `col == const` equality keys (a non-equality comparison, an `OR`, a non-constant side, or
+    /// contradictory duplicate bindings). Appliers resolve a filtered write from the selector
+    /// channel alone, so silently dropping any part of the filter widens an irreversible write to
+    /// rows/nodes the author never addressed (ticket 20260717102000: a partially-dropped REMOVE
+    /// filter deleted a whole table / trashed a whole folder). Fail closed at plan time instead.
+    WriteFilterUnsupported {
+        /// The effect-target path, for AI recovery.
+        path: String,
+        /// A machine-facing description of the unsupported filter form.
+        detail: String,
+    },
     /// A `TRANSACTION { … }` block (M6, ticket t62, decision G) contained an **irreversible**
     /// effect. A transaction promises all-or-nothing rollback, so every effect inside MUST be
     /// reversible — an irreversible one (a `REMOVE`, an irreversible `CALL`) is rejected here, at
@@ -357,6 +369,7 @@ impl EvalError {
             EvalError::HostScope(e) => e.code(),
             EvalError::NonLiteralValues { .. } => "non_literal_values",
             EvalError::DriverWrite { .. } => "driver_write",
+            EvalError::WriteFilterUnsupported { .. } => "write_filter_unsupported",
             EvalError::IrreversibleInTransaction { .. } => "irreversible_in_transaction",
             EvalError::LambdaArity { .. } => "lambda_arity",
             EvalError::NotAFunction { .. } => "not_a_function",
@@ -1048,7 +1061,7 @@ impl<'r> Evaluator<'r> {
         let selector_args: Option<RowBatch> = match &effect.body {
             EffectBody::SetWhere {
                 filter: Some(f), ..
-            } => where_selector_batch(f),
+            } => Some(where_selector_batch(f, &full)?),
             _ => None,
         };
 
@@ -1755,29 +1768,51 @@ fn setwhere_row_batch(set: &[qfs_parser::Assignment]) -> Result<RowBatch, EvalEr
 /// same-column `SET name='X' WHERE name='Y'` case) is carried faithfully rather than de-duped away.
 /// Returns `None` when the predicate carries no addressable equality key (a pure `OR`/range/non-const
 /// filter); an applier that needs a key then has none, and says so.
-fn where_selector_batch(filter: &Expr) -> Option<RowBatch> {
-    let leaves = collect_eq_constants(filter);
-    if leaves.is_empty() {
-        return None;
-    }
+fn where_selector_batch(filter: &Expr, path: &str) -> Result<RowBatch, EvalError> {
+    let Some(leaves) = collect_eq_constants(filter) else {
+        // Any part of the filter the selector cannot represent (a `>`/`!=` comparison, an `OR`,
+        // a non-constant side) MUST refuse the whole statement: the appliers resolve a filtered
+        // `UPDATE`/`REMOVE` from the selector channel alone, so a partially-captured filter is
+        // an under-constrained (over-deleting) irreversible write, not a narrower one.
+        return Err(EvalError::WriteFilterUnsupported {
+            path: path.to_string(),
+            detail: "an UPDATE/REMOVE `WHERE` must be a conjunction (`and`) of \
+                     `column == <constant>` equalities — other comparison forms cannot be \
+                     carried to the applier and would widen the write"
+                .to_string(),
+        });
+    };
     let mut cols: Vec<Column> = Vec::with_capacity(leaves.len());
     let mut vals: Vec<Value> = Vec::with_capacity(leaves.len());
     for (name, value) in leaves {
-        // A duplicate WHERE key on the same column (`WHERE name='a' AND name='b'`) is degenerate;
-        // keep the first binding — the applier resolves against one equality per column.
-        if !cols.iter().any(|c| c.name == name) {
-            cols.push(Column::new(name, ColumnType::Unknown, true));
-            vals.push(value);
+        if let Some(idx) = cols.iter().position(|c| c.name == name) {
+            // A duplicate WHERE key on the same column: an identical binding is redundant (keep
+            // the first); a CONTRADICTORY one (`name=='a' AND name=='b'`) matches nothing the
+            // one-equality-per-column selector can express — refuse rather than drop a binding
+            // and address the wrong rows.
+            if vals[idx] != value {
+                return Err(EvalError::WriteFilterUnsupported {
+                    path: path.to_string(),
+                    detail: format!(
+                        "the `WHERE` binds column `{name}` to two different constants — a \
+                         selector carries one equality per column"
+                    ),
+                });
+            }
+            continue;
         }
+        cols.push(Column::new(name, ColumnType::Unknown, true));
+        vals.push(value);
     }
-    Some(RowBatch::new(Schema::new(cols), vec![Row::new(vals)]))
+    Ok(RowBatch::new(Schema::new(cols), vec![Row::new(vals)]))
 }
 
 /// Collect `col == <const>` equality leaves from a `WHERE` predicate (recursing through `AND`),
-/// returning each as `(column, value)`. Non-equality leaves, `OR`, and non-constant right-hand
-/// sides are skipped — they carry no key the applier can address by, which the applier surfaces as
-/// an honest "supply the key column(s)" rejection rather than a wrong-row write.
-fn collect_eq_constants(expr: &Expr) -> Vec<(String, Value)> {
+/// returning each as `(column, value)` — or `None` when ANY leaf is not such an equality
+/// (a non-equality comparison, an `OR`, a non-constant side). All-or-nothing on purpose
+/// (ticket 20260717102000): the selector is the ONLY filter channel an applier sees, so a
+/// silently-skipped leaf under-constrains an irreversible write; the caller fails closed instead.
+fn collect_eq_constants(expr: &Expr) -> Option<Vec<(String, Value)>> {
     use qfs_parser::Op;
     match expr {
         Expr::Binary {
@@ -1785,9 +1820,9 @@ fn collect_eq_constants(expr: &Expr) -> Vec<(String, Value)> {
             lhs,
             rhs,
         } => {
-            let mut out = collect_eq_constants(lhs);
-            out.extend(collect_eq_constants(rhs));
-            out
+            let mut out = collect_eq_constants(lhs)?;
+            out.extend(collect_eq_constants(rhs)?);
+            Some(out)
         }
         Expr::Binary {
             op: Op::Eq,
@@ -1795,11 +1830,31 @@ fn collect_eq_constants(expr: &Expr) -> Vec<(String, Value)> {
             rhs,
         } => match (lhs.as_ref(), rhs.as_ref()) {
             (Expr::Col(col), Expr::Lit(lit)) | (Expr::Lit(lit), Expr::Col(col)) => {
-                vec![(col.clone(), literal_to_value(lit))]
+                Some(vec![(col.clone(), literal_to_value(lit))])
             }
-            _ => Vec::new(),
+            // The lexer surfaces the bare keyword constants `true`/`false`/`null` as
+            // identifiers (`Expr::Col`) — in a WHERE equality they are the constant, exactly
+            // as `literal_value` treats them in a VALUES/SET cell.
+            (Expr::Col(col), Expr::Col(kw)) if keyword_const(kw).is_some() => {
+                Some(vec![(col.clone(), keyword_const(kw)?)])
+            }
+            (Expr::Col(kw), Expr::Col(col)) if keyword_const(kw).is_some() => {
+                Some(vec![(col.clone(), keyword_const(kw)?)])
+            }
+            _ => None,
         },
-        _ => Vec::new(),
+        _ => None,
+    }
+}
+
+/// The constant a bare keyword identifier denotes (`true`/`false`/`null`), or `None` for a real
+/// column reference — the same convention [`literal_value`] applies to VALUES/SET cells.
+fn keyword_const(name: &str) -> Option<Value> {
+    match name.to_ascii_lowercase().as_str() {
+        "true" => Some(Value::Bool(true)),
+        "false" => Some(Value::Bool(false)),
+        "null" => Some(Value::Null),
+        _ => None,
     }
 }
 

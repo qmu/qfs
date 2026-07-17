@@ -83,17 +83,23 @@ impl<A: SharedApplier> PlanApplierBridge<A> {
 /// planner's honest estimate, not a degraded one). The applier still reports the *true*
 /// affected count back on completion.
 fn node_from_input(input: &EffectInput) -> EffectNode {
-    let node = EffectNode::new(input.id, input.kind.clone(), input.target.clone())
+    let mut node = EffectNode::new(input.id, input.kind.clone(), input.target.clone())
         .irreversible(input.irreversible)
         // Carry the planner's estimate first; `with_args` only refines `Unknown`, so an
         // explicit estimate set here is preserved while a literal row batch still derives an
         // exact count when the planner left it `Unknown`.
         .with_affected(input.est_affected);
-    if input.args.rows.is_empty() {
-        node
-    } else {
-        node.with_args(input.args.clone())
+    if !input.args.rows.is_empty() {
+        node = node.with_args(input.args.clone());
     }
+    // Re-attach the `WHERE`-selector verbatim (blueprint §7): the applier resolves a filtered
+    // `UPDATE`/`REMOVE` against THIS channel. Losing it here is not a degraded estimate but an
+    // over-delete (ticket 20260717102000): the driver cannot tell "no WHERE" from "WHERE
+    // dropped", so a filtered REMOVE would apply unfiltered.
+    if let Some(selector) = &input.selector {
+        node = node.with_selector(selector.clone());
+    }
+    node
 }
 
 #[async_trait::async_trait]
@@ -203,6 +209,45 @@ mod tests {
         let target = Target::new(DriverId::new("local"), VfsPath::new("/local/x"));
         let node = EffectNode::new(NodeId(9), EffectKind::Remove, target)
             .with_affected(Affected::AtMost(42));
+        let einput = EffectInput::from_node(&node);
+        let bridge = PlanApplierBridge::new(Arc::new(Inspect));
+        bridge
+            .apply_one(&einput, &ApplyCx::default())
+            .await
+            .unwrap();
+    }
+
+    /// The `WHERE`-selector survives the `EffectInput` round-trip onto the reconstructed node
+    /// (ticket 20260717102000). Losing it here was the incident-grade over-delete: the plan and
+    /// its PREVIEW carried the selector while the applier decoded an UNFILTERED effect — a
+    /// `remove <folder> where name == …` trashed the whole folder, and a filtered SQL REMOVE
+    /// deleted every row of the table.
+    #[tokio::test]
+    async fn node_reconstruction_preserves_the_where_selector() {
+        use qfs_types::{Column, ColumnType, Row, RowBatch, Schema, Value};
+        struct Inspect;
+        impl SharedApplier for Inspect {
+            fn apply_shared(&self, node: &EffectNode) -> Result<EffectOutput, EffectError> {
+                let sel = node
+                    .selector
+                    .as_ref()
+                    .expect("the WHERE-selector must survive the bridge round-trip");
+                assert_eq!(sel.schema.columns.len(), 1);
+                assert_eq!(sel.schema.columns[0].name, "name");
+                assert_eq!(
+                    node.selector_text("name").as_deref(),
+                    Some("budget.xlsx"),
+                    "the selector VALUE reaches the applier, not just the key column"
+                );
+                Ok(EffectOutput::new(node.id, 0))
+            }
+        }
+        let selector = RowBatch::new(
+            Schema::new(vec![Column::new("name", ColumnType::Text, true)]),
+            vec![Row::new(vec![Value::Text("budget.xlsx".into())])],
+        );
+        let target = Target::new(DriverId::new("drive"), VfsPath::new("/drive/my/Reports"));
+        let node = EffectNode::new(NodeId(4), EffectKind::Remove, target).with_selector(selector);
         let einput = EffectInput::from_node(&node);
         let bridge = PlanApplierBridge::new(Arc::new(Inspect));
         bridge

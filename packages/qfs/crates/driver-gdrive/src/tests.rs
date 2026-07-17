@@ -1450,6 +1450,112 @@ async fn set_wide_remove_resolves_by_name_or_fails_closed() {
     assert!(mock.recorded().is_empty());
 }
 
+/// The 2026-07-17 incident, verbatim (ticket 20260717102000): `remove
+/// /drive/shared/<Drive>/<folder> where name == '<file>'` committed through the REAL runtime
+/// seam (interpreter → `EffectInput` → bridge) must trash ONLY the WHERE-matched child. The
+/// live round trashed the folder node itself (with ~30 files) because `EffectInput` dropped
+/// the plan node's WHERE-selector, so the applier decoded a bare folder REMOVE.
+#[tokio::test]
+async fn shared_drive_remove_where_survives_the_runtime_seam_and_trashes_only_the_match() {
+    use crate::schema::SharedDrive;
+
+    // A Shared Drive "Team" holding folder Reports (folder9) with a child spreadsheet (x1).
+    let reports = FileMeta {
+        drive_id: "drv1".to_string(),
+        ..FileMeta::for_test("folder9", "Reports", FOLDER_MIME, vec!["drv1".to_string()])
+    };
+    let sheet = FileMeta {
+        drive_id: "drv1".to_string(),
+        ..FileMeta::for_test(
+            "x1",
+            "budget 2026.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            vec!["folder9".to_string()],
+        )
+    };
+    let mock = Arc::new(
+        MockDriveClient::new()
+            .with_drive(SharedDrive::for_test("drv1", "Team"))
+            // The child-path walk: resolve "Reports" under the drive root, then the sheet under it.
+            .with_list_page(walk_page(vec![reports]))
+            .with_list_page(walk_page(vec![sheet])),
+    );
+    let driver = GDriveDriver::new(mock.clone() as Arc<dyn GDriveClient>);
+    let bridge = gdrive_apply_driver(&driver);
+    let registry = DriverRegistry::new().with(driver.id(), Arc::new(bridge));
+    let interp = Interpreter::with_defaults(registry);
+
+    let mut b = PlanBuilder::new();
+    b.push(
+        EffectNode::new(
+            NodeId(0),
+            EffectKind::Remove,
+            target("/drive/shared/Team/Reports"),
+        )
+        .with_selector(args(&[(NAME_COL, Value::Text("budget 2026.xlsx".into()))])),
+    );
+    let plan = b.build();
+    plan.validate().unwrap();
+
+    let caps = CapabilitySet::none().grant(DriverId::new("drive"), &EffectKind::Remove);
+    let outcome = interp.commit(plan, &caps).await.unwrap();
+    assert!(outcome.is_complete(), "trash applied: {outcome:?}");
+
+    // Exactly the matched child was trashed — NEVER the folder node.
+    let trashed: Vec<String> = mock
+        .recorded()
+        .into_iter()
+        .filter_map(|c| match c {
+            RecordedCall::Trash { id } => Some(id),
+            RecordedCall::Delete { id } => Some(id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        trashed,
+        vec!["x1".to_string()],
+        "only the WHERE-matched file is trashed"
+    );
+}
+
+/// Fail-closed (ticket 20260717102000): a bare name-path REMOVE that resolves to a FOLDER is
+/// refused — whole-folder trashing requires the explicit id-addressed form. Without this guard
+/// a lost/unresolvable selector silently widens to the folder and its entire subtree.
+#[tokio::test]
+async fn bare_folder_path_remove_is_refused_toward_the_explicit_id_form() {
+    use qfs_runtime::SharedApplier;
+    let folder = FileMeta::for_test("fold1", "Reports", FOLDER_MIME, vec!["root".to_string()]);
+    let mock = Arc::new(MockDriveClient::new().with_list_page(walk_page(vec![folder])));
+    let driver = GDriveDriver::new(mock.clone() as Arc<dyn GDriveClient>);
+    let node = EffectNode::new(NodeId(0), EffectKind::Remove, target("/drive/my/Reports"));
+    let err = driver.drive_applier().apply_shared(&node).unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("FOLDER") && msg.contains("id:fold1"),
+        "refuses and points at the explicit id-addressed form: {msg}"
+    );
+    assert!(
+        !mock
+            .recorded()
+            .iter()
+            .any(|c| matches!(c, RecordedCall::Trash { .. } | RecordedCall::Delete { .. })),
+        "nothing was trashed"
+    );
+
+    // The explicit distinct form stays available: `remove /drive/id:<folder-id>` trashes the
+    // folder (with its subtree) deliberately.
+    let mock = Arc::new(MockDriveClient::new());
+    let driver = GDriveDriver::new(mock.clone() as Arc<dyn GDriveClient>);
+    let node = EffectNode::new(NodeId(0), EffectKind::Remove, target("id:fold1"));
+    driver.drive_applier().apply_shared(&node).unwrap();
+    assert_eq!(
+        mock.recorded(),
+        vec![RecordedCall::Trash {
+            id: "fold1".to_string()
+        }]
+    );
+}
+
 // ---- multi-row writes (ticket 20260712005000: honest counts on the write side) ------------
 
 /// Build a multi-row args batch sharing one schema (the shape a routed partition or any
