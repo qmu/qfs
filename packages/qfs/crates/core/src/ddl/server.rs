@@ -846,5 +846,9 @@ pub fn job_runs_schema() -> Schema {
         Column::new("detail", ColumnType::Text, true),
         // Effects applied by a committed fire (0 for denied/blocked/failed — atomic abort).
         Column::new("affected", ColumnType::Int, false),
+        // blueprint §19 axis B/D: the firing principal (identity only, secret-free) — `agent:<name>`
+        // for an agent-fired plan, `Null`/empty for an ordinary job fire. Nullable so a pre-§19 run
+        // reads back with no principal.
+        Column::new("principal", ColumnType::Text, true),
     ])
 }

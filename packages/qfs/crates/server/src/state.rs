@@ -118,6 +118,13 @@ pub struct JobRunRecord {
     pub detail: String,
     /// Effects applied by a committed fire (0 for denied/blocked/failed — atomic abort).
     pub affected: i64,
+    /// The firing **principal** (blueprint §19 axis B), recorded secret-free as an IDENTITY only —
+    /// `agent:<name>` for an agent-fired plan, or empty/an operator label for an ordinary
+    /// (non-agent) fire. Never credential material. The sweeper (blueprint §19 axis D) threads the
+    /// agent identity into this from the firing `DecisionContext`; a plain `/server/jobs` fire
+    /// leaves it empty. `#[serde(default)]` so a pre-§19 record rehydrates with no principal.
+    #[serde(default)]
+    pub principal: String,
 }
 
 /// A view definition (`CREATE [MATERIALIZED] VIEW name AS <query>`). A materialized view

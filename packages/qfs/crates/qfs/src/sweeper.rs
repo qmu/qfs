@@ -267,14 +267,24 @@ fn run_record(run: &CronRun) -> JobRunRecord {
         outcome: outcome.to_string(),
         detail,
         affected,
+        // blueprint §19 axis B/D: a plain `/server/jobs` fire has no agent principal; the agent
+        // cadence sweep (ticket 203334) threads `agent:<name>` here from the firing DecisionContext.
+        principal: String::new(),
     }
 }
 
-/// The one-line audit-ledger projection of a firing (secret-free: name + outcome only).
+/// The one-line audit-ledger projection of a firing (secret-free: name + outcome + firing
+/// principal). blueprint §19 axis B/D: an agent-fired plan records `principal=agent:<name>`; a
+/// principal-less ordinary job fire omits the field.
 fn ledger_line(run: &CronRun) -> String {
     let record = run_record(run);
+    let principal = if record.principal.is_empty() {
+        String::new()
+    } else {
+        format!(" principal={}", record.principal)
+    };
     format!(
-        "cron fire job={} outcome={} affected={} at={}",
+        "cron fire job={} outcome={} affected={} at={}{principal}",
         run.job, record.outcome, record.affected, run.scheduled_at
     )
 }

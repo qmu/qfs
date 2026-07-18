@@ -117,6 +117,9 @@ fn job_run_row(r: &qfs_provision::JobRunRecord) -> Row {
         Value::Text(r.outcome.clone()),
         text_or_null(&r.detail),
         Value::Int(r.affected),
+        // blueprint §19 axis B/D: the firing principal (secret-free identity), Null for a
+        // principal-less ordinary fire.
+        text_or_null(&r.principal),
     ])
 }
 

@@ -123,7 +123,7 @@ one owner-attended live round proving a real fire and a visible denial.
 
 ### Access control
 
-- [ ] The policy gate evaluates the AGENT as subject (#20260718203332-agent-subject-policy-gate.md): a resource the agent's policy does not
+- [x] The policy gate evaluates the AGENT as subject (#20260718203332-agent-subject-policy-gate.md): a resource the agent's policy does not
       grant is denied (default-deny floor) even when the operator could reach it; the audit
       ledger records the agent identity on every fired plan
 
@@ -193,3 +193,4 @@ one owner-attended live round proving a real fire and a visible denial.
 - 2026-07-18 — mission replanned — agent-model-ruled-and-set-ticketed
 - 2026-07-18 — ticket archived — 20260718203330-agent-model-blueprint-chapter.md
 - 2026-07-18 — ticket archived — 20260718203331-create-agent-grammar-registry.md
+- 2026-07-18 — ticket archived — 20260718203332-agent-subject-policy-gate.md

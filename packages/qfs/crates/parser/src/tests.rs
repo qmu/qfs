@@ -1510,6 +1510,16 @@ fn ddl_policy_t57_actor_scope_and_condition_clauses() {
         other => panic!("expected a member_of(...) call, got {other:?}"),
     }
 
+    // blueprint §19 axis B: `FOR agent <name>` parses as a policy subject beside user/role/group,
+    // adding no frozen keyword (`agent` is a contextual ident).
+    let p = parse_ok("CREATE POLICY ag ALLOW INSERT ON mail FOR agent triage AT /me/mail/**");
+    let Statement::Ddl(d) = p else { panic!() };
+    let r = &d.policy_rules[0];
+    let subject = r.subject.as_ref().expect("a FOR agent clause");
+    assert_eq!(subject.kind, "agent");
+    assert_eq!(subject.name, "triage");
+    assert_eq!(r.scope.as_deref(), Some("/me/mail/**"));
+
     // The clauses are optional: a bare ALLOW rule has none of them.
     let p = parse_ok("CREATE POLICY plain ALLOW SELECT");
     let Statement::Ddl(d) = p else { panic!() };
