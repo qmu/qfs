@@ -208,8 +208,8 @@ pub type SkillProvider<'a> = dyn Fn(bool) -> String + 'a;
 /// `qfs vault rekey`). No secret is ever carried here — the `secret_ref` is a REFERENCE.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionAction {
-    /// `connect --import-env` — print the `CREATE CONNECTION` declarations equivalent to the
-    /// current `QFS_SQL_*` / `QFS_GIT_*` env vars (the migration off the deprecated convention).
+    /// `connect --import-env` — print the `CONNECT` statements equivalent to the current
+    /// `QFS_SQL_*` / `QFS_GIT_*` env vars (the migration off the retired env-var convention).
     ImportEnv,
     /// `connect <path> …` — bind a defined PATH to a driver + credential (a full connect), or to
     /// an existing path (an alias). The direct-DB-I/O twin of the `CONNECT` statement (EPIC
@@ -610,8 +610,8 @@ enum Command {
     /// A full connect names a `--driver` (with optional `--at` locator + `--secret` REFERENCE);
     /// an alias names `--alias-of <existing-path>` instead. The secret is a REFERENCE
     /// (`env:VAR` / `vault:driver/connection`), never a value — nothing secret rides in argv.
-    /// `qfs connect --list` lists the defined paths; `--import-env` prints the `CREATE CONNECTION`
-    /// declarations equivalent to the current `QFS_SQL_*` / `QFS_GIT_*` env vars.
+    /// `qfs connect --list` lists the defined paths; `--import-env` prints the `CONNECT`
+    /// statements equivalent to the current `QFS_SQL_*` / `QFS_GIT_*` env vars.
     Connect {
         /// The user-defined path (the mount point), e.g. `/work/orders`. Omitted only with
         /// `--list` / `--import-env`.
@@ -640,8 +640,8 @@ enum Command {
         /// List the defined-path bindings (metadata only — never a secret value).
         #[arg(long = "list", conflicts_with_all = ["driver", "at", "secret", "alias_of", "host", "account", "app", "import_env"])]
         list: bool,
-        /// Print the `CREATE CONNECTION` declarations equivalent to the current `QFS_SQL_*` /
-        /// `QFS_GIT_*` env vars (the migration off the deprecated env-var convention).
+        /// Print the `CONNECT` statements equivalent to the current `QFS_SQL_*` / `QFS_GIT_*` env
+        /// vars (the migration off the retired env-var convention).
         #[arg(long = "import-env", conflicts_with_all = ["driver", "at", "secret", "alias_of", "host", "account", "app"])]
         import_env: bool,
     },

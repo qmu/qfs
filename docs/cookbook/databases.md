@@ -64,7 +64,7 @@ A local file / repo needs no passphrase. A **remote / connected** source stores 
 You register a database once, by name. The happy path is two lines:
 
 ```sh
-export QFS_SQL_ORDERS=/path/to/orders.db                                   # 1. name a connection `orders`
+qfs connect /sql/orders TO sqlite AT '/path/to/orders.db'                   # 1. name a connection `orders`
 qfs run "/sql/orders/orders |> select id, customer, total |> limit 5"      # 2. read a table
 ```
 
@@ -72,15 +72,16 @@ The rest of this section explains the naming rule and the alternatives.
 
 ### 1. Name a connection
 
-A connection is named by an environment variable: `QFS_SQL_<CONN>=<path-or-url>`. The recipes below
-use a SQLite file registered as `orders` (`QFS_SQL_ORDERS=/path/to/orders.db`), so its `orders`
-table is reachable at `/sql/orders/orders` — the shape is always `/sql/<conn>/<table>`.
+A connection is declared once with `qfs connect /sql/<conn> TO <driver> AT '<path-or-url>'` (the
+CLI twin of the `CONNECT` statement), persisted in qfs's own registry. The recipes below use a
+SQLite file registered as `orders` (`qfs connect /sql/orders TO sqlite AT '/path/to/orders.db'`), so
+its `orders` table is reachable at `/sql/orders/orders` — the shape is always `/sql/<conn>/<table>`.
 
 ### 2. Point it anywhere
 
 Postgres, MySQL, and D1 URLs work exactly the same way — swap the SQLite path for a connection URL
-under the same `QFS_SQL_<CONN>` variable. Only the verb support differs: tables get full CRUD, while
-views are `SELECT`-only.
+and the driver (`postgres` / `mysql`), adding `SECRET 'env:<VAR>'` for the password reference. Only
+the verb support differs: tables get full CRUD, while views are `SELECT`-only.
 
 ### 3. Read a real table
 
@@ -258,12 +259,12 @@ PREVIEW: 1 effect(s)
 
 ### Create a database
 
-For SQLite a database is just a file, and **declaring a connection to a new path creates it** — qfs
-opens (and so creates) the file the first time it is used. Declaring `shop` at a path that does not
-exist yet gives you an empty database named `shop`, ready for tables:
+For SQLite a database is just a file, and **connecting to a new path creates it** — qfs opens (and
+so creates) the file the first time it is used. Connecting `shop` at a path that does not exist yet
+gives you an empty database named `shop`, ready for tables:
 
 ```qfs
-CREATE CONNECTION shop DRIVER sqlite AT '/data/shop.db'
+CONNECT /sql/shop TO sqlite AT '/data/shop.db'
 ```
 
 From here `/sql/shop` is the new database's catalog. (Postgres and MySQL name a database the same
@@ -272,8 +273,8 @@ way — swap the driver and give a server URL; there the server, not a file, hol
 ### Create and drop tables
 
 A table is a **definition**, and qfs declares definitions with first-class `CREATE` statements —
-the same family as `CREATE VIEW` and `CREATE CONNECTION`. The path names the table inside its
-database, and the column list declares the schema:
+the same family as `CREATE VIEW`. The path names the table inside its database, and the column list
+declares the schema:
 
 **Create a table:**
 

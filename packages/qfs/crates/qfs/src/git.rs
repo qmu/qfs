@@ -10,14 +10,13 @@
 //! binary owns this wiring — like the local / sql composition. The `git` process dead-ends here.
 //!
 //! ## Config (no credentials)
-//! A repository is configured three ways, in precedence order (last wins a name clash): a
-//! `connections.qfs` `DRIVER git` declaration, a `QFS_GIT_<REPO>=<path>` env var (the deprecated
-//! fallback), and — the CANONICAL source (ticket 20260706170000, matching the `/sql` convergence of
-//! 20260705000500) — a persisted `qfs connect /git/<repo> TO git AT '<path>'` binding in the project
-//! DB `path_binding` registry. The `<REPO>` segment (lower-cased) is the `/git/<repo>/...` path
-//! segment. A repo whose refs cannot be read is skipped (best-effort), so a `/git/<repo>` commit for
-//! an unconfigured repo fails closed. `has_connections`, `git_driver`, and the `qfs describe` mount
-//! all read the SAME three sources, so run / commit / describe converge on one registry.
+//! A repository is declared with `CONNECT /git/<repo> TO git AT '<path>'` (or `qfs connect`),
+//! persisted in the project-DB `path_binding` registry — the SINGLE source (the retired
+//! `QFS_GIT_*` env var and `connections.qfs` `DRIVER git` declaration are gone; experimental, no
+//! backward compat). The `<repo>` segment after `/git/` (lower-cased) is the `/git/<repo>/...`
+//! path segment. A repo whose refs cannot be read is skipped (best-effort), so a `/git/<repo>`
+//! commit for an unresolvable repo fails closed. `has_connections`, `git_driver`, and the `qfs
+//! describe` mount all read the SAME source, so run / commit / describe converge on one registry.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -27,9 +26,6 @@ use qfs_driver_git::{
     GitApplier, GitDriver, GitError, ObjectDb, ObjectKind, Oid, RawObject, Repo, RepoResolver,
     RepoStore,
 };
-
-/// The env-var prefix naming a git repository: `QFS_GIT_<REPO>=<path>`.
-const GIT_ENV_PREFIX: &str = "QFS_GIT_";
 
 /// A read-side [`ObjectDb`] that fetches git objects (loose OR **packed**) by shelling out to
 /// `git cat-file` against a real repository — the read counterpart of [`RepoStore::at_path`]'s
@@ -141,16 +137,11 @@ fn planning_repo(path: &Path) -> Repo {
     repo
 }
 
-/// Whether any `/git` repository is configured (a declared `DRIVER git` connection, a `QFS_GIT_*`
-/// env var, OR a persisted `qfs connect /git/<repo>` binding — the canonical `path_binding` source).
+/// Whether any `/git` repository is bound (a persisted `CONNECT /git/<repo> TO git …`
+/// `path_binding` row — the single source).
 #[must_use]
 pub fn has_connections() -> bool {
-    std::env::vars().any(|(k, v)| k.starts_with(GIT_ENV_PREFIX) && !v.is_empty())
-        || crate::connections_config::declared_for("git")
-            .iter()
-            .any(|c| c.at_locator.is_some())
-        // The canonical source: a persisted `qfs connect /git/<repo> TO git …` binding.
-        || !path_binding_git_connections().is_empty()
+    !path_binding_git_connections().is_empty()
 }
 
 /// The `qfs connect` git repositories from the project-DB `path_binding` registry (the canonical
@@ -186,45 +177,74 @@ fn path_binding_git_connections() -> Vec<(String, String)> {
 }
 
 /// Build the live [`GitDriver`]: the resolver (real-ref planning repos) + the applier (real-repo
-/// CLI-backed stores), one entry per declared `CREATE CONNECTION … DRIVER git AT '<path>'` AND per
-/// `QFS_GIT_<repo>` env var (the deprecated fallback, which overrides a same-named declaration).
+/// CLI-backed stores), one entry per persisted `CONNECT /git/<repo> TO git AT '<path>'`
+/// `path_binding` row — the SINGLE source (the retired `QFS_GIT_*` env var and `connections.qfs`
+/// declaration are gone).
 #[must_use]
 pub fn git_driver() -> GitDriver {
     let mut resolver = RepoResolver::new();
     let mut applier = GitApplier::new();
-    // Declared connections first; an equally-named env var below then overrides.
-    for decl in crate::connections_config::declared_for("git") {
-        let Some(path) = decl.at_locator.as_deref() else {
-            continue;
-        };
-        let p = Path::new(path);
-        let repo = decl.name.to_ascii_lowercase();
-        resolver = resolver.with_repo(repo.clone(), planning_repo(p));
-        applier = applier.with_store(repo, RepoStore::at_path(p));
-    }
-    for (key, path) in std::env::vars() {
-        let Some(repo) = key.strip_prefix(GIT_ENV_PREFIX) else {
-            continue;
-        };
-        if repo.is_empty() || path.is_empty() {
-            continue;
-        }
-        let repo = repo.to_ascii_lowercase();
-        let p = Path::new(&path);
-        crate::connections_config::warn_env_var_deprecation_once();
-        resolver = resolver.with_repo(repo.clone(), planning_repo(p));
-        applier = applier.with_store(repo, RepoStore::at_path(p));
-    }
-    // `qfs connect` (the `path_binding` DB registry) — the CANONICAL local-connection mechanism
-    // (ticket 20260706170000, extending the `/sql` convergence of 20260705000500 to git). A
-    // `qfs connect /git/<repo> TO git AT '<path>'` binding wires the runtime git driver under
-    // `<repo>`, so a persisted connection is no longer invisible to `qfs run` / `qfs describe`.
-    // Registered LAST so a persisted binding wins a name clash with the deprecated
-    // env-var/`connections.qfs` shims.
     for (repo, at) in path_binding_git_connections() {
         let p = Path::new(&at);
         resolver = resolver.with_repo(repo.clone(), planning_repo(p));
         applier = applier.with_store(repo, RepoStore::at_path(p));
     }
     GitDriver::new(resolver, applier)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_var_and_connections_file_bind_nothing_only_path_binding_binds() {
+        // The single-source guarantee for git: the retired `QFS_GIT_*` env var and a
+        // `connections.qfs` `CREATE CONNECTION … DRIVER git` file bind NOTHING (their loader +
+        // fallback are gone — experimental, no backward compat). Only a persisted `CONNECT
+        // /git/<repo> …` `path_binding` row wires a mount, so run / commit / describe converge.
+        let _home = crate::testenv::HomeGuard::with_passphrase("git-only-path-binding");
+        let dir = tempfile::tempdir().unwrap();
+        let repo_path = dir.path().join("app.git");
+        std::fs::create_dir_all(&repo_path).unwrap();
+        let repo_str = repo_path.to_str().unwrap();
+
+        // env-only / file-only configurations resolve to NO working mount.
+        let conns = dir.path().join("connections.qfs");
+        std::fs::write(
+            &conns,
+            format!("CREATE CONNECTION app DRIVER git AT '{repo_str}';"),
+        )
+        .unwrap();
+        std::env::set_var("QFS_GIT_APP", repo_str);
+        std::env::set_var("QFS_CONNECTIONS", conns.to_str().unwrap());
+        assert!(
+            !has_connections(),
+            "a QFS_GIT_* / connections.qfs config binds no /git mount"
+        );
+        std::env::remove_var("QFS_GIT_APP");
+        std::env::remove_var("QFS_CONNECTIONS");
+
+        // Only the persisted path_binding row wires the mount.
+        let proj = crate::store::open_system_db()
+            .unwrap()
+            .unwrap()
+            .into_db()
+            .into_connection();
+        crate::path_binding::db_upsert_binding(
+            &proj,
+            "/git/app",
+            "git",
+            Some(repo_str),
+            None,
+            Some("local"),
+            None,
+            None,
+        )
+        .unwrap();
+        drop(proj);
+        assert!(
+            has_connections(),
+            "the path_binding row wires the /git mount"
+        );
+    }
 }

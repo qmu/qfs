@@ -62,14 +62,14 @@ A local file / repo needs no passphrase. A **remote / connected** source stores 
 :::
 
 git needs almost no setup — there's no account to connect. You just tell qfs where the repo lives by
-registering it with an environment variable, then read it at `/git/<repo>/…`:
+connecting it once, then read it at `/git/<repo>/…`:
 
 ```sh
-export QFS_GIT_MYREPO=/path/to/repo        # a working tree, or a bare .git directory
+qfs connect /git/myrepo TO git AT '/path/to/repo'      # a working tree, or a bare .git directory
 ```
 
-The variable name after `QFS_GIT_` (lowercased) becomes the repo segment in the path — here
-`QFS_GIT_MYREPO` mounts at `/git/myrepo`. Register as many as you like; each `QFS_GIT_<name>` adds a
+The `<repo>` segment you name (lowercased) becomes the repo segment in the path — here `/git/myrepo`
+mounts the repo at `/git/myrepo`. Connect as many as you like; each `qfs connect /git/<name>` adds a
 `/git/<name>` repo. Both loose and packed objects are read, so a freshly cloned or long-lived repo
 both work.
 

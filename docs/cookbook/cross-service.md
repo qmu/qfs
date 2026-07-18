@@ -104,8 +104,9 @@ Test <t@e.com> | platform | initial commit
 (2 row(s))
 ```
 
-(`/sql/<conn>` is registered with `QFS_SQL_<CONN>`, `/git/<repo>` with `QFS_GIT_<REPO>` — see the
-[Databases](/cookbook/databases) and [git](/cookbook/git) chapters.)
+(`/sql/<conn>` is registered with `qfs connect /sql/<conn> TO <driver> AT '…'`, `/git/<repo>` with
+`qfs connect /git/<repo> TO git AT '…'` — see the [Databases](/cookbook/databases) and
+[git](/cookbook/git) chapters.)
 
 ## Join a database to GitHub
 

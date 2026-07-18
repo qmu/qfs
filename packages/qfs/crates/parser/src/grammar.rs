@@ -27,18 +27,24 @@ use qfs_lang::token::{LitType, PathSeg};
 use qfs_lang::{lex, Keyword, Span, Spanned, Token};
 use qfs_types::{canonical_base_column_type, declared_type_path, DeclaredColumn};
 use winnow::combinator::{alt, cut_err, fail, opt, preceded, repeat, separated};
-use winnow::error::{ContextError, ErrMode, ParseError as WinnowParseError};
+use winnow::error::{ContextError, ErrMode, ParseError as WinnowParseError, StrContext};
 use winnow::token::any;
 use winnow::{ModalResult, Parser};
 
 use crate::ast::{
-    ArmWrite, Assignment, CallRef, Codec, ConnectionDeclAst, DdlKind, EffectBody, EffectStmt,
-    EffectVerb, Expr, FnRef, FollowRef, Ident, JoinOp, Literal, NamedArg, OfColumn, OfRef,
-    OfTarget, Op, OrderKey, Param, PathExpr, PathRef, PathSegment, PipeOp, Pipeline, PlanWrap,
-    PolicyRuleAst, PolicySubjectAst, Projection, ServerDdl, Source, Statement, SwitchArm,
-    SwitchStage, TransformRef, TypeAnn, Values,
+    ArmWrite, Assignment, CallRef, Codec, DdlKind, EffectBody, EffectStmt, EffectVerb, Expr, FnRef,
+    FollowRef, Ident, JoinOp, Literal, NamedArg, OfColumn, OfRef, OfTarget, Op, OrderKey, Param,
+    PathExpr, PathRef, PathSegment, PipeOp, Pipeline, PlanWrap, PolicyRuleAst, PolicySubjectAst,
+    Projection, ServerDdl, Source, Statement, SwitchArm, SwitchStage, TransformRef, TypeAnn,
+    Values,
 };
 use crate::error::{ParseError, ParseErrorCode};
+
+/// The parse-error message a retired `CREATE CONNECTION` carries — a pointer to the one surviving
+/// declaration statement, `CONNECT` (surfaced by [`map_error`] via [`StrContext::Label`]).
+const CREATE_CONNECTION_RETIRED: &str = "CREATE CONNECTION is retired; declare a connection with \
+     `CONNECT /<family>/<name> TO <driver> AT '<locator>' [SECRET '<ref>']` (e.g. `CONNECT \
+     /sql/shop TO sqlite AT '/data/shop.db'`), or run `qfs connect`";
 
 /// The parser input stream: a slice of spanned tokens (winnow drives this directly).
 type Stream<'a> = &'a [Spanned<Token>];
@@ -98,6 +104,18 @@ fn map_error(
     };
     let span = found_tok.span;
     let (code, message) = classify(&found_tok.node);
+    // A grammar arm may attach a bespoke `StrContext::Label` (e.g. the retired `CREATE CONNECTION`
+    // pointer) — surface it as the human message so the diagnostic steers the author, overriding the
+    // generic token classification. Only `Label` is surfaced; winnow's own `Expected` contexts stay
+    // internal. Secret-free: a label is a fixed `&'static str`, never echoing a literal value.
+    let message = err
+        .inner()
+        .context()
+        .find_map(|c| match c {
+            StrContext::Label(label) => Some((*label).to_string()),
+            _ => None,
+        })
+        .unwrap_or(message);
     ParseError::new(
         span.start as usize,
         span,
@@ -2740,6 +2758,15 @@ fn pipeline_or_effect(input: &mut Stream<'_>) -> ModalResult<Statement> {
 fn server_ddl(input: &mut Stream<'_>) -> ModalResult<ServerDdl> {
     let _ = kw(Keyword::Create).parse_next(input)?;
     let kind = ddl_kind(input)?;
+    // `CREATE CONNECTION` is retired (the "declared drivers are the normal way" mission):
+    // `CONNECT /<family>/<name> TO <driver> …` is the one declaration statement, persisted in the
+    // `path_binding` registry. Reject here with a committed error carrying a `CONNECT` pointer (the
+    // `StrContext::Label` surfaced by `map_error`), so an old `connections.qfs` line fails loudly.
+    if matches!(kind, DdlKind::Connection) {
+        return cut_err(fail::<_, ServerDdl, _>)
+            .context(StrContext::Label(CREATE_CONNECTION_RETIRED))
+            .parse_next(input);
+    }
     let name = ident(input)?;
     // Clause grammar is permissive (sugar shape, not full validation): collect the
     // optional ON / EVERY / AS / DO clauses in any order.
@@ -2750,33 +2777,7 @@ fn server_ddl(input: &mut Stream<'_>) -> ModalResult<ServerDdl> {
     let mut do_plan = None;
     let mut policy_rules: Vec<PolicyRuleAst> = Vec::new();
     let mut policy_attach: Option<String> = None;
-    let mut driver: Option<String> = None;
-    let mut at_locator: Option<String> = None;
-    let mut secret_ref: Option<String> = None;
     loop {
-        // `CREATE CONNECTION <name> DRIVER <driver> [AT '<loc>'] [SECRET '<ref>']` — the
-        // connection-declaration clauses (contextual idents, no frozen keyword). Probed first for
-        // the CONNECTION form so `DRIVER`/`SECRET` are consumed before the generic clause probes.
-        if matches!(kind, DdlKind::Connection) {
-            if driver.is_none() {
-                if let Some(v) = opt(conn_driver_clause).parse_next(input)? {
-                    driver = Some(v);
-                    continue;
-                }
-            }
-            if at_locator.is_none() {
-                if let Some(v) = opt(conn_at_clause).parse_next(input)? {
-                    at_locator = Some(v);
-                    continue;
-                }
-            }
-            if secret_ref.is_none() {
-                if let Some(v) = opt(conn_secret_clause).parse_next(input)? {
-                    secret_ref = Some(v);
-                    continue;
-                }
-            }
-        }
         // The `POLICY <name>` ATTACHMENT clause (t35) on a binding DDL — the policy a fired
         // plan commits under. `POLICY` is a frozen keyword (no new keyword). Only on a
         // non-POLICY DDL (for `CREATE POLICY` the leading POLICY is the kind, not an attach).
@@ -2844,13 +2845,9 @@ fn server_ddl(input: &mut Stream<'_>) -> ModalResult<ServerDdl> {
         on,
         policy_rules,
         policy: policy_attach,
-        connection: (driver.is_some() || at_locator.is_some() || secret_ref.is_some()).then(|| {
-            Box::new(ConnectionDeclAst {
-                driver,
-                at_locator,
-                secret_ref,
-            })
-        }),
+        // `CREATE CONNECTION` is retired (rejected above), so the connection-declaration clauses are
+        // never parsed here — a server-binding DDL never carries one.
+        connection: None,
     })
 }
 
@@ -3009,12 +3006,6 @@ fn ddl_kind(input: &mut Stream<'_>) -> ModalResult<DdlKind> {
         word("CONNECTION").map(|_| DdlKind::Connection),
     ))
     .parse_next(input)
-}
-
-/// `DRIVER <driver>` — the connection's driver kind (a bare ident). `DRIVER` is a contextual ident.
-fn conn_driver_clause(input: &mut Stream<'_>) -> ModalResult<String> {
-    let _ = word("DRIVER").parse_next(input)?;
-    ident(input).map(|s| s.node)
 }
 
 /// `AT '<locator>'` — the connection's non-secret location, a quoted string (consistent with the

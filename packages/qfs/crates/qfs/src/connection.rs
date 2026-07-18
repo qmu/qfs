@@ -350,15 +350,16 @@ fn now_rfc3339() -> String {
 fn run_inner(action: &ConnectionAction) -> Result<String, String> {
     match action {
         ConnectionAction::ImportEnv => {
-            // Print the CREATE CONNECTION declarations equivalent to the current QFS_SQL_*/QFS_GIT_*
-            // env vars — the one-command migration off the deprecated convention. No secret is read
-            // (SQLite/git connections carry none); the output is paste-ready for a connections.qfs.
+            // Print the CONNECT statements equivalent to the current QFS_SQL_*/QFS_GIT_* env vars —
+            // the one-command migration off the retired env-var convention (those vars no longer
+            // bind anything). No secret is read (SQLite/git connections carry none); the output is
+            // paste-ready for `qfs connect` or a script.
             let decls = crate::connections_config::import_env_declarations();
             if decls.is_empty() {
                 return Ok("no QFS_SQL_* / QFS_GIT_* env vars to import".into());
             }
             println!("{decls}");
-            Ok("printed the equivalent CREATE CONNECTION declarations".into())
+            Ok("printed the equivalent CONNECT statements".into())
         }
         // t100020 (the CONNECT model): bind a defined PATH to a driver + credential reference (or an
         // alias). Direct Project-DB I/O — the twin of the `CONNECT` statement. No passphrase: the
