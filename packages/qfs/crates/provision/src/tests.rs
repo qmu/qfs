@@ -287,6 +287,10 @@ fn agent_binding_round_trips_through_dump_restore() {
         "triage".to_string(),
         AgentDef {
             name: "triage".to_string(),
+            // blueprint §19 axis D: a launch cadence (config); the runtime last_run is excluded from
+            // the projection (a fire is not drift), so it round-trips as unset.
+            every: "5m".to_string(),
+            last_run: Some(1_700_000_000),
             // blueprint §19 axis C: a query function (a saved plan body, empty here to keep the
             // projection body-free; the body round-trip is covered by the jobs/triggers path).
             plan: StatementSource::new(String::new()),
@@ -297,6 +301,8 @@ fn agent_binding_round_trips_through_dump_restore() {
         "sweeper".to_string(),
         AgentDef {
             name: "sweeper".to_string(),
+            every: String::new(),
+            last_run: None,
             plan: StatementSource::new(String::new()),
             policy: None,
         },

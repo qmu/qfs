@@ -45,8 +45,8 @@ use qfs_core::CfsError;
 pub use audit::{AuditEntry, AuditSink};
 pub use binding::{Binding, BindingKind, CountingBinding, NullBinding};
 pub use driver::{
-    apply_server_write, job_runs_path_job, server_node_capabilities, server_node_schema,
-    ConfigChange, ServerDriver, SERVER_MOUNT,
+    agent_runs_path_agent, apply_server_write, job_runs_path_job, server_node_capabilities,
+    server_node_schema, ConfigChange, ServerDriver, SERVER_MOUNT,
 };
 pub use error::ServerError;
 pub use lower::lower_statement;

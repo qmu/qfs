@@ -75,6 +75,17 @@ impl ReadDriver for ServerReadFacet {
                 .unwrap_or_default();
             return Ok(RowBatch::new(qfs_core::job_runs_schema(), rows));
         }
+        // blueprint §19 axis D: the per-agent cadence-fire history `/server/agents/<name>/runs` —
+        // the agent's own run-history read-back, sharing the canonical `job_runs_schema`.
+        if let Some(agent) = qfs_http::agent_runs_path_agent(&scan.path) {
+            let snapshot = self.snapshot();
+            let rows = snapshot
+                .agent_runs
+                .get(agent)
+                .map(|runs| runs.iter().map(job_run_row).collect())
+                .unwrap_or_default();
+            return Ok(RowBatch::new(qfs_core::job_runs_schema(), rows));
+        }
         let segment = scan
             .path
             .strip_prefix("/server/")
@@ -203,13 +214,16 @@ fn collection_rows(state: &ServerState, node: ServerNode) -> Vec<Row> {
         ServerNode::Agents => state
             .agents
             .values()
-            // blueprint §19: the agent read-back is credential-free — name + query-function plan
-            // (axis C) + policy handle, in the `server_node_schema(Agents)` column order.
+            // blueprint §19: the agent read-back is credential-free — name + cadence (axis D) +
+            // query-function plan (axis C) + policy handle + last_run, in the
+            // `server_node_schema(Agents)` column order.
             .map(|d| {
                 Row::new(vec![
                     Value::Text(d.name.clone()),
+                    text_or_null(&d.every),
                     text_or_null(d.plan.as_str()),
                     opt_text(d.policy.as_ref()),
+                    d.last_run.map_or(Value::Null, Value::Timestamp),
                 ])
             })
             .collect(),

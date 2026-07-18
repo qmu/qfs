@@ -193,6 +193,9 @@ pub fn webhook_proj(def: &WebhookDef) -> ProjRow {
 pub fn agent_proj(def: &AgentDef) -> ProjRow {
     let mut row = ProjRow::default();
     row.set_text("name", &def.name);
+    // blueprint §19 axis D: the launch cadence (empty for a launch-less agent). The runtime
+    // `last_run` high-water mark is EXCLUDED — a fire is not drift (the same rule as jobs).
+    row.set_text("every", &def.every);
     // blueprint §19 axis C: the query function's canonical plan body (empty for a function-less
     // agent — the same body-column convention as jobs/triggers).
     row.set_text("plan", def.plan.as_str());

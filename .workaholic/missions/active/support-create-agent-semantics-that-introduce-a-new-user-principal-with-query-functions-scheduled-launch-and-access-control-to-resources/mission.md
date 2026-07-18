@@ -118,7 +118,7 @@ one owner-attended live round proving a real fire and a visible denial.
 
 ### Scheduled launch
 
-- [ ] An agent with a launch cadence fires on the shipped daemon sweeper (#20260718203334-agent-scheduled-launch-sweeper.md) UNDER THE AGENT
+- [x] An agent with a launch cadence fires on the shipped daemon sweeper (#20260718203334-agent-scheduled-launch-sweeper.md) UNDER THE AGENT
       PRINCIPAL — its runs land on the agent's own run-history read-back, hermetic-first
 
 ### Access control
@@ -195,3 +195,4 @@ one owner-attended live round proving a real fire and a visible denial.
 - 2026-07-18 — ticket archived — 20260718203331-create-agent-grammar-registry.md
 - 2026-07-18 — ticket archived — 20260718203332-agent-subject-policy-gate.md
 - 2026-07-18 — ticket archived — 20260718203333-agent-query-functions-saved-plans.md
+- 2026-07-18 — ticket archived — 20260718203334-agent-scheduled-launch-sweeper.md
