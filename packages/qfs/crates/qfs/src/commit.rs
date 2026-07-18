@@ -20,7 +20,9 @@ use qfs_runtime::{
     ApplyCx, ApplyDriver, CapabilitySet, DriverRegistry, EffectError, EffectInput, EffectOutput,
     Interpreter, LegStatus,
 };
-use qfs_secrets::{ConnectionId, CredentialKey, EnvStore, Secrets};
+use qfs_secrets::{
+    ConnectionId, ConnectionRecord, CredentialKey, EnvStore, Secret, SecretError, Secrets,
+};
 use qfs_types::DriverId;
 
 /// Apply `plan` to the World via the runtime interpreter. Returns `Ok(())` once every leg applied,
@@ -790,9 +792,21 @@ pub(crate) fn networked_credential(
     driver: &str,
     connection: &str,
 ) -> Option<(Arc<dyn Secrets>, CredentialKey)> {
-    let store: Arc<dyn Secrets> = match crate::connection::open_store_for_commit() {
+    let base: Arc<dyn Secrets> = match crate::connection::open_store_for_commit() {
         Some(sqlite) => Arc::new(sqlite),
         None => Arc::new(EnvStore::from_process_env()),
+    };
+    // 20260718203325: a self-contained `CREATE ACCOUNT … SECRET '<ref>'` records the reference on
+    // the consent row. Resolve it LAZILY here at request-build time, on a vault MISS — a sealed
+    // credential always wins, but a mount whose account was declared with a SECRET reference (and
+    // never `qfs account add`-ed) resolves its token from `env:`/`vault:` at USE, healing on each
+    // re-read. Absent a reference the store is the plain vault (unchanged).
+    let store: Arc<dyn Secrets> = match consent_secret_ref(driver, connection) {
+        Some(reference) => Arc::new(ConsentSecretRefFallback {
+            inner: base,
+            reference,
+        }),
+        None => base,
     };
     // t81: a project/team-owned connection is gated on the acting operator's actor-policy BEFORE
     // the credential binds — a member with no grant for the connection's scope cannot use it
@@ -817,6 +831,55 @@ pub(crate) fn networked_credential(
         .ok()?;
     let cred = CredentialKey::new(qfs_secrets::DriverId(driver.to_string()), acct);
     Some((store, cred))
+}
+
+/// The bind-time `secret_ref` (`env:`/`vault:`) a `CREATE ACCOUNT … SECRET '<ref>'` recorded for
+/// this `(driver, connection)`, or `None` if none was declared / the System DB is unreadable.
+/// Best-effort + passphrase-free (a reference is a selector, not a secret) — consulted lazily so a
+/// declared account resolves its credential with no `qfs account add`.
+fn consent_secret_ref(driver: &str, connection: &str) -> Option<String> {
+    let sys = crate::store::open_system_db().ok().flatten()?;
+    let conn = sys.into_db().into_connection();
+    crate::secret_store::db_get_consent_secret_ref(&conn, driver, connection)
+}
+
+/// A [`Secrets`] store that falls back to a declared `SECRET '<ref>'` reference when the underlying
+/// vault has NO sealed credential for the requested key (ticket 20260718203325). The reference is
+/// resolved LAZILY here (request-build time), mirroring [`crate::declared_driver`]'s
+/// `DeclaredSecretRefStore`: a sealed credential always wins (the vault hit short-circuits); only on
+/// a miss is the reference resolved, and an unresolvable reference fails closed with a structured,
+/// secret-free cause. Writes/list delegate to the inner store.
+struct ConsentSecretRefFallback {
+    inner: Arc<dyn Secrets>,
+    reference: String,
+}
+
+impl Secrets for ConsentSecretRefFallback {
+    fn get(&self, key: &CredentialKey) -> Result<Secret, SecretError> {
+        match self.inner.get(key) {
+            Ok(secret) => Ok(secret),
+            Err(_miss) => {
+                crate::secret_ref::resolve_secret_ref(&self.reference, self.inner.as_ref()).map_err(
+                    |e| SecretError::Backend(format!("declared account secret reference: {e}")),
+                )
+            }
+        }
+    }
+
+    fn put(&self, key: &CredentialKey, value: Secret) -> Result<(), SecretError> {
+        self.inner.put(key, value)
+    }
+
+    fn remove(&self, key: &CredentialKey) -> Result<(), SecretError> {
+        self.inner.remove(key)
+    }
+
+    fn list(
+        &self,
+        driver: Option<&qfs_secrets::DriverId>,
+    ) -> Result<Vec<ConnectionRecord>, SecretError> {
+        self.inner.list(driver)
+    }
 }
 
 #[cfg(test)]

@@ -491,6 +491,39 @@ mod tests {
     }
 
     #[test]
+    fn cf_account_declared_with_a_secret_reference_resolves_at_bind_time() {
+        // 20260718203325: `CREATE ACCOUNT cf 'mycf' SECRET 'env:CF_TOKEN'` records the reference on
+        // the consent row; the credential resolves LAZILY at bind time from the env — NO
+        // `qfs account add` (no sealed vault row). An unset env fails closed, secret-free.
+        use qfs_identity::IdentityStore as _;
+
+        // `HomeGuard` already holds `ENV_LOCK` for the whole test body (its `build` calls
+        // `env_guard()`); acquiring the same non-reentrant lock again here would deadlock.
+        let _home = crate::testenv::HomeGuard::with_passphrase("cf-secret-ref-test");
+        crate::identity::open_identity_store()
+            .unwrap()
+            .create_user("op@example.com")
+            .unwrap();
+
+        // Declare the account with a bind-time SECRET reference — the desugar path of
+        // `CREATE ACCOUNT cf 'mycf' SECRET 'env:CF_TOKEN'`. No token is sealed in the vault.
+        crate::account::declare_account("cf", "mycf", None, Some("env:CF_TOKEN")).unwrap();
+
+        let var = "CF_TOKEN";
+        std::env::set_var(var, "cf-bearer-from-env");
+        assert!(
+            super::resolve_cf_token("mycf").is_some(),
+            "the declared env: reference resolves the token at bind time, with no sealed vault row"
+        );
+
+        std::env::remove_var(var);
+        assert!(
+            super::resolve_cf_token("mycf").is_none(),
+            "an unresolvable reference fails closed (no credential, no leak)"
+        );
+    }
+
+    #[test]
     fn artifact_token_sealer_writes_a_separate_repo_scoped_secret() {
         let store = Arc::new(InMemoryStore::new());
         let sealer = super::VaultArtifactTokenSealer::new(store.clone());

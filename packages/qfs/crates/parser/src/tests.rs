@@ -931,6 +931,41 @@ fn create_account_needs_provider_and_label() {
     assert!(!KEYWORDS.contains(&"account"));
 }
 
+#[test]
+fn create_account_carries_a_secret_reference() {
+    // 20260718203325: an optional `SECRET '<ref>'` rides as the `secret_ref` selector column of the
+    // desugared `/sys/accounts` row — a reference resolved at USE, never an inline token.
+    let e = effect_of(parse_ok("CREATE ACCOUNT cf 'mycf' SECRET 'env:CF_TOKEN'"));
+    assert_eq!(target_path(&e), "/sys/accounts");
+    assert_eq!(values_cell(&e, "provider").as_deref(), Some("cf"));
+    assert_eq!(values_cell(&e, "account").as_deref(), Some("mycf"));
+    assert_eq!(
+        values_cell(&e, "secret_ref").as_deref(),
+        Some("env:CF_TOKEN")
+    );
+
+    // APP and SECRET are order-independent, mirroring CONNECT's clause loop.
+    let e = effect_of(parse_ok(
+        "CREATE ACCOUNT cf 'mycf' SECRET 'vault:cf/mycf' APP 'client'",
+    ));
+    assert_eq!(
+        values_cell(&e, "secret_ref").as_deref(),
+        Some("vault:cf/mycf")
+    );
+    assert_eq!(values_cell(&e, "app").as_deref(), Some("client"));
+
+    // Absent the clause, `secret_ref` is NULL (the token stays sealed out-of-band).
+    let e = effect_of(parse_ok("CREATE ACCOUNT github 'work'"));
+    assert_eq!(values_cell(&e, "secret_ref"), None);
+}
+
+#[test]
+fn create_account_rejects_an_inline_secret() {
+    // References only (`env:`/`vault:`): an inline non-reference secret is a PARSE error, never
+    // material sealed into the statement text.
+    assert!(parse_statement("CREATE ACCOUNT cf 'mycf' SECRET 'hunter2'").is_err());
+}
+
 // ---- §13 declared drivers — CREATE DRIVER / TYPE / declared VIEW / MAP -------
 // Each desugars to `INSERT INTO /sys/drivers` (the `/sys/paths` precedent); no new Statement
 // variant. Scripts are credential-free: no AUTH form can carry a token value.

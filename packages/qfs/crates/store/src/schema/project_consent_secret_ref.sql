@@ -1,0 +1,11 @@
+-- Project DB — migration #13 (ticket 20260718203325 — CREATE ACCOUNT … SECRET '<ref>'):
+-- mirror the System-DB migration #18 on the project `connection_consent` ledger so the shared
+-- consent writer (`crates/qfs/src/secret_store.rs` `db_record_consent_full`) can record the
+-- bind-time `secret_ref` against EITHER database. The reference (`env:VAR` / `vault:driver/conn`)
+-- names WHERE the credential lives; it is resolved LAZILY at bind time and NEVER a secret value —
+-- exactly as the `app` selector precedent (migration #12) added a locator, not key material.
+--
+-- APPEND-ONLY: migrations #1..#12 are FROZEN (the checksum guard forbids editing a shipped body).
+-- This is a NEW forward-only ALTER that only ADDS a nullable column — existing rows read back
+-- `secret_ref = NULL` (the pre-declaration state: the token was sealed out-of-band).
+ALTER TABLE connection_consent ADD COLUMN secret_ref TEXT;

@@ -2324,20 +2324,30 @@ fn create_map_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
 // in the statement text (RFD §10). The `provider`/`account` are selectors, never a secret.
 
 /// The `/sys/accounts` account-registry columns the desugar emits (the sys applier reads by NAME).
-/// Selectors only — there is structurally NO secret column; the token is sealed out-of-band.
-const ACCOUNT_COLUMNS: [&str; 3] = ["provider", "account", "app"];
+/// Selectors only — `secret_ref` is a REFERENCE (`env:`/`vault:`), resolved at USE time, NEVER an
+/// inline secret value; the token itself is sealed out-of-band.
+const ACCOUNT_COLUMNS: [&str; 4] = ["provider", "account", "app", "secret_ref"];
 
-/// Build the single-row `VALUES (provider, account)` the `/sys/accounts` insert carries.
-fn account_values(provider: &str, account: &str, app: Option<&str>) -> Values {
-    let app = app.map_or(Expr::Lit(Literal::Null), |s| {
-        Expr::Lit(Literal::Str(s.to_string()))
-    });
+/// Build the single-row `VALUES (provider, account, app, secret_ref)` the `/sys/accounts` insert
+/// carries. `secret_ref` is a reference selector, never a secret value.
+fn account_values(
+    provider: &str,
+    account: &str,
+    app: Option<&str>,
+    secret_ref: Option<&str>,
+) -> Values {
+    let opt_lit = |v: Option<&str>| {
+        v.map_or(Expr::Lit(Literal::Null), |s| {
+            Expr::Lit(Literal::Str(s.to_string()))
+        })
+    };
     Values {
         columns: Some(ACCOUNT_COLUMNS.iter().map(|c| (*c).to_string()).collect()),
         rows: vec![vec![
             Expr::Lit(Literal::Str(provider.to_string())),
             Expr::Lit(Literal::Str(account.to_string())),
-            app,
+            opt_lit(app),
+            opt_lit(secret_ref),
         ]],
     }
 }
@@ -2367,9 +2377,36 @@ fn create_account_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
     // Committed after the noun: a malformed CREATE ACCOUNT is a crisp error, never a fallthrough.
     let provider = cut_err(ident).parse_next(input)?.node;
     let account = cut_err(string_value).parse_next(input)?;
-    let app = opt(conn_app_clause).parse_next(input)?;
+    // APP / SECRET ride as optional clauses in either order (the sugar-shape clause loop, mirroring
+    // CONNECT). `SECRET '<ref>'` reuses `conn_secret_clause` so the reference grammar is identical
+    // to CONNECT — a reference (`env:`/`vault:`), never an inline secret.
+    let mut app: Option<String> = None;
+    let mut secret_ref: Option<String> = None;
+    loop {
+        if app.is_none() {
+            if let Some(v) = opt(conn_app_clause).parse_next(input)? {
+                app = Some(v);
+                continue;
+            }
+        }
+        if secret_ref.is_none() {
+            if let Some(v) = opt(conn_secret_clause).parse_next(input)? {
+                secret_ref = Some(v);
+                continue;
+            }
+        }
+        break;
+    }
+    // `SECRET` is a REFERENCE (`env:`/`vault:`), NEVER an inline value — an inline non-reference
+    // secret is a parse error (the credential-free-declaration contract; references only). The
+    // scheme list mirrors `conn_secret_clause`'s consumers and `secret_ref.rs::resolve_secret_ref`.
+    if let Some(s) = &secret_ref {
+        if !(s.starts_with("env:") || s.starts_with("vault:")) {
+            return Err(ErrMode::Cut(ContextError::new()));
+        }
+    }
     Ok(insert_sys_accounts(
-        account_values(&provider, &account, app.as_deref()),
+        account_values(&provider, &account, app.as_deref(), secret_ref.as_deref()),
         create,
     ))
 }

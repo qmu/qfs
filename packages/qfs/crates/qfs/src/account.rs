@@ -386,6 +386,21 @@ pub(crate) fn record_account_consent(
     subject: &str,
     app: Option<&str>,
 ) -> Result<(), String> {
+    record_account_consent_full(conn, provider, account, subject, app, None)
+}
+
+/// [`record_account_consent`] plus the bind-time `secret_ref` (`env:`/`vault:`) a self-contained
+/// `CREATE ACCOUNT … SECRET '<ref>'` declaration carries. The reference names WHERE the credential
+/// lives; the token VALUE still stays out-of-band. Google (OAuth) ignores `secret_ref` — its bearer
+/// is minted through the app, not read from an env/vault reference.
+pub(crate) fn record_account_consent_full(
+    conn: &Connection,
+    provider: &str,
+    account: &str,
+    subject: &str,
+    app: Option<&str>,
+    secret_ref: Option<&str>,
+) -> Result<(), String> {
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| format!("opening the consent transaction: {e}"))?;
@@ -393,7 +408,7 @@ pub(crate) fn record_account_consent(
         let app = app.ok_or("google account declarations need APP '<label>'")?;
         record_google_consents(&tx, subject, account, app)?;
     } else {
-        secret_store::db_record_consent(&tx, provider, account, subject, "")
+        secret_store::db_record_consent_full(&tx, provider, account, subject, "", app, secret_ref)
             .map_err(|e| format!("recording consent: {e}"))?;
     }
     crate::sys::ledgered_accounts_write_tx(
@@ -484,6 +499,7 @@ pub(crate) fn declare_account(
     provider: &str,
     account: &str,
     app: Option<&str>,
+    secret_ref: Option<&str>,
 ) -> Result<String, String> {
     if !is_account_provider(provider) {
         return Err(format!(
@@ -496,11 +512,21 @@ pub(crate) fn declare_account(
     // write — a declaration by an unauthenticated operator is refused, exactly as `qfs account add`.
     let subject = require_signed_in(provider)?;
     let sys = open_system_conn()?;
-    record_account_consent(&sys, provider, account, &subject, app)?;
-    Ok(format!(
-        "declared {provider} account `{account}` (consent granted by {subject}; seal the token \
-         out-of-band with `qfs account add {provider}`)"
-    ))
+    record_account_consent_full(&sys, provider, account, &subject, app, secret_ref)?;
+    let sealed = if secret_ref.is_some() {
+        // Self-contained: the reference resolves the credential lazily at bind time — no separate
+        // `qfs account add` is needed.
+        format!(
+            "declared {provider} account `{account}` (consent granted by {subject}; the credential \
+             resolves at bind time from the declared SECRET reference)"
+        )
+    } else {
+        format!(
+            "declared {provider} account `{account}` (consent granted by {subject}; seal the token \
+             out-of-band with `qfs account add {provider}`)"
+        )
+    };
+    Ok(sealed)
 }
 
 /// The `REMOVE /sys/accounts/<provider>/<account>` apply (20260703040000): delete the sealed token
@@ -623,7 +649,7 @@ mod tests {
         with_fresh_home(|| {
             sign_in("op@example.com");
 
-            let msg = declare_account("google", "you@example.com", Some("client")).unwrap();
+            let msg = declare_account("google", "you@example.com", Some("client"), None).unwrap();
             assert!(msg.contains("consent granted by op@example.com"), "{msg}");
             let proj = open_system_conn().unwrap();
             for driver in GOOGLE_DRIVERS {
@@ -644,7 +670,7 @@ mod tests {
                 "declaring an account seals no token (out-of-band by rule)"
             );
 
-            declare_account("github", "work", None).unwrap();
+            declare_account("github", "work", None, None).unwrap();
             assert!(
                 secret_store::db_get_consent(&proj, "github", "work").is_some(),
                 "a cloud provider records one consent row"
@@ -686,7 +712,8 @@ mod tests {
     #[test]
     fn declare_account_refuses_without_a_signed_in_operator() {
         with_fresh_home(|| {
-            let err = declare_account("google", "you@example.com", Some("client")).unwrap_err();
+            let err =
+                declare_account("google", "you@example.com", Some("client"), None).unwrap_err();
             assert!(
                 err.contains("sign") || err.contains("qfs init"),
                 "the gate asks for sign-in: {err}"
@@ -705,7 +732,7 @@ mod tests {
     #[test]
     fn declare_account_rejects_a_non_provider() {
         with_fresh_home(|| {
-            let err = declare_account("sqlite", "x", None).unwrap_err();
+            let err = declare_account("sqlite", "x", None, None).unwrap_err();
             assert!(err.contains("not an account provider"), "{err}");
             assert!(err.contains("CREATE CONNECTION"), "actionable: {err}");
         });
@@ -719,7 +746,7 @@ mod tests {
     fn declare_and_remove_account_are_ledger_transactional() {
         with_fresh_home(|| {
             sign_in("op@example.com");
-            declare_account("github", "work", None).unwrap();
+            declare_account("github", "work", None, None).unwrap();
 
             fn account_events(sys: &Connection, verb: &str) -> i64 {
                 sys.query_row(

@@ -262,12 +262,12 @@ impl SysBackend for SystemDbBackend {
             SysNode::Accounts => self.scan_system(
                 "SELECT 'google' AS provider, connection AS account, MIN(subject) AS subject, \
                         group_concat(DISTINCT scope) AS scope, MIN(app) AS app, \
-                        MIN(granted_at) AS created_at \
+                        MIN(secret_ref) AS secret_ref, MIN(granted_at) AS created_at \
                    FROM connection_consent WHERE driver IN ('gmail','gdrive','ga') \
                   GROUP BY connection \
                  UNION ALL \
                  SELECT driver AS provider, connection AS account, subject, scope, \
-                        app, granted_at AS created_at \
+                        app, secret_ref, granted_at AS created_at \
                    FROM connection_consent WHERE driver NOT IN ('gmail','gdrive','ga') \
                  ORDER BY provider, account",
                 |r| {
@@ -278,6 +278,7 @@ impl SysBackend for SystemDbBackend {
                         nullable_text(r, 3)?,
                         nullable_text(r, 4)?,
                         nullable_text(r, 5)?,
+                        nullable_text(r, 6)?,
                     ]))
                 },
             )?,
@@ -630,7 +631,10 @@ impl SysBackend for SystemDbBackend {
         let provider = required_text(row, "provider")?;
         let account = required_text(row, "account")?;
         let app = optional_text(row, "app");
-        crate::account::declare_account(&provider, &account, app.as_deref())
+        // 20260718203325: an optional `SECRET '<ref>'` reference rides as the `secret_ref` column —
+        // a selector (`env:`/`vault:`) resolved lazily at bind time, never a token in this row.
+        let secret_ref = optional_text(row, "secret_ref");
+        crate::account::declare_account(&provider, &account, app.as_deref(), secret_ref.as_deref())
             .map_err(SysError::Backend)?;
         // The consent write is ledgered INSIDE `declare_account`'s own System-DB transaction
         // (audit + ddl_event; ticket 20260716143641) — nothing to append here.
