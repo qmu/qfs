@@ -183,7 +183,7 @@ live backlog.
       mis-homed tables declare "never a secret" in their own schema headers — the boundary was
       drawn in the wrong place, so it moves. Concern
       `project-db-configuration-events-are-not`'s How-to-Fix is superseded accordingly.)
-- [ ] **The declared-secrets adapter carries the OAuth app** (#20260718203328-declared-secrets-adapter-carries-oauth-app.md), closing the declared-model follow-up
+- [x] **The declared-secrets adapter carries the OAuth app** (#20260718203328-declared-secrets-adapter-carries-oauth-app.md), closing the declared-model follow-up
       left by the capability-tryout mission (concern `declared-model-and-scheduling-follow-ups`; its
       Chatwork live-encoding and Slack-threading remainders hand over to the live backlog)
 
@@ -315,3 +315,4 @@ live backlog.
 - 2026-07-18 — ticket added — 20260718203328-declared-secrets-adapter-carries-oauth-app.md
 - 2026-07-18 — mission replanned — declared-drivers-cloud-and-cf-and-sqlgit-and-oauth
 - 2026-07-18 — ticket archived — 20260718203325-create-account-secret-ref-bind-time-resolution.md
+- 2026-07-18 — ticket archived — 20260718203328-declared-secrets-adapter-carries-oauth-app.md
