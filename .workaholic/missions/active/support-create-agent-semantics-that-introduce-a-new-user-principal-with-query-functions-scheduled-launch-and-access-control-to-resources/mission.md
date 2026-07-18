@@ -100,7 +100,7 @@ one owner-attended live round proving a real fire and a visible denial.
 
 ### Design (blueprint-first)
 
-- [ ] The blueprint gains a ruled agent-model chapter (#20260718203330-agent-model-blueprint-chapter.md): what an agent IS (a principal, not a
+- [x] The blueprint gains a ruled agent-model chapter (#20260718203330-agent-model-blueprint-chapter.md): what an agent IS (a principal, not a
       process), where its rows live (`/server/agents` vs `/sys/…` — decided with reasons), how
       its identity reaches `DecisionContext`/`Subject`, and its secret posture (an agent never
       holds the operator's vault; grants reference handles)
@@ -191,3 +191,4 @@ one owner-attended live round proving a real fire and a visible denial.
 - 2026-07-18 — ticket added — 20260718203334-agent-scheduled-launch-sweeper.md
 - 2026-07-18 — ticket added — 20260718203335-agent-live-proof-round.md
 - 2026-07-18 — mission replanned — agent-model-ruled-and-set-ticketed
+- 2026-07-18 — ticket archived — 20260718203330-agent-model-blueprint-chapter.md

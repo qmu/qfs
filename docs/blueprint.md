@@ -1702,6 +1702,104 @@ end state):
    at the transform seam already pins a *closed* discriminant to its declared set; the open-type
    fallback is total by construction).
 
+## 19. Agents — a principal, not a process — *blueprint (rulings settled 2026-07-18; grammar/subject/functions/cadence being built)*
+
+*(Owner rulings, 2026-07-18. An **agent** is a new **user principal** the language can create:
+`CREATE AGENT <name>` grants a non-human actor a scoped reach, named query functions, and an
+optional launch cadence. The decisive framing — from which the five axis rulings follow — is that
+an agent is a **principal, not a process**: it is an identity that owns grants and saved plans, NOT
+a new runtime, scheduler, or effect path. Everything below reuses a shipped seam; a new backend, a
+new daemon, a second vault, or a new execution semantics are each **rejected**, recorded as such.
+This chapter is the contract the mission's remaining tickets implement against — the seam names are
+written exactly as those tickets cite them so implementers land on the same files.)*
+
+**A. Row home — an agent is `/server/agents` binding rows.** *(ruled)* An agent's declared shape
+lands as `ServerBindingDdl` rows on the `/server/agents` surface, read back beside `/server/jobs`,
+exactly as every other server binding is data under `/server/...` (§10). It constrains
+[`core/src/ddl/server.rs`](../packages/qfs/crates/core/src/ddl/server.rs) (a new `AgentDecl` beside
+`EndpointDecl`/`JobDecl`/`ViewDecl`, a new `ServerNode::Agents`, its credential-free schema, and the
+same `binding_config_row` → `config_row_batch` → `desugar_to_insert` desugar the other bindings
+ride). **Reason:** a binding row is already the closed-core "declared as data" home — the §16
+provision dump/restore loop round-trips it, `REMOVE` drops it through the standard gate, and a new
+backend adds zero variants. **Rejected — a durable `/sys` identity now:** minting an agent as a
+first-class `/sys` principal (a durable, cross-host identity) is more than this mission needs and
+would couple the agent to the identity crate. Recorded instead as the **FUTURE federation seam**:
+promotion of an agent binding to a durable `/sys` principal, when cross-host agent identity is
+scoped.
+
+**B. Subject — a new `Subject::Agent` variant.** *(ruled)* The agent is a **first-class policy
+subject**, via a new `Subject::Agent(String)` plus a `DecisionContext::for_agent` constructor, NOT a
+reused user/role. It constrains
+[`server/src/policy/model.rs`](../packages/qfs/crates/server/src/policy/model.rs) (the `Subject`
+enum, its `label`/`from_label` round-trip as `agent:<name>`, and `satisfies_subject`) and
+[`server/src/policy/context.rs`](../packages/qfs/crates/server/src/policy/context.rs) (the resolved
+`DecisionContext` carrying the acting agent). `FOR agent <name>` routes through the existing
+[`ast.rs` FOR clause](../packages/qfs/crates/parser/src/ast.rs) (`PolicySubjectAst`), adding no new
+grammar beyond one more contextual `agent` word beside `user`/`role`/`group` — no frozen keyword.
+**Reason:** the agent must be legible in the audit identity and the default-deny reasoning as *its
+own* actor; a distinct subject keeps a `deny_reason` that names the agent, and keeps default-deny
+honest — an agent with no matching rule is denied even on a path the operator context reaches.
+**Rejected — model the agent as a service user:** folding the agent onto `Subject::User` would blur
+the audit identity (an operator and its agent would be indistinguishable in the ledger) and weaken
+the default-deny reasoning (an agent could silently inherit an operator's `FOR user` grant). The
+pure enforcer `evaluate_with_context`
+([`server/src/policy/enforce.rs`](../packages/qfs/crates/server/src/policy/enforce.rs)) stays **pure
+— no I/O added**; the agent context is resolved up front and frozen, like every other actor.
+
+**C. Query functions — saved-plan registry rows, a gated statement.** *(ruled)* An agent function is
+a **named saved plan** — the `JobDecl` `DO <plan>` body shape **without a cadence** — stored as a row
+on the agent's `/server/agents` surface, readable exactly like a `/server/jobs` row and
+credential-free. Invocation (`qfs agent run <agent> <fn>` or equivalent) builds via
+`qfs_exec::build_plan`, **previews by default**, and commits only through the same policy +
+`IrreversibleGuard` chain the sweeper's `LiveCronCommitter` uses — evaluated under the **agent's**
+`DecisionContext`, never the operator's. **Reason:** a function is a *gated statement*, so it cannot
+shortcut the preview/commit gate; it desugars to the shipped pipeline and adds no execution
+semantics. The **§5.9 pure-lambda effects ban STANDS**: a function is a named gated statement, not a
+lambda — if functions were pure lambdas they would escape the preview/commit gate, which is exactly
+why that shape is **rejected**.
+
+**D. Fire chain — `DecisionContext` threaded to the `qfs_watchtower::Committer` seam.** *(ruled)* An
+agent with a launch cadence enters the **same sweep** as `/server/jobs` — no new scheduler. The pure
+`qfs_watchtower::cron::fire_due` decision stays pure; the gated fire runs inside the injected
+[`Committer`](../packages/qfs/crates/watchtower/src/commit.rs), and the fire path is
+[`qfs/src/sweeper.rs`](../packages/qfs/crates/qfs/src/sweeper.rs)'s `LiveCronCommitter` +
+`watchtower::Committer`. The `Committer` seam is **extended to carry the firing principal** so the
+policy gate evaluates the agent as subject (axis B) rather than the operator. Because the `Committer`
+trait lives in the wasm-clean pure core (which must not depend on `qfs-server`, per the dep-direction
+guard), the seam carries the principal as an **owned, vendor-free descriptor** (the agent name); the
+native committer constructs the `DecisionContext::for_agent` at the gate. Runs append to the agent's
+own run history through `job_runs_schema`
+([`core/src/ddl/server.rs`](../packages/qfs/crates/core/src/ddl/server.rs)), carrying the firing
+principal. **Reason:** reusing `fire_due` + `LiveCronCommitter` means the durable `last_run`,
+missed-fire collapse, and skip-if-running semantics (§10) hold for an agent for free, and the
+decision/committer split stays intact. **Rejected — a forked agent scheduler:** a second scheduler
+would duplicate the ruled cron semantics and risk them diverging.
+
+**The ruled irreversible property (recorded verbatim):** `IrreversibleGuard` with `RunMode::Server` +
+`Ack::Absent` → **an agent can NEVER fire an irreversible plan unattended.** A scheduled agent fire
+is unattended (`RunMode::Server`) with no ack path on a timer (`Ack::Absent`), so an irreversible
+`REMOVE` / declared-irreversible `CALL` is refused fail-closed — this is a **ruled property**,
+asserted by its own test, not an incidental behaviour of the guard being exercised elsewhere.
+
+**E. Secret posture — policy-subject only, daemon-mediated.** *(ruled)* There is **no second vault**.
+An agent's reach is **exactly its `ALLOW … AT` grants evaluated against its subject**, at the §8
+store boundary — the same boundary every actor's reach is enforced at. `DESCRIBE /server/agents` and
+reading an agent's function surface are **credential-free from the start**. **Reason:** the agent is
+a *policy subject* (axis B), so its authorization is already fully expressed by its grants — a
+separate credential store would be redundant surface and a second thing to leak. **Rejected — a
+per-agent credential store:** recorded instead as the **FUTURE seam**: per-agent credential handles
+(an agent holding its own resolvable secret refs), if and when an agent must act with a credential
+distinct from the daemon's.
+
+**Out-of-scope, recorded as named FUTURE seams (not omissions):**
+
+- **Federation** — promoting an agent binding to a durable `/sys` principal (axis A), for cross-host
+  agent identity.
+- **Delegation chains** — an agent granting a subset of its reach to another agent; today an agent's
+  reach is exactly its own `ALLOW … AT` grants, with no re-delegation.
+- **Per-agent credential handles** — an agent resolving its own secret refs (axis E), distinct from
+  the daemon's mediation.
+
 ## Retirement record
 
 This blueprint absorbed and retired the numbered design pile on 2026-07-04 (owner directive:
