@@ -18,6 +18,15 @@ A generic qfs consumer (the qfs-viewer column UI) drills into a table only when 
 
 The consumer half is `qfs-viewer` ticket `20260718003000` (a row's primary key becomes the next address — `@選択`). **Neither should ship until the `@選択` spelling is settled with the plan-book owner** (`strategy/docs/plan.md:175`). This ticket does not invent the grammar; it makes qfs able to serve it.
 
+## Settled (2026-07-18 design session — recorded in strategy `plan.md`「番地」)
+
+The design options below are **decided**, by the plan-book owner:
+
+- **Option 1 plus the grammar, together — and both land here.** describe **declares the key columns** per node (the identity that selects a child), and **qfs itself owns the `@` selection segment**: the lexer and the single lowering site (`/x/@A` → `|> where <key> = A`). The synthetic-path-column option is rejected. Spelling: keys only; single key `@A`; composite keys positional in declared key order, `@2024,INV-003`, values percent-encoded (column names live in describe, never in the address). Precedent that the lexer absorbs new segment kinds cleanly: quoted path segments, v0.0.77.
+- **enumerate becomes a facet.** `ls` of a table node lists **row addresses** — the read projected to (address, label), same source, default order, and limit as read. The REPL's `ls`, the viewer's column, and a REST listing are the same observation. This is the same missing root plumbing the stopped describe-surface ticket measured (`ls /sys` erroring today) — that work now has its concept instead of a false premise.
+- Secondary axes (`thread_id`, sender) are **relation segments**, a later phase with the relation-metadata layer. "No child" stays declarable — not every table is a tree.
+- **This ticket goes first in the cross-repo order.** The viewer (qfs-viewer `20260718003000`) is blocked on it and will pass trails through rather than lower them — the plan's one-lowering rule is why qfs must learn `@` before any consumer does.
+
 ## Measured (2026-07-18 against `qfs 0.0.77`, structure only — no client values read)
 
 The consumer's containment rule links a row **only when the row carries a `path` column naming a valid child**. Surveyed every live binding by `qfs describe` (archetype + column names only):
