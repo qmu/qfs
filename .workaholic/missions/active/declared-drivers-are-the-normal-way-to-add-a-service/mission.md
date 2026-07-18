@@ -145,7 +145,7 @@ live backlog.
       `cf-live-203090-unimplemented-cf-and`, rescoped 2026-07-16; its live round hands over to the
       live backlog). REST resource maps are **already declared** via the view/map → `resources` lift
       (`declared_driver.rs:233`) and are not part of this item.
-- [ ] **`sql`/`git` move onto the `path_binding` registry** (#20260718203327-sql-git-path-binding-only-and-type-roundtrips.md), and declared-path column-type coverage
+- [x] **`sql`/`git` move onto the `path_binding` registry** (#20260718203327-sql-git-path-binding-only-and-type-roundtrips.md), and declared-path column-type coverage
       broadens to NUMERIC / TIMESTAMP / UUID / JSON round-trips
       (concern `postgres-mysql-declarations-for-the-declared`)
 - [x] **A re-install heals every declaration row kind** — `driver`, `view`, and `map` lookups get the
@@ -316,3 +316,4 @@ live backlog.
 - 2026-07-18 — mission replanned — declared-drivers-cloud-and-cf-and-sqlgit-and-oauth
 - 2026-07-18 — ticket archived — 20260718203325-create-account-secret-ref-bind-time-resolution.md
 - 2026-07-18 — ticket archived — 20260718203328-declared-secrets-adapter-carries-oauth-app.md
+- 2026-07-18 — ticket archived — 20260718203327-sql-git-path-binding-only-and-type-roundtrips.md
