@@ -5,7 +5,7 @@ type: enhancement
 layer: [UX, Infrastructure]
 effort: 1h
 commit_hash:
-category: Added
+category: Changed
 depends_on: [20260717020105-markdown-browsing-over-the-qfs-collection-path.md, 20260717020106-keep-npx-distribution-true-through-the-ui-replacement.md]
 mission: qfs-viewer-mvp
 ---
@@ -73,3 +73,12 @@ pinning stale versions"); the developer lifts the hold, not the drive.
 ticked. The final demo is runnable once the hold clears (binding date
 **2026-07-24**, or earlier if the developer lifts it). No code change was
 needed or made.
+
+## Resolution (2026-07-19, same night)
+
+The developer lifted the hold (`~/.npmrc` `#min-release-age=7`), so a fresh
+`npm install` resolved with no ETARGET and `scripts/check-all.sh` exits 0.
+The four-leg demo then RAN end to end at `/home/ec2-user/projects/strategy`
+with the packed+installed `qfs-viewer` bin and qfs 0.0.80 — evidence
+(commands, `/resolve` addresses, column counts, the byte-identical revisit)
+recorded in the mission changelog. Acceptance item 7 ticked; mission 7/7.
