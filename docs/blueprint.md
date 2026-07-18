@@ -1077,6 +1077,49 @@ cursor requires).
 loading UI from a third-party origin at runtime; a side database for the console; a privileged
 private API between the console and the engine.
 
+## 14b. The address strip: qfs-viewer's second face — *implemented core; the column model is under reconsideration (2026-07-18)*
+
+§14 is the **console** (monitor / administer / analyze). qfs-viewer is a **second first-party
+face**, now a package in this repo (`packages/qfs-viewer/`): a knowledge browser that renders a
+qfs address as a horizontal **strip of columns**. Both faces are clients of a host over the
+public surfaces; neither is embedded in the binary.
+
+**The address, and prefix closure — *implemented*.** The face rests on §2 (*a path is a query
+that resolves to a set*). `GET /resolve/<address>` materialises an address as a container whose
+children are the resolution of each prefix: **column `i` is the resolution of the address's
+prefix `i`**, and any prefix of a valid address is itself valid (prefix closure). A trail — an
+address spelled with row-selection and relation segments beyond bare containment — lowers
+deterministically to a qfs-query prefix (the one-lowering rule). The row-selection segment `@`
+shipped in v0.0.80: `/x/@A` lowers to `|> where <declared key> == A`, describe declares each
+node's key columns, and effect positions refuse an unlowered selection (a red test proved
+`REMOVE /db/users/@1` previously targeted the containment path `/db/users/1` silently).
+
+**The reconsideration — *owner direction 2026-07-18, not yet settled*.** The first framing was
+"one containment path segment = one column." The owner reconsiders: the column axis is closer to
+the semantics as **the stages of a complete query pipeline, `where` included** — a column is a
+pipeline stage, not merely a path segment. Concrete anchor: in the plggmatic reference exhibit,
+the Clients / Projects **search-condition form is a `where` stage** rendered as a column.
+
+This is a generalisation of the shipped seam, not a rebuild — `@` already lowers to `where`, so
+the lowering target is unchanged. What widens is the segment's expressive range: from "select one
+row by its declared key" to "**any predicate**", with `@`-selection as the special case. It is
+consistent with the address boundary (data-determining stages belong on the canonical address;
+presentation state — sort display, column fold, highlight — does not): a search `where` is
+data-determining, so it belongs on the trail. The earlier lean "filters escape to raw
+qfs-query" was a **spelling cost, not a principle**.
+
+**The open question is the spelling.** Composite-key selection `@2024,INV-003` (positional in
+declared key order, percent-encoded) is settled. Spelling a rich predicate
+(`where amount > 100 and status = 'open'`) as a single path segment — the notation that makes
+"a search form is a column" real — is not. When settled, this section, the row-selection grammar,
+and qfs-viewer's column construction are revised together.
+
+*(This design corpus is authored **here** now: qfs's design — the path model, the address/trail,
+access control, the qfs-viewer UI integration — lives in this blueprint, not in the qmu.app plan
+book, per the owner's 2026-07-18 direction that qfs-related material bases itself in the qfs
+repository. The plan book keeps the qmu.app-level product vision. Migrating the remaining
+qfs-design sections out of the plan book into this blueprint is a tracked follow-up.)*
+
 ## 15. `transform` — the model-calling pipe stage — *implemented (grammar, execution, whole-tree routing, consent gate, three live providers); live-provider run owner-attended*
 
 *(Decision W — decided 2026-07-08, ticket 20260708002100; **shipped 2026-07-09** (transform epic
