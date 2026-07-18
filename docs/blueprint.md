@@ -449,6 +449,12 @@ A driver declares — and the declaration is everything the engine and the AI ne
 - **Pushdown** — what the driver executes natively. The compiler keeps a **truthful residual**:
   a predicate that cannot be faithfully pushed is re-filtered locally — never wrong rows.
 - **Prelude** — optional pure alias functions (`SEND`).
+- **Relations** *(blueprint, with §5)* — declared edges as first-class DESCRIBE metadata beside
+  the schema, so `describe` returns `(schema, relations)`: a `/sql` foreign key and a markdown
+  collection's declared heading (§13b) are two instances of one **relation vocabulary**. A
+  relation is what the address grammar traverses as a relation segment and what qfs-viewer draws
+  as a clickable edge lowering to a JOIN (§14b) — a human click, an AI tool call, and a
+  qfs-query stage are one move.
 
 **Types re-found the schema surface** *(blueprint, with §5)*: a driver's output nodes declare
 their shapes **as types in the one namespace**, so DESCRIBE reports type references, a
@@ -561,6 +567,21 @@ settings) *beside* `audit_tail` and `sys_ddl_events`, so every config write — 
 replayable DDL event in **one** transaction. (Historically the two config tables lived in the
 Project DB and their writes could only append a best-effort post-commit audit event — two WAL
 files share no transaction; moving the tables dissolved that class instead of bridging it.)
+
+**The subject model** *(blueprint framing over the shipped PBAC engine)*: a **principal** is any
+actor a policy's `FOR <subject>` clause names — a human, or an AI (a bot, an issued API key) — and
+the two are **the same kind of subject**, evaluated on one path through one policy engine; there is
+no separate AI authorization path. (This is the mechanism under the product's "MCP server conscious
+of its user": an agent reaches a resource by the same route and the same check as a human.) Because
+the resource unit is the **path**, one policy binds every face at once — query, console, HTTP
+endpoint (§10), and the viewer's trail (§14b) — so per-face permission drift cannot arise
+structurally. Authorization is IAM-shaped: **PBAC** (the shipped path-scoped `CREATE POLICY … ALLOW
+… FOR … AT …` grants below) combined with **RBAC** (roles bundle subjects). *RBAC as a grant stays
+blueprint*: a role today is an invitation label, deliberately **not** a grant — which role, if any,
+confers admin is an open product decision, so the who-axis wiring (carrying the request actor down
+`ReadDriver::scan` to the policy's who-axis) and role-derived grants are a named seam, not shipped.
+**Open** — the finer policy semantics: explicit-deny precedence, the evaluation point when a trail
+crosses a derived reverse edge, and the permissions of the management paths themselves.
 
 **Policy grants are path-aware** *(implemented 2026-07-04, ticket 20260704110923)*:
 
@@ -979,6 +1000,57 @@ CREATE MAP INSERT /chatwork/rooms/{room}/messages AS
   per-service Rust crates as the growth path (the compiled set shrinks toward primitives:
   wire, codecs, secrets, OAuth).
 
+## 13b. The markdown collection path — *implemented (documents/links tables, full section context); relation-vocabulary typing blueprint*
+
+*(Mission `markdown-trees-are-queryable-as-documents-and-links-tables`.)* A markdown tree is a
+first-class qfs path. `CONNECT /markdown/<name> TO markdown AT '<dir>'` declares a root (an ordinary
+`path_binding`, no secret), and the **read-only** `markdown` driver (`qfs-driver-markdown` — a pure
+string scan with no I/O in the pure crate; the binary's read facet walks the declared tree) resolves
+it to two relational tables, **read-through** so a query never sees a stale index — after files
+change, the very next query reflects them:
+
+- `/markdown/<name>/documents` — one row per file: `path` (root-relative, the canonical join id),
+  `title` (frontmatter `title`, else the first ATX heading), `frontmatter` (the parsed YAML as one
+  `json` value).
+- `/markdown/<name>/links` — one row per inline link: `source_doc`, `section_path` (the **full
+  nested ATX-heading path** at the link's line, top-level first — never collapsed to the nearest
+  heading), `target`, `target_doc` (the normalized in-tree root-relative target, `null` for an
+  external or root-escaping URL), `line`.
+
+DESCRIBE is **pure** — the driver describes both tables credential-free for any tree name. The
+shipped slice recognises frontmatter, ATX headings, and inline `[text](target)` links (setext
+headings, reference-style links, and autolinks are documented non-goals of the minimal version).
+
+**The design thesis — *the relation-vocabulary mission, blueprint*.** A heading is a field and the
+links beneath it are that field's references — **a section is a field**. `section_path` is the
+load-bearing column that makes this typeable, but the shipped slice only *extracts* it; typing it is
+the next mission. The vocabulary of relations is a **closed set declared up front**; a link under a
+heading outside the declared vocabulary is a typed-nothing edge and is **rejected with a diagnostic,
+never silently admitted** — *don't guess; declare and reject*. Reverse edges (backlinks) fall out by
+derivation without being declared, and become the derived-reverse-relation segments the address
+grammar traverses (§14b). Once typed, the markdown document graph is a first-class relation source
+(§6): the viewer, an AI agent querying qfs-query directly, the automation face, and cross-service
+JOINs all reach one relation table, and editing a document rides the same DESCRIBE → PREVIEW →
+COMMIT gate. The retired InsightBrowser indexer (heading = field, a declared relation vocabulary, a
+frontmatter index) is subsumed here; its name is retired.
+
+**Open — builtin driver, or one alias-registered set.** The collection ships as a **builtin
+driver** with its collection condition and `documents`/`links` interpretation compiled in. The
+alternative is a general **alias-registration** semantics — register any set over other paths
+(`/local`, `/s3`, `/drive`, a `union`) as a named resource — of which `/markdown` would be one
+instance; the same shape would then fall out for other file kinds (a photo's EXIF, CSV, PDF). No new
+syntax is needed: the DDL already desugars a `CREATE <noun>` to an `INSERT` into a registry path
+(§3), so a set definition is a pipeline, not a grammar addition. If alias registration lands,
+`/markdown` is demoted from builtin to one example. The running mission assumes the builtin (and
+`/markdown/<name>/{documents,links}` already reaches the engine); this question reopens the
+assumption without blocking it. **Also open**: what the closed relation set contains
+(`parent`/`concerns`/`references`/`supersedes` …) — it determines the UI that emerges — and how far
+the *interpretation* is expressible in qfs-query itself: whether `decode markdown` yields the two
+`documents`/`links` relations or one flat relation (the cross-document `links` edge appearing as a
+stage output is the crux), whether the codec's `bytes↔rows` contract runs per row of a collected
+set, and where the grammar (`decode md`, `expand`, `transform`) meets the registered codecs versus
+where interpretation stays the driver's work.
+
 ## 14. The console face: one screen, loaded not embedded — *blueprint*
 
 *(Decided 2026-07-04, ticket 20260704144737, revised same day by owner direction: qfs **has a
@@ -1076,6 +1148,102 @@ cursor requires).
 **Rejected**: presentation nouns in the grammar; embedding the SPA in the binary; the browser
 loading UI from a third-party origin at runtime; a side database for the console; a privileged
 private API between the console and the engine.
+
+## 14b. The address strip: qfs-viewer's second face — *implemented core; the column model is under reconsideration (2026-07-18)*
+
+§14 is the **console** (monitor / administer / analyze). qfs-viewer is a **second first-party
+face**, now a package in this repo (`packages/qfs-viewer/`): a knowledge browser that renders a
+qfs address as a horizontal **strip of columns**. Both faces are clients of a host over the
+public surfaces; neither is embedded in the binary.
+
+**The address, and prefix closure — *implemented*.** The face rests on §2 (*a path is a query
+that resolves to a set*). `GET /resolve/<address>` materialises an address as a container whose
+children are the resolution of each prefix: **column `i` is the resolution of the address's
+prefix `i`**, and any prefix of a valid address is itself valid (prefix closure). A trail — an
+address spelled with row-selection and relation segments beyond bare containment — lowers
+deterministically to a qfs-query prefix (the one-lowering rule). The row-selection segment `@`
+shipped in v0.0.80: `/x/@A` lowers to `|> where <declared key> == A`, describe declares each
+node's key columns, and effect positions refuse an unlowered selection (a red test proved
+`REMOVE /db/users/@1` previously targeted the containment path `/db/users/1` silently).
+
+**The reconsideration — *owner direction 2026-07-18, not yet settled*.** The first framing was
+"one containment path segment = one column." The owner reconsiders: the column axis is closer to
+the semantics as **the stages of a complete query pipeline, `where` included** — a column is a
+pipeline stage, not merely a path segment. Concrete anchor: in the plggmatic reference exhibit,
+the Clients / Projects **search-condition form is a `where` stage** rendered as a column.
+
+This is a generalisation of the shipped seam, not a rebuild — `@` already lowers to `where`, so
+the lowering target is unchanged. What widens is the segment's expressive range: from "select one
+row by its declared key" to "**any predicate**", with `@`-selection as the special case. It is
+consistent with the address boundary (data-determining stages belong on the canonical address;
+presentation state — sort display, column fold, highlight — does not): a search `where` is
+data-determining, so it belongs on the trail. The earlier lean "filters escape to raw
+qfs-query" was a **spelling cost, not a principle**.
+
+**The open question is the spelling.** Composite-key selection `@2024,INV-003` (positional in
+declared key order, percent-encoded) is settled. Spelling a rich predicate
+(`where amount > 100 and status = 'open'`) as a single path segment — the notation that makes
+"a search form is a column" real — is not. When settled, this section, the row-selection grammar,
+and qfs-viewer's column construction are revised together.
+
+**The closure principle — *`@`-selection and per-node keys shipped (v0.0.80); the enumerate root
+plumbing is a follow-up*.** Everything a read shows has an address: **a row is a node.** Every
+address answers three observations — **describe** (what is here: archetype, schema, keys, relations,
+verbs), **enumerate** (what is directly beneath: the child addresses), and **read** (the contents).
+The shell's `ls`, a viewer column, and a REST listing are one **enumerate**; a table's enumerate is
+the projection of its rows onto `(address, label)`, sharing the read's source, order, and limit —
+`cd /mail/INBOX` then `ls` lists message addresses, `cd @<id>` enters one. The space is closed under
+the language's own operations: **a statement's result rows are again statement sources.**
+
+**Keys are declared, not guessed.** A row's address derives from the row's identity, and the
+identity columns (the key) are declared **by the driver in describe** — the viewer and the shell
+never infer them: `relational_table` → the primary key, `append_log` → `id`, `blob_namespace` → the
+entry name (the containing segment itself). A table that declares no key is **childless** — a valid
+answer; not every table is a tree. A non-key identity column (`thread_id`, a sender) is reached not
+by selection but by a **relation segment**.
+
+**Relation segments and trails — *blueprint*.** A **trail** is an address spelled with segments
+beyond bare containment; a trail is not a concept beside the path — **it is one path within the path
+concept**, a wider grammar over one system. A containment-only spelling is the **canonical
+address** — the anchor of identity, storage, and permission — while a trail also carries
+**declared-relation** segments (`/…/@A/client`) and **derived reverse-edge** segments (a backlink,
+`~projects`). Relations are the first-class DESCRIBE metadata of §6: a `/sql` foreign key and a
+markdown collection's declared heading (§13b) are two instances of one **relation vocabulary**, so
+the viewer draws each as a clickable edge and lowers a click to a JOIN. Link-typed relations
+traverse identically: a markdown document web walks `…/references/@overview.md/~references` (forward
+link, then backlink) exactly as a foreign key walks `…/@A/client/~projects`; a mutual reference or a
+cycle is a valid trail. **Open**: the deterministic naming rule for derived reverse edges
+(`~projects`); whether a type-agnostic edge (`linked`/`~linked`) is admitted at all (only as a union
+view over typed edges, never a rehabilitation of untyped links); and the `/resolve` name itself.
+
+**Resolve runs as the caller's principal.** Because many trails reach one resource,
+`/resolve/<trail>` evaluates under the **caller's principal**, and RBAC binds the underlying paths
+and relations, never the trail spelling — no chain of relation segments reads what the canonical
+address cannot (§8). **A trail is not a policy loophole.**
+
+**Presets.** One viewer changes face by **preset** — *Insight* over the markdown collection path
+(§13b), *Form* over `/sql`, *Admin* over the management paths (the same paths §14's console
+administers, resolved as ordinary qfs paths rather than a separate app). A preset is a
+column-rendering choice over one engine, not a second product. The write-approval UX is not
+invented: qfs's PREVIEW renders as the scene and COMMIT is the approval — rows highlighted in order,
+approval requested last is the drawing of the data-plane safety model.
+
+**The viewer's first column — *open*.** The strip's first column cannot be derived from the request
+principal today: roles and sessions exist, but no seam carries the request's actor down the query
+path (`ReadDriver::scan` takes no principal), so no caller passes an actor to a policy's who-axis.
+Until that seam lands (an independent qfs mission — §8's named seam), the first column derives from
+what qfs declares now: `/sys/paths` (`{path, driver, account}` — the connected query paths) and
+`/sys/connections` (`{driver, connection}` — the admin view), two axes kept distinct. The *Admin*
+preset column waits on the same seam — qfs deliberately has not ruled which role grants admin, so
+the viewer must not invent that distinction.
+
+*(This design corpus is authored **here** now: qfs's design — the path model, the address/trail,
+access control, the qfs-viewer UI integration — lives in this blueprint, not in the qmu.app plan
+book, per the owner's 2026-07-18 direction that qfs-related material bases itself in the qfs
+repository. The remaining qfs-design sections — the closure/key/relation model and trails above, the
+markdown collection path (§13b), and the subject model (§8) — are now migrated here; the plan book
+keeps pointers plus the qmu.app-level product vision: the managed service, on-demand UI generation,
+and plggmatic's rendering engine.)*
 
 ## 15. `transform` — the model-calling pipe stage — *implemented (grammar, execution, whole-tree routing, consent gate, three live providers); live-provider run owner-attended*
 
