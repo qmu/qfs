@@ -120,3 +120,46 @@ for a running session, (2) read the `rvAuth`/`ptyAuth` framing (or the `control.
 protocol under `~/.claude/daemon/dispatch/`), and (3) decide whether the instructions append
 speaks that socket directly or shells out to a sanctioned client — then wire it behind the
 unchanged `SessionSource::append_instruction` seam.
+
+## Owner-attended probe result (2026-07-19 — medium identified: the teams inbox)
+
+The probe ran in the owner's unrestricted terminal (`/monitor`, 2026-07-19). Findings:
+
+- **The rendezvous/pty sockets are NOT a usable sink.** `roster.json` still lists a worker
+  (`a6239df4`) with `rendezvousSock`/`ptySock` paths under `/tmp/cc-daemon-1000/<supervisor>/`,
+  but that directory **does not exist** — `/tmp` is tmpfs and clears on reboot, so the roster
+  record is stale and the socket transport is gone. A file under `/tmp` cannot be the durable
+  steering sink (this confirms the original worry).
+- **The medium is the teams inbox.** `~/.claude/teams/<session>/inboxes/<recipient>.json` — one
+  JSON file **per recipient** (observed live: `drive-jishakabu.json`, `team-lead.json`, filenames
+  = role/member names), each a **JSON array of messages** that the running session drains (the
+  files sit at `[]` once drained). This is the concrete realisation of the `peerProtocol: 1`
+  peer transport: a SendMessage to a teammate appends a message object to that recipient's inbox
+  array. `~/.claude/daemon/dispatch/` is empty and `claude agents` exposes only launch/list
+  (`--json`, `--agent`, `--model`, …) — no send-to-session verb — so the inbox file IS the sink,
+  not a CLI shell-out.
+
+**Decision (owner, 2026-07-19):** wire steering as an **append to the target's teams inbox JSON
+array** behind the unchanged `SessionSource::append_instruction` seam; `scan_instructions` reads
+the same array back. Same-user/same-host only (the inbox dir's uid/ownership is the boundary);
+unknown session still fails closed.
+
+**Refinement (same probe):** the inbox is keyed by **member name**, and it is a **team
+construct**. `config.json` carries `{createdAt, leadAgentId, leadSessionId, members, name}`; each
+member is `{agentId: "<name>@session-<id>", name, agentType, joinedAt, tmuxPaneId, cwd,
+subscriptions, backendType}`, and `inboxes/<member-name>.json` is that member's queue. So this
+medium steers a **team session's member**; a standalone (non-team) session may have no inbox dir
+at all — the implementation must branch on whether the target session is a team member, and rule
+what steering a plain single session means (out of scope here, or a different sink). The
+session-id → inbox mapping is `member.agentId` = `<name>@session-<id>`, so the sessions relation's
+`id` resolves to the `session-<id>` half.
+
+**One detail remains for implementation:** the exact message-object schema (the keys in an inbox
+array element — `from`/`to`/`text`/`id`/`ts` or similar). Every observed inbox was empty (`[]`),
+so the shape must be captured from **one real message in flight** (snapshot a live session's
+`inboxes/<recipient>.json` the moment a message arrives) — an owner-attended one-liner at
+implementation time — or read from the CLI's own inbox-writer. Until that single capture, the
+append target (the file + JSON-array format) is known; only the element's field names are not.
+The surface therefore stays fail-closed until the schema is captured and the append is wired and
+hermetically tested (fake inbox dir behind the seam; unknown session fails closed; UPDATE/REMOVE
+still structurally rejected).
