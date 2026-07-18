@@ -52,7 +52,8 @@ use std::sync::Arc;
 
 use qfs_core::{CfsError, RowBatch};
 use qfs_driver_claude::{
-    claude_node_schema, instruction_session, node_for_path, ClaudeError, ClaudeNode, SessionSource,
+    claude_node_schema, instruction_session, node_for_path, ClaudeError, ClaudeNode, LaunchSpec,
+    SessionLauncher, SessionSource,
 };
 use qfs_exec::ReadDriver;
 use qfs_pushdown::ScanNode;
@@ -61,6 +62,12 @@ use qfs_types::{Row, Value};
 /// The env var naming the Claude Code home dir (the parent of `sessions/` and `projects/`):
 /// `QFS_CLAUDE_SESSIONS=<claude-home>`, conventionally `~/.claude`.
 const CLAUDE_ENV: &str = "QFS_CLAUDE_SESSIONS";
+
+/// The env var naming the Claude Code CLI binary the launcher spawns (`INSERT INTO
+/// /claude/sessions`). The binary path is **configuration**, never a query input; unset ⇒ the
+/// default `claude` on `PATH`. This is the ONLY trusted input to the launcher — `cwd`/`prompt`/
+/// `name` are data, passed as discrete arguments (never a shell line).
+const CLAUDE_BINARY_ENV: &str = "QFS_CLAUDE_BINARY";
 
 /// How many bytes of a transcript tail are scanned for the last visible message. Transcripts grow
 /// to many megabytes; the last visible text virtually always lives in the final few entries.
@@ -168,6 +175,90 @@ impl SessionSource for ClaudeStoreSource {
              the append is refused rather than written where no session reads"
                 .to_string(),
         ))
+    }
+}
+
+/// The on-disk [`SessionLauncher`] over the real Claude Code CLI (`INSERT INTO /claude/sessions`).
+/// Spawns a background session with `Command::new(<configured binary>)`, passing `cwd`/`prompt`/
+/// `name` as **discrete process arguments** — never a shell line (no `sh -c`, no interpolation;
+/// ticket 20260717010600 safety floor). The binary path is *configuration* (`QFS_CLAUDE_BINARY`,
+/// default `claude`), the only trusted input; the cwd/prompt/name are the query's data. Owns only
+/// the binary path — no credential, no model handle (decision W: this root calls no model).
+///
+/// ## The live spawn is owner-attended (not exercised hermetically)
+/// A real launch spends money and starts an autonomous session (mission acceptance, owner-attended
+/// live proof). Hermetic tests point `binary` at a harmless fake that echoes its argv, so the
+/// argument-passing safety floor and the id-capture path are proven without any real launch.
+pub struct ClaudeCliLauncher {
+    /// The CLI binary to spawn (configuration; default `claude`).
+    binary: PathBuf,
+}
+
+impl ClaudeCliLauncher {
+    /// Build a launcher over an explicit binary path (the test + composition seam).
+    #[must_use]
+    pub fn new(binary: impl Into<PathBuf>) -> Self {
+        Self {
+            binary: binary.into(),
+        }
+    }
+
+    /// The configured launcher: `QFS_CLAUDE_BINARY` when set and non-empty, else the default
+    /// `claude` resolved on `PATH`. Always returns a launcher (the binary need not exist until a
+    /// launch is committed — a missing binary is a structured [`ClaudeError::LaunchFailed`] then,
+    /// not at wiring time); the whole `/claude` write surface stays fail-closed via the session
+    /// store (`open_default`), which must be configured for the applier to register at all.
+    #[must_use]
+    pub fn open_default() -> Self {
+        let binary = std::env::var(CLAUDE_BINARY_ENV)
+            .ok()
+            .filter(|b| !b.is_empty())
+            .map_or_else(|| PathBuf::from("claude"), PathBuf::from);
+        Self::new(binary)
+    }
+}
+
+impl SessionLauncher for ClaudeCliLauncher {
+    fn launch(&self, spec: &LaunchSpec) -> Result<String, ClaudeError> {
+        // Validate the working directory BEFORE spawning: a bad cwd is a structured, secret-free
+        // refusal, never a half-started session.
+        let cwd = Path::new(&spec.cwd);
+        if !cwd.is_dir() {
+            return Err(ClaudeError::LaunchFailed {
+                reason: "working directory does not exist".to_string(),
+            });
+        }
+        // `<binary> --bg <prompt> [--name <name>]` in `cwd`. EVERY value crosses as a DISCRETE
+        // ARGUMENT via `.arg(..)` — no shell, no interpolation (the safety floor). A prompt full of
+        // shell metacharacters reaches the CLI verbatim as one argument.
+        let mut cmd = std::process::Command::new(&self.binary);
+        cmd.current_dir(cwd).arg("--bg").arg(&spec.prompt);
+        if let Some(name) = &spec.name {
+            cmd.arg("--name").arg(name);
+        }
+        let output = cmd.output().map_err(|e| ClaudeError::LaunchFailed {
+            reason: format!("could not spawn the session binary ({})", e.kind()),
+        })?;
+        if !output.status.success() {
+            return Err(ClaudeError::LaunchFailed {
+                reason: format!("session binary exited unsuccessfully ({})", output.status),
+            });
+        }
+        // The new session id: the launched CLI prints its handle to stdout (`--bg` returns
+        // immediately). Take the first non-empty trimmed line. The exact id-discovery contract is
+        // validated in the owner-attended live proof; hermetically a fake binary prints a known id.
+        let id = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        if id.is_empty() {
+            return Err(ClaudeError::LaunchFailed {
+                reason: "the launch produced no session id".to_string(),
+            });
+        }
+        Ok(id)
     }
 }
 
@@ -346,6 +437,8 @@ fn claude_error_reason(e: &ClaudeError) -> &'static str {
         ClaudeError::UnknownSession { .. } => "unknown_session",
         ClaudeError::Unsupported { .. } => "unsupported_verb",
         ClaudeError::MalformedEffect { .. } => "malformed_effect",
+        ClaudeError::LaunchNotConfigured => "launch_not_configured",
+        ClaudeError::LaunchFailed { .. } => "launch_failed",
         ClaudeError::Source(_) => "read_failed",
     }
 }
@@ -543,6 +636,94 @@ mod tests {
         // The test process does not set QFS_CLAUDE_SESSIONS.
         assert!(std::env::var(CLAUDE_ENV).is_err());
         assert!(ClaudeStoreSource::open_default().is_none());
+    }
+
+    /// Write an executable fake `claude` binary that records its argv + cwd to `record` and prints
+    /// a canned session id — the hermetic stand-in for the real CLI (no real launch, no spend).
+    #[cfg(unix)]
+    fn write_fake_binary(path: &Path, record: &Path, session_id: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        // `printf '%s\n' "$@"` writes each ARGUMENT on its own line — if our launcher had built a
+        // shell line instead of discrete args, the recorded argv would be mangled. `pwd` records
+        // the cwd the child ran in. Then echo the session id to stdout (what the launcher captures).
+        let script = format!(
+            "#!/bin/sh\n{{ pwd; printf 'ARG:%s\\n' \"$@\"; }} > \"{record}\"\necho '{session_id}'\n",
+            record = record.display(),
+        );
+        std::fs::write(path, script).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// The launcher passes cwd/prompt/name as DISCRETE ARGUMENTS (no shell interpolation), spawns
+    /// the configured binary in the given cwd, and captures the printed session id. The prompt is
+    /// packed with shell metacharacters to prove it reaches the CLI verbatim (never expanded).
+    #[test]
+    #[cfg(unix)]
+    fn launcher_passes_data_as_arguments_and_captures_the_id() {
+        let dir = TempDir::new().unwrap();
+        let bin = dir.path().join("fake-claude");
+        let record = dir.path().join("argv.txt");
+        write_fake_binary(&bin, &record, "s-launched-7");
+        // A workdir that exists (the launcher validates it before spawning).
+        let workdir = dir.path().join("work");
+        std::fs::create_dir(&workdir).unwrap();
+
+        let launcher = ClaudeCliLauncher::new(&bin);
+        let evil_prompt = "$(rm -rf /); `whoami`; a && b | c > d";
+        let spec = LaunchSpec {
+            cwd: workdir.to_string_lossy().into_owned(),
+            prompt: evil_prompt.to_string(),
+            name: Some("nightly-run".to_string()),
+        };
+        let id = launcher.launch(&spec).unwrap();
+        assert_eq!(id, "s-launched-7", "the printed session id is captured");
+
+        let recorded = std::fs::read_to_string(&record).unwrap();
+        let lines: Vec<&str> = recorded.lines().collect();
+        // Line 0 is the child's cwd — the launcher set current_dir.
+        assert_eq!(
+            std::fs::canonicalize(lines[0]).unwrap(),
+            std::fs::canonicalize(&workdir).unwrap(),
+            "the session ran in the requested cwd"
+        );
+        // The remaining lines are the argv, each prefixed `ARG:`. The metacharacter-laden prompt is
+        // ONE verbatim argument — proof there was no shell interpolation.
+        let args: Vec<&str> = lines[1..].iter().map(|l| &l[4..]).collect();
+        assert_eq!(args[0], "--bg");
+        assert_eq!(
+            args[1], evil_prompt,
+            "the prompt crossed as one literal argument"
+        );
+        assert_eq!(args[2], "--name");
+        assert_eq!(args[3], "nightly-run");
+    }
+
+    /// A launch whose cwd does not exist is a structured, secret-free refusal — never a spawn.
+    #[test]
+    fn launcher_rejects_a_missing_cwd() {
+        let launcher = ClaudeCliLauncher::new("claude");
+        let spec = LaunchSpec {
+            cwd: "/no/such/dir/anywhere".to_string(),
+            prompt: "go".to_string(),
+            name: None,
+        };
+        let err = launcher.launch(&spec).unwrap_err();
+        assert!(
+            matches!(err, ClaudeError::LaunchFailed { .. }),
+            "bad cwd is a structured LaunchFailed"
+        );
+        // Secret-free: names the reason, not a path payload / credential.
+        assert!(err.to_string().contains("working directory"));
+    }
+
+    /// `open_default` reads the binary path from `QFS_CLAUDE_BINARY`, defaulting to `claude`. It
+    /// always returns a launcher — the fail-closed gate is the session store, not the binary path.
+    #[test]
+    fn launcher_open_default_defaults_to_claude() {
+        // The test process sets no QFS_CLAUDE_BINARY.
+        assert!(std::env::var(CLAUDE_BINARY_ENV).is_err());
+        let launcher = ClaudeCliLauncher::open_default();
+        assert_eq!(launcher.binary, PathBuf::from("claude"));
     }
 
     /// The tail reader drops the partial first line of a mid-file window.

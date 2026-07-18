@@ -55,7 +55,7 @@ use qfs_plan::PlanApplier;
 use qfs_runtime::PlanApplierBridge;
 
 pub use applier::ClaudeApplier;
-pub use backend::{ClaudeError, SessionSource};
+pub use backend::{ClaudeError, LaunchSpec, SessionLauncher, SessionSource};
 pub use schema::{
     claude_node_schema, instruction_session, node_for_path, ClaudeNode, CLAUDE_MOUNT,
 };
@@ -88,15 +88,20 @@ impl ClaudeDriver {
     }
 }
 
-/// The per-node capability set (blueprint §6). `/claude/sessions` is READ-ONLY (`SELECT`); the
-/// instructions append-log accepts `SELECT` + the one gated reversible `INSERT` (no `UPDATE`/
-/// `REMOVE` — steering appends, it never silently removes). Single source of truth shared by
+/// The per-node capability set (blueprint §6). `/claude/sessions` is `SELECT` (read the live
+/// sessions) **plus** `INSERT` — a **session launch** (ticket 20260717010600): `INSERT INTO
+/// /claude/sessions (cwd, prompt [, name])` spawns a new session, an IRREVERSIBLE write (see
+/// [`ClaudeDriver::write_irreversible`]) routed to the launcher effect in the applier lane. No
+/// `UPDATE`/`REMOVE` — a session is not edited or deleted through this relation (teardown, if ever
+/// added, is a separate irreversible `Remove`). The instructions append-log accepts `SELECT` + the
+/// one gated reversible `INSERT` to steer. Single source of truth shared by
 /// [`Driver::capabilities`] and the parse-time verb gate.
 #[must_use]
 pub fn claude_node_capabilities(node: ClaudeNode) -> Capabilities {
     match node {
-        // The sessions relation: read-only metadata — what an agent is doing.
-        ClaudeNode::Sessions => Capabilities::from_verbs(&[Verb::Select]),
+        // The sessions relation: SELECT to read the live sessions; INSERT to LAUNCH a new one (an
+        // irreversible spawn). No UPDATE/REMOVE — a session is neither edited nor deleted here.
+        ClaudeNode::Sessions => Capabilities::from_verbs(&[Verb::Select, Verb::Insert]),
         // The instructions append-log: SELECT to read the log, a single reversible INSERT to steer.
         ClaudeNode::Instructions => Capabilities::from_verbs(&[Verb::Select, Verb::Insert]),
     }
@@ -131,6 +136,19 @@ impl Driver for ClaudeDriver {
             Some(node) => claude_node_capabilities(node),
             None => Capabilities::none(),
         }
+    }
+
+    /// A session launch — `INSERT INTO /claude/sessions` — is **irreversible** (ticket
+    /// 20260717010600, the `Remove`/`mail.send` precedent): the spawned turn runs on the operator's
+    /// account, so there is no inverse effect. The planner reads this bit onto the write node, so
+    /// `PREVIEW` surfaces the launch and `COMMIT` gates it behind the irreversible ack
+    /// (`--commit-irreversible`). Every other `/claude` write (the instructions append) is a
+    /// reversible steer, so this returns `false` for it. Pure: a path/verb classification, no I/O.
+    fn write_irreversible(&self, path: &Path, verb: Verb) -> bool {
+        matches!(
+            (node_for_path(path.as_str()), verb),
+            (Some(ClaudeNode::Sessions), Verb::Insert)
+        )
     }
 
     fn procedures(&self) -> &[ProcSig] {
@@ -209,15 +227,18 @@ mod tests {
         assert!(d.describe(&Path::new("/claude/nope")).is_err());
     }
 
-    /// Capability golden gate: `/claude/sessions` is READ-ONLY — `INSERT`/`UPDATE`/`REMOVE` are
-    /// rejected at the parse-time gate with a structured error, while `SELECT` passes. The
-    /// instructions log admits the one gated `INSERT` (a reversible steer) but NOT `UPDATE`/`REMOVE`.
+    /// Capability golden gate: `/claude/sessions` admits `SELECT` (read the live sessions) and
+    /// `INSERT` (LAUNCH a new session, ticket 20260717010600), but NOT `UPDATE`/`REMOVE` (a session
+    /// is neither edited nor deleted through this relation). The instructions log admits the one
+    /// gated reversible `INSERT` (a steer) but NOT `UPDATE`/`REMOVE`.
     #[test]
-    fn sessions_read_only_instructions_append_only() {
+    fn sessions_launchable_instructions_append_only() {
         let d = ClaudeDriver::new();
         let sessions = Path::new("/claude/sessions");
         assert!(check_capability(&d, &sessions, Verb::Select).is_ok());
-        for verb in [Verb::Insert, Verb::Update, Verb::Remove] {
+        // INSERT is now a launch (deliberate capability widening, ticket 20260717010600).
+        assert!(check_capability(&d, &sessions, Verb::Insert).is_ok());
+        for verb in [Verb::Update, Verb::Remove] {
             let err = check_capability(&d, &sessions, verb).unwrap_err();
             assert!(
                 matches!(err, CfsError::UnsupportedVerb { .. }),
@@ -232,6 +253,24 @@ mod tests {
         // Steering appends; it is never a silent reversible UPDATE/REMOVE (the safety floor).
         assert!(check_capability(&d, &instr, Verb::Update).is_err());
         assert!(check_capability(&d, &instr, Verb::Remove).is_err());
+    }
+
+    /// The launch INSERT is IRREVERSIBLE (the `Remove`/`mail.send` precedent), so PREVIEW surfaces
+    /// it and COMMIT gates it behind the irreversible ack; the reversible steering append is NOT.
+    #[test]
+    fn session_launch_is_irreversible_steer_is_not() {
+        let d = ClaudeDriver::new();
+        assert!(
+            d.write_irreversible(&Path::new("/claude/sessions"), Verb::Insert),
+            "launching a session spends money and starts an autonomous actor — irreversible"
+        );
+        assert!(
+            !d.write_irreversible(
+                &Path::new("/claude/sessions/current/instructions"),
+                Verb::Insert
+            ),
+            "steering appends a message — reversible"
+        );
     }
 
     /// Reading session metadata from a fixture (in-memory) source works — proving the read facet
