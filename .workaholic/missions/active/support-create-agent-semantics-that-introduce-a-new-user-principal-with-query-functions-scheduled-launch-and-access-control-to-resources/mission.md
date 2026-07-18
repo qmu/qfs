@@ -6,7 +6,14 @@ status: active
 created_at: 2026-07-12T04:34:26+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
-tickets: []
+drive_authorized: true
+tickets:
+  - 20260718203330-agent-model-blueprint-chapter.md
+  - 20260718203331-create-agent-grammar-registry.md
+  - 20260718203332-agent-subject-policy-gate.md
+  - 20260718203333-agent-query-functions-saved-plans.md
+  - 20260718203334-agent-scheduled-launch-sweeper.md
+  - 20260718203335-agent-live-proof-round.md
 stories: []
 concerns: []
 gate_type:
@@ -64,44 +71,66 @@ the agent subject, and the whole loop is verified live at least once in an owner
   mission adds no new model seam.
 - A console/dashboard face for agents (read-back is the relational surface first).
 
+## Experience
+
+`CREATE AGENT <name>` introduces a principal distinct from the operator, and everything an agent
+does is gated as that principal:
+
+- **An agent is a `/server/agents` registry row** — declared, `DESCRIBE`-able credential-free,
+  round-tripped by dump/restore, its runs read back beside `/server/jobs/<name>/runs`. (Promotion
+  to a durable `/sys` identity is the recorded future federation seam, not built here.)
+- **Its query functions are named saved plans** — data, readable like `/server/jobs` rows;
+  invoking one previews by default and commits through the standard gate, under the agent's
+  `DecisionContext`, never the operator's. A function is a gated statement, not a lambda; the §5.9
+  pure-lambda rule is untouched.
+- **A launch cadence fires on the shipped daemon sweeper under the agent principal** — the
+  `Committer` seam carries the agent subject so the policy gate evaluates the agent, and the run
+  lands on the agent's own run-history. An irreversible plan on a timer is refused fail-closed
+  (`RunMode::Server` + `Ack::Absent`): an agent can never fire irreversible work unattended.
+- **Access is default-deny against `Subject::Agent`** — a path the operator could reach is denied
+  to the agent unless an `ALLOW … ON <driver> AT <glob> FOR <agent>` grant names it, and every
+  fired plan carries the agent identity in the audit ledger.
+- **The agent holds no vault** — its reach is exactly its grants; per-agent credential handles are
+  a recorded future seam, not built here.
+
+The agent model is ruled in the blueprint chapter first; implementation lands hermetic-first, with
+one owner-attended live round proving a real fire and a visible denial.
+
 ## Acceptance
 
 ### Design (blueprint-first)
 
-- [ ] The blueprint gains a ruled agent-model chapter: what an agent IS (a principal, not a
+- [ ] The blueprint gains a ruled agent-model chapter (#20260718203330-agent-model-blueprint-chapter.md): what an agent IS (a principal, not a
       process), where its rows live (`/server/agents` vs `/sys/…` — decided with reasons), how
       its identity reaches `DecisionContext`/`Subject`, and its secret posture (an agent never
-      holds the operator's vault; grants reference handles) (ticket to be cut at /ticket time)
+      holds the operator's vault; grants reference handles)
 
 ### Grammar + registry
 
-- [ ] `CREATE AGENT <name> …` parses on the closed core (contextual identifiers, keyword freeze
+- [ ] `CREATE AGENT <name> …` parses on the closed core (#20260718203331-create-agent-grammar-registry.md) (contextual identifiers, keyword freeze
       intact), desugars to registry rows like every other binding, and round-trips through
-      dump/restore; `DESCRIBE` lists agents credential-free (ticket to be cut at /ticket time)
+      dump/restore; `DESCRIBE` lists agents credential-free
 
 ### Query functions
 
-- [ ] An agent declares named query functions (saved plans) readable as data; invoking one
-      previews by default and commits through the standard gates (ticket to be cut at /ticket
-      time)
+- [ ] An agent declares named query functions (saved plans) readable as data (#20260718203333-agent-query-functions-saved-plans.md); invoking one
+      previews by default and commits through the standard gates
 
 ### Scheduled launch
 
-- [ ] An agent with a launch cadence fires on the shipped daemon sweeper UNDER THE AGENT
+- [ ] An agent with a launch cadence fires on the shipped daemon sweeper (#20260718203334-agent-scheduled-launch-sweeper.md) UNDER THE AGENT
       PRINCIPAL — its runs land on the agent's own run-history read-back, hermetic-first
-      (ticket to be cut at /ticket time)
 
 ### Access control
 
-- [ ] The policy gate evaluates the AGENT as subject: a resource the agent's policy does not
+- [ ] The policy gate evaluates the AGENT as subject (#20260718203332-agent-subject-policy-gate.md): a resource the agent's policy does not
       grant is denied (default-deny floor) even when the operator could reach it; the audit
-      ledger records the agent identity on every fired plan (ticket to be cut at /ticket time)
+      ledger records the agent identity on every fired plan
 
 ### Live proof
 
-- [ ] One owner-attended live round: a scheduled agent with a narrow grant runs a real query
-      function end to end, its denied over-reach visibly recorded (ticket to be cut at /ticket
-      time)
+- [ ] One owner-attended live round (#20260718203335-agent-live-proof-round.md): a scheduled agent with a narrow grant runs a real query
+      function end to end, its denied over-reach visibly recorded
 
 ## Changelog
 
@@ -126,3 +155,39 @@ the agent subject, and the whole loop is verified live at least once in an owner
   escapes, path tokens, `#` comments and line numbers. Treat the items below as headings, not
   findings. Re-check each against the code before cutting its ticket; do not paraphrase them into a
   ticket.
+- 2026-07-18 — **Replan: the agent model ruled and the whole set ticketed** (`/monitor`
+  interrogation, AskUserQuestion). Five owner design rulings, each answering a load-bearing
+  question the 2026-07-16 warning above flagged, and each baked into the tickets and the
+  blueprint-chapter ticket as settled:
+  1. **Row home → `/server/agents` binding rows** (the `ServerBindingDdl` shape; runs read back
+     beside `/server/jobs`). Promotion to a durable `/sys` identity is recorded as the future
+     federation seam. (`/sys` identity rows and a new `/agents` realm both declined for this
+     mission.)
+  2. **Subject → a new `Subject::Agent` variant** + `DecisionContext::for_agent`, so the type
+     system itself distinguishes delegated automation from humans (namespaced-user strings and
+     role-carried identity both declined — neither makes "denied even where the operator is
+     allowed" expressible without conventions).
+  3. **Query functions → saved-plan registry rows** (the `JobDecl DO <plan>` body without a
+     cadence). The §5.9 pure-lambda effects ban STANDS — an agent function is a named gated
+     statement, not a lambda (the `LET`-lambda framing in the Goal is superseded here).
+  4. **Fire chain → thread `DecisionContext` through the `qfs_watchtower::Committer` seam** so the
+     pure enforcer evaluates the agent subject on a timer fire (today the sweeper gates
+     subject-blind by policy name). Ruled property recorded: `RunMode::Server` + `Ack::Absent`
+     means an agent can never fire an irreversible plan unattended.
+  5. **Secret posture → policy-subject only, daemon-mediated** — the agent holds no second vault;
+     its reach is exactly its `ALLOW…AT` grants against its subject. Per-agent credential handles
+     are the recorded future seam.
+  Six tickets emitted (`todo/a-qmu-jp/20260718203330`–`203335`) — blueprint chapter first, then
+  grammar+registry, subject/policy gate, query functions, scheduled launch, and the owner-attended
+  live-proof round — ordered by `depends_on`, each stamped `mission:` with pre-answered
+  `## Policies`/`## Quality Gate`. `## Experience` written; each acceptance item links its ticket
+  by `(#…)`. `drive_authorized: true` stamped: every judgement call about these exact tickets is
+  answered, the first five land hermetic-first, and the live round stays owner-gated within its own
+  ticket.
+- 2026-07-18 — ticket added — 20260718203330-agent-model-blueprint-chapter.md
+- 2026-07-18 — ticket added — 20260718203331-create-agent-grammar-registry.md
+- 2026-07-18 — ticket added — 20260718203332-agent-subject-policy-gate.md
+- 2026-07-18 — ticket added — 20260718203333-agent-query-functions-saved-plans.md
+- 2026-07-18 — ticket added — 20260718203334-agent-scheduled-launch-sweeper.md
+- 2026-07-18 — ticket added — 20260718203335-agent-live-proof-round.md
+- 2026-07-18 — mission replanned — agent-model-ruled-and-set-ticketed
