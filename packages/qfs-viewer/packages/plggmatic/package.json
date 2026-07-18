@@ -1,0 +1,55 @@
+{
+  "name": "plggmatic",
+  "version": "0.2.0",
+  "description": "A column-oriented UI design framework on the plgg family: pane alignment, a typed light/dark color scheme, and fundamental components as pure functions returning plgg-view Html",
+  "type": "module",
+  "main": "dist/index.es.js",
+  "module": "dist/index.es.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.es.js"
+    },
+    "./style": {
+      "types": "./dist/styleEntry.d.ts",
+      "default": "./dist/styleEntry.es.js"
+    }
+  },
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "plgg-bundle",
+    "prepack": "plgg-bundle",
+    "test": "tsc --noEmit && plgg-test src",
+    "tsc": "tsc --noEmit",
+    "tsc:watch": "tsc --noEmit --watch",
+    "test:watch": "plgg-test src --watch",
+    "coverage": "tsc --noEmit && plgg-test src --coverage",
+    "coverage:watch": "plgg-test src --coverage --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qmu/qfs.git"
+  },
+  "author": "qmu",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/qmu/qfs/issues"
+  },
+  "homepage": "https://github.com/qmu/qfs#readme",
+  "dependencies": {
+    "plgg": "^0.0.27",
+    "plgg-ir-language": "^0.0.1",
+    "plgg-ir-manifest": "^0.0.1",
+    "plgg-ir-syntax": "^0.0.1",
+    "plgg-view": "^0.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "plgg-bundle": "^0.0.6",
+    "plgg-test": "^0.0.5",
+    "typescript": "^6.0.3"
+  }
+}

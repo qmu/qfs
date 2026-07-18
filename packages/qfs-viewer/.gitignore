@@ -1,0 +1,45 @@
+# Node modules and logs
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Build outputs
+**/dist/
+# Transient staging/backup dirs from plgg-bundle's atomic dist publish
+# (normally renamed/removed within a build; only linger if one is killed).
+**/dist.stage/
+**/dist.old/
+**/coverage/
+
+# Per-package lockfiles are regenerated on install (this repo consumes the
+# plgg family from the npm registry, so lockfiles are environment-local).
+**/package-lock.json
+
+# Gitignored working outputs (directory-structure policy)
+outputs/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.local
+**/.claude/settings.local.json
+
+# Playwright MCP session output
+.playwright-mcp/
+**/.playwright-mcp/
