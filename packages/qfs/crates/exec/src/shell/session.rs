@@ -152,7 +152,10 @@ impl<'a> Session<'a> {
             None => self.cwd.clone(),
         };
         let abs = target.render();
-        let (driver, _) = self.engine.mounts.resolve_path(&abs).ok_or_else(|| {
+        // 番地の`@選択`: a trailing selection segment names a ROW node — describe the BASE,
+        // then refine into the row view (the same fold the one-shot form performs).
+        let (base, selection) = qfs_core::split_selection(&abs);
+        let (driver, _) = self.engine.mounts.resolve_path(base).ok_or_else(|| {
             ExecError::new(
                 ErrorKind::Capability,
                 "unknown_mount",
@@ -160,8 +163,14 @@ impl<'a> Session<'a> {
             )
             .with_path(abs.clone())
         })?;
-        let report = DescribeReport::from_driver(driver.as_ref(), &Path::new(abs))
+        let report = DescribeReport::from_driver(driver.as_ref(), &Path::new(base))
             .map_err(|e| ExecError::from_qfs(&e))?;
+        let report = match selection {
+            Some(raw) => report.for_selected_row(&abs, raw).map_err(|e| {
+                ExecError::new(ErrorKind::Usage, e.code(), e.to_string()).with_path(abs.clone())
+            })?,
+            None => report,
+        };
         Ok(Outcome::Described(Box::new(report)))
     }
 

@@ -343,9 +343,11 @@ impl Driver for SqlDriver {
                 // table definitions and its archetype is therefore `RelationalTable` (the same
                 // archetype its table LEAVES carry, which is exactly why the gate cannot read the
                 // archetype and needs this per-node fact).
+                // 番地: the catalog's children are TABLES, addressed by their name segment.
                 return Ok(
                     NodeDesc::new(Archetype::RelationalTable, catalog_node_schema())
-                        .navigable(true),
+                        .navigable(true)
+                        .child_entry_name("name"),
                 );
             }
         }
@@ -364,10 +366,12 @@ impl Driver for SqlDriver {
                         _ => "not a concrete /sql table address",
                     },
                 })?;
-        Ok(NodeDesc::new(
-            Archetype::RelationalTable,
-            table.describe_schema(),
-        ))
+        // 番地の鍵の宣言: a table row is selected by the catalog's key columns (PK, or a
+        // unique fallback — `TableCatalog::key_columns`), positionally: `/sql/db/users/@1`.
+        // A keyless relation declares no child (the builder's empty guard) — honest, not
+        // broken.
+        let key: Vec<String> = table.key_columns().iter().map(|c| c.name.clone()).collect();
+        Ok(NodeDesc::new(Archetype::RelationalTable, table.describe_schema()).child_key(key))
     }
 
     fn capabilities(&self, path: &Path) -> Capabilities {

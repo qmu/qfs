@@ -551,3 +551,85 @@ fn integer_overflow_is_bad_number_not_panic() {
     let err = lex("99999999999999999999999999").expect_err("overflow");
     assert_eq!(err.kind, LexErrorKind::BadNumber);
 }
+
+// ---- selection segments (番地の @選択, plan.md「選択セグメントの綴り」2026-07-18確定) ----
+
+#[test]
+fn selection_segment_lexes_after_a_slash() {
+    // `/mail/INBOX/@197a…` — the row-selection step. The `@` directly after `/` opens a
+    // SELECTION segment (never an empty containment name + version pin).
+    let src = "/mail/INBOX/@197a2b3c4d |> SELECT subject";
+    let toks = lex(src).expect("valid");
+    assert_spans_round_trip(src, &toks);
+    assert_eq!(
+        nodes(src)[0],
+        Token::Path(vec![
+            PathSeg::new("mail", None, false),
+            PathSeg::new("INBOX", None, false),
+            PathSeg::selection("197a2b3c4d"),
+        ]),
+        "a `@`-led segment is a selection, carrying the raw key value"
+    );
+}
+
+#[test]
+fn selection_segment_takes_composite_and_percent_encoded_keys() {
+    // Composite keys are positional in declared key order, comma-joined; values are
+    // percent-encoded (a literal comma inside a value is %2C). The lexer carries the raw
+    // text — decoding belongs to the single lowering site.
+    assert_eq!(
+        nodes("/sql/crm/invoices/@2024,INV-003")[0],
+        Token::Path(vec![
+            PathSeg::new("sql", None, false),
+            PathSeg::new("crm", None, false),
+            PathSeg::new("invoices", None, false),
+            PathSeg::selection("2024,INV-003"),
+        ]),
+        "comma joins composite key values inside one selection segment"
+    );
+    assert_eq!(
+        nodes("/sql/crm/invoices/@INV%2C003")[0],
+        Token::Path(vec![
+            PathSeg::new("sql", None, false),
+            PathSeg::new("crm", None, false),
+            PathSeg::new("invoices", None, false),
+            PathSeg::selection("INV%2C003"),
+        ]),
+        "percent-encoded values pass through verbatim"
+    );
+}
+
+#[test]
+fn selection_segment_composes_with_later_segments_and_version_pins_stay() {
+    // A selection may sit mid-path (the relation-segment phase will build on this); the
+    // lexer stays permissive and the lowering site owns placement rules.
+    assert_eq!(
+        nodes("/mail/INBOX/@abc/thread")[0],
+        Token::Path(vec![
+            PathSeg::new("mail", None, false),
+            PathSeg::new("INBOX", None, false),
+            PathSeg::selection("abc"),
+            PathSeg::new("thread", None, false),
+        ])
+    );
+    // The `name@version` pin is untouched: `@` after a NAME is still a version ref.
+    assert_eq!(
+        nodes("/git/repo/file.rs@v1.2")[0],
+        Token::Path(vec![
+            PathSeg::new("git", None, false),
+            PathSeg::new("repo", None, false),
+            PathSeg::new("file.rs", Some("v1.2".into()), false),
+        ]),
+        "a version pin binds to a segment name; only `/@` opens a selection"
+    );
+}
+
+#[test]
+fn error_empty_selection_segment() {
+    // `/x/@` selects nothing — refuse loudly, never a silent no-op.
+    let err = lex("/mail/INBOX/@").expect_err("empty selection is refused");
+    assert_eq!(err.kind, LexErrorKind::EmptySelectionSegment);
+    assert_eq!(err.kind.as_str(), "EMPTY_SELECTION_SEGMENT");
+    let err = lex("/mail/INBOX/@ |> SELECT subject").expect_err("empty selection before a stage");
+    assert_eq!(err.kind, LexErrorKind::EmptySelectionSegment);
+}

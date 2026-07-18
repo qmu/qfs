@@ -307,10 +307,12 @@ impl Driver for ObjDriver {
             reason: "not a valid object-storage address",
         })?;
         match node {
+            // 番地の鍵の宣言: an object row's `key` is the containment segment under the bucket.
             ObjNode::Bucket { .. } | ObjNode::Object { .. } => Ok(NodeDesc::new(
                 Archetype::BlobNamespace,
                 schema::object_listing_schema(),
-            )),
+            )
+            .child_entry_name("key")),
             ObjNode::Root { .. } => Err(qfs_driver::CfsError::InvalidPath {
                 path: path.as_str().to_string(),
                 reason: "an object-storage mount root is not a describable node",

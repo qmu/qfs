@@ -367,3 +367,17 @@ fn applier_seam_is_reachable_through_driver() {
     let d = FsDriver::new(roots);
     let _seam: &dyn qfs_plan::PlanApplier = d.applier();
 }
+
+#[test]
+fn describe_declares_entry_name_as_the_child_address() {
+    // 番地の鍵の宣言: a filesystem row's `name` is the containment segment itself.
+    let d = FsDriver::new(FsRoots::new());
+    assert_eq!(
+        d.describe(&Path::new("/fs/projects"))
+            .unwrap()
+            .child_address,
+        qfs_driver::ChildAddress::EntryName {
+            column: "name".to_string()
+        }
+    );
+}

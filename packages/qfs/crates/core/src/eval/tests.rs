@@ -1526,3 +1526,26 @@ fn empty_transaction_is_a_reversible_empty_plan() {
     assert!(plan.nodes().is_empty(), "an empty block has no effects");
     assert!(!plan.is_irreversible());
 }
+
+// ---- selection segments (番地の`@選択`) never reach the effect planner unlowered ----
+
+/// A selection segment lowers ONLY at the read-planning site (`qfs_core::plan`). The
+/// evaluator's paths — effect targets and effect-embedded read pipelines — refuse it
+/// loudly: rendering `/db/users/@1` by joining names would silently address the
+/// CONTAINMENT child `/db/users/1`, a different thing than what was written.
+#[test]
+fn a_selection_segment_is_refused_outside_read_planning() {
+    for stmt in [
+        "REMOVE /db/users/@1",
+        "UPDATE /db/users/@1 SET name = 'x'",
+        "INSERT INTO /db/users/@1 VALUES (1, 'a', TRUE)",
+        "/db/users/@1 |> REMOVE",
+    ] {
+        let err = eval(stmt).expect_err(stmt);
+        assert_eq!(
+            err.code(),
+            "selection_not_lowered_here",
+            "{stmt} must refuse the unlowered selection, got {err:?}"
+        );
+    }
+}

@@ -1570,7 +1570,13 @@ fn describe_json_snapshot_is_stable_per_archetype() {
     ]
   },
   "navigable": false,
-  "category": "data"
+  "category": "data",
+  "child_address": {
+    "kind": "key",
+    "columns": [
+      "ts"
+    ]
+  }
 }"#
     );
 
@@ -1610,4 +1616,39 @@ fn archetype_for_maps_every_node_kind() {
     assert_eq!(archetype_for(NodeKind::Dms), Archetype::AppendLog);
     assert_eq!(archetype_for(NodeKind::Files), Archetype::BlobNamespace);
     assert_eq!(archetype_for(NodeKind::Users), Archetype::RelationalTable);
+}
+
+#[test]
+fn describe_declares_ts_as_the_message_child_key() {
+    // 番地の鍵の宣言: a message log's rows are selected by `ts` (`…/messages/@<ts>` — the
+    // same identity the containment spelling `…/messages/<ts>/replies` already uses).
+    let (d, _) = driver();
+    for log in [
+        "/slack/acme/#general/messages",
+        "/slack/acme/#general/messages/1.2/replies",
+        "/slack/acme/dms/@alice/messages",
+    ] {
+        assert_eq!(
+            d.describe(&Path::new(log)).unwrap().child_address,
+            qfs_driver::ChildAddress::Key {
+                columns: vec!["ts".to_string()]
+            },
+            "message log {log}"
+        );
+    }
+    // Users are rows selected by `id`; reactions declare no child.
+    assert_eq!(
+        d.describe(&Path::new("/slack/acme/users"))
+            .unwrap()
+            .child_address,
+        qfs_driver::ChildAddress::Key {
+            columns: vec!["id".to_string()]
+        }
+    );
+    assert_eq!(
+        d.describe(&Path::new("/slack/acme/#general/messages/1.2/reactions"))
+            .unwrap()
+            .child_address,
+        qfs_driver::ChildAddress::None
+    );
 }

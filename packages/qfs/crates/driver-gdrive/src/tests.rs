@@ -1762,3 +1762,22 @@ async fn multi_row_remove_fails_closed() {
     );
     assert!(mock.recorded().is_empty(), "nothing was trashed");
 }
+
+#[test]
+fn describe_declares_entry_name_as_the_child_address() {
+    // 番地の鍵の宣言: a Drive row's `name` IS the containment segment (`/drive/my/<name>`).
+    // Measured 2026-07-18: rows carry `id`/`name`/`parents` and NO `path` column — the
+    // truthful child declaration is the entry name, never a promised `path`.
+    let (d, _) = driver_with_mock();
+    let desc = d.describe(&Path::new("/drive/my/reports")).unwrap();
+    assert_eq!(
+        desc.child_address,
+        qfs_driver::ChildAddress::EntryName {
+            column: "name".to_string()
+        }
+    );
+    assert!(
+        desc.schema.column("path").is_none(),
+        "no `path` column exists — describe must not imply one"
+    );
+}

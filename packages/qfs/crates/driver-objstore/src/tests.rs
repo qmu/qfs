@@ -602,3 +602,15 @@ async fn r2_driver_commits_through_its_own_bridge_id() {
         .iter()
         .any(|c| matches!(c, RecordedCall::Put { .. })));
 }
+
+#[test]
+fn describe_declares_the_key_column_as_entry_name() {
+    // 番地の鍵の宣言: an object row's `key` is the containment segment under the bucket.
+    let d = s3_with(Arc::new(MockObjectBackend::new()));
+    assert_eq!(
+        d.describe(&Path::new("/s3/assets")).unwrap().child_address,
+        qfs_driver::ChildAddress::EntryName {
+            column: "key".to_string()
+        }
+    );
+}

@@ -952,8 +952,13 @@ fn run_describe_inner(
         ExecError::new(ErrorKind::Capability, e.code(), e.to_string()).with_path(path)
     })?;
 
+    // 番地の`@選択` (plan.md, 閉包の原理): a trailing selection segment names a ROW, and a
+    // row is a node — it answers describe. Split it off, describe the BASE, then refine the
+    // report into the row view (validated against the driver's DECLARED child key).
+    let (base, selection) = qfs_core::split_selection(&canonical);
+
     // Resolve the path to its describe-only driver (longest-mount-prefix match).
-    let (driver, _rest) = describe.resolve_path(&canonical).ok_or_else(|| {
+    let (driver, _rest) = describe.resolve_path(base).ok_or_else(|| {
         ExecError::new(
             ErrorKind::Capability,
             "unknown_mount",
@@ -964,9 +969,14 @@ fn run_describe_inner(
 
     // Fold the introspective half into the report — pure, no I/O, no creds (described at the
     // peeled SERVICE path: the driver speaks its own mount namespace).
-    let report =
-        qfs_core::DescribeReport::from_driver(driver.as_ref(), &qfs_core::Path::new(&canonical))
-            .map_err(|e| ExecError::from_qfs(&e))?;
+    let report = qfs_core::DescribeReport::from_driver(driver.as_ref(), &qfs_core::Path::new(base))
+        .map_err(|e| ExecError::from_qfs(&e))?;
+    let report = match selection {
+        Some(raw) => report.for_selected_row(&canonical, raw).map_err(|e| {
+            ExecError::new(ErrorKind::Usage, e.code(), e.to_string()).with_path(path)
+        })?,
+        None => report,
+    };
 
     let renderer = fmt.renderer();
     renderer.describe(&report, streams.out).map_err(io_err)?;

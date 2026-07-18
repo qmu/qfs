@@ -260,7 +260,16 @@ impl Driver for SlackDriver {
             SlackNode::File { .. } => crate::dto::FileDto::content_schema(),
             _ => schema_for(kind),
         };
-        Ok(NodeDesc::new(archetype_for(kind), schema))
+        let desc = NodeDesc::new(archetype_for(kind), schema);
+        // 番地の鍵の宣言: a message log's rows are selected by `ts` (the same identity the
+        // containment spelling `…/messages/<ts>/replies` already uses); the user directory
+        // by `id`. Reactions/files declare no child.
+        let desc = match kind {
+            NodeKind::Messages | NodeKind::Replies | NodeKind::Dms => desc.child_key(["ts"]),
+            NodeKind::Users => desc.child_key(["id"]),
+            _ => desc,
+        };
+        Ok(desc)
     }
 
     fn capabilities(&self, path: &Path) -> Capabilities {

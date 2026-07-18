@@ -119,8 +119,9 @@ pipeline      = source , { "|>" , stage } ;
 
 source        = path | id_ref | name ;   (* name = a let-bound relation *)
 path          = "/" , segment , { "/" , segment } ;   (* absolute only, no cwd *)
-segment       = bare_segment | quoted_segment ;
+segment       = bare_segment | quoted_segment | selection_segment ;
 quoted_segment = "'" , { any_char_except_quote_or_slash | "''" } , "'" ;
+selection_segment = "@" , key_value , { "," , key_value } ;   (* the row address *)
 id_ref        = "id:" , token ;
 
 (* A QUOTED segment carries any character literally — spaces, `?`, `#`, `&`, `(`, Unicode —  *)
@@ -128,6 +129,14 @@ id_ref        = "id:" , token ;
 (* Escape a quote by doubling it (''). A quoted `?`/`*` is a LITERAL character, never a      *)
 (* glob: /drive/my/'report?.pdf' is one file, /drive/my/report?.pdf still globs. A `/` may   *)
 (* not appear inside quotes (the separator is structural). Bare segments are unchanged.      *)
+
+(* A SELECTION segment (`@` directly after `/`) is a ROW address: `/mail/INBOX/@<id>`       *)
+(* lowers deterministically — at one site, for every consumer — to `|> where <key> == <id>`, *)
+(* where <key> is the key column(s) the node's DESCRIBE declares (`child_address`). It must  *)
+(* be the FINAL segment. Composite keys list values positionally in declared key order       *)
+(* (`@2024,INV-003`); values are percent-encoded (`%2C` = a literal comma). A node declaring *)
+(* no child key refuses the form; blob children are named segments, never `@` selections.    *)
+(* The `name@version` pin is distinct: `@` after a NAME is a version ref, not a selection.   *)
 
 stage         = query_stage | effect_stage | codec_stage | call_stage ;
 
