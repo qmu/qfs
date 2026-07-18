@@ -100,3 +100,31 @@ Drive-readiness of the two remaining gates:
 Dependency note: the `depends_on: 20260717010500` edge exists because QG2 composes launch with
 steering. The **hermetic implementation** (QG1+QG3) does not need steering wired — only the
 live-proof gate does. A driving session may land QG1+QG3 and leave QG2 for an owner-attended run.
+
+## Status update (2026-07-19 — hermetic launch DONE; only the owner-attended live fire remains)
+
+**QG3 (hermetic) is complete** (commit `a73fa01`, qfs `v0.0.81`). Shipped:
+
+- **Grammar + capability.** `INSERT INTO /hosts/<host>/claude/sessions` is a session launch; the
+  `Sessions` relation widened `Select` → `Select+Insert` deliberately. The qfs surface names the
+  columns after `VALUES`: `insert into /hosts/local/claude/sessions values (cwd, prompt, name)
+  ('…','…','…') returning id`. No `CREATE SESSION` noun. `RETURNING id` types the projection
+  against the sessions schema.
+- **Irreversible gate.** `ClaudeDriver::write_irreversible` flags the sessions `INSERT`
+  irreversible (the `Remove`/`mail.send` precedent). Verified end-to-end on the built binary:
+  PREVIEW is effect-free and marks it irreversible; `--commit` without `--commit-irreversible`
+  fails closed (`irreversible_ack_required`); `--commit --commit-irreversible` spawns.
+- **Launcher seam in the applier lane.** A new `SessionLauncher` trait + `LaunchSpec` (pure driver
+  crate, I/O-free); the real `ClaudeCliLauncher` (binary crate) runs `Command::new(<configured
+  binary — `QFS_CLAUDE_BINARY`, default `claude`)` with cwd/prompt/name as **discrete arguments**,
+  never a shell line. Optional `name` accepted. Fail-closed: no store ⇒ no applier; no launcher ⇒
+  the `INSERT` is refused.
+- **Hermetic tests** behind the fake launcher seam: spawn/route, name-optional, no-launcher
+  fail-closed, malformed payload; plus real-launcher tests (a shell-metacharacter prompt lands
+  verbatim as one argv entry; bad cwd → structured secret-free `LaunchFailed`; store-unconfigured).
+
+**QG2 (live proof) is NOT done and the launch acceptance item is deliberately NOT ticked.** The
+real, money-spending launch composed with steering (capability 4) is the owner-attended proof
+(mission acceptance ~164); it composes with the steering medium ruled in `20260717010500` and must
+run in the owner's attended session. This ticket therefore **stays in `todo`** — only the
+owner-attended live fire remains.
