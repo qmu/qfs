@@ -412,3 +412,21 @@ appended as (#…) markers when each ticket is filed.
   relocation is a no-op there — which is why only the packed path sees it.
 - 2026-07-17 — story reported — work-20260717-150001.md
 - 2026-07-19 — mission replanned — night-monitor-authorize-final-demo
+- 2026-07-19 — **Final-demo attempt BLOCKED by the npm min-release-age
+  hold; acceptance item 7 NOT ticked, ticket kept in todo** (night
+  /monitor). The demo needs the viewer built and installed, and the
+  developer's `~/.npmrc` `min-release-age=7` (npm `before=2026-07-12`)
+  excludes the two releases it requires: `plgg-bundle 0.0.6` (2026-07-13,
+  clears ~2026-07-20) fails `npm install` first with `ETARGET — No matching
+  version found for plgg-bundle@^0.0.6 with a date before 2026/7/12`, and
+  the binding one is `plggmatic ^0.2.0` — the UI engine required to *run*
+  the viewer — whose only satisfying version 0.2.0 (2026-07-17) clears
+  ~**2026-07-24**. No `node_modules` exists anywhere on the machine (main
+  checkout, other worktrees, global, packed `.tgz`, prebuilt `dist/` all
+  absent), so the "reuse the main checkout's deps" fallback had nothing to
+  copy; pinning/bypassing is the developer's call per Considerations, not
+  the drive's. Real evidence, not prose: qfs 0.0.80 on PATH and the
+  qmu/strategy root (docs/ present) were both verified — the substrate is
+  ready; only the JS install is held. Re-run the demo once the hold clears
+  (2026-07-24, or earlier if lifted) —
+  20260717020107-run-the-final-demo-end-to-end.md
