@@ -253,9 +253,11 @@ pub type ConnectionLauncher<'a> = dyn Fn(&ConnectionAction) -> i32 + 'a;
 
 /// A parsed `qfs identity <verb>` request, handed to the binary-injected [`IdentityLauncher`] (t45).
 /// This is the AUTHENTICATION surface — local sign-up + a session-less `whoami` (decision §4.1:
-/// identity is not authorization; sessions land in t46). Like [`ConnectionAction`], the **password is
-/// never carried here** (it would leak into argv / shell history / `ps`); the launcher reads it from
-/// stdin. The email is a handle (safe metadata).
+/// identity is not authorization). Server-side sessions (t46) have **shipped**, but they serve the
+/// local web / dashboard face: no session rides a CLI invocation, so this surface stays session-less
+/// by design. Like [`ConnectionAction`], the **password is never carried here** (it would leak into
+/// argv / shell history / `ps`); the launcher reads it from stdin. The email is a handle (safe
+/// metadata).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityAction {
     /// `identity whoami [email]` — print a user's email + id (NEVER the password hash). With no
