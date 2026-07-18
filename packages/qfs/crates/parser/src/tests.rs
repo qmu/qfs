@@ -1215,6 +1215,53 @@ fn create_map_call_signature_and_irreversible() {
 }
 
 #[test]
+fn create_sql_resource_desugars_with_dialect_endpoint_and_table_catalog() {
+    // ticket 20260718203326: the declared sql-resource arm — a sqlite-dialect SQL endpoint over a
+    // wire query verb, with the relation catalog declared INLINE. Desugars to a `kind='sql'`
+    // /sys/drivers row whose `body` carries the dialect, the `/http/<driver>/…` query endpoint, and
+    // the table catalog (the declared twin of a mount-time D1 introspection).
+    let e = effect_of(parse_ok(
+        "CREATE SQL /cloudflare/d1/{database} \
+         OVER /http/cloudflare/accounts/{account}/d1/database/{database}/query \
+         TABLES ( users ( id text PRIMARY KEY, email text NOT NULL, name text ), \
+                  orders ( id text PRIMARY KEY, total int ) )",
+    ));
+    assert_eq!(target_path(&e), "/sys/drivers");
+    assert_eq!(values_cell(&e, "kind").as_deref(), Some("sql"));
+    assert_eq!(
+        values_cell(&e, "name").as_deref(),
+        Some("/cloudflare/d1/{database}")
+    );
+    let body = values_cell(&e, "body").unwrap();
+    assert!(body.contains("\"dialect\":\"sqlite\""), "body: {body}");
+    assert!(
+        body.contains("/http/cloudflare/accounts/{account}/d1/database/{database}/query"),
+        "body carries the query endpoint: {body}"
+    );
+    assert!(body.contains("users") && body.contains("orders") && body.contains("email"));
+    // No secret and no irreversible flag: a declared sql-resource is credential-free by construction.
+    assert!(!values_bool(&e, "irreversible"));
+}
+
+#[test]
+fn create_sql_resource_defaults_dialect_and_rejects_a_non_sqlite_dialect() {
+    // DIALECT is optional (default sqlite). Only sqlite is served today (the driver-cf planner
+    // dialect); any other dialect is a crisp parse error, never a silent mismatch.
+    assert!(
+        parse_statement("CREATE SQL /cf/d1/{db} OVER /http/cf/query TABLES ( t ( id text ) )")
+            .is_ok()
+    );
+    assert!(parse_statement(
+        "CREATE SQL /cf/d1/{db} DIALECT SQLITE OVER /http/cf/query TABLES ( t ( id text ) )"
+    )
+    .is_ok());
+    assert!(parse_statement(
+        "CREATE SQL /cf/d1/{db} DIALECT postgres OVER /http/cf/query TABLES ( t ( id text ) )"
+    )
+    .is_err());
+}
+
+#[test]
 fn server_binding_view_with_bare_ident_still_parses_as_ddl() {
     // Dispatch regression + PRINCIPLE (§5.5): the two `CREATE VIEW` forms are told apart by what KIND
     // of thing the view's OWN name denotes. A PATH name (`CREATE VIEW /chatwork/rooms`) is a
@@ -1261,6 +1308,10 @@ fn declared_driver_nouns_add_no_frozen_keyword() {
         "next",
         "param",
         "max",
+        "sql",
+        "over",
+        "tables",
+        "dialect",
     ] {
         assert!(
             !KEYWORDS.contains(&w),

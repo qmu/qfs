@@ -2331,6 +2331,101 @@ fn create_map_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
     Ok(insert_sys_drivers(values, create))
 }
 
+/// One relation in a `CREATE SQL … TABLES (…)` catalog: `<name> ( <col> <type> [constraints], … )`,
+/// reusing the `CREATE TABLE`/`CREATE TYPE` column-list parser (`table_column_def`).
+struct SqlResourceTable {
+    name: String,
+    columns: Vec<TableColumnDef>,
+}
+
+/// Parse one `TABLES (…)` entry: `<name> ( <column-def>, … )`. At least one column.
+fn sql_resource_table(input: &mut Stream<'_>) -> ModalResult<SqlResourceTable> {
+    let name = ident(input)?.node;
+    let _ = cut_err(punct(Token::LParen)).parse_next(input)?;
+    let columns: Vec<TableColumnDef> =
+        cut_err(separated(1.., table_column_def, punct(Token::Comma))).parse_next(input)?;
+    let _ = cut_err(punct(Token::RParen)).parse_next(input)?;
+    Ok(SqlResourceTable { name, columns })
+}
+
+/// `CREATE SQL /<path> [DIALECT SQLITE] OVER /<wire-endpoint> TABLES ( <table>(<cols>), … )` — a
+/// declared **sql-resource** (blueprint §13): a sqlite-dialect SQL endpoint served over a wire query
+/// verb, with the relation catalog declared INLINE (the declared twin of a mount-time D1
+/// introspection — no `introspect_d1` at mount). Desugars to `INSERT INTO /sys/drivers` with
+/// `kind='sql'`; the whole descriptor (dialect, the `/http/<driver>/…` query endpoint, and the table
+/// catalog) is stored as JSON in `body`, reusing the existing 9-column row shape. `SQL`/`DIALECT`/
+/// `OVER`/`TABLES` are contextual UPPERCASE idents — zero new frozen keywords. Carries NO secret (the
+/// token stays in the account layer, like every declared form). Only the `sqlite` dialect is served
+/// today (the D1/driver-cf planner dialect); any other dialect is a crisp parse error.
+fn create_sql_resource_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
+    let create = kw(Keyword::Create).parse_next(input)?;
+    let _ = word("SQL").parse_next(input)?;
+    // Committed after the noun: a malformed CREATE SQL is a crisp error, never a fallthrough.
+    let path = cut_err(path_expr).parse_next(input)?;
+    validate_template_path(&path)?;
+    let dialect = opt(preceded(word("DIALECT"), cut_err(ident)))
+        .parse_next(input)?
+        .map_or_else(|| "sqlite".to_string(), |d| d.node.to_ascii_lowercase());
+    if dialect != "sqlite" {
+        return Err(ErrMode::Cut(ContextError::new()));
+    }
+    let _ = cut_err(word("OVER")).parse_next(input)?;
+    let endpoint = cut_err(path_expr).parse_next(input)?;
+    validate_template_path(&endpoint)?;
+    let _ = cut_err(word("TABLES")).parse_next(input)?;
+    let _ = cut_err(punct(Token::LParen)).parse_next(input)?;
+    let tables: Vec<SqlResourceTable> =
+        cut_err(separated(1.., sql_resource_table, punct(Token::Comma))).parse_next(input)?;
+    let _ = cut_err(punct(Token::RParen)).parse_next(input)?;
+    let body = sql_resource_body_json(&dialect, &canonical_path(&endpoint), &tables);
+    let name = canonical_path(&path);
+    let values = driver_row_values(
+        "sql",
+        &name,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(&body),
+        false,
+    );
+    Ok(insert_sys_drivers(values, create))
+}
+
+/// Render a declared sql-resource's body to `{"dialect":…,"query_endpoint":…,"tables":[…]}`. Each
+/// table is `{"name":…,"columns":[{name,type,nullable,primary_key,unique}]}` — the SAME column shape
+/// `CREATE TYPE`/`CREATE TABLE` lower to, so the driver-cf D1 catalog lift reads one column shape.
+fn sql_resource_body_json(
+    dialect: &str,
+    query_endpoint: &str,
+    tables: &[SqlResourceTable],
+) -> String {
+    let tables_json: Vec<serde_json::Value> = tables
+        .iter()
+        .map(|t| {
+            let columns: Vec<DeclaredColumn> = t
+                .columns
+                .iter()
+                .map(|c| DeclaredColumn {
+                    name: c.name.clone(),
+                    ty: c.ty.clone(),
+                    nullable: c.nullable,
+                    primary_key: c.primary_key,
+                    unique: c.unique,
+                })
+                .collect();
+            serde_json::json!({ "name": t.name, "columns": columns })
+        })
+        .collect();
+    serde_json::json!({
+        "dialect": dialect,
+        "query_endpoint": query_endpoint,
+        "tables": tables_json,
+    })
+    .to_string()
+}
+
 // ---- CREATE ACCOUNT — in-language account declaration (20260703040000) -------
 //
 // `CREATE ACCOUNT <provider> '<account>'` declares a service account (google/github/slack/objstore/
@@ -3152,7 +3247,11 @@ fn inner_statement(input: &mut Stream<'_>) -> ModalResult<Statement> {
             create_driver_stmt,
             create_type_stmt,
             create_declared_view_stmt,
-            create_map_stmt,
+            // `CREATE MAP` and `CREATE SQL` share one nested `alt` so the CREATE-family tuple stays
+            // within winnow's alt arity. `CREATE SQL /<path> … TABLES (…)` is the declared
+            // sql-resource arm — a sqlite-dialect SQL endpoint over a wire query verb (ticket
+            // 20260718203326). Both backtrack cleanly when the noun after `CREATE` doesn't match.
+            alt((create_map_stmt, create_sql_resource_stmt)),
             // `CREATE ACCOUNT <provider> '<label>'` (20260703040000): the in-language account
             // declaration, desugars to `INSERT INTO /sys/accounts`. Backtracks cleanly when the
             // noun after `CREATE` is not `ACCOUNT`.

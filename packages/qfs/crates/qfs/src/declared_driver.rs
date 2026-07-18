@@ -709,6 +709,169 @@ pub fn conformance(
     }
 }
 
+// ---------------------------------------------------------------------------
+// §13 declared sql-resources — a sqlite-dialect SQL endpoint over a wire query verb
+// (blueprint §13 self-hosting ratchet, ticket 20260718203326)
+// ---------------------------------------------------------------------------
+
+/// A declared **sql-resource**: a sqlite-dialect SQL endpoint served over a wire query verb, its
+/// relation catalog declared INLINE. Loaded from a `kind='sql'` `/sys/drivers` row (the `CREATE SQL
+/// … TABLES (…)` desugar) — the declared twin of a mount-time D1 introspection, so the D1 relational
+/// surface reads from the committed declaration rather than an `introspect_d1` round-trip. The D1
+/// bridge lifts this onto the driver-cf planner: [`Self::catalog`] yields the
+/// `qfs_driver_sql::Catalog` handed to `D1Database::discovered`, and `query_endpoint` names the
+/// `/http/<driver>/…` wire the SQL runs over. Carries no token (credential-free by construction).
+#[derive(Debug, Clone)]
+pub struct DeclaredSqlResource {
+    /// The mount path template (`/cloudflare/d1/{database}`).
+    pub path: String,
+    /// The SQL dialect — `sqlite` is the only served dialect today (the driver-cf planner dialect).
+    pub dialect: String,
+    /// The wire query endpoint the SQL runs over (`/http/<driver>/…/query`).
+    pub query_endpoint: String,
+    /// The declared relation catalog (tables + their columns).
+    pub tables: Vec<DeclaredSqlTable>,
+}
+
+/// One declared relation in a sql-resource's inline catalog: its name and its columns (the
+/// `CREATE TYPE`/`CREATE TABLE` column shape, `qfs_types::DeclaredColumn`).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DeclaredSqlTable {
+    pub name: String,
+    #[serde(default)]
+    pub columns: Vec<qfs_types::DeclaredColumn>,
+}
+
+/// The `body` JSON shape of a `kind='sql'` row, matching the parser's `sql_resource_body_json`.
+#[derive(serde::Deserialize)]
+struct SqlResourceBody {
+    #[serde(default = "default_sqlite_dialect")]
+    dialect: String,
+    query_endpoint: String,
+    #[serde(default)]
+    tables: Vec<DeclaredSqlTable>,
+}
+
+fn default_sqlite_dialect() -> String {
+    "sqlite".to_string()
+}
+
+impl DeclaredSqlResource {
+    /// The `qfs_driver_sql::Catalog` this resource declares — the lift the D1 bridge hands to
+    /// `D1Database::discovered` in place of a mount-time `introspect_d1`. Column SQL types map
+    /// through the sqlite dialect exactly as the compiled introspection did (`cf.rs::introspect_d1`).
+    #[must_use]
+    pub fn catalog(&self) -> qfs_driver_sql::Catalog {
+        use qfs_driver_sql::{Catalog, ColumnDef, Dialect, RelationKind, TableCatalog};
+        let tables = self
+            .tables
+            .iter()
+            .map(|t| {
+                let columns = t
+                    .columns
+                    .iter()
+                    .map(|c| {
+                        ColumnDef::new(
+                            c.name.clone(),
+                            Dialect::Sqlite.map_type(c.ty.as_str()),
+                            c.nullable,
+                            c.primary_key,
+                            c.primary_key,
+                        )
+                    })
+                    .collect();
+                TableCatalog::new(t.name.clone(), RelationKind::Table, columns)
+            })
+            .collect();
+        Catalog::new(tables)
+    }
+
+    /// §13 host confinement: the wire `query_endpoint` may address ONLY this resource's own
+    /// `/http/<driver>` namespace (the driver is the resource path's leading segment). A foreign
+    /// `/http/<x>` is the anti-exfiltration violation — dropped at load (FAIL CLOSED), mirroring the
+    /// declared-driver body confinement.
+    fn confined(&self) -> bool {
+        match leading_segment(&self.path) {
+            Some(driver) => sql_endpoint_confined(driver, &self.query_endpoint),
+            None => false,
+        }
+    }
+}
+
+/// Whether a sql-resource's wire endpoint is confined to `driver_name`'s own `/http/<driver>`
+/// namespace. A non-`/http` endpoint is not a wire foreign-host escape (vacuously confined); an
+/// `/http` endpoint whose second segment is not the driver is rejected.
+fn sql_endpoint_confined(driver_name: &str, endpoint: &str) -> bool {
+    let mut segs = endpoint.trim_start_matches('/').split('/');
+    match (segs.next(), segs.next()) {
+        (Some("http"), Some(second)) => second == driver_name,
+        (Some("http"), None) => false,
+        _ => true,
+    }
+}
+
+/// Load the declared sql-resources (`kind='sql'` rows) from `sys_drivers` — a pure local read, no
+/// network. Newest declaration per path wins (`ORDER BY id DESC`), matching `types_from_conn`.
+/// Foreign-host resources are dropped at load (§13 confinement), mirroring `load_declared_drivers`;
+/// the drop is reported, never silent.
+#[must_use]
+pub fn load_declared_sql_resources() -> Vec<DeclaredSqlResource> {
+    let Ok(Some(sys)) = crate::store::open_system_db() else {
+        return Vec::new();
+    };
+    let conn = sys.into_db().into_connection();
+    let mut resources = sql_resources_from_conn(&conn).unwrap_or_default();
+    resources.retain(|r| {
+        let ok = r.confined();
+        if !ok {
+            tracing::warn!(
+                resource = %r.path,
+                "declared sql-resource dropped: its query endpoint addresses a foreign host (§13 confinement)"
+            );
+        }
+        ok
+    });
+    resources
+}
+
+fn sql_resources_from_conn(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<DeclaredSqlResource>, rusqlite::Error> {
+    let mut stmt =
+        conn.prepare("SELECT name, body FROM sys_drivers WHERE kind = 'sql' ORDER BY id DESC")?;
+    let rows = stmt
+        .query_map([], |r| {
+            let path: String = r.get(0)?;
+            let body: Option<String> = r.get(1)?;
+            Ok((path, body))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    // First-seen (newest) per path wins; a superseded append-era row is skipped.
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (path, body) in rows {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        if let Some(resource) = parse_sql_resource(&path, body.as_deref().unwrap_or("")) {
+            out.push(resource);
+        }
+    }
+    Ok(out)
+}
+
+/// Rehydrate a `kind='sql'` row's `body` JSON into a [`DeclaredSqlResource`]. A malformed body (or one
+/// missing the required `query_endpoint`) is skipped rather than aborting the registry.
+fn parse_sql_resource(path: &str, body_json: &str) -> Option<DeclaredSqlResource> {
+    let body: SqlResourceBody = serde_json::from_str(body_json).ok()?;
+    Some(DeclaredSqlResource {
+        path: path.to_string(),
+        dialect: body.dialect,
+        query_endpoint: body.query_endpoint,
+        tables: body.tables,
+    })
+}
+
 /// The shared secrets store a live declared driver resolves its auth `SecretRef` through. A
 /// `CONNECT ... SECRET '<ref>'` path binding is lifted into the driver's default auth key, so the
 /// generated `SecretRef(driver, "default")` can resolve `env:<VAR>` / `vault:<driver>/<conn>` at use
@@ -2547,5 +2710,112 @@ mod tests {
             "a map differing only in verb is its own declaration: {map_bodies:?}"
         );
         assert_eq!(d.maps.len(), 2, "one row per map key: {map_bodies:?}");
+    }
+
+    // --- §13 declared sql-resources (ticket 20260718203326) ---------------------------------
+
+    const CF_D1_BODY: &str = r#"{"dialect":"sqlite",
+        "query_endpoint":"/http/cloudflare/accounts/{account}/d1/database/{database}/query",
+        "tables":[
+          {"name":"users","columns":[
+            {"name":"id","type":"text","nullable":false,"primary_key":true,"unique":false},
+            {"name":"email","type":"text","nullable":false,"primary_key":false,"unique":false}]},
+          {"name":"orders","columns":[
+            {"name":"id","type":"text","nullable":false,"primary_key":true,"unique":false}]}
+        ]}"#;
+
+    fn seed_sql_row(path: &str, body: &str) {
+        let sys = crate::store::open_system_db()
+            .unwrap()
+            .expect("system db resolves");
+        let conn = sys.into_db().into_connection();
+        conn.execute(
+            "INSERT INTO sys_drivers (kind, name, body, irreversible) VALUES ('sql', ?1, ?2, 0)",
+            rusqlite::params![path, body],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn load_declared_sql_resources_reads_the_committed_declaration() {
+        // The D1 relational surface comes from the committed `kind='sql'` row (the declared twin of a
+        // mount-time introspection), not from `introspect_d1`: the loader rehydrates the dialect, the
+        // wire query endpoint, and the inline table catalog with zero network.
+        let _home = crate::testenv::HomeGuard::new();
+        seed_sql_row("/cloudflare/d1/{database}", CF_D1_BODY);
+
+        let resources = load_declared_sql_resources();
+        let r = resources
+            .iter()
+            .find(|r| r.path == "/cloudflare/d1/{database}")
+            .expect("the declared sql-resource is loaded");
+        assert_eq!(r.dialect, "sqlite");
+        assert_eq!(
+            r.query_endpoint,
+            "/http/cloudflare/accounts/{account}/d1/database/{database}/query"
+        );
+        assert_eq!(r.tables.len(), 2);
+        let users = r.tables.iter().find(|t| t.name == "users").unwrap();
+        assert_eq!(users.columns.len(), 2);
+        assert!(users
+            .columns
+            .iter()
+            .any(|c| c.name == "id" && c.primary_key));
+        assert!(r.tables.iter().any(|t| t.name == "orders"));
+    }
+
+    #[test]
+    fn declared_sql_resource_catalog_lifts_tables_for_the_d1_planner() {
+        // `catalog()` produces the `qfs_driver_sql::Catalog` the D1 bridge hands to
+        // `D1Database::discovered` — the same shape `cf.rs::introspect_d1` built, but from the
+        // declaration. Built purely (no DB), so DESCRIBE stays network-free.
+        let resource = DeclaredSqlResource {
+            path: "/cloudflare/d1/{database}".to_string(),
+            dialect: "sqlite".to_string(),
+            query_endpoint: "/http/cloudflare/accounts/{account}/d1/database/{database}/query"
+                .to_string(),
+            tables: vec![
+                DeclaredSqlTable {
+                    name: "users".to_string(),
+                    columns: vec![qfs_types::DeclaredColumn {
+                        name: "id".to_string(),
+                        ty: "text".to_string(),
+                        nullable: false,
+                        primary_key: true,
+                        unique: false,
+                    }],
+                },
+                DeclaredSqlTable {
+                    name: "orders".to_string(),
+                    columns: vec![qfs_types::DeclaredColumn {
+                        name: "id".to_string(),
+                        ty: "text".to_string(),
+                        nullable: false,
+                        primary_key: true,
+                        unique: false,
+                    }],
+                },
+            ],
+        };
+        let catalog = resource.catalog();
+        assert!(catalog.table("users").is_some());
+        assert!(catalog.table("orders").is_some());
+        assert!(catalog.table("absent").is_none());
+    }
+
+    #[test]
+    fn load_declared_sql_resources_drops_a_foreign_host_endpoint() {
+        // §13 confinement (FAIL CLOSED): a sql-resource under `/cloudflare` whose query endpoint
+        // addresses a foreign `/http/<x>` host is dropped at load — the anti-exfiltration boundary,
+        // exactly as a declared driver's foreign view/map body is dropped.
+        let _home = crate::testenv::HomeGuard::new();
+        let foreign = r#"{"dialect":"sqlite",
+            "query_endpoint":"/http/evil/steal",
+            "tables":[{"name":"t","columns":[{"name":"id","type":"text"}]}]}"#;
+        seed_sql_row("/cloudflare/d1/{database}", foreign);
+        assert!(
+            load_declared_sql_resources().is_empty(),
+            "a foreign-host sql-resource must be dropped at load"
+        );
     }
 }
