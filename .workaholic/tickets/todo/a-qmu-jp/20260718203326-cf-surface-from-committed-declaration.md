@@ -154,3 +154,72 @@ cross-cutting architecture bulk and are NOT started; the tree is clean and unbro
    line 142.
 
 Binary stays at `0.0.79`, plugin `0.13.0` (no PR opened, nothing shipped this leaf).
+
+## Drive status — 2026-07-19 (wave-3 leaf: Stage 2 design pinned, NOT built; still at Stage 1)
+
+This leaf resumed at Stage 2 (the D1 bridge) and did a full end-to-end architecture read of the
+mount seams. **Conclusion: Stage 2 wired to actually serve a mount cannot be made gate-green in one
+leaf without fabricating several interlocking, unspecified design decisions**, so — per the
+attempt-first / closed-outcome rule — NOTHING new was committed beyond Stage 1 (`bb089fe`,
+recorded `2cfb9ca`); the tree is clean at `2cfb9ca`, binary `0.0.79`, plugins `0.13.0`, no
+acceptance ticked. What this leaf adds is the **evidence-pinned design map** below (the prior notes
+named the stages; this pins the exact blockers + seams so the next session builds, not rediscovers).
+
+**The three concrete blockers (all read-verified this leaf):**
+
+1. **Registry routing asymmetry — the core problem.** The plan/describe registry
+   (`crates/core/src/registry.rs:594` `resolve_service_path`) routes by **longest-prefix path**, so a
+   nested D1 mount at `/cloudflare/d1` would route there fine. But the **read** funnel
+   (`crates/exec/src/read.rs:57` `ReadRegistry` = `HashMap<DriverId, Arc<dyn ReadDriver>>`, resolved
+   by `.get(id)`) and the **apply** funnel are keyed by **DriverId** (a mount's `outer_id`), NOT by
+   path prefix. So `/cloudflare/...` reads/writes all resolve to the ONE driver registered under the
+   `cloudflare` id — a nested `/cloudflare/d1` cannot get its own read/apply driver *by leading
+   segment*. This is why a naive "register a second CfDriver mount" does not work across all three
+   facets.
+
+2. **A promising escape (needs a spike to confirm BEFORE committing to it).** `MountRemap::outer_id`
+   (`crates/qfs/src/mount_adapter.rs:113`) is the **full** outer-mount path minus the leading `/`
+   (not just the leading segment), and `DriverId` (`crates/types/src/schema.rs:19`) is an
+   **unvalidated `String`**. So a mount at `/cloudflare/d1` yields DriverId `"cloudflare/d1"` —
+   *distinct* from `"cloudflare"`. If a slash-bearing DriverId flows cleanly through
+   plan-lowering → effect target → read/apply `.get(id)`, then the D1 surface can be a **separate
+   nested mount** (id `cloudflare/d1`, plan-registry longest-prefix picks it over `/cloudflare`) and
+   NO composite facet is needed. **UNVERIFIED / dead-end risk:** if any stage (plan lowering,
+   capability qualification, `CALL` proc routing, the `mount_adapter` proc/effect rewrites) assumes a
+   single-segment id, this collapses back to needing a **composite `cloudflare` facet** that
+   internally dispatches `/cloudflare/d1/…` → CfDriver and everything else → RestDriver across read,
+   apply, AND a merged plan/pushdown profile — a substantially larger build. Verify this first (a
+   ~30-min spike: register a dummy nested mount, assert a read routes to id `a/b`).
+
+3. **Wildcard D1 resolution gap.** `CfRegistry::d1` (`crates/driver-cf/src/registry.rs:280`) is an
+   exact-match `HashMap<String, D1Database>.get(db)`. The declared path `/cloudflare/d1/{database}`
+   is a **wildcard**; with no introspection the addressed segment must itself be the D1 api id
+   (`D1Database::api_database_id`, `registry.rs:65`, already falls back to the path name when uuid is
+   `None` — so `D1Database::new(backend, catalog)` addressed at `/cf/d1/<X>/<t>` uses `<X>` as the
+   api id). The missing piece is a CfRegistry that resolves an **arbitrary** d1 key to a template
+   `D1Database` carrying the declared `catalog()` — a small new driver-cf capability (e.g.
+   `with_d1_template(catalog, backend)` + a `d1()` template fallback), unit-testable in
+   `driver-cf/src/tests.rs`. This is forced by the no-introspection model, not a design choice.
+
+**The wire backend is NOT a blocker.** The "HTTP-over-declared-wire CfBackend" the ticket names is
+just `HttpApiBackend` (`crates/driver-cf/src/backend.rs:611` `HttpApiBackend::new(exchange,
+account_id, token)`), whose D1 URL/req/resp shape already matches the declared endpoint
+`/http/cloudflare/accounts/{account}/d1/database/{database}/query`. Build it from the declared
+inputs — `account_id` = mount `at_locator` (same as compiled `/cf`), `token` = the resolved
+`AUTH ACCOUNT 'cf'` bearer, exchange = `crate::transport::cf_exchange()` (`transport.rs:161`) —
+instead of from compiled discovery. `D1Database::discovered(backend, uuid, catalog)`
+(`registry.rs:48`) is the exact lift; `DeclaredSqlResource::catalog()` (Stage 1) is the `catalog`.
+
+**Recommended next-session decomposition (build order):**
+- **2.0 (spike, no commit):** confirm blocker-2 (slash-bearing DriverId flows through plan→read/apply).
+  This decides nested-mount vs composite — the whole shape of Stage 2. Escalate the shape choice
+  (nested vs composite, and whether the declared D1 stays nested under `/cloudflare/d1` or moves to
+  its own top-level segment — an owner-facing UX call) as a design decision if the spike is ambiguous.
+- **2a:** the wildcard-D1 CfRegistry capability + the declared→`CfDriver` composition helper (backend
+  from declared inputs + `CfRegistry` from `resource.catalog()` → `CfDriver`), unit-tested hermetically
+  over `MockCfBackend`/`MockExchange` (assert ZERO `list_d1_databases`/introspection at build; a read
+  issues `d1_query`, not `sqlite_master`).
+- **2b:** wire it into the three declared-mount facets (`describe.rs:173`, `commit.rs:355-396`,
+  `shell.rs:418-448`) per the 2.0 shape decision — the cross-cutting core.
+
+Then Stages 3-6 as previously mapped. Binary stays `0.0.79`, plugins `0.13.0`; no acceptance ticked.
