@@ -444,11 +444,13 @@ fn insert_row(
             );
         }
         ServerNode::Agents => {
-            // blueprint §19: credential-free — name + the optional attached POLICY handle only.
+            // blueprint §19: credential-free — name, the query function `plan` (axis C), and the
+            // optional attached POLICY handle (axis E).
             state.agents.insert(
                 name.clone(),
                 AgentDef {
                     name,
+                    plan: StatementSource::new(text("plan")),
                     policy: match get("policy") {
                         Some(Value::Text(s)) if !s.is_empty() => Some(s.clone()),
                         _ => None,

@@ -113,7 +113,7 @@ one owner-attended live round proving a real fire and a visible denial.
 
 ### Query functions
 
-- [ ] An agent declares named query functions (saved plans) readable as data (#20260718203333-agent-query-functions-saved-plans.md); invoking one
+- [x] An agent declares named query functions (saved plans) readable as data (#20260718203333-agent-query-functions-saved-plans.md); invoking one
       previews by default and commits through the standard gates
 
 ### Scheduled launch
@@ -194,3 +194,4 @@ one owner-attended live round proving a real fire and a visible denial.
 - 2026-07-18 — ticket archived — 20260718203330-agent-model-blueprint-chapter.md
 - 2026-07-18 — ticket archived — 20260718203331-create-agent-grammar-registry.md
 - 2026-07-18 — ticket archived — 20260718203332-agent-subject-policy-gate.md
+- 2026-07-18 — ticket archived — 20260718203333-agent-query-functions-saved-plans.md

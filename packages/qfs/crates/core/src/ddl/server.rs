@@ -237,6 +237,12 @@ pub struct WebhookDecl {
 pub struct AgentDecl {
     /// The agent name (the config row key, and the `Subject::Agent` identity).
     pub name: String,
+    /// The agent's **query function** — a named saved plan, the `JobDecl` `DO <plan>` body shape
+    /// WITHOUT a cadence (blueprint §19 axis C). Parsed + type-checked NOW, stored as a span-
+    /// normalised [`PlanSpec`]; a gated statement, never a lambda (the §5.9 pure-lambda effects ban
+    /// stands). `None` for a function-less agent (naming only). Invoked by `qfs agent run` through
+    /// the shipped preview/commit pipeline under the agent's own `DecisionContext`.
+    pub plan: Option<PlanSpec>,
     /// The attached POLICY handle (a `/server/policies` row name) the agent's fired plans commit
     /// under (least privilege, blueprint §19 axis E). `None` = no policy attached ⇒ fail-closed
     /// default-deny at fire time. Stored as a handle, never inline credential material.
@@ -453,6 +459,9 @@ pub fn from_server_ddl(ddl: &ServerDdl) -> Result<ServerBindingDdl, DdlError> {
         }
         DdlKind::Agent => Ok(ServerBindingDdl::Agent(AgentDecl {
             name,
+            // blueprint §19 axis C: the agent's query function is the `DO <plan>` body WITHOUT a
+            // cadence — the same JobDecl body shape, parsed + span-normalised now.
+            plan: ddl.do_plan.as_deref().map(PlanSpec::from_statement_ref),
             policy_ref: ddl.policy.clone(),
         })),
         DdlKind::Policy => Err(DdlError::validation(
@@ -651,9 +660,14 @@ pub fn binding_config_row(ddl: &ServerBindingDdl) -> ConfigRow {
             row.set_text("route", d.route.as_str());
         }
         ServerBindingDdl::Agent(d) => {
-            // blueprint §19: the agent binding is credential-free — it carries only its name and,
-            // when attached, its least-privilege POLICY handle. Omitted when `None` so a
-            // policy-less agent row stays byte-identical (the column fills with `Null`).
+            // blueprint §19: the agent binding is credential-free — it carries its name, its query
+            // function's canonical `plan` spec (axis C, empty when function-less), and, when
+            // attached, its least-privilege POLICY handle (omitted when `None` so a policy-less
+            // agent row stays byte-identical, the column fills with `Null`).
+            row.set_text(
+                "plan",
+                canonical_or_empty(d.plan.as_ref().map(PlanSpec::canonical)),
+            );
             if let Some(policy) = d.policy_ref.as_ref() {
                 row.set_text("policy", policy.as_str());
             }
@@ -812,8 +826,12 @@ pub fn server_node_schema(node: ServerNode) -> Schema {
             // blueprint §19 axis A: the agent binding is credential-free. This ticket lands the
             // naming + registry row only — `name` (the agent identity / `Subject::Agent`) and the
             // optional attached `policy` handle (axis E). Cadence + query-function columns build on
-            // this row in later tickets (axes C/D).
+            // this row in later tickets (axis D — cadence). Axis C (the query function's `plan`)
+            // is carried here.
             col("name", ColumnType::Text, false),
+            // blueprint §19 axis C: the agent's query function as a canonical PlanSpec (a saved
+            // named plan WITHOUT a cadence). `Null`/empty for a function-less agent.
+            col("plan", ColumnType::Text, true),
             col("policy", ColumnType::Text, true),
         ]),
         ServerNode::Webhooks => Schema::new(vec![

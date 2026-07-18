@@ -753,7 +753,11 @@ fn describe_server_agents_is_credential_free() {
     // canonical source of truth `DESCRIBE` reads, so asserting on it is the external form.
     let schema = qfs_core::server_node_schema(ServerNode::Agents);
     let cols: Vec<&str> = schema.columns.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(cols, vec!["name", "policy"], "name + policy handle only");
+    assert_eq!(
+        cols,
+        vec!["name", "plan", "policy"],
+        "name + query-function plan + policy handle only (credential-free)"
+    );
     for c in &cols {
         let lc = c.to_lowercase();
         assert!(

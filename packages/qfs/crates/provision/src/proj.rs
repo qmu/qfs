@@ -193,6 +193,9 @@ pub fn webhook_proj(def: &WebhookDef) -> ProjRow {
 pub fn agent_proj(def: &AgentDef) -> ProjRow {
     let mut row = ProjRow::default();
     row.set_text("name", &def.name);
+    // blueprint §19 axis C: the query function's canonical plan body (empty for a function-less
+    // agent — the same body-column convention as jobs/triggers).
+    row.set_text("plan", def.plan.as_str());
     if let Some(policy) = &def.policy {
         row.set_text_opt("policy", policy);
     }

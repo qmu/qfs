@@ -188,6 +188,12 @@ pub struct WebhookDef {
 pub struct AgentDef {
     /// The agent name (the config row key, and the `Subject::Agent` identity).
     pub name: String,
+    /// The agent's **query function** (blueprint §19 axis C): a named saved plan — the `DO <plan>`
+    /// body shape WITHOUT a cadence — as canonical [`qfs_core::PlanSpec`] source. Empty for a
+    /// function-less agent. Rehydrated (no re-parse) + built + gated under the agent's own subject
+    /// and committed through the shipped preview/commit pipeline by `qfs agent run`.
+    #[serde(default)]
+    pub plan: StatementSource,
     /// The attached `POLICY <name>` handle the agent's fired plans commit under. `None` = no
     /// policy attached ⇒ fail-closed default-deny at fire time. A handle, never a credential.
     #[serde(default)]

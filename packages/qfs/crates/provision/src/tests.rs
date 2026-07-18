@@ -287,6 +287,9 @@ fn agent_binding_round_trips_through_dump_restore() {
         "triage".to_string(),
         AgentDef {
             name: "triage".to_string(),
+            // blueprint §19 axis C: a query function (a saved plan body, empty here to keep the
+            // projection body-free; the body round-trip is covered by the jobs/triggers path).
+            plan: StatementSource::new(String::new()),
             policy: Some("narrow".to_string()),
         },
     );
@@ -294,6 +297,7 @@ fn agent_binding_round_trips_through_dump_restore() {
         "sweeper".to_string(),
         AgentDef {
             name: "sweeper".to_string(),
+            plan: StatementSource::new(String::new()),
             policy: None,
         },
     );
