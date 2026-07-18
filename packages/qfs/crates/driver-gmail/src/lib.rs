@@ -290,7 +290,18 @@ impl Driver for GmailDriver {
             MailPath::parse(path),
             Ok(MailPath::Root | MailPath::Label { .. })
         );
-        Ok(NodeDesc::new(Archetype::AppendLog, schema).navigable(navigable))
+        let desc = NodeDesc::new(Archetype::AppendLog, schema).navigable(navigable);
+        // 番地の鍵の宣言 (plan.md, settled 2026-07-18): the driver declares the identity that
+        // selects a child. The root/label-collection lists LABELS — the label name is the
+        // containment segment itself (`/mail/INBOX`). A label's rows are MESSAGES selected by
+        // `id` (`/mail/INBOX/@<id>` lowers to `where id == …`). A message and its
+        // attachment/reply leaves declare no child — relation segments are a later phase.
+        let desc = match MailPath::parse(path) {
+            Ok(MailPath::Root | MailPath::Labels) => desc.child_entry_name("name"),
+            Ok(MailPath::Label { .. }) => desc.child_key(["id"]),
+            _ => desc,
+        };
+        Ok(desc)
     }
 
     fn capabilities(&self, path: &Path) -> Capabilities {

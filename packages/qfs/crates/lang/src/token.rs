@@ -207,25 +207,44 @@ impl LitType {
 /// `name` is the raw segment text (no validation); `version` holds the raw
 /// `@version` ref text if present (a git ref, S3 versionId, drive rev — blueprint §4),
 /// preserved verbatim; `glob` flags that the segment contained a glob char (`*`
-/// or `?`).
+/// or `?`); `selection` flags a **selection segment** — a segment written `@<key…>`
+/// directly after `/` (番地: the row-selection step, plan.md「選択セグメントの綴り」).
+/// For a selection segment `name` is the raw text after the `@` (composite key values
+/// stay comma-joined and percent-encoded; decoding is the lowering site's job).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathSeg {
-    /// Raw segment name text.
+    /// Raw segment name text (for a selection segment: the raw text after `@`).
     pub name: String,
     /// Raw `@version` ref text, if the segment carried one.
     pub version: Option<String>,
     /// Whether the segment contains a glob character.
     pub glob: bool,
+    /// Whether this is a `@`-led **selection segment** (`/x/@A`), which lowers to a
+    /// `where <declared key> == A` step — never a containment step.
+    pub selection: bool,
 }
 
 impl PathSeg {
-    /// Construct a path segment.
+    /// Construct an ordinary (containment) path segment.
     #[must_use]
     pub fn new(name: impl Into<String>, version: Option<String>, glob: bool) -> Self {
         Self {
             name: name.into(),
             version,
             glob,
+            selection: false,
+        }
+    }
+
+    /// Construct a **selection segment** (`/x/@A`): `raw` is the text after the `@`,
+    /// preserved verbatim (comma-joined, percent-encoded key values).
+    #[must_use]
+    pub fn selection(raw: impl Into<String>) -> Self {
+        Self {
+            name: raw.into(),
+            version: None,
+            glob: false,
+            selection: true,
         }
     }
 }

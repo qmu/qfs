@@ -462,6 +462,35 @@ fn quoted_path_segment_addresses_a_single_file_remove() {
 }
 
 #[test]
+fn selection_segment_reaches_the_ast_flagged() {
+    // 番地の`@選択` (plan.md, settled 2026-07-18): `/mail/INBOX/@<id>` parses with the final
+    // segment FLAGGED as a selection carrying the raw key text — never a containment name.
+    // The parser carries shape only; the single lowering site turns it into the where step.
+    let stmt = parse_ok("/mail/INBOX/@197a2b3c |> SELECT subject");
+    let Statement::Query(p) = stmt else { panic!() };
+    let Source::Path(path) = p.source else {
+        panic!()
+    };
+    assert_eq!(path.segments.len(), 3);
+    let sel = &path.segments[2];
+    assert!(sel.selection, "the `@` segment is a selection");
+    assert_eq!(sel.name, "197a2b3c", "raw key text, `@` stripped");
+    assert!(sel.version.is_none() && !sel.glob);
+    assert!(
+        path.segments[..2].iter().all(|s| !s.selection),
+        "containment segments stay unflagged"
+    );
+    // Composite spelling: the raw comma-joined values ride one segment.
+    let stmt = parse_ok("/sql/crm/invoices/@2024,INV-003");
+    let Statement::Query(p) = stmt else { panic!() };
+    let Source::Path(path) = p.source else {
+        panic!()
+    };
+    assert_eq!(path.segments[3].name, "2024,INV-003");
+    assert!(path.segments[3].selection);
+}
+
+#[test]
 fn path_as_of_temporal() {
     let stmt = parse_ok("/sql/pg/orders AS OF '2026-01-01'");
     let Statement::Query(p) = stmt else { panic!() };

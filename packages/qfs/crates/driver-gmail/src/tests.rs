@@ -1780,3 +1780,35 @@ async fn multi_account_selects_independent_clients() {
     );
     let _ = driver_b; // bound to prove the two are distinct instances.
 }
+
+#[test]
+fn describe_declares_the_child_address_per_node() {
+    // 番地の鍵の宣言 (plan.md, settled 2026-07-18): the driver states the identity that
+    // selects a child; a consumer never guesses.
+    let (d, _) = driver_with_mock();
+    // A label's rows are messages selected by `id` → `/mail/INBOX/@<id>`.
+    assert_eq!(
+        d.describe(&Path::new("/mail/INBOX")).unwrap().child_address,
+        qfs_driver::ChildAddress::Key {
+            columns: vec!["id".to_string()]
+        }
+    );
+    // The root (and the label-management collection) lists labels: the label NAME is the
+    // containment segment itself (`/mail/INBOX`), not an `@` selection.
+    for root in ["/mail", "/mail/labels"] {
+        assert_eq!(
+            d.describe(&Path::new(root)).unwrap().child_address,
+            qfs_driver::ChildAddress::EntryName {
+                column: "name".to_string()
+            }
+        );
+    }
+    // A message (and its attachment/reply leaves) declares no child — relation segments
+    // (`/@<id>/thread`) are a later phase, and "no child" is a valid, declared answer.
+    assert_eq!(
+        d.describe(&Path::new("/mail/INBOX/197abc"))
+            .unwrap()
+            .child_address,
+        qfs_driver::ChildAddress::None
+    );
+}

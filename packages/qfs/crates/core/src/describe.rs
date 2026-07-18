@@ -27,7 +27,8 @@
 //! agent sees the FS/SQL-shaped verbs each archetype answers to.
 
 use qfs_driver::{
-    AliasFn, Archetype, Capabilities, Driver, NodeDesc, Path, ProcSig, PushdownProfile,
+    AliasFn, Archetype, Capabilities, ChildAddress, Driver, NodeDesc, Path, ProcSig,
+    PushdownProfile,
 };
 use qfs_types::Column;
 use serde::Serialize;
@@ -60,6 +61,12 @@ pub struct DescribeReport {
     pub aliases: Vec<AliasFn>,
     /// What the source can push down natively (the planner's pushdown input, blueprint §7).
     pub pushdown: PushdownSummary,
+    /// How a row of this node addresses its child (番地の鍵の宣言, plan.md settled
+    /// 2026-07-18): the key column(s) a selection segment (`/x/@A`) matches, the entry-name
+    /// column whose value IS the containment segment (blob namespaces), or a declared
+    /// "no child". A generic consumer builds the drill link from this — never from a
+    /// per-service guess.
+    pub child_address: ChildAddress,
 }
 
 impl DescribeReport {
@@ -75,7 +82,10 @@ impl DescribeReport {
     /// describable node (e.g. a mount root with no relation) — the agent-legible failure path.
     pub fn from_driver(driver: &dyn Driver, path: &Path) -> Result<Self, qfs_driver::CfsError> {
         let NodeDesc {
-            archetype, schema, ..
+            archetype,
+            schema,
+            child_address,
+            ..
         } = driver.describe(path)?;
         let verbs = driver.capabilities(path);
         Ok(Self {
@@ -87,7 +97,59 @@ impl DescribeReport {
             procedures: driver.procedures().to_vec(),
             aliases: driver.prelude().to_vec(),
             pushdown: PushdownSummary::from_profile(driver.pushdown()),
+            child_address,
         })
+    }
+}
+
+impl DescribeReport {
+    /// Refine this BASE-node report into the **selected row's** view (閉包の原理, plan.md:
+    /// every 番地 answers describe — the row address `/x/@A` included). The row shares the
+    /// node's shape (archetype + columns), the report's `path` becomes the FULL row address,
+    /// and the row claims no further `@` child (relation segments are a later phase).
+    ///
+    /// # Errors
+    /// [`crate::plan::SelectionError`] when the base declares no child key
+    /// ([`ChildAddress::None`] / [`ChildAddress::EntryName`] — blob children are name
+    /// segments) or when the value count mismatches the declared key columns.
+    pub fn for_selected_row(
+        mut self,
+        full_path: &str,
+        raw_selection: &str,
+    ) -> Result<Self, crate::plan::SelectionError> {
+        let ChildAddress::Key { columns } = &self.child_address else {
+            return Err(crate::plan::SelectionError::NoChildKey {
+                path: self.path.clone(),
+                declared: self.child_address.clone(),
+            });
+        };
+        let given = if raw_selection.is_empty() {
+            0
+        } else {
+            raw_selection.split(',').count()
+        };
+        if given != columns.len() {
+            return Err(crate::plan::SelectionError::Arity {
+                path: self.path.clone(),
+                declared: columns.len(),
+                given,
+            });
+        }
+        self.path = full_path.to_string();
+        self.child_address = ChildAddress::None;
+        Ok(self)
+    }
+}
+
+/// Split a trailing **selection segment** (`…/@A`, 番地の`@選択`) off a canonical path
+/// string: `("/mail/INBOX/@2")` → `("/mail/INBOX", Some("2"))`. A path with no trailing
+/// selection — including a selection anywhere but last — returns `(path, None)` unchanged,
+/// so callers describe it literally and the driver answers (or refuses) honestly.
+#[must_use]
+pub fn split_selection(path: &str) -> (&str, Option<&str>) {
+    match path.rfind("/@") {
+        Some(i) if !path[i + 2..].contains('/') => (&path[..i], Some(&path[i + 2..])),
+        _ => (path, None),
     }
 }
 
@@ -273,7 +335,8 @@ mod tests {
                     Column::new("id", ColumnType::Int, false),
                     Column::new("name", ColumnType::Text, true),
                 ]),
-            ))
+            )
+            .child_key(["id"]))
         }
         fn capabilities(&self, _path: &Path) -> Capabilities {
             Capabilities::from_verbs(&[Verb::Select, Verb::Insert, Verb::Upsert])
@@ -351,6 +414,27 @@ mod tests {
         let full = PushdownSummary::from_profile(&PushdownProfile::Full);
         assert!(full.where_ && full.aggregate && full.group_by);
         assert!(!full.is_local_only());
+    }
+
+    /// The 番地 key declaration rides the report (plan.md「鍵の宣言」): the driver's declared
+    /// child address — key columns, entry name, or an explicit "no child" — reaches the agent
+    /// verbatim, in both the DTO and its JSON projection.
+    #[test]
+    fn report_carries_the_declared_child_address() {
+        let d = FixtureDriver::new();
+        let report = DescribeReport::from_driver(&d, &Path::new("/fix/rel")).unwrap();
+        assert_eq!(
+            report.child_address,
+            ChildAddress::Key {
+                columns: vec!["id".to_string()]
+            },
+            "the fixture's declared key column reaches the report"
+        );
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(
+            json.contains("\"child_address\":{\"kind\":\"key\",\"columns\":[\"id\"]}"),
+            "JSON shape a generic consumer dispatches on; got: {json}"
+        );
     }
 
     /// The report's JSON projection is stable for AI consumption (`-json`): owned DTOs serialize

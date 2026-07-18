@@ -29,6 +29,10 @@ pub enum LexErrorKind {
     /// a segment is one name — and every driver re-splits the rendered path on it, so a `/`
     /// inside a name could not survive the round-trip to the driver (ticket 20260717120200).
     PathSeparatorInQuotedSegment,
+    /// A selection segment (`/x/@A`, 番地の選択セグメント) carried no key value: `/x/@` selects
+    /// nothing. The key value(s) follow the `@` — comma-joined, percent-encoded — so an empty
+    /// selection is a refusal, never a silent no-op.
+    EmptySelectionSegment,
 }
 
 impl LexErrorKind {
@@ -42,6 +46,7 @@ impl LexErrorKind {
             Self::BadNumber => "BAD_NUMBER",
             Self::BadHexBytes => "BAD_HEX_BYTES",
             Self::PathSeparatorInQuotedSegment => "PATH_SEPARATOR_IN_QUOTED_SEGMENT",
+            Self::EmptySelectionSegment => "EMPTY_SELECTION_SEGMENT",
         }
     }
 }

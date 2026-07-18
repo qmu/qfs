@@ -1246,3 +1246,39 @@ fn connection_node_advertises_select_for_show_tables() {
     let (driver, _be) = driver_over(USERS_DDL);
     assert!(check_capability(&driver, &Path::new("/sql/db"), Verb::Select).is_ok());
 }
+
+#[test]
+fn describe_declares_the_primary_key_as_the_child_address() {
+    // 番地の鍵の宣言: a relational table's child is a ROW selected by its primary key —
+    // `/sql/db/users/@1` — so describe declares the catalog's key columns. A keyless
+    // relation (no PK, no unique) honestly declares no child.
+    let (driver, _be) = driver_over(USERS_DDL);
+    assert_eq!(
+        driver
+            .describe(&Path::new("/sql/db/users"))
+            .unwrap()
+            .child_address,
+        qfs_driver::ChildAddress::Key {
+            columns: vec!["id".to_string()]
+        }
+    );
+    // The connection catalog's children are TABLES, addressed by name segment.
+    assert_eq!(
+        driver
+            .describe(&Path::new("/sql/db"))
+            .unwrap()
+            .child_address,
+        qfs_driver::ChildAddress::EntryName {
+            column: "name".to_string()
+        }
+    );
+    // A keyless table (a bare log) declares no child rather than a broken one.
+    let (driver, _be) = driver_over("CREATE TABLE log (line TEXT);");
+    assert_eq!(
+        driver
+            .describe(&Path::new("/sql/db/log"))
+            .unwrap()
+            .child_address,
+        qfs_driver::ChildAddress::None
+    );
+}

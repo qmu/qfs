@@ -194,13 +194,21 @@ impl Lexer {
 
     /// Lex a `/`-led path: `/seg/seg(@ver)`, with glob flags per segment. A segment written
     /// `'…'` is a **quoted segment** ([`Self::consume_quoted_path_segment_name`]) whose content
-    /// is wholly literal; anything else lexes exactly as it always has.
+    /// is wholly literal; a segment opening with `@` directly after the `/` is a **selection
+    /// segment** ([`Self::consume_selection_segment`], 番地の`@選択`); anything else lexes
+    /// exactly as it always has.
     fn lex_path(&mut self) -> Result<(), LexError> {
         let start = self.byte_at();
         let mut segs: Vec<PathSeg> = Vec::new();
         // Consume the leading '/' and each segment.
         while self.peek().is_some_and(|ch| ch.c == '/') {
             self.bump(); // consume '/'
+            if self.peek().is_some_and(|ch| ch.c == '@') {
+                // `/@…` opens a SELECTION segment: the row-selection step. Distinct from the
+                // `name@version` pin, which binds `@` to a non-empty segment name.
+                segs.push(self.consume_selection_segment()?);
+                continue;
+            }
             let (name, glob) = if self.peek().is_some_and(|ch| ch.c == '\'') {
                 // A quoted segment is a literal NAME: never a glob, whatever it contains.
                 (self.consume_quoted_path_segment_name()?, false)
@@ -214,6 +222,37 @@ impl Lexer {
         }
         self.push(start, Token::Path(segs));
         Ok(())
+    }
+
+    /// Consume a **selection segment** — `@<key…>` directly after a `/` (番地: plan.md
+    /// 「選択セグメントの綴り」, settled 2026-07-18). `/x/@A` is the one deterministic spelling
+    /// of "select the row whose declared key is A"; it lowers to `|> where <key> == A` at the
+    /// single lowering site, never here.
+    ///
+    /// The raw text after the `@` is carried verbatim: composite key values stay comma-joined
+    /// in declared key order (`@2024,INV-003`) and percent-encoded (`%2C` for a literal comma)
+    /// — the lexer neither decodes nor validates them against a schema it cannot see. The run
+    /// ends at `/`, another `@`, or a statement delimiter, except that `,` — normally a
+    /// delimiter — belongs to the composite key list.
+    ///
+    /// # Errors
+    /// [`LexErrorKind::EmptySelectionSegment`] when no key value follows the `@`: `/x/@`
+    /// selects nothing, and refusing loudly beats a silent no-op.
+    fn consume_selection_segment(&mut self) -> Result<PathSeg, LexError> {
+        let open = self.byte_at();
+        self.bump(); // consume '@'
+        let mut raw = String::new();
+        while let Some(ch) = self.peek() {
+            if ch.c == '/' || ch.c == '@' || (is_path_delimiter(ch.c) && ch.c != ',') {
+                break;
+            }
+            raw.push(ch.c);
+            self.bump();
+        }
+        if raw.is_empty() {
+            return Err(self.err(open, LexErrorKind::EmptySelectionSegment));
+        }
+        Ok(PathSeg::selection(raw))
     }
 
     /// Consume a **quoted path segment** name — `'…'` (ticket 20260717120200).

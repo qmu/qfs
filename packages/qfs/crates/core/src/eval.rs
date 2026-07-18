@@ -215,6 +215,15 @@ pub enum EvalError {
     /// cross-realm service path, or a retired bare spelling of a host-realm-only mount. The
     /// inner error carries the canonical pointer for AI recovery.
     HostScope(crate::registry::HostScopeError),
+    /// A path carried a selection segment (`/x/@A`, 番地の`@選択`) in a position the one
+    /// lowering site (`qfs_core::plan`) does not cover — an effect target or an
+    /// effect-embedded pipeline. Rendering it by joining names would silently address the
+    /// CONTAINMENT child (`/x/A`), a different thing than what was written, so this
+    /// refuses instead. Spell the row with an explicit `WHERE <key> == …`.
+    SelectionNotLowered {
+        /// The path that carried the unlowered selection segment.
+        path: String,
+    },
     /// An `INSERT … VALUES` cell was not a constant the planner can lower to a literal effect
     /// payload (a function call, column reference, or other runtime expression). VALUES must be
     /// constants — use an `INSERT … FROM <query>` for computed rows. Carries a secret-free detail.
@@ -367,6 +376,7 @@ impl EvalError {
             EvalError::Fn(e) => e.code(),
             EvalError::UnroutedPath { .. } => "unrouted_path",
             EvalError::HostScope(e) => e.code(),
+            EvalError::SelectionNotLowered { .. } => "selection_not_lowered_here",
             EvalError::NonLiteralValues { .. } => "non_literal_values",
             EvalError::DriverWrite { .. } => "driver_write",
             EvalError::WriteFilterUnsupported { .. } => "write_filter_unsupported",
@@ -758,6 +768,7 @@ impl<'r> Evaluator<'r> {
                 EvalError::Resolve(ResolveError::UnknownBinding { name: name.clone() })
             }),
             Source::Path(path) => {
+                refuse_unlowered_selection(&path.segments)?;
                 let full = render_path(
                     &path
                         .segments
@@ -995,6 +1006,7 @@ impl<'r> Evaluator<'r> {
             }
         }
 
+        refuse_unlowered_selection(&effect.target.segments)?;
         let full = render_path(
             &effect
                 .target
@@ -1656,6 +1668,25 @@ fn validate_switch_shape(stage: &SwitchStage) -> Result<(), EvalError> {
                 });
             }
         }
+    }
+    Ok(())
+}
+
+/// Refuse a path carrying a selection segment (`/x/@A`, 番地の`@選択`) in an evaluator
+/// position — the one lowering site is read planning (`qfs_core::plan`); here, joining
+/// segment NAMES would silently address the containment child `/x/A` instead of the
+/// selected row. Fail closed with the spelled-out pointer.
+fn refuse_unlowered_selection(segments: &[qfs_parser::PathSegment]) -> Result<(), EvalError> {
+    if segments.iter().any(|s| s.selection) {
+        let mut path = String::new();
+        for s in segments {
+            path.push('/');
+            if s.selection {
+                path.push('@');
+            }
+            path.push_str(&s.name);
+        }
+        return Err(EvalError::SelectionNotLowered { path });
     }
     Ok(())
 }

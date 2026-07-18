@@ -310,6 +310,7 @@ fn path_expr(input: &mut Stream<'_>) -> ModalResult<PathExpr> {
             name: s.name,
             version: s.version,
             glob: s.glob,
+            selection: s.selection,
         })
         .collect();
     Ok(PathExpr {
@@ -1453,6 +1454,7 @@ fn plain_segment(name: &str) -> PathSegment {
         name: name.to_string(),
         version: None,
         glob: false,
+        selection: false,
     }
 }
 
