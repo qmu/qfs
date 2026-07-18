@@ -710,3 +710,55 @@ fn serve_boots_mixed_fixture_and_drains_audit_on_sigint() {
         "shutdown must drain exactly 8 audit entries (one per /server mutation):\n{log}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Scenario 9 — CREATE AGENT (blueprint §19): naming + registry landing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn create_agent_desugars_to_one_server_agents_insert() {
+    // blueprint §19 axis A: an agent binding desugars to exactly ONE `INSERT INTO /server/agents`,
+    // the same one-node UPSERT shape as `ServerBindingDdl::Job`.
+    assert_single_server_insert(&binding("CREATE AGENT triage"), ServerNode::Agents);
+    assert_single_server_insert(
+        &binding("CREATE AGENT triage POLICY narrow"),
+        ServerNode::Agents,
+    );
+}
+
+#[test]
+fn create_agent_lands_a_credential_free_row_and_remove_drops_it() {
+    // Drive the public runtime: CREATE → the committed /server/agents row → REMOVE drops it, all
+    // through the standard gate. The stored row carries name + attached policy handle only.
+    let mut rt = Runtime::new().with_binding(Box::new(NullBinding));
+    rt.apply_source("e2e-agent", 1, "CREATE AGENT triage POLICY narrow")
+        .expect("create agent");
+    let state = rt.snapshot();
+    let agent = state.agents.get("triage").expect("agent landed");
+    assert_eq!(agent.name, "triage");
+    assert_eq!(agent.policy.as_deref(), Some("narrow"));
+
+    // REMOVE drops the agent binding through the standard /server gate.
+    rt.apply_source("e2e-agent", 2, "REMOVE /server/agents/triage")
+        .expect("remove agent");
+    assert!(
+        !rt.snapshot().agents.contains_key("triage"),
+        "REMOVE drops the agent binding"
+    );
+}
+
+#[test]
+fn describe_server_agents_is_credential_free() {
+    // blueprint §19 axis E: `DESCRIBE /server/agents` renders credential-free — the schema is the
+    // canonical source of truth `DESCRIBE` reads, so asserting on it is the external form.
+    let schema = qfs_core::server_node_schema(ServerNode::Agents);
+    let cols: Vec<&str> = schema.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(cols, vec!["name", "policy"], "name + policy handle only");
+    for c in &cols {
+        let lc = c.to_lowercase();
+        assert!(
+            !lc.contains("secret") && !lc.contains("token") && !lc.contains("credential"),
+            "the agent schema must carry no secret material: `{c}`"
+        );
+    }
+}

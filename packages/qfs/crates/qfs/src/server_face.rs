@@ -197,5 +197,17 @@ fn collection_rows(state: &ServerState, node: ServerNode) -> Vec<Row> {
                 ])
             })
             .collect(),
+        ServerNode::Agents => state
+            .agents
+            .values()
+            // blueprint §19: the agent read-back is credential-free — name + policy handle only,
+            // in the `server_node_schema(Agents)` column order.
+            .map(|d| {
+                Row::new(vec![
+                    Value::Text(d.name.clone()),
+                    opt_text(d.policy.as_ref()),
+                ])
+            })
+            .collect(),
     }
 }

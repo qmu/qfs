@@ -5,7 +5,8 @@
 use qfs_core::{preview, ServerNode, ServerWriteOp, StatementSpec};
 use qfs_parser::parse_statement;
 use qfs_server::{
-    EndpointDef, JobDef, PolicyDef, ServerState, StatementSource, TriggerDef, ViewDef, WebhookDef,
+    AgentDef, EndpointDef, JobDef, PolicyDef, ServerState, StatementSource, TriggerDef, ViewDef,
+    WebhookDef,
 };
 
 use crate::{
@@ -273,6 +274,42 @@ fn round_trip_preserves_config_projection() {
     assert!(
         diff(&s, &loaded).is_empty(),
         "emit -> load must reproduce the config projection"
+    );
+}
+
+#[test]
+fn agent_binding_round_trips_through_dump_restore() {
+    // blueprint §19 axis A: the §16 provision dump/restore loop round-trips an agent binding
+    // (credential-free: name + attached policy handle only). emit -> load reproduces the exact
+    // projection, so the reconcile plan is empty (idempotent).
+    let mut server = ServerState::new();
+    server.agents.insert(
+        "triage".to_string(),
+        AgentDef {
+            name: "triage".to_string(),
+            policy: Some("narrow".to_string()),
+        },
+    );
+    server.agents.insert(
+        "sweeper".to_string(),
+        AgentDef {
+            name: "sweeper".to_string(),
+            policy: None,
+        },
+    );
+    let s = cfg(server);
+
+    let doc = crate::emit(&s, &stamp());
+    let loaded = load(&doc).unwrap();
+    assert_eq!(loaded.server.agents.len(), 2);
+    assert_eq!(
+        loaded.server.agents["triage"].policy.as_deref(),
+        Some("narrow")
+    );
+    assert_eq!(loaded.server.agents["sweeper"].policy, None);
+    assert!(
+        diff(&s, &loaded).is_empty(),
+        "emit -> load must reproduce the agent config projection"
     );
 }
 

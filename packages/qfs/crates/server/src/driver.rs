@@ -21,7 +21,8 @@ use qfs_core::{
 };
 
 use crate::state::{
-    EndpointDef, JobDef, PolicyDef, ServerState, StatementSource, TriggerDef, ViewDef, WebhookDef,
+    AgentDef, EndpointDef, JobDef, PolicyDef, ServerState, StatementSource, TriggerDef, ViewDef,
+    WebhookDef,
 };
 
 /// The reserved mount point for the server-as-a-driver (blueprint §10).
@@ -279,6 +280,7 @@ fn collection_contains(state: &ServerState, node: ServerNode, name: &str) -> boo
         ServerNode::Views => state.views.contains_key(name),
         ServerNode::Policies => state.policies.contains_key(name),
         ServerNode::Webhooks => state.webhooks.contains_key(name),
+        ServerNode::Agents => state.agents.contains_key(name),
     }
 }
 
@@ -304,6 +306,9 @@ fn remove_row(state: &mut ServerState, node: ServerNode, name: &str) {
         }
         ServerNode::Webhooks => {
             state.webhooks.remove(name);
+        }
+        ServerNode::Agents => {
+            state.agents.remove(name);
         }
     }
 }
@@ -435,6 +440,19 @@ fn insert_row(
                     name,
                     route: text("route"),
                     secret: text("secret"),
+                },
+            );
+        }
+        ServerNode::Agents => {
+            // blueprint §19: credential-free — name + the optional attached POLICY handle only.
+            state.agents.insert(
+                name.clone(),
+                AgentDef {
+                    name,
+                    policy: match get("policy") {
+                        Some(Value::Text(s)) if !s.is_empty() => Some(s.clone()),
+                        _ => None,
+                    },
                 },
             );
         }

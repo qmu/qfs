@@ -39,6 +39,10 @@ pub enum ServerNode {
     Policies,
     /// `/server/webhooks` — inbound webhook routes (`CREATE WEBHOOK`).
     Webhooks,
+    /// `/server/agents` — agent principals (`CREATE AGENT`, blueprint §19). An agent is a
+    /// new user principal (a policy subject), NOT a process — its declared shape lands here
+    /// as a binding row read back beside `/server/jobs`.
+    Agents,
 }
 
 impl ServerNode {
@@ -54,6 +58,7 @@ impl ServerNode {
             ServerNode::Views => "views",
             ServerNode::Policies => "policies",
             ServerNode::Webhooks => "webhooks",
+            ServerNode::Agents => "agents",
         }
     }
 
@@ -69,6 +74,7 @@ impl ServerNode {
             "views" | "materialized_views" => Some(ServerNode::Views),
             "policies" => Some(ServerNode::Policies),
             "webhooks" => Some(ServerNode::Webhooks),
+            "agents" => Some(ServerNode::Agents),
             _ => None,
         }
     }

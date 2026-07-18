@@ -595,6 +595,10 @@ pub enum DdlKind {
     /// `CONNECTION` is parsed as a contextual UPPERCASE ident (the `AT` lesson, like `MATERIALIZED`)
     /// so it adds NO frozen keyword.
     Connection,
+    /// `CREATE AGENT` — an agent principal declaration (blueprint §19). `AGENT` is parsed as a
+    /// contextual UPPERCASE ident (the `AT`/`CONNECTION` lesson), so it adds NO frozen keyword — a
+    /// column named `agent` still parses everywhere.
+    Agent,
 }
 
 /// An expression (blueprint §3 operators, frozen). The boolean structure (`AND`/`OR`/

@@ -2970,6 +2970,9 @@ fn ddl_kind(input: &mut Stream<'_>) -> ModalResult<DdlKind> {
         kw(Keyword::Policy).map(|_| DdlKind::Policy),
         // `CONNECTION` is a contextual ident (no frozen keyword), like `materialized`.
         word("CONNECTION").map(|_| DdlKind::Connection),
+        // `AGENT` is a contextual ident (no frozen keyword), like `CONNECTION` — blueprint §19.
+        // The keyword freeze stays intact, so a column named `agent` still parses everywhere.
+        word("AGENT").map(|_| DdlKind::Agent),
     ))
     .parse_next(input)
 }
@@ -3042,6 +3045,7 @@ fn ddl_kind_segment(kind: DdlKind) -> &'static str {
         DdlKind::Webhook => "webhooks",
         DdlKind::Policy => "policies",
         DdlKind::Connection => "connections",
+        DdlKind::Agent => "agents",
     }
 }
 

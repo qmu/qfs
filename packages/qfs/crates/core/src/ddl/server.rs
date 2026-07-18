@@ -229,8 +229,22 @@ pub struct WebhookDecl {
     pub policy_ref: PolicyRef,
 }
 
-/// The five frozen server-binding DDL forms (blueprint §3). A sum type, one variant per form —
-/// closed; a new backend adds none.
+/// `CREATE AGENT <name> [POLICY <p>]` — an agent-principal binding (blueprint §19). An agent is a
+/// new user principal (a first-class policy subject), NOT a process: this ticket lands the naming +
+/// registry row only. It carries no cadence and no plan body yet — its query functions (blueprint
+/// §19 axis C) and launch cadence (axis D) build on this row in later tickets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentDecl {
+    /// The agent name (the config row key, and the `Subject::Agent` identity).
+    pub name: String,
+    /// The attached POLICY handle (a `/server/policies` row name) the agent's fired plans commit
+    /// under (least privilege, blueprint §19 axis E). `None` = no policy attached ⇒ fail-closed
+    /// default-deny at fire time. Stored as a handle, never inline credential material.
+    pub policy_ref: PolicyRef,
+}
+
+/// The frozen server-binding DDL forms (blueprint §3, extended by §19's agents). A sum type, one
+/// variant per form — closed; a new backend adds none.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerBindingDdl {
     /// `CREATE ENDPOINT …`
@@ -243,6 +257,8 @@ pub enum ServerBindingDdl {
     View(ViewDecl),
     /// `CREATE WEBHOOK …`
     Webhook(WebhookDecl),
+    /// `CREATE AGENT …` (blueprint §19).
+    Agent(AgentDecl),
 }
 
 impl ServerBindingDdl {
@@ -255,6 +271,7 @@ impl ServerBindingDdl {
             Self::Job(_) => ServerNode::Jobs,
             Self::View(_) => ServerNode::Views,
             Self::Webhook(_) => ServerNode::Webhooks,
+            Self::Agent(_) => ServerNode::Agents,
         }
     }
 
@@ -267,6 +284,7 @@ impl ServerBindingDdl {
             Self::Job(d) => &d.name,
             Self::View(d) => &d.name,
             Self::Webhook(d) => &d.name,
+            Self::Agent(d) => &d.name,
         }
     }
 }
@@ -433,6 +451,10 @@ pub fn from_server_ddl(ddl: &ServerDdl) -> Result<ServerBindingDdl, DdlError> {
                 policy_ref: ddl.policy.clone(),
             }))
         }
+        DdlKind::Agent => Ok(ServerBindingDdl::Agent(AgentDecl {
+            name,
+            policy_ref: ddl.policy.clone(),
+        })),
         DdlKind::Policy => Err(DdlError::validation(
             "UNSUPPORTED_DDL",
             "CREATE POLICY is deferred to t34 (capability gating); not a t31 binding form",
@@ -628,6 +650,14 @@ pub fn binding_config_row(ddl: &ServerBindingDdl) -> ConfigRow {
         ServerBindingDdl::Webhook(d) => {
             row.set_text("route", d.route.as_str());
         }
+        ServerBindingDdl::Agent(d) => {
+            // blueprint §19: the agent binding is credential-free — it carries only its name and,
+            // when attached, its least-privilege POLICY handle. Omitted when `None` so a
+            // policy-less agent row stays byte-identical (the column fills with `Null`).
+            if let Some(policy) = d.policy_ref.as_ref() {
+                row.set_text("policy", policy.as_str());
+            }
+        }
     }
     row
 }
@@ -777,6 +807,14 @@ pub fn server_node_schema(node: ServerNode) -> Schema {
             col("name", ColumnType::Text, false),
             col("handler", ColumnType::Text, true),
             col("allow", ColumnType::Array(Box::new(ColumnType::Text)), true),
+        ]),
+        ServerNode::Agents => Schema::new(vec![
+            // blueprint §19 axis A: the agent binding is credential-free. This ticket lands the
+            // naming + registry row only — `name` (the agent identity / `Subject::Agent`) and the
+            // optional attached `policy` handle (axis E). Cadence + query-function columns build on
+            // this row in later tickets (axes C/D).
+            col("name", ColumnType::Text, false),
+            col("policy", ColumnType::Text, true),
         ]),
         ServerNode::Webhooks => Schema::new(vec![
             col("name", ColumnType::Text, false),

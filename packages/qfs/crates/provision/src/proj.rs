@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 use qfs_core::{
     config_row_batch, Column, ColumnType, ConfigRow, Row, RowBatch, Schema, ServerNode, Value,
 };
-use qfs_server::{EndpointDef, JobDef, PolicyDef, ServerState, TriggerDef, ViewDef, WebhookDef};
+use qfs_server::{
+    AgentDef, EndpointDef, JobDef, PolicyDef, ServerState, TriggerDef, ViewDef, WebhookDef,
+};
 
 /// One `/server` row projected to its config columns (runtime fields excluded). The map is a
 /// [`BTreeMap`] so column iteration — and thus the emitted `VALUES (...)` order and the diff
@@ -184,6 +186,19 @@ pub fn webhook_proj(def: &WebhookDef) -> ProjRow {
     row
 }
 
+/// The config projection of an agent row (`name`; `policy` optional). Credential-free (blueprint
+/// §19 axis A/E) — the agent binding's identity as code is its name and, when attached, its
+/// least-privilege POLICY handle.
+#[must_use]
+pub fn agent_proj(def: &AgentDef) -> ProjRow {
+    let mut row = ProjRow::default();
+    row.set_text("name", &def.name);
+    if let Some(policy) = &def.policy {
+        row.set_text_opt("policy", policy);
+    }
+    row
+}
+
 /// The name→projection map of one collection, keyed and sorted by row name.
 pub(crate) fn collection_projs(state: &ServerState, node: ServerNode) -> BTreeMap<String, ProjRow> {
     match node {
@@ -217,15 +232,21 @@ pub(crate) fn collection_projs(state: &ServerState, node: ServerNode) -> BTreeMa
             .iter()
             .map(|(k, d)| (k.clone(), webhook_proj(d)))
             .collect(),
+        ServerNode::Agents => state
+            .agents
+            .iter()
+            .map(|(k, d)| (k.clone(), agent_proj(d)))
+            .collect(),
     }
 }
 
-/// The six `/server` collections, in the fixed order the emitter and diff engine walk them.
-pub(crate) const SERVER_NODES: [ServerNode; 6] = [
+/// The seven `/server` collections, in the fixed order the emitter and diff engine walk them.
+pub(crate) const SERVER_NODES: [ServerNode; 7] = [
     ServerNode::Endpoints,
     ServerNode::Triggers,
     ServerNode::Jobs,
     ServerNode::Views,
     ServerNode::Policies,
     ServerNode::Webhooks,
+    ServerNode::Agents,
 ];

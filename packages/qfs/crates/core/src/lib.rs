@@ -38,10 +38,10 @@ mod typeck;
 
 pub use ddl::server::{
     binding_config_row, config_row_batch, desugar_to_insert, from_server_ddl, job_runs_schema,
-    normalize_spans, parse_server_binding_ddl, server_node_schema, server_write_plan, ConfigRow,
-    DdlError as ServerDdlError, DesugarToInsert, EndpointDecl, EventRef, HttpMethod, Interval,
-    JobDecl, PlanSpec, PolicyRef, Route, ServerBindingDdl, StatementSpec, TriggerDecl, ViewDecl,
-    WebhookDecl, CREATE_WRITE_OP,
+    normalize_spans, parse_server_binding_ddl, server_node_schema, server_write_plan, AgentDecl,
+    ConfigRow, DdlError as ServerDdlError, DesugarToInsert, EndpointDecl, EventRef, HttpMethod,
+    Interval, JobDecl, PlanSpec, PolicyRef, Route, ServerBindingDdl, StatementSpec, TriggerDecl,
+    ViewDecl, WebhookDecl, CREATE_WRITE_OP,
 };
 pub use describe::{archetype_hint, DescribeReport, PushdownSummary};
 pub use eval::{call_proc_id, effect_kind_for, EvalError, EvalValue, Evaluator, PlanSource};

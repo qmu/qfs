@@ -70,8 +70,8 @@ pub use runtime::{
     ServerConfigApplier,
 };
 pub use state::{
-    EndpointDef, JobDef, JobRunRecord, PolicyDef, ServerState, StatementSource, TriggerDef,
-    ViewDef, WebhookDef, JOB_RUN_HISTORY_CAP,
+    AgentDef, EndpointDef, JobDef, JobRunRecord, PolicyDef, ServerState, StatementSource,
+    TriggerDef, ViewDef, WebhookDef, JOB_RUN_HISTORY_CAP,
 };
 
 /// Boot and run the server from a `.qfs` config file (blueprint §10).

@@ -107,7 +107,7 @@ one owner-attended live round proving a real fire and a visible denial.
 
 ### Grammar + registry
 
-- [ ] `CREATE AGENT <name> …` parses on the closed core (#20260718203331-create-agent-grammar-registry.md) (contextual identifiers, keyword freeze
+- [x] `CREATE AGENT <name> …` parses on the closed core (#20260718203331-create-agent-grammar-registry.md) (contextual identifiers, keyword freeze
       intact), desugars to registry rows like every other binding, and round-trips through
       dump/restore; `DESCRIBE` lists agents credential-free
 
@@ -192,3 +192,4 @@ one owner-attended live round proving a real fire and a visible denial.
 - 2026-07-18 — ticket added — 20260718203335-agent-live-proof-round.md
 - 2026-07-18 — mission replanned — agent-model-ruled-and-set-ticketed
 - 2026-07-18 — ticket archived — 20260718203330-agent-model-blueprint-chapter.md
+- 2026-07-18 — ticket archived — 20260718203331-create-agent-grammar-registry.md
