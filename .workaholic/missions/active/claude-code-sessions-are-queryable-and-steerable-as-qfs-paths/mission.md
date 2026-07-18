@@ -262,3 +262,26 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
   session (`19b46573-…`, status `busy`) — exit 0; the bare `/claude/sessions |> LIMIT 1`
   returned `{"code":"retired_path","kind":"capability"}` naming
   `/hosts/local/claude/sessions`, exit 3.
+- 2026-07-18 — **Replan: the two open owner decisions blocking items 5–6 were ruled**
+  (`/monitor` interrogation, AskUserQuestion). Four rulings recorded durably in the tickets and
+  the launch brief:
+  1. **Steering medium (item 5) — owner-attended probe.** Not the `--resume -p` turn fallback,
+     not fail-closed retirement: the transport is chosen by an owner-attended probe from an
+     unrestricted shell. New evidence this replan — `~/.claude/daemon/roster.json` is readable
+     and shows each live worker carrying a `rendezvousSock`/`ptySock` under `/tmp/cc-daemon-1000`
+     with per-worker `rvAuth`/`ptyAuth` tokens and a daemon `control.key`, so the medium is a
+     token-authenticated per-session unix socket (ahead of the teams/tasks dirs as the sink). The
+     socket dir was absent at probe time and `teams/session-*` reads were classifier-denied, so
+     the wire framing stays unverified from here. **Item 5 remains fail-closed, escalation-blocked
+     on the owner-attended probe.**
+  2–4. **Launch (item 6) — design acknowledged.** INSERT grammar (`Sessions` → `Select+Insert`,
+     `RETURNING id`); irreversible-gated (`--commit-irreversible`/ack); optional `name` column
+     accepted. **Quality gate 1 (owner acknowledgment before implementing commits) is satisfied.**
+     The hermetic implementation (QG3) is now drive-ready; QG2's live proof stays owner-attended
+     because it composes with the still-blocked steering.
+  No tickets emitted and no acceptance items added or reworded — this replan resolved round-4
+  per-ticket decisions on the existing tickets 010500/010600. `drive_authorized` **not** stamped:
+  the steering medium is deferred to owner-attended work, so the remaining set is not uniformly
+  drive-ready and both remaining live proofs need an owner-attended session (real Claude spend /
+  classifier-blocked daemon probing).
+- 2026-07-18 — mission replanned — design-brief-session-launch.md

@@ -95,3 +95,30 @@ spend lands on the operator's account. The irreversible gate (above) is the cont
 2. Irreversible-gated launch — agreed?
 3. Should the launch surface accept a `name` column (the store records one; it would make the
    returned session locatable by name in later queries)?
+
+## Owner rulings (2026-07-18 — replan, all three questions closed)
+
+The owner ruled all three open questions in a `/monitor` replan interrogation
+(AskUserQuestion, 2026-07-18); the brief is **acknowledged** and quality gate 1 of ticket
+`20260717010600` is satisfied. The rulings, verbatim in effect:
+
+1. **Grammar — INSERT form approved.** `INSERT INTO /hosts/<host>/claude/sessions (cwd, prompt
+   [, name]) VALUES (…)` is the launch verb. No `CREATE SESSION` noun; the `Sessions` relation's
+   capabilities widen from `Select` to `Select+Insert` deliberately, with the write routed to a
+   launcher effect in the applier lane (never the pure driver crate). `RETURNING id` answers
+   addressability.
+2. **Gating — irreversible acknowledgement required.** The launch INSERT is declared irreversible
+   (the `Remove`/`mail.send` precedent): PREVIEW shows exactly what would spawn (binary path as
+   configuration, cwd + prompt + name as the row payload); COMMIT requires the irreversible ack
+   (`--commit-irreversible` / interactive ack). Fail-closed without a configured store.
+3. **`name` column — accepted.** The launch surface accepts an optional `name` column
+   (`INSERT (cwd, prompt, name)`; omittable). The real store records a session name, so a launched
+   session is locatable by name in later `/hosts/<host>/claude/sessions` queries.
+
+**What this unblocks and what it does not.** The launch *implementation* — INSERT grammar, the
+capability widening, the launcher effect behind a fake seam, the irreversible gate, the `name`
+column, and the hermetic tests (QG3) — is now fully specified and drive-ready. QG2's **live proof**
+is not: it composes launch with steering (capability 4), and steering's transport medium is still
+undecided pending an **owner-attended probe** (see ticket `20260717010500`). So the live,
+money-spending composition waits for an owner-attended session; the hermetic implementation does
+not.

@@ -77,3 +77,26 @@ operator; id via `RETURNING`; three open questions listed). Quality gate 1 requi
 acknowledgment BEFORE any implementing commit, so this ticket stays in todo until the owner
 rules. Also blocked serially: QG 2's live proof composes launch with steering (capability 4),
 and the steering ticket (20260717010500) is itself pending a medium ruling.
+
+## Status update (2026-07-18 — brief acknowledged; QG1 satisfied)
+
+The owner ruled all three open questions in a `/monitor` replan (AskUserQuestion, 2026-07-18) —
+recorded in the brief's "Owner rulings" section: **INSERT grammar** (`Sessions` widens to
+`Select+Insert`, `RETURNING id`), **irreversible-gated** launch (`--commit-irreversible` / ack),
+and an accepted optional **`name` column**. **Quality gate 1 (owner acknowledgment before
+implementing commits) is now satisfied.**
+
+Drive-readiness of the two remaining gates:
+
+- **QG3 (hermetic) — drive-ready now.** The launcher effect behind a fake seam, INSERT grammar +
+  capability widening, the irreversible preview/commit gate, the `name` column, and the
+  bad-cwd / store-unconfigured failure modes can all be implemented and tested hermetically
+  without an owner or any spend.
+- **QG2 (live proof) — owner-attended, still blocked.** It launches a real session and composes
+  with steering (capability 4), whose transport medium remains undecided pending the
+  owner-attended probe in ticket `20260717010500`. The live, money-spending composition waits for
+  an owner-attended session; the hermetic implementation does not depend on it.
+
+Dependency note: the `depends_on: 20260717010500` edge exists because QG2 composes launch with
+steering. The **hermetic implementation** (QG1+QG3) does not need steering wired — only the
+live-proof gate does. A driving session may land QG1+QG3 and leave QG2 for an owner-attended run.

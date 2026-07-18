@@ -92,3 +92,31 @@ todo because the decisive probes need an owner-attended session:
 Next step (owner-attended): probe the daemon dispatch / teams inbox formats from an
 unrestricted shell, or rule the `--resume -p` fallback; then wire the chosen medium behind the
 unchanged `SessionSource::append_instruction` seam with `scan_instructions` reading it back.
+
+## Owner decision (2026-07-18 — replan: medium probe is owner-attended)
+
+Ruled in a `/monitor` replan (AskUserQuestion, 2026-07-18): **the transport medium is chosen by
+an owner-attended probe**, not the `--resume -p` turn-running fallback and not fail-closed
+retirement. The ticket stays in todo, fail-closed, until that probe picks a medium. This is a
+deliberate escalation-block: the decisive reads need an unrestricted shell the autonomous session
+does not have.
+
+Further evidence gathered this replan (from the reads that WERE permitted here):
+
+- `~/.claude/daemon/roster.json` is readable and confirms the peer transport concretely: each
+  live worker record carries a `rendezvousSock` and a `ptySock` under `/tmp/cc-daemon-1000/
+  <supervisor>/{rv,pty}/<short>.sock`, plus per-worker `rvAuth` / `ptyAuth` tokens and a
+  daemon-level `control.key` under `~/.claude/daemon/`. So the medium is a **per-session unix
+  socket authenticated by a token the roster hands out** — the most promising sink for the
+  instructions append, ahead of the teams/tasks dirs.
+- But the socket directory `/tmp/cc-daemon-1000/` did not exist at probe time (the supervisor pid
+  in the roster may be stale), and reads under `~/.claude/teams/session-*/` were **denied by this
+  session's tool-permission classifier**. So the rendezvous/pty framing on the wire stays
+  unverified from here — exactly the "no verifiable medium from THIS session" boundary, which is
+  why the owner-attended probe is the ruled next action.
+
+Concretely, the owner-attended probe should: (1) confirm a live `rendezvousSock`/`ptySock` exists
+for a running session, (2) read the `rvAuth`/`ptyAuth` framing (or the `control.key` dispatch
+protocol under `~/.claude/daemon/dispatch/`), and (3) decide whether the instructions append
+speaks that socket directly or shells out to a sanctioned client — then wire it behind the
+unchanged `SessionSource::append_instruction` seam.
