@@ -426,6 +426,7 @@ fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> Re
             &d,
             mount.secret_ref.as_deref(),
             mount.account.as_deref(),
+            mount.app.as_deref(),
         );
         // The view specs (tier 2): reading a declared mount evaluates the matched view's stored body.
         let views = crate::declared_eval::view_specs(&d, &declared_types);

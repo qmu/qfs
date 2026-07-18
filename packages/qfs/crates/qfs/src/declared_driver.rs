@@ -78,6 +78,10 @@ pub(crate) struct DeclaredMount {
     /// The connection's bound account label (`CONNECT … ACCOUNT '<label>'`) — the account an
     /// `AUTH ACCOUNT '<provider>'` driver resolves its live bearer from (`None` → `default`).
     pub account: Option<String>,
+    /// The OAuth app label bound to this mount (`CONNECT … `, `path_binding.app`) — which provider
+    /// app an OAuth `AUTH ACCOUNT` driver exchanges its stored refresh token through. `None` falls
+    /// back to the consent row's app (`db_get_consent_app`); a static-bearer provider ignores it.
+    pub app: Option<String>,
 }
 
 /// Load every declared driver from the System DB `sys_drivers` table (best-effort, cred-free — a pure
@@ -486,6 +490,7 @@ pub(crate) fn declared_mounts() -> Vec<DeclaredMount> {
                 driver: d,
                 secret_ref: b.secret_ref,
                 account: b.account,
+                app: b.app,
             })
         })
         .collect()
@@ -712,6 +717,7 @@ pub(crate) fn declared_secrets(
     d: &DeclaredDriver,
     secret_ref: Option<&str>,
     account: Option<&str>,
+    app: Option<&str>,
 ) -> Arc<dyn qfs_secrets::Secrets> {
     let vault: Arc<dyn Secrets> = match crate::connection::open_store_for_commit() {
         Some(store) => Arc::new(store),
@@ -720,13 +726,24 @@ pub(crate) fn declared_secrets(
     // `AUTH ACCOUNT '<provider>'`: the live bearer comes from the shared provider account, not a
     // per-driver SECRET. Resolve the declared coordinate `(provider, "default")` to the vault's
     // stored bearer at `(provider, <connected account>)` — the account-referenced auth the declared
-    // model previously lacked. (Providers whose stored credential is a static bearer — github,
-    // slack, chatwork, cf — work through this directly.)
+    // model previously lacked.
     if let Some(provider) = account_auth_provider(&d.auth) {
         let account = account
             .filter(|s| !s.is_empty())
             .unwrap_or("default")
             .to_string();
+        // An OAuth provider (google) stores a REFRESH token, not a usable bearer — the raw vault
+        // row cannot authenticate a request. Hand it to the OAuth adapter, which exchanges the
+        // refresh token for a LIVE bearer through the mount's (or consent row's) app. Static-bearer
+        // providers (github, slack, chatwork, cf) return the stored bearer directly, unchanged.
+        if is_oauth_account_provider(&provider) {
+            return Arc::new(OAuthAccountBearerSecrets {
+                provider,
+                account,
+                app: app.filter(|s| !s.is_empty()).map(str::to_string),
+                vault,
+            });
+        }
         return Arc::new(AccountBearerSecrets {
             provider,
             account,
@@ -805,6 +822,88 @@ impl Secrets for AccountBearerSecrets {
     fn remove(&self, _key: &CredentialKey) -> Result<(), SecretError> {
         Err(SecretError::Backend(
             "AUTH ACCOUNT secrets adapter is read-only".to_string(),
+        ))
+    }
+
+    fn list(
+        &self,
+        driver: Option<&qfs_secrets::DriverId>,
+    ) -> Result<Vec<ConnectionRecord>, SecretError> {
+        if driver.is_some_and(|driver| driver.0 != self.provider) {
+            return Ok(Vec::new());
+        }
+        self.vault.list(driver)
+    }
+}
+
+/// Whether an `AUTH ACCOUNT '<provider>'` provider's stored credential is an OAuth REFRESH token
+/// that must be exchanged for a live bearer before use (ticket 20260718203328). Only `google` today;
+/// every other provider (github, slack, chatwork, cf) hands back a STATIC bearer served directly.
+fn is_oauth_account_provider(provider: &str) -> bool {
+    provider == "google"
+}
+
+/// The [`Secrets`] adapter an OAuth `AUTH ACCOUNT '<provider>'` declared driver resolves its bearer
+/// through. Unlike [`AccountBearerSecrets`] (which returns the stored value verbatim), an OAuth
+/// provider's stored credential is a REFRESH token that cannot authenticate a request; this adapter
+/// exchanges it for a LIVE bearer via the mount's app — falling back to the consent row's recorded
+/// app (`db_get_consent_app`), then the reserved `env` label. The declaration carries only the
+/// provider + app label, never a token. A missing app fails closed with a structured, secret-free
+/// cause naming the app (never a silent unauthenticated call); the adapter stays read-only.
+struct OAuthAccountBearerSecrets {
+    provider: String,
+    account: String,
+    app: Option<String>,
+    vault: Arc<dyn Secrets>,
+}
+
+impl OAuthAccountBearerSecrets {
+    /// The app label to exchange the refresh token through: the mount's `app` first, else the
+    /// consent row's recorded app (`db_get_consent_app`), else the reserved `env` label (client
+    /// id/secret from the environment). Explicit ordering so a mount that omits `app` still resolves
+    /// when the consent row names one.
+    fn resolve_app(&self) -> String {
+        if let Some(app) = self.app.as_deref().filter(|s| !s.is_empty()) {
+            return app.to_string();
+        }
+        if let Ok(Some(sys)) = crate::store::open_system_db() {
+            let conn = sys.into_db().into_connection();
+            if let Some(app) =
+                crate::secret_store::db_get_consent_app(&conn, &self.provider, &self.account)
+            {
+                if !app.is_empty() {
+                    return app;
+                }
+            }
+        }
+        "env".to_string()
+    }
+}
+
+impl Secrets for OAuthAccountBearerSecrets {
+    fn get(&self, key: &CredentialKey) -> Result<Secret, SecretError> {
+        let expected = CredentialKey::new(
+            qfs_secrets::DriverId(self.provider.clone()),
+            qfs_secrets::ConnectionId::new("default")
+                .map_err(|e| SecretError::Backend(e.to_string()))?,
+        );
+        if key != &expected {
+            return Err(SecretError::NotFound(key.clone()));
+        }
+        // google is the only OAuth `AUTH ACCOUNT` provider today (the predicate that routed here).
+        let app = self.resolve_app();
+        crate::google::google_account_bearer(&self.account, &app).map_err(SecretError::Backend)
+    }
+
+    fn put(&self, _key: &CredentialKey, _value: Secret) -> Result<(), SecretError> {
+        Err(SecretError::Backend(
+            "OAuth AUTH ACCOUNT secrets adapter is read-only".to_string(),
+        ))
+    }
+
+    fn remove(&self, _key: &CredentialKey) -> Result<(), SecretError> {
+        Err(SecretError::Backend(
+            "OAuth AUTH ACCOUNT secrets adapter is read-only".to_string(),
         ))
     }
 
@@ -925,6 +1024,126 @@ mod tests {
         }
     }
 
+    fn gdecl_account_driver() -> DeclaredDriver {
+        DeclaredDriver {
+            name: "gdecl".to_string(),
+            base_url: "https://www.googleapis.com".to_string(),
+            auth: r#"{"kind":"account","provider":"google"}"#.to_string(),
+            pagination: None,
+            views: Vec::new(),
+            maps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn oauth_account_driver_uses_the_oauth_adapter_and_fails_closed_naming_the_app() {
+        // ticket 20260718203328: an OAuth provider (google) routes to the OAuth adapter — NOT the
+        // static-bearer one. With no app configured the adapter fails CLOSED with a structured,
+        // secret-free cause naming the app (never a silent unauthenticated call, never the raw
+        // refresh token). A `HomeGuard` isolates XDG so no live account is ever touched.
+        let _home = crate::testenv::HomeGuard::new();
+        std::env::remove_var(crate::google::GOOGLE_CLIENT_ID_ENV);
+        std::env::remove_var(crate::google::GOOGLE_CLIENT_SECRET_ENV);
+        let d = gdecl_account_driver();
+        let secrets = declared_secrets(&d, None, Some("me@example.com"), None);
+        let declared_coord = CredentialKey::new(
+            qfs_secrets::DriverId("google".to_string()),
+            qfs_secrets::ConnectionId::new("default").unwrap(),
+        );
+        match secrets.get(&declared_coord) {
+            Err(SecretError::Backend(msg)) => {
+                assert!(
+                    msg.contains("google") && msg.contains("app") && msg.contains("env"),
+                    "the closed error names the provider + missing app label: {msg}"
+                );
+            }
+            other => panic!("expected a closed structured app error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn oauth_account_adapter_rejects_a_different_auth_key() {
+        // The OAuth adapter only answers its own `(provider, "default")` coordinate; any other key
+        // is a miss (never a cross-provider bearer).
+        let _home = crate::testenv::HomeGuard::new();
+        let d = gdecl_account_driver();
+        let secrets = declared_secrets(&d, None, Some("me@example.com"), None);
+        let other = CredentialKey::new(
+            qfs_secrets::DriverId("slack".to_string()),
+            qfs_secrets::ConnectionId::new("default").unwrap(),
+        );
+        assert_eq!(secrets.get(&other).unwrap_err().code(), "secret_not_found");
+    }
+
+    #[test]
+    fn oauth_adapter_resolve_app_prefers_the_mount_then_falls_back_to_env() {
+        // The app the refresh token is exchanged through: the mount's `app` wins; absent it (and
+        // with no consent-row app in the isolated System DB) the reserved `env` label is the floor.
+        let _home = crate::testenv::HomeGuard::new();
+        let vault: Arc<dyn Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
+        let with_mount_app = OAuthAccountBearerSecrets {
+            provider: "google".to_string(),
+            account: "me@example.com".to_string(),
+            app: Some("qmu".to_string()),
+            vault: vault.clone(),
+        };
+        assert_eq!(with_mount_app.resolve_app(), "qmu", "the mount app wins");
+        let without_app = OAuthAccountBearerSecrets {
+            provider: "google".to_string(),
+            account: "me@example.com".to_string(),
+            app: None,
+            vault,
+        };
+        assert_eq!(
+            without_app.resolve_app(),
+            "env",
+            "no mount/consent app falls back to the reserved env label"
+        );
+    }
+
+    #[test]
+    fn declared_mounts_carries_the_binding_app() {
+        // ticket 20260718203328: `declared_mounts()` must propagate the path_binding `app` onto the
+        // DeclaredMount (previously dropped), so the OAuth adapter can exchange through the mount's
+        // app. Seed a declared driver + a binding naming an app in the isolated System DB.
+        let _home = crate::testenv::HomeGuard::new();
+        {
+            let sys = crate::store::open_system_db()
+                .unwrap()
+                .expect("system db resolves");
+            let conn = sys.into_db().into_connection();
+            conn.execute(
+                "INSERT INTO sys_drivers (kind, name, base_url, auth, verb, body, irreversible) \
+                 VALUES ('driver', 'gdecl', 'https://www.googleapis.com', \
+                         '{\"kind\":\"account\",\"provider\":\"google\"}', NULL, NULL, 0)",
+                [],
+            )
+            .unwrap();
+            crate::path_binding::db_upsert_binding(
+                &conn,
+                "/gdecl",
+                "gdecl",
+                None,
+                None,
+                None,
+                Some("me@example.com"),
+                Some("qmu"),
+            )
+            .unwrap();
+        }
+        let mounts = declared_mounts();
+        let mount = mounts
+            .iter()
+            .find(|m| m.path == "/gdecl")
+            .expect("the declared mount is listed");
+        assert_eq!(
+            mount.app.as_deref(),
+            Some("qmu"),
+            "the binding's app reaches the mount"
+        );
+        assert_eq!(mount.account.as_deref(), Some("me@example.com"));
+    }
+
     #[test]
     fn auth_account_lifts_to_an_account_strategy_at_the_provider_coordinate() {
         // The `{"kind":"account","provider":"github"}` descriptor lifts to `AuthStrategy::Account`
@@ -1001,7 +1220,7 @@ mod tests {
         let d = ghdecl_account_driver();
         // No commit store in the test env → the adapter is built over an in-memory vault; we assert
         // its SHAPE (account resolution + fail-closed), the resolution itself is covered above.
-        let secrets = declared_secrets(&d, None, Some("work"));
+        let secrets = declared_secrets(&d, None, Some("work"), None);
         let declared_coord = CredentialKey::new(
             qfs_secrets::DriverId("github".to_string()),
             qfs_secrets::ConnectionId::new("default").unwrap(),
@@ -1023,7 +1242,7 @@ mod tests {
         let var = "QFS_DECLARED_CHATWORK_TOKEN_TEST";
         std::env::set_var(var, "cw-test-token");
         let d = chatwork_driver();
-        let secrets = declared_secrets(&d, Some(&format!("env:{var}")), None);
+        let secrets = declared_secrets(&d, Some(&format!("env:{var}")), None, None);
         let key = CredentialKey::new(
             qfs_secrets::DriverId("chatwork".to_string()),
             qfs_secrets::ConnectionId::new("default").unwrap(),
@@ -1039,7 +1258,7 @@ mod tests {
         let var = "QFS_DECLARED_CHATWORK_TOKEN_MISMATCH_TEST";
         std::env::set_var(var, "cw-test-token");
         let d = chatwork_driver();
-        let secrets = declared_secrets(&d, Some(&format!("env:{var}")), None);
+        let secrets = declared_secrets(&d, Some(&format!("env:{var}")), None, None);
         let key = CredentialKey::new(
             qfs_secrets::DriverId("slack".to_string()),
             qfs_secrets::ConnectionId::new("default").unwrap(),

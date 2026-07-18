@@ -357,6 +357,7 @@ fn live_registry() -> DriverRegistry {
         let d = mount.driver;
         let secret_ref = mount.secret_ref;
         let account = mount.account;
+        let app = mount.app;
         let Some(remap) = crate::declared_driver::declared_remap(&path, &d.name) else {
             continue;
         };
@@ -374,6 +375,7 @@ fn live_registry() -> DriverRegistry {
                         &d,
                         secret_ref.as_deref(),
                         account.as_deref(),
+                        app.as_deref(),
                     );
                     let driver = crate::declared_driver::live_rest_driver(&d, client, secrets)?;
                     let bridge = qfs_driver_http::rest_apply_driver(&driver);
