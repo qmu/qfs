@@ -134,7 +134,7 @@ live backlog.
 
 ## Acceptance
 
-- [ ] **Cloud account declarations ship.** (#20260718203325-create-account-secret-ref-bind-time-resolution.md) A cloud mount comes from a committed declaration with a
+- [x] **Cloud account declarations ship.** (#20260718203325-create-account-secret-ref-bind-time-resolution.md) A cloud mount comes from a committed declaration with a
       referenced secret (no `qfs account add` prerequisite); this includes deciding and implementing
       the `CREATE ACCOUNT … SECRET '<ref>'` edge together with the bind-time account-reference
       resolution it needs. `docs/roadmap.md` flips 🧭 → ✅ (concern
@@ -314,3 +314,4 @@ live backlog.
 - 2026-07-18 — ticket added — 20260718203327-sql-git-path-binding-only-and-type-roundtrips.md
 - 2026-07-18 — ticket added — 20260718203328-declared-secrets-adapter-carries-oauth-app.md
 - 2026-07-18 — mission replanned — declared-drivers-cloud-and-cf-and-sqlgit-and-oauth
+- 2026-07-18 — ticket archived — 20260718203325-create-account-secret-ref-bind-time-resolution.md
