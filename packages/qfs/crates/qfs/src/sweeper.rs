@@ -924,4 +924,93 @@ mod tests {
             "a blocked fire is not stamped"
         );
     }
+
+    /// The HERMETIC TWIN of the owner-attended live round (blueprint §19, ticket 203335): a
+    /// narrowly-granted scheduled agent runs a real function AND its over-reach is visibly denied —
+    /// both under the agent subject, on a timer, through the LIVE committer + real applier. The
+    /// owner's live round mirrors exactly this narrative on the real daemon; this rehearses it with
+    /// no network, no creds, so the live fire is the one non-hermetic acceptance item.
+    #[test]
+    fn live_round_rehearsal_narrow_grant_fires_and_overreach_is_denied() {
+        let (_state_dir, host) = tempdir_host();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let granted = dir.path().join("granted.txt");
+        let forbidden = dir.path().join("forbidden.txt");
+        std::fs::write(&forbidden, b"safe").unwrap();
+
+        // ONE narrow grant, scoped to the agent subject: `ALLOW UPSERT ON local FOR agent:triage`.
+        // (The `AT` path-scope axis is exercised in the pure enforcer tests; here the driver scope +
+        // the agent subject are the narrow grant.)
+        let mut table = qfs_host::PolicyTable::new();
+        table.insert(
+            "grant".into(),
+            qfs_provision::PolicyDef {
+                name: "grant".into(),
+                handler: String::new(),
+                allow: vec!["ALLOW UPSERT ON local FOR agent:triage".into()],
+            },
+        );
+        let policies: PolicyTableHandle = Arc::new(std::sync::RwLock::new(Arc::new(table)));
+        let (engine, _reads, _safety) = crate::shell::run_engine_and_reads();
+        let committer = LiveCronCommitter::new(engine, policies);
+
+        // The narrowly-granted agent + a SECOND agent whose function over-reaches the same grant is
+        // scoped to `triage` — `snoop` is a different subject, so it is default-denied.
+        let mut s = ServerState::new();
+        s.agents.insert(
+            "triage".into(),
+            qfs_provision::AgentDef {
+                name: "triage".into(),
+                every: "1m".into(),
+                last_run: None,
+                plan: plan_col(&format!(
+                    "upsert into /local{} values ('live')",
+                    granted.display()
+                )),
+                policy: Some("grant".into()),
+            },
+        );
+        s.agents.insert(
+            "snoop".into(),
+            qfs_provision::AgentDef {
+                name: "snoop".into(),
+                every: "1m".into(),
+                last_run: None,
+                // The SAME grant string is scoped to `agent:triage`, so `snoop` is not granted.
+                plan: plan_col(&format!(
+                    "upsert into /local{} values ('x')",
+                    forbidden.display()
+                )),
+                policy: Some("grant".into()),
+            },
+        );
+        let state = Arc::new(RwLock::new(s));
+
+        let runs = sweep_once(
+            &state,
+            &committer,
+            host.durable(),
+            Some(host.ledger()),
+            6_000,
+        );
+        assert_eq!(runs.len(), 2, "both agents are due");
+
+        let g = state.read().unwrap();
+        // The narrowly-granted agent's function FIRED under agent:triage — the file is written and
+        // the run is recorded on the agent's own history + the ledger.
+        assert_eq!(
+            std::fs::read_to_string(&granted).expect("granted file written"),
+            "live"
+        );
+        assert_eq!(g.agent_runs["triage"][0].outcome, "fired");
+        assert_eq!(g.agent_runs["triage"][0].principal, "agent:triage");
+        // The over-reaching agent is DENIED under its own subject — nothing applied, denial recorded.
+        assert_eq!(g.agent_runs["snoop"][0].outcome, "denied");
+        assert_eq!(g.agent_runs["snoop"][0].principal, "agent:snoop");
+        assert_eq!(
+            std::fs::read_to_string(&forbidden).unwrap(),
+            "safe",
+            "the over-reach applied nothing (atomic abort)"
+        );
+    }
 }

@@ -46,3 +46,32 @@ acceptance item.
 - Do not begin the live round until the owner is present at the real terminal; the agent session has no TTY for cloud writes.
 - The narrow grant and the over-reach path must both be self-visible to the owner — never involve a resource others can see or receive.
 - Capture concrete evidence (run-history row paths, ledger timestamps, the deny_reason string) into the mission checklist; prose is not acceptance.
+
+## Drive record (2026-07-18, /monitor drive leaf)
+
+**Hermetic rehearsal: DONE. Live fire: LEFT FOR THE OWNER (acceptance item UNTICKED).**
+
+The full chain shipped hermetically across tickets 203330→203334 (grammar → subject → functions →
+cadence). The QG's rehearsal — "everything is rehearsed first by the hermetic suites above" — is
+green, and a dedicated **hermetic twin of the live round** was added and passes:
+
+- `crates/qfs/src/sweeper.rs::live_round_rehearsal_narrow_grant_fires_and_overreach_is_denied` — a
+  narrowly-granted (`ALLOW UPSERT ON local FOR agent:triage`) scheduled agent fires its real query
+  function through the LIVE committer + real applier (file written, run recorded on the agent's own
+  `/server/agents/<name>/runs` history under principal `agent:triage`, ledger line), AND a second
+  agent's over-reach against the same `FOR agent:triage`-scoped grant is default-DENIED under its
+  own subject (`agent:snoop`), zero effects.
+- Supporting hermetic suites: `sweep_once_fires_a_due_agent_and_records_to_agent_history`,
+  `sweep_once_agent_fire_denied_by_agent_subject_records_denial`,
+  `sweep_once_agent_irreversible_is_blocked_fail_closed` (the ruled property, on a timer),
+  `sweep_once_hydrates_agent_last_run_from_the_durable_store`; the pure `fire_due_agents` suite in
+  `crates/watchtower/src/cron.rs`; the agent-subject enforcer suite in
+  `crates/server/src/policy/enforce.rs`; the `qfs agent run` preview/commit/deny suite in
+  `crates/qfs/src/agent.rs`.
+
+**NOT performed (per the QG's "no live probe before the owner is present"):** the one REAL fire on
+the owner's daemon and the one live over-reach denial (QG items 1–3). The agent session has no TTY
+for cloud writes, and the acceptance is owner-attended live observation. This ticket therefore stays
+in `todo/` and mission Acceptance item #20260718203335 stays **unticked** until the owner runs the
+live round and captures the concrete evidence (run-history paths, ledger timestamps, the
+`deny_reason` string) into the mission checklist.
