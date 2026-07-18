@@ -110,3 +110,47 @@ partial advances its acceptance. Nothing was committed for it; the tree is clean
 
 **No acceptance item is ticked.** Estimated as a multi-session architecture effort (driver-cf ~4600
 LOC, declared-driver ~2551 LOC).
+
+## Drive status — 2026-07-19 (STAGE 1 LANDED, gate-green; stages 2–6 remain; acceptance NOT ticked)
+
+Split into gate-green increments per the scoping map above. **Stage 1 — the declared sql-resource
+SHAPE — is implemented, gate-green, and committed** (`bb089fe`, still in todo). The remaining stages
+(the D1 bridge, KV/queues REST, the conformance twin, deleting compiled `/cf`, docs/version) are the
+cross-cutting architecture bulk and are NOT started; the tree is clean and unbroken.
+
+**What Stage 1 landed (`bb089fe`):**
+- A new `CREATE SQL /<path> [DIALECT SQLITE] OVER /<wire-endpoint> TABLES ( <table>(<cols>), … )`
+  statement: a sqlite-dialect SQL endpoint over a wire query verb with the relation catalog declared
+  INLINE (the declared twin of a mount-time D1 introspection). Parser sugar desugaring to a
+  `kind='sql'` `/sys/drivers` row (no new `Statement` variant, no new frozen keyword) — the
+  `CREATE TRANSFORM`/`CREATE MAP` pattern. `SQL`/`OVER` added to the lexer `path_boundary_word` list
+  so `/…` after those nouns lexes as a path, not division (`crates/lang/src/lex.rs`).
+- The read-back model `DeclaredSqlResource` + `load_declared_sql_resources()` (mirrors
+  `DeclaredType`/`load_declared_types`, so **zero edits to `DeclaredDriver`'s ~15 construction
+  sites**), including `DeclaredSqlResource::catalog()` — the `qfs_driver_sql::Catalog` lift the D1
+  bridge will hand to `D1Database::discovered` in place of `introspect_d1` — and §13 host confinement
+  on the wire endpoint (a foreign `/http/<x>` sql-resource is dropped at load, FAIL CLOSED).
+- Unit tests: parser desugar + dialect default/reject; loader round-trip; catalog lift; confinement
+  drop. Gates: `cargo test -p qfs` (395), `-p qfs-parser` (137), `-p qfs-lang` (23), `-p qfs-test`
+  all pass; `clippy --workspace --all-targets -- -D warnings` clean; `fmt --all --check` clean;
+  `gen-docs`/`gen-skills --check` in sync; `check-migrations` clean.
+
+**What remains (stages 2–6), and why they are NOT a single safe increment for one leaf:**
+2. **The D1 bridge.** Serve `D1Database::discovered(backend, uuid, catalog)` from the committed row:
+   `catalog` = `DeclaredSqlResource::catalog()` (done); `backend` = a `CfBackend`/`HttpApiBackend`
+   built from the declared wire config + the resolved `AUTH ACCOUNT 'cf'` bearer + the `{account}`/
+   `{database}` path params (no `list_*`/`introspect_d1`). The hard part is **mount composition**:
+   the declared mount today builds a `RestDriver` in THREE facets — `describe.rs:173`, `commit.rs:355–387`,
+   `shell.rs:418–433`; a `kind='sql'` resource must instead compose a `CfDriver`+`D1Database` there.
+   A half-wired branch breaks all three facets at once, so it is not a sound partial commit.
+3. **KV/queues as plain declared REST** (the served get/put/push/pull, beyond the listings already in
+   `cloudflare.qfs`), staged with the compiled `/cf` still alive.
+4. **The conformance twin** over `MockCfBackend`/`MockHttpClient` + a describe-purity (no-network)
+   test, proving the declared surface matches the compiled `/cf` BEFORE any deletion.
+5. **Delete/demote compiled `/cf`** (`cf.rs:153–242`, `cloud_mounts.rs:54`) only once the twin is
+   green (the §13 ratchet forbids deleting first).
+6. `cloudflare.qfs` asset extension (a `CREATE SQL` D1 arm) + cookbook + `gen-skills`; plugin version
+   bump if `qfs-cloudflare`'s taught surface changes; binary patch bump; then archive + tick mission
+   line 142.
+
+Binary stays at `0.0.79`, plugin `0.13.0` (no PR opened, nothing shipped this leaf).
