@@ -1,0 +1,50 @@
+{
+  "compilerOptions": {
+    /* Compiler Option */
+    "target": "ES2021",
+    /* This package is `"type": "module"` and its source is
+       run directly via Node type-stripping (plgg-test and
+       the `qfs-viewer` bin), so it uses ESNext +
+       Bundler resolution: extensionless self-alias
+       specifiers (`#qfs-viewer/...`) resolve while
+       modules stay ESM.
+
+       There is no `paths` entry for the self-alias, and
+       that absence is the point. `#qfs-viewer/*` is
+       declared ONCE, in package.json's `imports`, which
+       tsc, node, bun and deno all implement. It used to
+       live here as well, and the duplication was the bug:
+       tsc and bun read the tsconfig, node read
+       `bin/hook.mjs`, and deno read NEITHER (it takes
+       `deno.json`, not `tsconfig.json`) -- so it fell
+       through to `exports`, found no subpath, and could
+       not run the product at all. Three declarations of
+       one fact meant "the alias resolves" was true once
+       per runtime instead of once. Do not re-add it. */
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"],
+    /* Type Checking Rules */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowUnusedLabels": false,
+    "allowUnreachableCode": false,
+    "forceConsistentCasingInFileNames": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "allowJs": false,
+    "erasableSyntaxOnly": true
+  },
+  "include": ["src/**/*"]
+}
