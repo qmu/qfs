@@ -108,15 +108,22 @@ pub struct Account {
     pub created_at: String,
 }
 
-/// The outcome of resolving the *sole* user for a session-less `whoami` (sessions land in t46). With
-/// no session, `whoami` with no email can only answer when the deployment has exactly one user.
+/// The outcome of resolving the *sole* user for the session-less CLI `whoami`.
+///
+/// Server-side sessions (t46, `qfs-session`) have **shipped**; this type is not waiting on them.
+/// They bind an HTTP request to a `UserId` for the local web / dashboard face, and **no session
+/// rides a CLI invocation** — the CLI `whoami` is session-less *by design* (`qfs-cmd`: "the
+/// AUTHENTICATION surface — local sign-up + a session-less `whoami`"), because the OS login is the
+/// authentication there (ADR 0008). With no session, `whoami` with no email can only answer when
+/// the deployment has exactly one user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SoleUser {
     /// No users have signed up yet.
     None,
     /// Exactly one user exists — the one `whoami` resolves to without a session.
     One(User),
-    /// More than one user exists; `whoami` cannot pick without an email (no session yet).
+    /// More than one user exists; `whoami` cannot pick without an email (no session rides a CLI
+    /// invocation).
     Many,
 }
 
