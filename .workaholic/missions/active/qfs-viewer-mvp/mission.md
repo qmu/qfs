@@ -6,7 +6,7 @@ status: active
 created_at: 2026-07-17T00:29:05+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
-drive_authorized:
+drive_authorized: true
 tickets: [20260717020101-qfs-connection-seam-with-swappable-issuance-forms.md, 20260717020102-describe-generic-browsing-as-default-columns.md, 20260717020103-resolve-addresses-with-prefix-closure.md, 20260717020104-strip-ui-on-the-plggmatic-engine.md, 20260717020105-markdown-browsing-over-the-qfs-collection-path.md, 20260717020106-keep-npx-distribution-true-through-the-ui-replacement.md, 20260717020107-run-the-final-demo-end-to-end.md, 20260716092321-prove-a-plggmatic-ui-can-be-an-mcp-app.md]
 stories: []
 concerns: []
@@ -411,3 +411,4 @@ appended as (#…) markers when each ticket is filed.
   the workaround's removal. Not reproducible from a source checkout —
   relocation is a no-op there — which is why only the packed path sees it.
 - 2026-07-17 — story reported — work-20260717-150001.md
+- 2026-07-19 — mission replanned — night-monitor-authorize-final-demo
