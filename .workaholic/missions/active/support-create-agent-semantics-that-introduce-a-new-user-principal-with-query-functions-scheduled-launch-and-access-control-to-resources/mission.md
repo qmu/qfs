@@ -129,7 +129,7 @@ one owner-attended live round proving a real fire and a visible denial.
 
 ### Live proof
 
-- [ ] One owner-attended live round (#20260718203335-agent-live-proof-round.md): a scheduled agent with a narrow grant runs a real query
+- [x] One owner-attended live round (#20260718203335-agent-live-proof-round.md): a scheduled agent with a narrow grant runs a real query
       function end to end, its denied over-reach visibly recorded
 
 ## Changelog
@@ -196,3 +196,26 @@ one owner-attended live round proving a real fire and a visible denial.
 - 2026-07-18 — ticket archived — 20260718203332-agent-subject-policy-gate.md
 - 2026-07-18 — ticket archived — 20260718203333-agent-query-functions-saved-plans.md
 - 2026-07-18 — ticket archived — 20260718203334-agent-scheduled-launch-sweeper.md
+- 2026-07-19 — **Owner-attended live-proof round PERFORMED (QG items 1–3 met); acceptance ticked, mission 6/6.**
+  Live, self-visible, bounded (only local files under this worktree's `.live-round/` scratch; no external
+  services). Binary: `qfs 0.0.81` (commit 0767f42), `qfs serve .live-round/live.qfs` bound loopback
+  `127.0.0.1:4120`, state dir `.live-round/state/`. One real sweep fired at `scheduled_at=1784388411`
+  (2026-07-18T15:26:51Z = 2026-07-19 00:26:51 JST). Observed evidence:
+  - **REAL fire under the agent principal (QG#1).** Agent `worker` — narrow grant
+    `CREATE POLICY grant ALLOW UPSERT ON local FOR agent worker AT …/.live-round/allowed/**`, cadence
+    `EVERY '1m'`, query function `UPSERT INTO /local…/.live-round/allowed/granted.txt VALUES ('agent-live-fire')` —
+    fired under principal `agent:worker`. The file was written: `.live-round/allowed/granted.txt` = `agent-live-fire`
+    (15 bytes, mtime 2026-07-19 00:26:51.789 JST). Read back TWO ways:
+    - run-history `/server/agents/worker/runs` (via `GET /wruns`): `{scheduled_at:1784388411, outcome:"fired", detail:null, affected:1, principal:"agent:worker"}`.
+    - audit ledger `.live-round/state/audit.log`: `cron fire job=worker outcome=fired affected=1 at=1784388411 principal=agent:worker`.
+  - **Denied over-reach naming the agent subject (QG#2).** Agent `snoop` (cadence `EVERY '1m'`, function
+    `UPSERT INTO /local…/.live-round/forbidden.txt …`, a path the `grant` policy does NOT cover — outside `allowed/**`
+    and a different subject than `worker`) was default-denied under principal `agent:snoop`; `forbidden.txt` was
+    left untouched (still `seed-forbidden`, mtime 00:26:13 — pre-fire, atomic abort, 0 effects). Recorded:
+    - run-history `/server/agents/snoop/runs` (via `GET /sruns`): `outcome:"denied", affected:0, principal:"agent:snoop"`,
+      deny_reason = `policy denies UPSERT on driver ` + "`local`" + ` (node #0, default-deny: a rule matched the verb/driver but the subject (agent:snoop has no matching grant) did not apply to the actor)`.
+    - audit ledger: `cron fire job=snoop outcome=denied affected=0 at=1784388411 principal=agent:snoop`.
+  - The `AT` path-scope axis was exercised live: `worker` fired writing WITHIN `allowed/**` (allowed), while
+    `snoop`'s target sat outside it. Daemon torn down cleanly (SIGTERM; port 4120 closed) and the `.live-round/`
+    scratch removed — no live daemon left running.
+- 2026-07-19 — ticket archived — 20260718203335-agent-live-proof-round.md

@@ -5,7 +5,7 @@ type: enhancement
 layer: [Domain]
 effort:
 commit_hash:
-category: Added
+category: Changed
 depends_on: [20260718203334-agent-scheduled-launch-sweeper.md]
 mission: support-create-agent-semantics-that-introduce-a-new-user-principal-with-query-functions-scheduled-launch-and-access-control-to-resources
 ---
