@@ -446,6 +446,39 @@ fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> Re
             )),
         );
     }
+    // §13 declared D1 nested mounts: the LIVE read facet for a `/cloudflare/d1` twin — a
+    // `CfReadDriver` over the declared `CfDriver` (its wildcard-D1 template serves the committed
+    // catalog), backed by an `HttpApiBackend` built from the DECLARED inputs: the Cloudflare account
+    // id from the mount's `AT` locator + the bearer the mount's auth resolves. No `list_*`/
+    // `introspect_d1` at mount time. Fail-closed like every cloud mount: a mount with no account id
+    // or no resolvable bearer registers nothing (a scan then fails `unknown_source`, honest).
+    for m in crate::declared_driver::declared_sql_mounts() {
+        let Some(remap) = crate::declared_driver::declared_d1_remap(&m.prefix) else {
+            continue;
+        };
+        let Some(account_id) = m
+            .mount
+            .at_locator
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let Some(token) = crate::declared_driver::declared_auth_bearer(&m.mount) else {
+            continue;
+        };
+        let backend = crate::cf::declared_d1_backend(account_id, token);
+        let driver = Arc::new(crate::cf::declared_d1_driver(backend, m.resource.catalog()));
+        let facet = crate::read_facets::CfReadDriver::new(driver);
+        reads = reads.with(
+            remap.outer_id(),
+            Arc::new(crate::mount_adapter::MountReadDriver::new(
+                remap,
+                Arc::new(facet),
+            )),
+        );
+    }
 
     reads
 }

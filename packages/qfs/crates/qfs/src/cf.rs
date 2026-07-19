@@ -241,6 +241,37 @@ pub(crate) fn driver_from_backend_with_artifact_sealer(
     Some(CfDriver::new(registry))
 }
 
+// ---------------------------------------------------------------------------
+// §13 declared D1 twin — the `/cloudflare/d1` nested mount served from a committed
+// `CREATE SQL … TABLES(…)` declaration, NOT compiled introspection (ticket 20260718203326).
+// ---------------------------------------------------------------------------
+
+/// Build a **declared** Cloudflare D1 driver: a [`CfDriver`] whose registry is a single wildcard-D1
+/// template over `backend`, serving the declared `catalog` for ANY `{database}` key with NO
+/// mount-time `list_d1_databases`/`introspect_d1` (the declared twin of the compiled `/cf` D1
+/// surface, blueprint §13). The addressed `{database}` segment is used AS the Cloudflare D1 api id
+/// ([`D1Database::api_database_id`] falls back to the path name when the uuid is `None`). The
+/// `backend` carries whatever auth it was built with — this function is credential-free by
+/// construction (a `MockCfBackend` for the pure DESCRIBE mount, the live [`HttpApiBackend`] for the
+/// read/apply facets).
+#[must_use]
+pub(crate) fn declared_d1_driver(backend: Arc<dyn CfBackend>, catalog: Catalog) -> CfDriver {
+    CfDriver::new(CfRegistry::new().with_d1_template(D1Database::new(backend, catalog)))
+}
+
+/// The live wire backend a declared D1 mount serves over: the shared `reqwest` Cloudflare transport,
+/// the Cloudflare account id from the mount's `AT` locator, and the resolved bearer — the SAME
+/// [`HttpApiBackend`] the compiled `/cf` uses, built from DECLARED inputs instead of compiled
+/// discovery. Its D1 URL/req/resp shape already matches the declared `query_endpoint`.
+#[must_use]
+pub(crate) fn declared_d1_backend(account_id: &str, token: Secret) -> Arc<dyn CfBackend> {
+    Arc::new(HttpApiBackend::new(
+        crate::transport::cf_exchange(),
+        account_id,
+        token,
+    ))
+}
+
 struct VaultArtifactTokenSealer {
     store: Arc<dyn Secrets>,
 }
@@ -520,6 +551,47 @@ mod tests {
         assert!(
             super::resolve_cf_token("mycf").is_none(),
             "an unresolvable reference fails closed (no credential, no leak)"
+        );
+    }
+
+    #[test]
+    fn declared_d1_driver_serves_the_declared_catalog_without_introspection() {
+        // Stage 2a-ii (ticket 20260718203326): the declared→CfDriver composition. A single
+        // wildcard-D1 template over the backend serves the DECLARED catalog for ANY `{database}`
+        // key, with ZERO mount-time `list_d1_databases`/`introspect_d1` — the no-introspection
+        // model the declared `/cloudflare/d1/{database}` twin needs (the D1 relational surface from
+        // the committed `CREATE SQL … TABLES(…)` row, not compiled discovery).
+        use qfs_driver_cf::MockCfBackend;
+        use qfs_driver_sql::{Catalog, ColumnDef, Dialect, RelationKind, TableCatalog};
+
+        let backend = Arc::new(MockCfBackend::new());
+        let catalog = Catalog::new(vec![TableCatalog::new(
+            "users".to_string(),
+            RelationKind::Table,
+            vec![ColumnDef::new(
+                "id".to_string(),
+                Dialect::Sqlite.map_type("text"),
+                false,
+                true,
+                true,
+            )],
+        )]);
+        let driver = super::declared_d1_driver(backend.clone(), catalog);
+
+        // The wildcard template answers ANY database key — no discovery.
+        assert!(driver.registry().has_d1("prod"));
+        assert!(driver.registry().has_d1("anything-else"));
+        let handle = driver
+            .registry()
+            .d1("prod")
+            .expect("template answers any key");
+        assert!(handle.catalog().table("users").is_some());
+        // The addressed `{database}` segment IS the api id (uuid None → path-name fallback).
+        assert_eq!(handle.api_database_id("prod"), "prod");
+        // ZERO backend I/O: the declared catalog replaced mount-time introspection.
+        assert!(
+            backend.recorded().is_empty(),
+            "the declared D1 driver performs no introspection at build"
         );
     }
 

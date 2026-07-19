@@ -75,6 +75,10 @@ pub(crate) struct DeclaredMount {
     pub path: String,
     pub driver: DeclaredDriver,
     pub secret_ref: Option<String>,
+    /// The non-secret `AT '<locator>'` value on the binding (for a declared Cloudflare mount this is
+    /// the Cloudflare account id the D1 twin's [`HttpApiBackend`] routes to). `None` when the
+    /// connect carried no `AT` clause.
+    pub at_locator: Option<String>,
     /// The connection's bound account label (`CONNECT … ACCOUNT '<label>'`) — the account an
     /// `AUTH ACCOUNT '<provider>'` driver resolves its live bearer from (`None` → `default`).
     pub account: Option<String>,
@@ -489,6 +493,7 @@ pub(crate) fn declared_mounts() -> Vec<DeclaredMount> {
                 path: b.path,
                 driver: d,
                 secret_ref: b.secret_ref,
+                at_locator: b.at_locator,
                 account: b.account,
                 app: b.app,
             })
@@ -870,6 +875,97 @@ fn parse_sql_resource(path: &str, body_json: &str) -> Option<DeclaredSqlResource
         query_endpoint: body.query_endpoint,
         tables: body.tables,
     })
+}
+
+/// A declared **D1 nested mount**: a connected declared driver paired with the `CREATE SQL …`
+/// resource it serves and the fixed mount prefix (`/cloudflare/d1`) the [`qfs_driver_cf::CfDriver`]
+/// twin registers under. The three declared-mount facets (describe/read/apply) each build the twin
+/// from this.
+pub(crate) struct DeclaredSqlMount {
+    pub mount: DeclaredMount,
+    pub resource: DeclaredSqlResource,
+    /// The fixed mount prefix, e.g. `/cloudflare/d1` (the resource path's segments before the first
+    /// `{…}` wildcard).
+    pub prefix: String,
+}
+
+/// The declared D1 nested mounts: each connected declared driver whose name is the leading segment
+/// of a committed sql-resource path, paired with that resource and its mount prefix. Empty when
+/// nothing is connected or no sql-resource is declared (fail-closed, like every mount). A pure local
+/// read (the two loaders it composes touch only `/sys/drivers`) — no network.
+pub(crate) fn declared_sql_mounts() -> Vec<DeclaredSqlMount> {
+    let resources = load_declared_sql_resources();
+    if resources.is_empty() {
+        return Vec::new();
+    }
+    declared_mounts()
+        .into_iter()
+        .filter_map(|mount| {
+            let resource = resources
+                .iter()
+                .find(|r| leading_segment(&r.path) == Some(mount.driver.name.as_str()))?
+                .clone();
+            let prefix = sql_resource_mount_prefix(&resource.path)?;
+            Some(DeclaredSqlMount {
+                mount,
+                resource,
+                prefix,
+            })
+        })
+        .collect()
+}
+
+/// The fixed mount prefix of a declared sql-resource path — the leading segments before the first
+/// `{…}` wildcard (`/cloudflare/d1/{database}` → `/cloudflare/d1`). `None` for a path with no fixed
+/// prefix (a leading wildcard).
+fn sql_resource_mount_prefix(path: &str) -> Option<String> {
+    let mut prefix = String::new();
+    for seg in path.trim_start_matches('/').split('/') {
+        if seg.is_empty() || seg.starts_with('{') {
+            break;
+        }
+        prefix.push('/');
+        prefix.push_str(seg);
+    }
+    (!prefix.is_empty()).then_some(prefix)
+}
+
+/// The mount remap for a declared D1 nested mount: the outer prefix (`/cloudflare/d1`) ⟷ the
+/// [`qfs_driver_cf::CfDriver`]'s own `/cf/d1` namespace (inner id `cf`). The outer id is the
+/// slash-bearing `cloudflare/d1` the plan/read/apply funnels route by — the routing spike
+/// (`exec/tests/oneshot.rs :: nested_mount_id_routing_spike`) proved a slash-bearing `DriverId` flows
+/// cleanly through all three. `None` when the prefix is malformed (fail closed).
+pub(crate) fn declared_d1_remap(mount_prefix: &str) -> Option<crate::mount_adapter::MountRemap> {
+    crate::mount_adapter::MountRemap::new_prefixed(mount_prefix, "/cf/d1", "cf").ok()
+}
+
+/// Resolve the static bearer a declared driver's auth strategy exposes — the raw token the declared
+/// D1 [`qfs_driver_cf::CfBackend`] needs, resolved through the SAME `SecretRef` coordinate the live
+/// `RestDriver` uses: an `AUTH ACCOUNT '<provider>'` resolves `(provider, "default")` (mapped by
+/// [`AccountBearerSecrets`] to the stored provider account bearer); an `AUTH BEARER`/`Header`
+/// resolves `(driver, "default")`. `None` when no credential resolves (fail closed, secret-free).
+pub(crate) fn declared_auth_bearer(mount: &DeclaredMount) -> Option<Secret> {
+    let d = &mount.driver;
+    let key = declared_auth_key(d)?;
+    let secrets = declared_secrets(
+        d,
+        mount.secret_ref.as_deref(),
+        mount.account.as_deref(),
+        mount.app.as_deref(),
+    );
+    secrets.get(&key).ok()
+}
+
+/// The credential coordinate a declared driver's auth strategy resolves its bearer at — the twin of
+/// the `SecretRef` [`DeclaredDriver::auth_strategy`] builds. An `AUTH ACCOUNT '<provider>'` keys the
+/// shared provider (`(provider, "default")`); every other scheme keys the driver's own name.
+fn declared_auth_key(d: &DeclaredDriver) -> Option<CredentialKey> {
+    let connection = qfs_secrets::ConnectionId::new("default").ok()?;
+    let driver_id = account_auth_provider(&d.auth).unwrap_or_else(|| d.name.clone());
+    Some(CredentialKey::new(
+        qfs_secrets::DriverId(driver_id),
+        connection,
+    ))
 }
 
 /// The shared secrets store a live declared driver resolves its auth `SecretRef` through. A
@@ -2817,5 +2913,137 @@ mod tests {
             load_declared_sql_resources().is_empty(),
             "a foreign-host sql-resource must be dropped at load"
         );
+    }
+
+    /// Seed a connected declared `cloudflare` driver (AUTH ACCOUNT 'cf') + its `/cloudflare` binding
+    /// in the isolated System DB — the mount the declared D1 twin nests under.
+    fn seed_cf_declared_driver_and_binding(at_locator: Option<&str>, account: Option<&str>) {
+        let sys = crate::store::open_system_db()
+            .unwrap()
+            .expect("system db resolves");
+        let conn = sys.into_db().into_connection();
+        conn.execute(
+            "INSERT INTO sys_drivers (kind, name, base_url, auth, verb, body, irreversible) \
+             VALUES ('driver', 'cloudflare', 'https://api.cloudflare.com/client/v4', \
+                     '{\"kind\":\"account\",\"provider\":\"cf\"}', NULL, NULL, 0)",
+            [],
+        )
+        .unwrap();
+        crate::path_binding::db_upsert_binding(
+            &conn,
+            "/cloudflare",
+            "cloudflare",
+            at_locator,
+            None,
+            None,
+            account,
+            None,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn sql_resource_mount_prefix_keeps_the_fixed_leading_segments() {
+        assert_eq!(
+            super::sql_resource_mount_prefix("/cloudflare/d1/{database}").as_deref(),
+            Some("/cloudflare/d1")
+        );
+        assert_eq!(
+            super::sql_resource_mount_prefix("/a/b/{x}/{y}").as_deref(),
+            Some("/a/b")
+        );
+        // A leading wildcard has no fixed prefix (nothing to mount under).
+        assert_eq!(
+            super::sql_resource_mount_prefix("/{leading}").as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn declared_d1_remap_maps_the_nested_prefix_onto_the_cf_namespace() {
+        let remap = super::declared_d1_remap("/cloudflare/d1").expect("valid remap");
+        // The outer id is the slash-bearing nested-mount id the funnels route by (spike-proven).
+        assert_eq!(remap.outer_id().as_str(), "cloudflare/d1");
+        // `/cloudflare/d1/<db>/<table>` maps onto the CfDriver's own `/cf/d1/<db>/<table>` namespace.
+        assert_eq!(
+            remap.path_in("/cloudflare/d1/mydb/users"),
+            "/cf/d1/mydb/users"
+        );
+        assert_eq!(
+            remap.path_out("/cf/d1/mydb/users"),
+            "/cloudflare/d1/mydb/users"
+        );
+    }
+
+    #[test]
+    fn declared_sql_mounts_pairs_the_connected_driver_with_its_resource() {
+        let _home = crate::testenv::HomeGuard::new();
+        seed_cf_declared_driver_and_binding(Some("cf-acct-id"), Some("mycf"));
+        seed_sql_row("/cloudflare/d1/{database}", CF_D1_BODY);
+
+        let mounts = declared_sql_mounts();
+        assert_eq!(
+            mounts.len(),
+            1,
+            "one nested D1 mount for the connected driver"
+        );
+        let m = &mounts[0];
+        assert_eq!(m.prefix, "/cloudflare/d1");
+        assert_eq!(m.mount.path, "/cloudflare");
+        assert_eq!(m.mount.at_locator.as_deref(), Some("cf-acct-id"));
+        assert!(m.resource.tables.iter().any(|t| t.name == "users"));
+        // The catalog the D1 bridge lifts comes from the declaration, not a mount-time introspection.
+        assert!(m.resource.catalog().table("users").is_some());
+        assert!(m.resource.catalog().table("orders").is_some());
+    }
+
+    #[test]
+    fn declared_sql_mounts_empty_without_a_declared_resource() {
+        let _home = crate::testenv::HomeGuard::new();
+        seed_cf_declared_driver_and_binding(Some("cf-acct-id"), Some("mycf"));
+        // The driver is connected, but no `CREATE SQL` resource is declared → nothing pairs.
+        assert!(
+            declared_sql_mounts().is_empty(),
+            "no sql-resource declared → no nested D1 mount (fail closed)"
+        );
+    }
+
+    #[test]
+    fn declared_auth_bearer_resolves_the_account_provider_bearer() {
+        // The declared D1 backend's bearer resolves through the SAME `(provider, "default")`
+        // coordinate the live RestDriver uses: `AUTH ACCOUNT 'cf'` maps to the stored `(cf, <account>)`
+        // vault bearer. The declaration carries only the provider; the token stays in the vault.
+        use qfs_identity::IdentityStore as _;
+        use qfs_secrets::{ConnectionId, CredentialKey, DriverId, Secret, Secrets};
+
+        let _home = crate::testenv::HomeGuard::with_passphrase("cf-d1-bearer-test");
+        crate::identity::open_identity_store()
+            .unwrap()
+            .create_user("op@example.com")
+            .unwrap();
+        let conn = crate::connection::open_system_conn().unwrap();
+        crate::secret_store::db_record_consent(&conn, "cf", "mycf", "op@example.com", "").unwrap();
+        drop(conn);
+        seed_cf_declared_driver_and_binding(Some("cf-acct-id"), Some("mycf"));
+
+        let store = crate::connection::open_store().unwrap();
+        store
+            .put(
+                &CredentialKey::new(
+                    DriverId("cf".to_string()),
+                    ConnectionId::new("mycf").unwrap(),
+                ),
+                Secret::from("cf-bearer-token"),
+            )
+            .unwrap();
+
+        let mounts = declared_mounts();
+        let mount = mounts
+            .iter()
+            .find(|m| m.path == "/cloudflare")
+            .expect("the declared cloudflare mount is listed");
+        let bearer =
+            super::declared_auth_bearer(mount).expect("the AUTH ACCOUNT 'cf' bearer resolves");
+        assert_eq!(bearer.expose_str(), Some("cf-bearer-token"));
     }
 }

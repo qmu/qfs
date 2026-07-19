@@ -395,6 +395,45 @@ fn live_registry() -> DriverRegistry {
         );
     }
 
+    // §13 declared D1 nested mounts: the LIVE apply facet twin of the read facet — a `CfDriver`
+    // apply bridge for a `/cloudflare/d1` nested mount (id `cloudflare/d1`), built from the DECLARED
+    // inputs (account id from the mount `AT` locator + the resolved bearer) with NO `list_*`/
+    // `introspect_d1`. The bind is DEFERRED to first apply (`LazyApplyDriver`) — resolving the bearer
+    // opens the credential store, so an unrelated commit never pays for it. Fail-closed per mount: no
+    // account id / no resolvable bearer / a malformed remap leaves the mount unregistered (a write
+    // then fails with the actionable declared hint), never a half-wired branch.
+    for m in crate::declared_driver::declared_sql_mounts() {
+        let Some(remap) = crate::declared_driver::declared_d1_remap(&m.prefix) else {
+            continue;
+        };
+        let outer = remap.outer_id();
+        let prefix = m.prefix.clone();
+        let catalog = m.resource.catalog();
+        let mount = m.mount.clone();
+        reg = reg.with(
+            outer,
+            Arc::new(LazyApplyDriver::new(
+                move || {
+                    let account_id = mount
+                        .at_locator
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())?;
+                    let token = crate::declared_driver::declared_auth_bearer(&mount)?;
+                    let backend = crate::cf::declared_d1_backend(account_id, token);
+                    let driver = crate::cf::declared_d1_driver(backend, catalog.clone());
+                    let bridge = qfs_driver_cf::cf_apply_driver(&driver);
+                    let remap = crate::declared_driver::declared_d1_remap(&prefix)?;
+                    Some(Arc::new(crate::mount_adapter::MountApplyDriver::new(
+                        remap,
+                        Arc::new(bridge),
+                    )) as Arc<dyn ApplyDriver>)
+                },
+                DECLARED_APPLY_HINT,
+            )),
+        );
+    }
+
     reg
 }
 
