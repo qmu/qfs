@@ -317,3 +317,4 @@ live backlog.
 - 2026-07-18 — ticket archived — 20260718203325-create-account-secret-ref-bind-time-resolution.md
 - 2026-07-18 — ticket archived — 20260718203328-declared-secrets-adapter-carries-oauth-app.md
 - 2026-07-18 — ticket archived — 20260718203327-sql-git-path-binding-only-and-type-roundtrips.md
+- 2026-07-19 — ticket archived — 20260719004500-cf-declared-d1-mount-shape-owner-ruling.md

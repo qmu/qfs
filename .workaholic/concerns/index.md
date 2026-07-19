@@ -1,5 +1,6 @@
 # concerns
 
+<!-- okf:generated:begin -->
 * [Append-era duplicate rows persist on disk but resolve correctly](append-era-duplicate-rows-persist-on.md)
 * [`cd` into a blob file is still admitted](cd-into-a-blob-file-is.md)
 * [/cf live (203090) unimplemented; /cf and /rest are placeholder mounts](cf-live-203090-unimplemented-cf-and.md)
@@ -22,3 +23,4 @@
 * [The `/type` catalog and the type resolver translate the stored key differently](the-type-catalog-and-the-type.md)
 
 * [archive/](archive/)
+<!-- okf:generated:end -->
