@@ -43,19 +43,19 @@ use qfs_core::MountRegistry;
 /// impossible here (distinct mounts), but a duplicate would be dropped silently rather than
 /// panicking — the registry stays a best-effort describe surface.
 #[must_use]
-/// A cred-free Cloudflare registry carrying ONE representative D1 database / KV namespace / queue,
-/// so `qfs describe /cf/d1/db` (and the t40 driver catalogue) surface `/cf`'s real verbs over the
-/// public in-memory [`MockCfBackend`](qfs_driver_cf::MockCfBackend) — the same "representative
-/// resource" shape the objstore describe uses for `/s3/bucket`. Never *applied* (describe reads only
-/// the introspective half), so no credential and no I/O ever happens.
+/// A cred-free Cloudflare registry carrying ONE representative queue + artifacts namespace, so
+/// `qfs describe /cf/queue/q` surfaces the compiled `/cf`'s real verbs over the public in-memory
+/// [`MockCfBackend`](qfs_driver_cf::MockCfBackend) — the same "representative resource" shape the
+/// objstore describe uses for `/s3/bucket`. Never *applied* (describe reads only the introspective
+/// half), so no credential and no I/O ever happens.
+///
+/// §13 ratchet (ticket 20260718203326): D1 and KV moved onto the committed `cloudflare.qfs`
+/// declaration (the declared `/cloudflare` mount + the `/cloudflare/d1` twin), so the compiled `/cf`
+/// describe surface carries ONLY the two things plain declared REST cannot express — queue PULL and
+/// Artifacts. It no longer represents a D1 database or a KV namespace.
 pub(crate) fn cred_free_cf_registry() -> qfs_driver_cf::CfRegistry {
-    use qfs_driver_cf::{Catalog, CfRegistry, D1Database, MockCfBackend, NoopArtifactTokenSealer};
+    use qfs_driver_cf::{CfRegistry, MockCfBackend, NoopArtifactTokenSealer};
     CfRegistry::new()
-        .with_d1(
-            "db",
-            D1Database::new(Arc::new(MockCfBackend::new()), Catalog::new(Vec::new())),
-        )
-        .with_kv("ns", Arc::new(MockCfBackend::new()))
         .with_queue("q", Arc::new(MockCfBackend::new()))
         .with_artifacts(
             Arc::new(MockCfBackend::new().with_artifact_namespace("default")),

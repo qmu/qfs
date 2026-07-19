@@ -1,9 +1,23 @@
 //! Cloudflare live-driver composition for `/cf`.
 //!
-//! The driver crate owns the vendor-free D1/KV/Queues semantics. This binary module owns only the
-//! live wiring: resolve the API token from the qfs vault, read the Cloudflare account id from the
-//! connect-created mount binding, adapt the shared reqwest transport, discover resources, and build
-//! a `CfRegistry` with D1 catalogs introspected once up front.
+//! The driver crate owns the vendor-free D1/KV/Queues/Artifacts semantics. This binary module owns
+//! only the live wiring: resolve the API token from the qfs vault, read the Cloudflare account id
+//! from the connect-created mount binding, and adapt the shared reqwest transport.
+//!
+//! ## §13 self-hosting ratchet — the compiled `/cf` is now a MINIMAL fallback
+//! D1, KV (get/put/list), and Queue *push* moved onto the committed `cloudflare.qfs` declaration
+//! (the declared `/cloudflare` mount + the declared `/cloudflare/d1` twin), so the compiled `/cf`
+//! no longer *discovers* or serves them (ticket 20260718203326, blueprint §13). What stays compiled
+//! is only what plain declared REST cannot express:
+//!
+//! - **Queue PULL** — Cloudflare pull is a POST-to-read; a declared VIEW is always a GET and a
+//!   declared MAP is a write effect, so there is no declared read-over-POST primitive to consume a
+//!   queue. It rides the compiled queue handle (which also serves push, on the `/cf` path).
+//! - **Artifacts** — Cloudflare Artifacts is a git-repo surface, not a REST resource the declared
+//!   view/map shape covers, so it too stays on the compiled driver.
+//!
+//! Everything the declared twin covers is GONE from compiled discovery: no `list_d1_databases`, no
+//! `introspect_d1`, no `list_kv_namespaces` at mount time.
 
 use std::sync::Arc;
 
@@ -11,9 +25,8 @@ use qfs_driver_cf::{
     ArtifactRepoKey, ArtifactTokenSealer, CfBackend, CfDriver, CfRegistry, D1Database,
     HttpApiBackend,
 };
-use qfs_driver_sql::{Catalog, ColumnDef, Dialect, Param, RelationKind, TableCatalog};
+use qfs_driver_sql::Catalog;
 use qfs_secrets::{ConnectionId, CredentialKey, DriverId, Secret, Secrets};
-use qfs_types::Value;
 
 /// The non-secret Cloudflare account id carried by the connect binding's `at_locator`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,58 +163,18 @@ pub(crate) fn driver_from_backend(backend: Arc<dyn CfBackend>) -> Option<CfDrive
     )
 }
 
+/// Build the MINIMAL compiled `/cf` driver — the §13-ratchet fallback for the two surfaces plain
+/// declared REST cannot express: **queue PULL** (a POST-to-read the declared view/map shape has no
+/// primitive for) and **Artifacts** (a git-repo surface, not a REST resource). D1, KV, and queue
+/// *push* moved onto the committed `cloudflare.qfs` declaration, so this NO LONGER discovers them:
+/// there is no `list_d1_databases`/`introspect_d1`/`list_kv_namespaces` here. The queue handle it
+/// registers also serves push over the `/cf` path (one handle serves both directions), but the
+/// declared `/cloudflare` mount is the reviewable way push is reached.
 pub(crate) fn driver_from_backend_with_artifact_sealer(
     backend: Arc<dyn CfBackend>,
     artifact_sealer: Arc<dyn ArtifactTokenSealer>,
 ) -> Option<CfDriver> {
     let mut registry = CfRegistry::new();
-
-    match backend.list_d1_databases() {
-        Ok(databases) => {
-            for db in databases {
-                let api_id = db.uuid.as_str().to_string();
-                let catalog = match introspect_d1(backend.as_ref(), &api_id) {
-                    Ok(catalog) => catalog,
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "qfs::cf",
-                            database = %db.name,
-                            uuid = %api_id,
-                            error = %e,
-                            "skipping Cloudflare D1 database; catalog introspection failed"
-                        );
-                        continue;
-                    }
-                };
-                registry = registry.with_d1(
-                    db.name,
-                    D1Database::discovered(backend.clone(), db.uuid, catalog),
-                );
-            }
-        }
-        Err(e) => {
-            tracing::warn!(
-                target: "qfs::cf",
-                error = %e,
-                "skipping Cloudflare D1 registration; resource discovery failed"
-            );
-        }
-    }
-
-    match backend.list_kv_namespaces() {
-        Ok(namespaces) => {
-            for ns in namespaces {
-                registry = registry.with_kv_id(ns.title, ns.id, backend.clone());
-            }
-        }
-        Err(e) => {
-            tracing::warn!(
-                target: "qfs::cf",
-                error = %e,
-                "skipping Cloudflare KV registration; resource discovery failed"
-            );
-        }
-    }
 
     match backend.list_queues() {
         Ok(queues) => {
@@ -234,7 +207,7 @@ pub(crate) fn driver_from_backend_with_artifact_sealer(
     if registry.is_empty() {
         tracing::warn!(
             target: "qfs::cf",
-            "skipping Cloudflare mount; no D1, KV, Queue, or Artifacts resources were discovered"
+            "skipping Cloudflare mount; no Queue or Artifacts resources were discovered (D1/KV moved to the declared /cloudflare mount)"
         );
         return None;
     }
@@ -352,82 +325,6 @@ fn hex_bytes(bytes: &[u8]) -> String {
     out
 }
 
-fn introspect_d1(backend: &dyn CfBackend, db: &str) -> Result<Catalog, String> {
-    let rels = backend
-        .d1_query(
-            db,
-            "SELECT name AS c0, type AS c1 FROM sqlite_master \
-             WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name",
-            &[],
-        )
-        .map_err(|e| e.to_string())?;
-    let mut tables = Vec::new();
-    for rel in rels {
-        let Some(name) = text_at(&rel.values, 0) else {
-            continue;
-        };
-        if name.starts_with("_cf_") {
-            continue;
-        }
-        let kind = text_at(&rel.values, 1).unwrap_or("table");
-        let columns = introspect_d1_columns(backend, db, name)?;
-        let relkind = if kind.eq_ignore_ascii_case("view") {
-            RelationKind::View
-        } else {
-            RelationKind::Table
-        };
-        tables.push(TableCatalog::new(name.to_string(), relkind, columns));
-    }
-    Ok(Catalog::new(tables))
-}
-
-fn introspect_d1_columns(
-    backend: &dyn CfBackend,
-    db: &str,
-    table: &str,
-) -> Result<Vec<ColumnDef>, String> {
-    let rows = backend
-        .d1_query(
-            db,
-            "SELECT name AS c0, type AS c1, [notnull] AS c2, pk AS c3 \
-             FROM pragma_table_info(?) ORDER BY cid",
-            &[Param::Text(table.to_string())],
-        )
-        .map_err(|e| e.to_string())?;
-    let mut cols = Vec::new();
-    for row in rows {
-        let Some(name) = text_at(&row.values, 0) else {
-            continue;
-        };
-        let ty = text_at(&row.values, 1).unwrap_or("text");
-        let notnull = int_at(&row.values, 2).unwrap_or(0) != 0;
-        let pk = int_at(&row.values, 3).unwrap_or(0) != 0;
-        cols.push(ColumnDef::new(
-            name.to_string(),
-            Dialect::Sqlite.map_type(ty),
-            !notnull,
-            pk,
-            pk,
-        ));
-    }
-    Ok(cols)
-}
-
-fn text_at(values: &[Value], idx: usize) -> Option<&str> {
-    match values.get(idx) {
-        Some(Value::Text(s)) => Some(s.as_str()),
-        _ => None,
-    }
-}
-
-fn int_at(values: &[Value], idx: usize) -> Option<i64> {
-    match values.get(idx) {
-        Some(Value::Int(n)) => Some(*n),
-        Some(Value::Bool(b)) => Some(i64::from(*b)),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -436,78 +333,44 @@ mod tests {
     use qfs_secrets::{InMemoryStore, Secret, Secrets};
     use qfs_types::{Row, Value};
 
-    use super::{driver_from_backend, introspect_d1};
+    use super::driver_from_backend;
 
     #[test]
-    fn d1_introspection_skips_cloudflare_internal_tables() {
-        let backend = MockCfBackend::new()
-            .with_d1_rows(vec![
-                Row::new(vec![
-                    Value::Text("_cf_KV".to_string()),
-                    Value::Text("table".to_string()),
-                ]),
-                Row::new(vec![
-                    Value::Text("artifacts".to_string()),
-                    Value::Text("table".to_string()),
-                ]),
-            ])
-            .with_d1_rows(vec![Row::new(vec![
-                Value::Text("id".to_string()),
-                Value::Text("TEXT".to_string()),
-                Value::Int(1),
-                Value::Int(1),
-            ])]);
-
-        let catalog = introspect_d1(&backend, "db").expect("catalog introspection");
-
-        assert!(catalog.table("artifacts").is_some());
-        assert!(catalog.table("_cf_KV").is_none());
-
-        let calls = backend.recorded();
-        assert_eq!(calls.len(), 2);
-        let RecordedCall::D1Query { params, .. } = &calls[1] else {
-            panic!("expected D1 column query");
-        };
-        assert_eq!(params.len(), 1);
-        assert_eq!(format!("{:?}", params[0]), "Text(\"artifacts\")");
-    }
-
-    #[test]
-    fn resource_discovery_registers_human_names_with_cloudflare_ids() {
+    fn minimal_compiled_fallback_registers_only_queue_pull_and_artifacts() {
+        // §13 ratchet (ticket 20260718203326): D1, KV, and queue *push* moved onto the committed
+        // `cloudflare.qfs` declaration, so the compiled `/cf` no longer DISCOVERS or serves them.
+        // What stays compiled is only what plain declared REST cannot express — queue PULL (a
+        // POST-to-read) and Artifacts (a git-repo surface). So compiled discovery issues NO
+        // `list_d1_databases`/`list_kv_namespaces`, registers no D1/KV, and builds only the
+        // queue + artifacts surface.
         let backend = Arc::new(
             MockCfBackend::new()
                 .with_d1_database("prod", qfs_driver_cf::D1DatabaseUuid::new("d1-uuid"))
                 .with_kv_namespace("cache", qfs_driver_cf::KvNamespaceId::new("kv-id"))
-                .with_queue(qfs_driver_cf::QueueName::new("events"))
-                .with_d1_rows(vec![Row::new(vec![
-                    Value::Text("users".to_string()),
-                    Value::Text("table".to_string()),
-                ])])
-                .with_d1_rows(vec![Row::new(vec![
-                    Value::Text("id".to_string()),
-                    Value::Text("TEXT".to_string()),
-                    Value::Int(1),
-                    Value::Int(1),
-                ])]),
+                .with_queue(qfs_driver_cf::QueueName::new("events")),
         );
         let driver = driver_from_backend(backend.clone()).expect("discovered driver");
 
-        assert!(driver.registry().has_d1("prod"));
-        assert!(driver.registry().has_kv("cache"));
+        // D1 and KV are NO LONGER served by the compiled driver (they are declared on /cloudflare).
+        assert!(!driver.registry().has_d1("prod"));
+        assert!(!driver.registry().has_kv("cache"));
+        // Queue (for PULL) and Artifacts are the minimal compiled fallback.
         assert!(driver.registry().has_queue("events"));
         assert!(driver.registry().has_artifacts());
-        driver.kv_list_keys("cache", None, Some(10)).unwrap();
         driver.queue_tail("events", 5).unwrap();
 
+        // The recorded calls prove ZERO D1/KV discovery: only queue + artifacts discovery, then the
+        // queue pull. No `D1Discovery`, no `KvDiscovery`, no `introspect_d1` column pragmas.
         let calls = backend.recorded();
-        assert!(matches!(calls[0], RecordedCall::D1Discovery));
-        assert!(matches!(calls[1], RecordedCall::D1Query { ref db, .. } if db == "d1-uuid"));
-        assert!(matches!(calls[2], RecordedCall::D1Query { ref db, .. } if db == "d1-uuid"));
-        assert!(matches!(calls[3], RecordedCall::KvDiscovery));
-        assert!(matches!(calls[4], RecordedCall::QueueDiscovery));
-        assert!(matches!(calls[5], RecordedCall::ArtifactNamespaceDiscovery));
-        assert!(matches!(calls[6], RecordedCall::KvList { ref ns, .. } if ns == "kv-id"));
-        assert!(matches!(calls[7], RecordedCall::QueuePull { ref queue, .. } if queue == "events"));
+        assert!(
+            !calls
+                .iter()
+                .any(|c| matches!(c, RecordedCall::D1Discovery | RecordedCall::KvDiscovery)),
+            "compiled discovery must not probe D1 or KV: {calls:?}"
+        );
+        assert!(matches!(calls[0], RecordedCall::QueueDiscovery));
+        assert!(matches!(calls[1], RecordedCall::ArtifactNamespaceDiscovery));
+        assert!(matches!(calls[2], RecordedCall::QueuePull { ref queue, .. } if queue == "events"));
     }
 
     #[test]
@@ -631,18 +494,19 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------------------------
-    // Stage 4 (ticket 20260718203326) — the §13 conformance twin.
+    // The declared `/cloudflare/d1` twin (ticket 20260718203326).
     //
-    // The declared `/cloudflare/d1` twin must serve the SAME behaviour the compiled `/cf` D1 path
-    // serves, over `MockCfBackend`/`MockExchange`, BEFORE the compiled discovery/registration is
-    // deleted (the self-hosting ratchet forbids deleting first). Two proofs:
-    //   1. equivalence: given the same D1 data, the declared twin returns the same rows, the same
-    //      residual, the same outward schema, and emits the same wire query as compiled — while
-    //      doing ZERO introspection;
-    //   2. the wire seam: the read/apply facets build their live backend through
-    //      `declared_d1_backend`, which calls `cf_exchange()` internally. The test seam below
-    //      injects a socket-free `MockExchange` through that exact builder, so the declared read
-    //      runs with NO network.
+    // The Stage-4 equivalence twin (declared ≡ compiled `/cf` D1, over `MockCfBackend`) fired the
+    // §13 ratchet — it was GREEN at `f1bd5f3`, which authorized deleting the compiled D1 discovery
+    // in Stage 5. With compiled D1 introspection now retired, there is no compiled counterpart to
+    // compare against, so the equivalence test retired with it (git history holds the proof). The
+    // declared D1 path stands on its own coverage below:
+    //   * `declared_d1_driver_serves_the_declared_catalog_without_introspection` (above) — the
+    //     wildcard template serves the committed catalog for ANY key with ZERO backend I/O;
+    //   * `declared_d1_read_over_injected_mock_exchange_does_no_network` (below) — the read/apply
+    //     facets build their live backend through `declared_d1_backend`, which calls `cf_exchange()`
+    //     internally; the test seam injects a socket-free `MockExchange` through that exact builder,
+    //     so the declared read runs with NO network and addresses the confined Cloudflare host.
     // -----------------------------------------------------------------------------------------
 
     thread_local! {
@@ -672,103 +536,6 @@ mod tests {
     ) -> D1ExchangeGuard {
         DECLARED_D1_EXCHANGE.with(|c| *c.borrow_mut() = Some(exchange));
         D1ExchangeGuard
-    }
-
-    #[test]
-    fn declared_d1_twin_matches_compiled_cf_rows_schema_and_wire_query() {
-        use qfs_core::Path;
-        use qfs_driver_cf::{D1DatabaseUuid, RecordedCall};
-        use qfs_driver_sql::QuerySpec;
-
-        // The single data row every D1 path returns for `SELECT id, name FROM users`.
-        let data_row = || Row::new(vec![Value::Int(1), Value::Text("alice".to_string())]);
-
-        // COMPILED path: discovery + introspection (the table listing, then the column pragma) then
-        // the data query. The uuid IS `prod`, so the compiled data query addresses the same api db
-        // id the declared twin derives from the path-name fallback.
-        let compiled_backend = Arc::new(
-            MockCfBackend::new()
-                .with_d1_database("prod", D1DatabaseUuid::new("prod"))
-                .with_d1_rows(vec![Row::new(vec![
-                    Value::Text("users".to_string()),
-                    Value::Text("table".to_string()),
-                ])])
-                .with_d1_rows(vec![
-                    Row::new(vec![
-                        Value::Text("id".to_string()),
-                        Value::Text("INTEGER".to_string()),
-                        Value::Int(1),
-                        Value::Int(1),
-                    ]),
-                    Row::new(vec![
-                        Value::Text("name".to_string()),
-                        Value::Text("TEXT".to_string()),
-                        Value::Int(0),
-                        Value::Int(0),
-                    ]),
-                ])
-                .with_d1_rows(vec![data_row()]),
-        );
-        let compiled = driver_from_backend(compiled_backend.clone()).expect("compiled cf driver");
-
-        // The declared twin serves the SAME catalog the compiled driver introspected — but WITHOUT
-        // introspecting: it is handed the catalog straight from the committed `CREATE SQL` row.
-        let catalog = compiled
-            .registry()
-            .d1("prod")
-            .expect("compiled introspected the users catalog")
-            .catalog()
-            .clone();
-        let declared_backend = Arc::new(MockCfBackend::new().with_d1_rows(vec![data_row()]));
-        let declared = super::declared_d1_driver(declared_backend.clone(), catalog);
-
-        let spec = QuerySpec::new(vec!["id".to_string(), "name".to_string()]);
-        let path = Path::new("/cf/d1/prod/users");
-        let (compiled_rows, compiled_residual) = compiled.execute_d1_query(&path, &spec).unwrap();
-        let (declared_rows, declared_residual) = declared.execute_d1_query(&path, &spec).unwrap();
-
-        // CONFORMANCE — identical rows and residual.
-        assert_eq!(compiled_rows, declared_rows);
-        assert_eq!(compiled_residual, declared_residual);
-
-        // CONFORMANCE — identical outward schema (columns/types/pk).
-        let schema_of = |d: &qfs_driver_cf::CfDriver| {
-            d.registry()
-                .d1("prod")
-                .unwrap()
-                .table("users", "/cf/d1/prod/users")
-                .unwrap()
-                .describe_schema()
-        };
-        assert_eq!(schema_of(&compiled), schema_of(&declared));
-
-        // CONFORMANCE — the declared twin emits the SAME wire D1 query (SQL text + bound params).
-        let last_d1 = |calls: Vec<RecordedCall>| {
-            calls
-                .into_iter()
-                .rev()
-                .find_map(|c| match c {
-                    RecordedCall::D1Query { sql, params, .. } => Some((sql, params)),
-                    _ => None,
-                })
-                .expect("a recorded d1 query")
-        };
-        let (compiled_sql, compiled_params) = last_d1(compiled_backend.recorded());
-        let (declared_sql, declared_params) = last_d1(declared_backend.recorded());
-        assert_eq!(
-            compiled_sql, declared_sql,
-            "the declared twin emits the compiled wire SQL"
-        );
-        assert_eq!(compiled_params, declared_params);
-
-        // The declared twin did ZERO discovery/introspection — its only backend call is the read.
-        let declared_calls = declared_backend.recorded();
-        assert_eq!(
-            declared_calls.len(),
-            1,
-            "no discovery/introspection, just the data read: {declared_calls:?}"
-        );
-        assert!(matches!(declared_calls[0], RecordedCall::D1Query { .. }));
     }
 
     #[test]
