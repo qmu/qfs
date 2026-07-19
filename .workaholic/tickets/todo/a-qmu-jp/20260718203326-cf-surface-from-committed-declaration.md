@@ -317,3 +317,67 @@ Purely internal (no CLI surface) — no plugin version bump, no gen-docs/gen-ski
 — + `CfRegistry::new().with_d1_template(D1Database::new(backend, resource.catalog()))` → `CfDriver`)
 and wiring it into the three declared-mount facets (`describe.rs:173`, `commit.rs:355-396`,
 `shell.rs:418-448`) as a NESTED `/cloudflare/d1` mount (id `cloudflare/d1`). Then Stages 3–6.
+
+## Drive status — 2026-07-19 (wave-6 /monitor leaf: STAGE 2a-ii + 2b LANDED, gate-green, additive)
+
+**Commit `ff2085d`** (still in todo; acceptance NOT ticked — the compiled `/cf` still serves D1
+until the conformance twin passes, per the §13 ratchet). The cross-cutting core the four prior
+leaves deferred is now built and green. The tree is clean at `ff2085d`, binary `0.0.79`, plugins
+`0.13.0`.
+
+**What landed (all three facets wired ATOMICALLY, additive — the compiled `/cf` untouched):**
+- **Stage 2a-ii — composition helpers.** `cf.rs`: `declared_d1_driver(backend, catalog)` = a
+  `CfDriver` over `CfRegistry::new().with_d1_template(D1Database::new(backend, catalog))` (serves the
+  declared catalog for ANY `{database}` with ZERO `list_*`/`introspect_d1`); `declared_d1_backend(
+  account_id, token)` = the live `HttpApiBackend` over `cf_exchange()`. The `backend` is INJECTED
+  (not built inside), so the pure describe mount uses `MockCfBackend` and read/apply use the live
+  wire — the seam the Stage-4 twin will drive. `declared_driver.rs`: `declared_sql_mounts()` pairs
+  each connected declared driver with the `CREATE SQL` resource whose path leading-segment is its
+  name (`+ prefix` = segments before the first `{…}`, e.g. `/cloudflare/d1`); `declared_d1_remap()`
+  = `MountRemap::new_prefixed(prefix, "/cf/d1", "cf")` (outer id the slash-bearing `cloudflare/d1`);
+  `declared_auth_bearer()` resolves the raw `Secret` through the same `(provider,"default")` /
+  `(driver,"default")` `SecretRef` coordinate the `RestDriver` uses; `DeclaredMount` grew
+  `at_locator`.
+- **Stage 2b — the three facets.** describe (`describe.rs` `register_defined_paths_where`): a NESTED
+  plan/describe mount over a cred-free `MockCfBackend` + the declared catalog (pure, network-free).
+  read (`shell.rs`): a live `CfReadDriver` over `declared_d1_backend` + declared catalog, wrapped in
+  `MountReadDriver` at id `cloudflare/d1`. apply (`commit.rs`): a `LazyApplyDriver` → `cf_apply_driver`
+  → `MountApplyDriver` at id `cloudflare/d1` (bind deferred to first apply). All fail-closed per mount.
+- **Tests (7 new, hermetic):** `declared_d1_driver_serves_the_declared_catalog_without_introspection`
+  (cf.rs — zero I/O); `sql_resource_mount_prefix_*`, `declared_d1_remap_*`, `declared_sql_mounts_*`
+  (×2), `declared_auth_bearer_resolves_the_account_provider_bearer` (declared_driver.rs);
+  `declared_d1_nested_mount_describes_the_declared_catalog_network_free` (describe.rs — end-to-end
+  through the real describe registry, proving the nested-mount routing + remap + declared catalog,
+  and that an UNDECLARED table is not describable — no hidden introspection fallback).
+
+**Gates (all exit 0):** `cargo test -p qfs` 402 pass, `-p qfs-driver-cf` 22, `-p qfs-test
+cookbook_skills` 1; `clippy --workspace --all-targets -D warnings` clean; `fmt --all --check` clean;
+`gen-docs`/`gen-skills --check` in sync; `check-migrations` clean. (The full `cargo test --workspace`
+could not complete on this shared host — `/` hit 100% disk from concurrent worktree builds, `os
+error 28` at link, NOT a test failure; reclaimed only own `target/incremental` and verified the
+affected crates per-crate.)
+
+**What remains (Stages 3–6), unchanged in shape but now atop a live nested D1 twin:**
+3. **KV/queues as plain declared REST** (served get/put/push/pull beyond the listings already in
+   `cloudflare.qfs`), staged with the compiled `/cf` still alive.
+4. **The conformance twin.** The read/apply facets call `declared_d1_backend` → `cf_exchange()` (real
+   reqwest) internally, so an end-to-end funnel twin needs a TEST SEAM to inject a
+   `MockExchange`/`MockCfBackend` through the facet (e.g. thread an optional exchange override, or
+   factor the per-mount driver build behind an injectable backend provider). Then the twin asserts
+   the declared surface matches the compiled `/cf` over `MockCfBackend`/`MockHttpClient` + a
+   describe-purity (no-network) assertion — BEFORE any deletion (the §13 ratchet).
+5. **Delete/demote compiled `/cf`** (`cf.rs:153-242` `driver_from_backend_with_artifact_sealer` +
+   `introspect_d1`; `cloud_mounts.rs:54` the `cf` canonical-id arm; `describe.rs` the `"cf"`
+   `cred_free_driver` arm; `shell.rs`/`commit.rs` the compiled `cf` read/apply branches) only once
+   the twin is green. NOTE `CfReadDriver`/`cf_apply_driver`/`CfDriver` STAY — the declared twin reuses
+   them; only the compiled *discovery/registration* path is deleted. High regression surface (the
+   `cf.rs` tests, `cloud_mounts` tests, any `/cf` integration test) — validate with a full workspace
+   test once disk allows.
+6. `cloudflare.qfs` asset extension (a `CREATE SQL` D1 arm) + cookbook + `gen-skills`; plugin version
+   bump if `qfs-cloudflare`'s taught surface changes; binary patch bump; then archive + tick mission
+   line 142.
+
+Stages 4 + 5 are the all-or-nothing remainder and were NOT attempted this leaf: the twin needs the
+injection seam above, deletion is a hard break with a wide regression surface, and the shared host's
+disk pressure blocked a full-workspace validation — landing them half-wired is exactly what the
+safety floor forbids. Binary stays `0.0.79`, plugins `0.13.0`; no acceptance ticked.
