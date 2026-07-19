@@ -2480,6 +2480,77 @@ mod tests {
     }
 
     #[test]
+    fn declared_cloudflare_kv_and_queue_rest_resources_expose_get_put_push() {
+        // Stage 3 (ticket 20260718203326): KV get/put and Queues push served as PLAIN declared REST
+        // — a value SELECT (GET), a value UPSERT (PUT), and a message INSERT (POST) — all under the
+        // account-scoped `accounts` leading segment. This holds the config-layer verb aggregation the
+        // shipped `cloudflare.qfs` KV/queue statements desugar to (the statements themselves are
+        // parse-ratcheted in `shipped_cloudflare_script_installs_statement_for_statement`). Pull is a
+        // POST-to-read with no declared primitive, so it is intentionally absent (compiled /cf serves
+        // it) — asserted below.
+        let d = DeclaredDriver {
+            name: "cloudflare".into(),
+            base_url: "https://api.cloudflare.com/client/v4".into(),
+            auth: r#"{"kind":"bearer"}"#.into(),
+            pagination: None,
+            views: vec![
+                DeclaredNode {
+                    path: "/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/keys"
+                        .into(),
+                    of_type: None,
+                    body: String::new(),
+                },
+                DeclaredNode {
+                    path:
+                        "/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key}"
+                            .into(),
+                    of_type: None,
+                    body: String::new(),
+                },
+            ],
+            maps: vec![
+                DeclaredMap {
+                    path:
+                        "/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key}"
+                            .into(),
+                    verb: "UPSERT".into(),
+                    body: String::new(),
+                    irreversible: false,
+                },
+                DeclaredMap {
+                    path: "/cloudflare/accounts/{account}/queues/{queue}/messages".into(),
+                    verb: "INSERT".into(),
+                    body: String::new(),
+                    irreversible: false,
+                },
+            ],
+        };
+
+        let cfg = d.rest_config();
+        // All account-scoped KV/queue nodes collapse under the `accounts` leading segment; the get
+        // (SELECT), put (UPSERT), and push (INSERT) verbs aggregate there.
+        let accounts = cfg
+            .resource_for_segment("accounts")
+            .expect("account-scoped resource");
+        assert!(
+            accounts.supports(RestVerb::Select),
+            "KV value get is a plain declared SELECT (GET)"
+        );
+        assert!(
+            accounts.supports(RestVerb::Upsert),
+            "KV value put is a plain declared UPSERT (PUT)"
+        );
+        assert!(
+            accounts.supports(RestVerb::Insert),
+            "queue push is a plain declared INSERT (POST)"
+        );
+        // Pull has no declared read-over-POST primitive: no REMOVE/other write verb is smuggled in as
+        // a pull, and the get/put/push additions carry no irreversible write.
+        assert!(!accounts.is_irreversible(RestVerb::Insert));
+        assert!(!accounts.is_irreversible(RestVerb::Upsert));
+    }
+
+    #[test]
     fn cloudflare_declared_driver_loads_confined_with_two_source_registry() {
         use qfs_core::{Path, Verb};
         let d = cloudflare_fixture();
@@ -2567,8 +2638,8 @@ mod tests {
 
         assert_eq!(
             stmts.len(),
-            9,
-            "1 driver + 2 types + 5 views + 1 map: {stmts:?}"
+            13,
+            "1 driver + 2 types + 7 views + 3 maps: {stmts:?}"
         );
         for s in &stmts {
             assert!(

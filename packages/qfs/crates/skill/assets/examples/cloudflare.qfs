@@ -62,3 +62,38 @@ CREATE VIEW /cloudflare/accounts/{account}/queues AS
 
 CREATE VIEW /cloudflare/accounts/{account}/d1/database AS
   /http/cloudflare/accounts/{account}/d1/database |> DECODE json |> EXPAND result;
+
+-- ── KV GET / PUT as plain declared REST ─────────────────────────────────────────────────────────
+-- KV values are ordinary REST over the wire, so the served surface is plain declared views/maps
+-- (the compiled /cf KV path still coexists). {namespace} is a KV namespace id (list them with the
+-- namespaces view above); {key} is the value key.
+--
+-- GET — a namespace's keys (paginated listing, wrapped like every Cloudflare list payload) and a
+-- single key's raw value. The value read carries no `DECODE`: KV returns the stored bytes verbatim,
+-- so the wire body IS the value (map SELECT → HTTP GET).
+CREATE VIEW /cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/keys AS
+  /http/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/keys
+  |> DECODE json |> EXPAND result;
+
+CREATE VIEW /cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key} AS
+  /http/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key};
+
+-- PUT — write a value at a key. An idempotent UPSERT (map UPSERT → HTTP PUT); re-putting the same
+-- key overwrites, and the value is reversible (REMOVE deletes it). The token stays in the account
+-- layer. Write shape: UPSERT a row carrying the value bytes.
+CREATE MAP UPSERT /cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key} AS
+  UPSERT INTO /http/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key}
+  VALUES (row);
+
+-- ── Queues PUSH as plain declared REST ──────────────────────────────────────────────────────────
+-- PUSH — send a message to a queue. An ordinary append INSERT (map INSERT → HTTP POST); {queue} is
+-- a queue id (list them with the queues view above). Write shape: INSERT a row carrying the body.
+CREATE MAP INSERT /cloudflare/accounts/{account}/queues/{queue}/messages AS
+  INSERT INTO /http/cloudflare/accounts/{account}/queues/{queue}/messages VALUES (row);
+
+-- PULL is NOT declared here (recorded gap, honest-surfaces). Cloudflare queue pull is a POST-to-read
+-- (POST /http/cloudflare/accounts/{account}/queues/{queue}/messages/pull returning a message batch),
+-- and plain declared REST has no POST-that-reads primitive: a declared VIEW is always a GET and a
+-- declared MAP is a write effect (no rows returned). Consuming a queue therefore stays on the
+-- compiled /cf driver until a declared read-over-POST primitive ships. Everything above needs no
+-- such primitive — get/put/push are GET/PUT/POST in the plain CRUD-over-HTTP shape.
