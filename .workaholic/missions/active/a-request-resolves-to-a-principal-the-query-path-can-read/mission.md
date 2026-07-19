@@ -278,38 +278,35 @@ Each item is a criterion, not a design. The ticket that satisfies it is cut agai
 `/ticket` time — **re-verify the *Measured starting state* first; do not paraphrase it into a
 ticket.**
 
-- [ ] **"Who am I" is answerable for a request, and its negative is first-class.** A request
+- [ ] **"Who am I" is answerable for a request, and its negative is first-class.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) A request
       carrying a live session resolves to a named principal; a request with no session resolves to
       an explicit not-signed-in answer — not an error, not a silent fallback to the sole user.
-      Demonstrated by a real run with raw exit codes. (#20260719101202-thread-the-request-principal-to-the-scan-seam.md)
-- [ ] **The principal is reachable on the path a query takes.** The seam that serves a scan can see
+      Demonstrated by a real run with raw exit codes.
+- [ ] **The principal is reachable on the path a query takes.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) The seam that serves a scan can see
       who is asking, without each driver inventing its own route to the answer and without a
       per-face divergence. The shape of the seam is the ticket's to rule against the source.
-      (#20260719101202-thread-the-request-principal-to-the-scan-seam.md)
-- [ ] **The policy gate evaluates the resolved actor, not `anonymous()`.** A t57-narrowed
+- [ ] **The policy gate evaluates the resolved actor, not `anonymous()`.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) A t57-narrowed
       (`FOR <subject>`) rule contributes when a principal is present. Proved both directions: the
       rule bites with a principal, and the same rule contributes nothing without one.
-      (#20260719101202-thread-the-request-principal-to-the-scan-seam.md)
-- [ ] **Fail-closed is preserved, pinned by a test that would fail if the default widened.** No
+- [ ] **Fail-closed is preserved, pinned by a test that would fail if the default widened.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) No
       session ⇒ no user, no roles, no groups, no memberships ⇒ default-deny holds. Threading a
-      principal widens nothing. (#20260719101202-thread-the-request-principal-to-the-scan-seam.md)
-- [ ] **The answer is readable as data through the one engine, credential-free.** Reached on the
+      principal widens nothing.
+- [ ] **The answer is readable as data through the one engine, credential-free.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) Reached on the
       closed-set convention — never a bespoke side-channel endpoint — and carrying no credential
       column, matching the `/sys/connections` redaction contract. Verified by a `DESCRIBE` run and a
-      structural test. (#20260719101202-thread-the-request-principal-to-the-scan-seam.md)
-- [ ] **`Role` is still not a grant, and the open decision is still open.** The mission's outcome
+      structural test.
+- [ ] **`Role` is still not a grant, and the open decision is still open.** (#20260719101203-role-stays-not-a-grant-and-the-open-decision-stays-open.md) The mission's outcome
       states plainly that `identity::Role` was not converted into an authorization grant, that
       `Role::Admin` is still not privileged, and that the t55-vs-t53 taxonomy and the
       super-admin/project-admin split remain unruled. The flags at `invite.rs:135-139` and
       `sys.rs:24-27` still stand, or are updated only to record a ruling the developer actually
-      made. (#20260719101203-role-stays-not-a-grant-and-the-open-decision-stays-open.md)
-- [ ] **The identity read-back tells the truth.** `whoami --json` emits machine-readable JSON or
+      made.
+- [x] **The identity read-back tells the truth.** (#20260719101201-identity-read-back-tells-the-truth.md) `whoami --json` emits machine-readable JSON or
       rejects the flag — it does not accept it and emit prose; and `qfs identity --help`
       (`cmd/src/lib.rs:702-706`) no longer asserts a retired sign-up or a pending t46.
-      (#20260719101201-identity-read-back-tells-the-truth.md)
-- [ ] **One live round, developer-attended.** A real request with a session and a real request
+- [ ] **One live round, developer-attended.** (#20260719101204-one-live-round-developer-attended.md) A real request with a session and a real request
       without one, end to end, each resolving to its answer through the shipped path — output and
-      exit codes pasted. (#20260719101204-one-live-round-developer-attended.md)
+      exit codes pasted.
 
 ## Changelog
 
