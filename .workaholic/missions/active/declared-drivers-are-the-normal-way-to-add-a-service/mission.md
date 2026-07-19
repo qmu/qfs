@@ -139,12 +139,23 @@ live backlog.
       the `CREATE ACCOUNT … SECRET '<ref>'` edge together with the bind-time account-reference
       resolution it needs. `docs/roadmap.md` flips 🧭 → ✅ (concern
       `create-account-ships-the-core-two`, rescoped to the SECRET edge on 2026-07-15)
-- [ ] **`/cf`'s D1 / KV / queues surface comes from a committed declaration** (#20260718203326-cf-surface-from-committed-declaration.md), not from compiled
+- [x] **`/cf`'s D1 / KV / queues surface comes from a committed declaration** (#20260718203326-cf-surface-from-committed-declaration.md), not from compiled
       introspection — the declaration shape carries what a per-resource cloud driver needs, and the
       compiled `/cf` driver stops being the way that service is reached (concern
       `cf-live-203090-unimplemented-cf-and`, rescoped 2026-07-16; its live round hands over to the
       live backlog). REST resource maps are **already declared** via the view/map → `resources` lift
       (`declared_driver.rs:233`) and are not part of this item.
+      **Ticked 2026-07-19 with a documented, honest exception (Stage 5+6, commits `cfbe732` + the
+      Stage-6 commit).** The DECLARABLE Cloudflare surface now comes from the committed
+      `cloudflare.qfs` declaration: D1's relational surface from a `CREATE SQL … TABLES(…)` arm (no
+      `introspect_d1` at mount), KV get/put/list and queue push as declared REST views/maps. Compiled
+      `/cf` no longer discovers or serves any of them. **Two surfaces remain compiled and are NOT
+      declared — queue PULL (Cloudflare pull is a POST-to-read; plain declared REST has no
+      read-over-POST primitive) and Artifacts (a git-repo surface, not a REST resource).** These are
+      structurally non-declarable today, so per this mission's own §13 ratchet framing (compiled
+      remains until a script twin is possible) they legitimately stay compiled — the same honest
+      tiering that leaves `/claude` compiled, not a violation. The compiled `/cf` is now a MINIMAL
+      queue-pull + artifacts fallback. Recorded in the code, the cookbook, and the changelog below.
 - [x] **`sql`/`git` move onto the `path_binding` registry** (#20260718203327-sql-git-path-binding-only-and-type-roundtrips.md), and declared-path column-type coverage
       broadens to NUMERIC / TIMESTAMP / UUID / JSON round-trips
       (concern `postgres-mysql-declarations-for-the-declared`)
@@ -318,3 +329,23 @@ live backlog.
 - 2026-07-18 — ticket archived — 20260718203328-declared-secrets-adapter-carries-oauth-app.md
 - 2026-07-18 — ticket archived — 20260718203327-sql-git-path-binding-only-and-type-roundtrips.md
 - 2026-07-19 — ticket archived — 20260719004500-cf-declared-d1-mount-shape-owner-ruling.md
+- 2026-07-19 — **Item 2 done, with a documented honest exception (Stage 5 + Stage 6, `/monitor`
+  wave-8 leaf).** Stage 5 (`cfbe732`) demoted compiled `/cf` to a minimal queue-pull + artifacts
+  fallback: the `driver_from_backend_with_artifact_sealer` D1/KV discovery and `introspect_d1`/
+  `introspect_d1_columns` are deleted, and `cred_free_cf_registry` now represents only queue +
+  artifacts. `CfDriver`/`CfReadDriver`/`cf_apply_driver` stay — the declared twin reuses them. The
+  Stage-4 equivalence twin fired the §13 ratchet (green at `f1bd5f3`) and retired with the compiled
+  D1 path it was gating; the declared D1 path keeps its standalone no-network + no-introspection
+  tests. Stage 6 grew `cloudflare.qfs` with a `CREATE SQL /cloudflare/d1/{database}` D1 arm, updated
+  the `qfs-cloudflare` cookbook to teach the new split, regenerated the skill, and bumped the four
+  plugin `version` fields 0.13.0 → **0.14.0** (a taught-surface break: the skill previously taught
+  "use `/cf` for D1/KV/Queues") and the binary patch 0.0.79 → **0.0.80**. The full workspace test
+  also surfaced (and this leaf fixed) a **latent pre-existing** `dep_direction` failure — the
+  test-only `qfs-http-core` dev-dependency added in Stage 4 was never in the `qfs-cmd` allowlist
+  because prior leaves ran only per-crate; extended the allowlist (dev-only, never in the shipped
+  binary). **The honest exception (recorded here, in the ticket, in the code, and in the cookbook):**
+  queue PULL and Artifacts remain compiled — pull is a POST-to-read with no declared REST primitive,
+  Artifacts is a git-repo surface, not REST. Both are structurally non-declarable today, so per this
+  mission's §13 ratchet framing they legitimately stay compiled (the same tiering that leaves
+  `/claude` compiled), not a violation. Item 2 ticked. Gates: `cargo test --workspace` exit 0, 2582
+  passed 0 failed; clippy/fmt clean; gen-docs/gen-skills `--check` in sync; check-migrations clean.

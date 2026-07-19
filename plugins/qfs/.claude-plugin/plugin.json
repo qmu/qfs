@@ -1,7 +1,7 @@
 {
   "name": "qfs",
   "description": "Use when a task needs to read or modify any service the user has connected — mail, files, databases, GitHub, Slack, git, cloud storage — through the qfs pipe-SQL query language and the qfs CLI. Replaces the gmail-ftp and gdrive-ftp plugins.",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "dependencies": [],
   "author": {
     "name": "tamurayoshiya",

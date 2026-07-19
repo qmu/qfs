@@ -2638,8 +2638,8 @@ mod tests {
 
         assert_eq!(
             stmts.len(),
-            13,
-            "1 driver + 2 types + 7 views + 3 maps: {stmts:?}"
+            14,
+            "1 driver + 2 types + 7 views + 3 maps + 1 sql: {stmts:?}"
         );
         for s in &stmts {
             assert!(
