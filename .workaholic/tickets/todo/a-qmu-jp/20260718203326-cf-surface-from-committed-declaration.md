@@ -222,4 +222,37 @@ instead of from compiled discovery. `D1Database::discovered(backend, uuid, catal
 - **2b:** wire it into the three declared-mount facets (`describe.rs:173`, `commit.rs:355-396`,
   `shell.rs:418-448`) per the 2.0 shape decision — the cross-cutting core.
 
+## Drive status — 2026-07-19 (wave-4 /monitor leaf: DEFERRED to an owner design ruling; nothing built)
+
+This leaf resumed at Stage 2, re-ran the blocker analysis against source, and completed the
+**mechanical half of the 2.0 spike by code-read** (no runtime test committed):
+
+- `DriverId` is an unvalidated `String` (`types/src/schema.rs:19`) and `MountRemap::outer_id`
+  (`mount_adapter.rs:113`) keeps the full outer path minus the leading `/`, so a `/cloudflare/d1`
+  mount yields the slash-bearing id `"cloudflare/d1"`, distinct from `"cloudflare"` — the nested-mount
+  escape is structurally available.
+- The plan/describe registry routes by **longest-prefix path** (`core/src/registry.rs:594
+  resolve_service_path`, boundary-matched), so `/cloudflare/d1/…` would prefer a nested mount.
+- BUT the **read** funnel (`exec/src/read.rs:57` `ReadRegistry`) and apply funnel are keyed by
+  `DriverId` via `.get(id)`, and every read driver registered today uses a **single-segment** id
+  (`shell.rs`: `local`, `sys`, `transform`, `type`, …). Whether the `DriverId`-keyed read/apply
+  funnels and plan-lowering tolerate a slash-bearing id is the ONE unverified seam — it needs a
+  runtime spike (register a dummy nested mount at id `a/b`, assert a read resolves `.get("a/b")`),
+  which decides nested (A, small) vs composite (B, large).
+
+**Outcome: DEFERRED, not built.** Consistent with the three prior leaves, Stage 2 wired to serve a
+real mount cannot be made gate-green in one leaf without first ruling the mount shape (Q1: nested vs
+composite) and the D1 address placement (Q2: nested under `/cloudflare/d1` vs its own top-level
+segment — a pure owner UX call). The older brief (`20260716214300`) reserves this as Fable-tier
+judgment: "Do not start implementation before the brief is ruled." An unattended `/monitor` leaf
+cannot make that call, so it is escalated as a discrete decision artifact:
+**`20260719004500-cf-declared-d1-mount-shape-owner-ruling.md`** (deferred; blocks this ticket).
+
+No speculative scaffolding was added: blocker-3's wildcard-`CfRegistry` capability and the
+declared→`CfDriver` composition helper are shape-independent and safe, but their build stage and
+exact home follow the Q1 ruling, and landing a fourth thin pre-ruling commit is precisely what the
+brief forbids. The tree is clean at `ed3e075`, binary `0.0.79`, plugins `0.13.0`, no acceptance
+ticked. When the owner rules Q1+Q2 in this ticket, a normal drive builds Stages 2–6 per the build
+order above and the deferred escalation ticket retires.
+
 Then Stages 3-6 as previously mapped. Binary stays `0.0.79`, plugins `0.13.0`; no acceptance ticked.
