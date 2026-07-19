@@ -381,3 +381,59 @@ Stages 4 + 5 are the all-or-nothing remainder and were NOT attempted this leaf: 
 injection seam above, deletion is a hard break with a wide regression surface, and the shared host's
 disk pressure blocked a full-workspace validation — landing them half-wired is exactly what the
 safety floor forbids. Binary stays `0.0.79`, plugins `0.13.0`; no acceptance ticked.
+
+## Drive status — 2026-07-19 (wave-7 /monitor leaf: STAGE 3 + STAGE 4 LANDED, gate-green; twin GREEN)
+
+Two gate-green commits, each leaving all three facets consistent and the compiled `/cf` intact (the
+§13 dual-alive state). Tree clean, binary `0.0.79`, plugins `0.13.0` (surface unchanged — no bump).
+
+**Stage 3 — KV/queues as plain declared REST (`445b600`).** `cloudflare.qfs` now serves the KV
+get/put and Queues push surface as ordinary declared views/maps alongside the D1 twin, compiled `/cf`
+untouched:
+- `CREATE VIEW …/storage/kv/namespaces/{namespace}/keys` (keys listing) and
+  `CREATE VIEW …/values/{key}` (raw value, a plain GET — no DECODE, the wire body IS the value).
+- `CREATE MAP UPSERT …/values/{key}` (value put → HTTP PUT) — idempotent, reversible.
+- `CREATE MAP INSERT …/queues/{queue}/messages` (queue push → HTTP POST) — append.
+- **Queue pull is intentionally NOT declared** (recorded honest-surfaces gap comment): Cloudflare
+  queue pull is a POST-to-read and plain declared REST has no POST-that-reads primitive (a VIEW is
+  always GET, a MAP is a write effect), so consuming a queue stays on compiled `/cf` until a declared
+  read-over-POST primitive ships.
+- Ratchets: the shipped-script parse test count moved 9→13 (each new statement parse-checked); a new
+  `declared_cloudflare_kv_and_queue_rest_resources_expose_get_put_push` holds the config-layer verb
+  aggregation (SELECT+UPSERT+INSERT under the `accounts` segment). Host-confinement + credential-free
+  asset invariants still hold. No cookbook/skill change → no plugin version bump (Stage 6 owns docs).
+
+**Stage 4 — the conformance twin + exchange seam (`da71c97`). THE TWIN IS GREEN.** This is the
+§13-ratchet signal that unblocks the Stage-5 deletion of compiled `/cf` discovery.
+- **Test seam (production-safe):** `declared_d1_backend` now builds its `HttpApiBackend` over a new
+  `declared_d1_exchange()` helper. In production that is always `cf_exchange()` (the real transport);
+  a `#[cfg(test)]`-only thread-local override (cleared by a `Drop` guard so it never leaks across
+  cargo's reused test threads) lets the twin inject a socket-free `MockExchange` through the EXACT
+  same read/apply-facet backend builder. Production behavior is byte-identical (the override branch
+  does not exist in a non-test build).
+- **Twin equivalence (`declared_d1_twin_matches_compiled_cf_rows_schema_and_wire_query`):** given the
+  same D1 data, the declared driver returns identical rows, identical residual, identical outward
+  schema, and emits the identical wire D1 query (SQL + bound params) as the compiled `/cf` path — over
+  `MockCfBackend` — while performing ZERO discovery/introspection (its only backend call is the read).
+- **Seam / no-network (`declared_d1_read_over_injected_mock_exchange_does_no_network`):** the declared
+  read (`execute_d1_query`, the exact call `read_facets::cf_scan` issues) runs over an injected
+  `MockExchange` with no socket, addressing the confined `api.cloudflare.com` host for the path-derived
+  api db id. Plus `declared_d1_exchange_seam_falls_through_to_production_when_unset` (the seam is inert
+  unless a test injects). The pre-existing describe-purity test
+  (`declared_d1_nested_mount_describes_the_declared_catalog_network_free`) is the no-network DESCRIBE
+  proof and still passes.
+- A test-only `qfs-http-core` dev-dependency was added (to name the `HttpResponse` DTO the mock
+  scripts); the binary itself still reaches the transport through `qfs-driver-cf`.
+
+**Gates (all exit 0):** `cargo test -p qfs` 406 pass, `-p qfs-skill --lib` 6; `clippy --workspace
+--all-targets -D warnings` clean; `fmt --all --check` clean; `gen-docs`/`gen-skills --check` in sync;
+`check-migrations` clean.
+
+**What remains (Stages 5–6), OUT of this wave's scope:**
+5. **Delete/demote compiled `/cf` discovery** (`cf.rs` `driver_from_backend_with_artifact_sealer` +
+   `introspect_d1`; `cloud_mounts.rs:54`; the compiled `cf` describe/read/apply arms) — now unblocked
+   (twin GREEN), but a WIDE hard break awaiting the developer's authorization. `CfReadDriver`/
+   `cf_apply_driver`/`CfDriver` STAY (the declared twin reuses them); only the compiled discovery path
+   goes. High regression surface — validate with a full workspace test.
+6. `cloudflare.qfs` `CREATE SQL` D1 arm + cookbook + `gen-skills`; plugin version bump if
+   `qfs-cloudflare`'s taught surface changes; binary patch bump; archive + tick mission line 142.
