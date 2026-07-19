@@ -289,6 +289,9 @@ rustix = { version = "1", default-features = false, features = ["std", "termios"
 [dev-dependencies]
 # Temp-dir fixtures for the shell's end-to-end local read tests (never touches user files).
 tempfile = "3"
+# The wire-DTO crate the cf conformance twin scripts its socket-free `MockExchange` responses with
+# (`HttpResponse`) — test-only; the binary itself reaches the transport through qfs-driver-cf.
+qfs-http-core = { path = "../http-core" }
 
 [lints]
 workspace = true

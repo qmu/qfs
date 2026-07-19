@@ -2294,6 +2294,7 @@ dependencies = [
  "qfs-google-auth",
  "qfs-host",
  "qfs-http",
+ "qfs-http-core",
  "qfs-identity",
  "qfs-mcp",
  "qfs-oauth",

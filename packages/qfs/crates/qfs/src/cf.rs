@@ -266,10 +266,25 @@ pub(crate) fn declared_d1_driver(backend: Arc<dyn CfBackend>, catalog: Catalog) 
 #[must_use]
 pub(crate) fn declared_d1_backend(account_id: &str, token: Secret) -> Arc<dyn CfBackend> {
     Arc::new(HttpApiBackend::new(
-        crate::transport::cf_exchange(),
+        declared_d1_exchange(),
         account_id,
         token,
     ))
+}
+
+/// The wire seam [`declared_d1_backend`] builds its [`HttpApiBackend`] over. In production this is
+/// always the shared `reqwest` transport [`crate::transport::cf_exchange`]; the `#[cfg(test)]`
+/// override below lets the conformance twin inject a socket-free [`qfs_driver_cf::MockExchange`]
+/// through the *exact same* read/apply-facet backend builder, so the twin drives the declared D1
+/// facets with ZERO network. Production behaviour is unchanged — the override branch does not exist
+/// in a non-test build.
+#[must_use]
+fn declared_d1_exchange() -> Arc<dyn qfs_driver_cf::HttpExchange> {
+    #[cfg(test)]
+    if let Some(exchange) = tests::declared_d1_exchange_override() {
+        return exchange;
+    }
+    crate::transport::cf_exchange()
 }
 
 struct VaultArtifactTokenSealer {
@@ -613,5 +628,226 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(stored.expose_str(), Some("repo-token-secret"));
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Stage 4 (ticket 20260718203326) — the §13 conformance twin.
+    //
+    // The declared `/cloudflare/d1` twin must serve the SAME behaviour the compiled `/cf` D1 path
+    // serves, over `MockCfBackend`/`MockExchange`, BEFORE the compiled discovery/registration is
+    // deleted (the self-hosting ratchet forbids deleting first). Two proofs:
+    //   1. equivalence: given the same D1 data, the declared twin returns the same rows, the same
+    //      residual, the same outward schema, and emits the same wire query as compiled — while
+    //      doing ZERO introspection;
+    //   2. the wire seam: the read/apply facets build their live backend through
+    //      `declared_d1_backend`, which calls `cf_exchange()` internally. The test seam below
+    //      injects a socket-free `MockExchange` through that exact builder, so the declared read
+    //      runs with NO network.
+    // -----------------------------------------------------------------------------------------
+
+    thread_local! {
+        static DECLARED_D1_EXCHANGE: std::cell::RefCell<Option<Arc<dyn qfs_driver_cf::HttpExchange>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// The `#[cfg(test)]` override [`super::declared_d1_exchange`] consults: `Some` only while an
+    /// [`inject_declared_d1_exchange`] guard is live on this thread, so production (which never sets
+    /// it) always falls through to the real `cf_exchange()`.
+    pub(super) fn declared_d1_exchange_override() -> Option<Arc<dyn qfs_driver_cf::HttpExchange>> {
+        DECLARED_D1_EXCHANGE.with(|c| c.borrow().clone())
+    }
+
+    /// Drop-clears the thread-local so an injected exchange never leaks to another test on the same
+    /// (reused) cargo test thread.
+    struct D1ExchangeGuard;
+    impl Drop for D1ExchangeGuard {
+        fn drop(&mut self) {
+            DECLARED_D1_EXCHANGE.with(|c| *c.borrow_mut() = None);
+        }
+    }
+
+    #[must_use]
+    fn inject_declared_d1_exchange(
+        exchange: Arc<dyn qfs_driver_cf::HttpExchange>,
+    ) -> D1ExchangeGuard {
+        DECLARED_D1_EXCHANGE.with(|c| *c.borrow_mut() = Some(exchange));
+        D1ExchangeGuard
+    }
+
+    #[test]
+    fn declared_d1_twin_matches_compiled_cf_rows_schema_and_wire_query() {
+        use qfs_core::Path;
+        use qfs_driver_cf::{D1DatabaseUuid, RecordedCall};
+        use qfs_driver_sql::QuerySpec;
+
+        // The single data row every D1 path returns for `SELECT id, name FROM users`.
+        let data_row = || Row::new(vec![Value::Int(1), Value::Text("alice".to_string())]);
+
+        // COMPILED path: discovery + introspection (the table listing, then the column pragma) then
+        // the data query. The uuid IS `prod`, so the compiled data query addresses the same api db
+        // id the declared twin derives from the path-name fallback.
+        let compiled_backend = Arc::new(
+            MockCfBackend::new()
+                .with_d1_database("prod", D1DatabaseUuid::new("prod"))
+                .with_d1_rows(vec![Row::new(vec![
+                    Value::Text("users".to_string()),
+                    Value::Text("table".to_string()),
+                ])])
+                .with_d1_rows(vec![
+                    Row::new(vec![
+                        Value::Text("id".to_string()),
+                        Value::Text("INTEGER".to_string()),
+                        Value::Int(1),
+                        Value::Int(1),
+                    ]),
+                    Row::new(vec![
+                        Value::Text("name".to_string()),
+                        Value::Text("TEXT".to_string()),
+                        Value::Int(0),
+                        Value::Int(0),
+                    ]),
+                ])
+                .with_d1_rows(vec![data_row()]),
+        );
+        let compiled = driver_from_backend(compiled_backend.clone()).expect("compiled cf driver");
+
+        // The declared twin serves the SAME catalog the compiled driver introspected — but WITHOUT
+        // introspecting: it is handed the catalog straight from the committed `CREATE SQL` row.
+        let catalog = compiled
+            .registry()
+            .d1("prod")
+            .expect("compiled introspected the users catalog")
+            .catalog()
+            .clone();
+        let declared_backend = Arc::new(MockCfBackend::new().with_d1_rows(vec![data_row()]));
+        let declared = super::declared_d1_driver(declared_backend.clone(), catalog);
+
+        let spec = QuerySpec::new(vec!["id".to_string(), "name".to_string()]);
+        let path = Path::new("/cf/d1/prod/users");
+        let (compiled_rows, compiled_residual) = compiled.execute_d1_query(&path, &spec).unwrap();
+        let (declared_rows, declared_residual) = declared.execute_d1_query(&path, &spec).unwrap();
+
+        // CONFORMANCE — identical rows and residual.
+        assert_eq!(compiled_rows, declared_rows);
+        assert_eq!(compiled_residual, declared_residual);
+
+        // CONFORMANCE — identical outward schema (columns/types/pk).
+        let schema_of = |d: &qfs_driver_cf::CfDriver| {
+            d.registry()
+                .d1("prod")
+                .unwrap()
+                .table("users", "/cf/d1/prod/users")
+                .unwrap()
+                .describe_schema()
+        };
+        assert_eq!(schema_of(&compiled), schema_of(&declared));
+
+        // CONFORMANCE — the declared twin emits the SAME wire D1 query (SQL text + bound params).
+        let last_d1 = |calls: Vec<RecordedCall>| {
+            calls
+                .into_iter()
+                .rev()
+                .find_map(|c| match c {
+                    RecordedCall::D1Query { sql, params, .. } => Some((sql, params)),
+                    _ => None,
+                })
+                .expect("a recorded d1 query")
+        };
+        let (compiled_sql, compiled_params) = last_d1(compiled_backend.recorded());
+        let (declared_sql, declared_params) = last_d1(declared_backend.recorded());
+        assert_eq!(
+            compiled_sql, declared_sql,
+            "the declared twin emits the compiled wire SQL"
+        );
+        assert_eq!(compiled_params, declared_params);
+
+        // The declared twin did ZERO discovery/introspection — its only backend call is the read.
+        let declared_calls = declared_backend.recorded();
+        assert_eq!(
+            declared_calls.len(),
+            1,
+            "no discovery/introspection, just the data read: {declared_calls:?}"
+        );
+        assert!(matches!(declared_calls[0], RecordedCall::D1Query { .. }));
+    }
+
+    #[test]
+    fn declared_d1_read_over_injected_mock_exchange_does_no_network() {
+        use qfs_core::Path;
+        use qfs_driver_cf::MockExchange;
+        use qfs_driver_sql::{Catalog, ColumnDef, Dialect, QuerySpec, RelationKind, TableCatalog};
+        use qfs_http_core::HttpResponse;
+
+        // A socket-free wire: a MockExchange scripted with the Cloudflare D1 query JSON envelope.
+        let body = serde_json::json!({
+            "success": true,
+            "result": [{ "results": [{ "c0": 1, "c1": "alice" }] }]
+        });
+        let exchange = Arc::new(
+            MockExchange::new()
+                .with_response(HttpResponse::new(200, serde_json::to_vec(&body).unwrap())),
+        );
+        // Inject it through the SAME builder the read/apply facets (shell.rs / commit.rs) use.
+        let _guard = inject_declared_d1_exchange(exchange.clone());
+        let backend = super::declared_d1_backend("acct-id", Secret::from("cf-bearer"));
+
+        let catalog = Catalog::new(vec![TableCatalog::new(
+            "users".to_string(),
+            RelationKind::Table,
+            vec![
+                ColumnDef::new(
+                    "id".to_string(),
+                    Dialect::Sqlite.map_type("integer"),
+                    false,
+                    true,
+                    true,
+                ),
+                ColumnDef::new(
+                    "name".to_string(),
+                    Dialect::Sqlite.map_type("text"),
+                    true,
+                    false,
+                    false,
+                ),
+            ],
+        )]);
+        let driver = super::declared_d1_driver(backend, catalog);
+
+        // `execute_d1_query` is the exact call `read_facets::cf_scan` issues for a D1 SELECT.
+        let spec = QuerySpec::new(vec!["id".to_string(), "name".to_string()]);
+        let (rows, _residual) = driver
+            .execute_d1_query(&Path::new("/cf/d1/prod/users"), &spec)
+            .expect("the declared read runs over the injected mock exchange");
+        assert_eq!(
+            rows,
+            vec![Row::new(vec![
+                Value::Int(1),
+                Value::Text("alice".to_string())
+            ])]
+        );
+
+        // The request went to the injected mock (NO socket) and addressed the confined Cloudflare
+        // host for the api db id taken from the path (`prod`) — the no-introspection resolution.
+        let reqs = exchange.recorded();
+        assert_eq!(reqs.len(), 1, "exactly one wire call: the D1 query");
+        assert!(
+            reqs[0].url.contains("api.cloudflare.com"),
+            "confined to the cloudflare host: {}",
+            reqs[0].url
+        );
+        assert!(
+            reqs[0].url.contains("/d1/database/prod/query"),
+            "addresses the path-derived api db id: {}",
+            reqs[0].url
+        );
+    }
+
+    #[test]
+    fn declared_d1_exchange_seam_falls_through_to_production_when_unset() {
+        // With no guard live, the override is absent — production always uses the real transport.
+        assert!(
+            declared_d1_exchange_override().is_none(),
+            "the exchange seam is inert unless a test explicitly injects a mock"
+        );
     }
 }
