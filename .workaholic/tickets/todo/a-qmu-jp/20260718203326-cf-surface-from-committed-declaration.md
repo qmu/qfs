@@ -256,3 +256,45 @@ ticked. When the owner rules Q1+Q2 in this ticket, a normal drive builds Stages 
 order above and the deferred escalation ticket retires.
 
 Then Stages 3-6 as previously mapped. Binary stays `0.0.79`, plugins `0.13.0`; no acceptance ticked.
+
+## Drive status — 2026-07-19 (wave-5 /monitor leaf: SPIKE RUN + GREEN; owner RULING recorded — nested shape A, nested placement)
+
+The owner ruled (2026-07-19) and authorized running the 2.0 routing spike autonomously (it is
+hermetic, not a process/live exercise) and — if green — implementing the **nested** mount-id shape
+with the D1 address nested under `/cloudflare/d1`. **The spike ran and is GREEN.**
+
+**Spike (committed as a permanent regression test):** `crates/exec/tests/oneshot.rs`, module
+`nested_mount_id_routing_spike` (4 tests, all pass). It registers two OVERLAPPING mounts — the top
+`/a` (id `"a"`) and the NESTED `/a/b` (slash-bearing id `"a/b"`, from the default
+`Driver::id()` = mount minus the leading `/`) — and proves, end-to-end through the REAL funnels:
+
+1. `read_funnel_routes_the_slash_bearing_nested_mount_id` — a SELECT of `/a/b/x` resolves to the
+   NESTED driver via the real read funnel (`plan_query` tags the scan source `"a/b"` by longest-prefix
+   over the overlapping `/a`; `ReadRegistry.get("a/b")` — `exec::exec::id_of` — resolves it). The
+   returned row is tagged by the driver that served it (`"/a/b"`), so it is attributable. Control: a
+   SELECT of `/a/x` still routes to the top id `"a"`.
+2. `apply_funnel_targets_the_slash_bearing_nested_mount_id` — `build_plan` of
+   `INSERT INTO /a/b/tbl …` lowers the effect target to `DriverId("a/b")` at path `/a/b/tbl` — the key
+   the runtime apply funnel (`interpreter::drivers.get(id)`) resolves. No lowering / capability stage
+   choked on the slash.
+3. `full_commit_path_drives_the_nested_mount_without_choking_on_the_slash` — the whole one-shot COMMIT
+   path (capability gate + effect dispatch) drives the nested-mount INSERT to a clean commit (exit 0),
+   applying the write at `/a/b/tbl`.
+4. `both_funnel_registries_resolve_a_slash_bearing_id_with_no_single_segment_collision` — the shared
+   `HashMap<DriverId,_>` `.get(id)` primitive: `"a/b"` resolves and does NOT collide with `"a"`.
+
+**Ruling recorded (owner, 2026-07-19):**
+- **Q1 = (A) NESTED MOUNT.** The spike confirms a slash-bearing `DriverId` flows cleanly through
+  plan-lowering → the read funnel → the apply funnel. The declared D1 surface becomes its OWN nested
+  mount (id `cloudflare/d1`), which the plan/describe registry's longest-prefix router prefers over
+  `/cloudflare`. **No composite facet is needed.**
+- **Q2 = NESTED PLACEMENT under `/cloudflare/d1/{database}`** (co-located with the plain-REST
+  Cloudflare mount; NOT a new top-level segment).
+
+The deferred ruling ticket `20260719004500-cf-declared-d1-mount-shape-owner-ruling.md` is now
+RESOLVED (its only content was the ruling request) and archived this leaf.
+
+**What still remains (the build, now design-unblocked):** Stages 2a → 2b → 3 → 4 → 5 → 6 per the
+build order above, wired to the **nested-mount** shape. Acceptance item 7/7 is NOT yet ticked — the
+compiled `/cf` still serves D1/KV/queues until the declared nested twin passes the conformance suite
+(the §13 ratchet forbids deleting first). Binary stays `0.0.79`, plugins `0.13.0`.
