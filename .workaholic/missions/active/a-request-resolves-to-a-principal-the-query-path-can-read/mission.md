@@ -358,3 +358,12 @@ ticket.**
   mission.md
 - 2026-07-19 — ticket archived — 20260719101202-thread-the-request-principal-to-the-scan-seam.md
 - 2026-07-19 — ticket archived — 20260719101203-role-stays-not-a-grant-and-the-open-decision-stays-open.md
+- 2026-07-19 — /monitor drive leaf reached 7/8. Items 1-7 achieved and gate-green (build, test,
+  clippy --all-targets -D warnings, fmt, gen-docs/gen-skills/check-migrations all exit 0). **Item 8
+  (one live round, developer-attended) is BLOCKED for this run and stays in `todo/`
+  (`20260719101204-one-live-round-developer-attended.md`):** an UNATTENDED leaf cannot paste a
+  developer-observed live round, and exercising it requires standing up the HTTP server + a live
+  session mint (a spawned process), which this run is barred from doing. The seam is wired end to
+  end so the live round + the session-cookie→UserId store injection is a drop-in for a
+  developer-attended `/drive`. Escalation: item 8 needs the developer to run the two requests
+  (session + no session) and paste output + exit codes — mission.md
