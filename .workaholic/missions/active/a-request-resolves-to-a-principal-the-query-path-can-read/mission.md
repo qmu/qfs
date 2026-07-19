@@ -295,7 +295,7 @@ ticket.**
       closed-set convention — never a bespoke side-channel endpoint — and carrying no credential
       column, matching the `/sys/connections` redaction contract. Verified by a `DESCRIBE` run and a
       structural test.
-- [ ] **`Role` is still not a grant, and the open decision is still open.** (#20260719101203-role-stays-not-a-grant-and-the-open-decision-stays-open.md) The mission's outcome
+- [x] **`Role` is still not a grant, and the open decision is still open.** (#20260719101203-role-stays-not-a-grant-and-the-open-decision-stays-open.md) The mission's outcome
       states plainly that `identity::Role` was not converted into an authorization grant, that
       `Role::Admin` is still not privileged, and that the t55-vs-t53 taxonomy and the
       super-admin/project-admin split remain unruled. The flags at `invite.rs:135-139` and
@@ -357,3 +357,4 @@ ticket.**
   a re-plumb. Roles/groups/memberships resolve later (t57/t58); this supplies the user axis —
   mission.md
 - 2026-07-19 — ticket archived — 20260719101202-thread-the-request-principal-to-the-scan-seam.md
+- 2026-07-19 — ticket archived — 20260719101203-role-stays-not-a-grant-and-the-open-decision-stays-open.md

@@ -321,6 +321,41 @@ fn policy_gate_evaluates_the_resolved_actor_both_directions() {
     );
 }
 
+/// `identity::Role` is NOT an authorization grant, and this mission did not convert it into one
+/// (mission acceptance 6, the invariant). The request-principal seam carries the USER axis only —
+/// never a membership `Role` label — so a `Role::Admin` member is not privileged by that label:
+/// a role-scoped rule cannot bite on the strength of a membership (identity ≠ authorization, §4.1).
+/// If a later change ever wires `identity::Role` into the principal seam, `roles` becomes non-empty
+/// and the first assertion fails; the role rule would then bite and the second fails — either way
+/// this test catches the accidental conversion.
+#[test]
+fn identity_role_is_not_an_authorization_grant() {
+    use crate::policy::{assert_read_only, decision_for};
+
+    // The seam resolves only a user id — it carries NO role set (no membership label flows in).
+    let actor = decision_for(&qfs_core::RequestContext::for_user("alice"));
+    assert!(
+        actor.roles.is_empty(),
+        "the principal seam must carry no role grant (identity::Role is not authorization)"
+    );
+
+    let engine = engine_with_mock();
+    let stmt = parse("REMOVE /mock/items WHERE id == 1").expect("parses");
+    let plan = qfs_exec::build_plan(&stmt, &engine).expect("plans");
+
+    // A rule granting REMOVE to `role:admin` does NOT bite for a user resolved through the seam —
+    // even one who is an `identity::Role::Admin` member — because the label is not a grant.
+    let role_policy = qfs_server::PolicyDef {
+        name: "r".to_string(),
+        handler: String::new(),
+        allow: vec!["ALLOW REMOVE FOR role:admin".to_string()],
+    };
+    assert!(
+        assert_read_only(&plan, Some(&role_policy), &actor).is_err(),
+        "identity::Role must not be an authorization grant (Role::Admin is still not privileged)"
+    );
+}
+
 #[test]
 fn content_negotiation_json_default_and_csv_on_request() {
     let mut binding = HttpBinding::new(engine_with_mock(), reads_with_mock(), 10_000);
