@@ -298,3 +298,22 @@ RESOLVED (its only content was the ruling request) and archived this leaf.
 build order above, wired to the **nested-mount** shape. Acceptance item 7/7 is NOT yet ticked — the
 compiled `/cf` still serves D1/KV/queues until the declared nested twin passes the conformance suite
 (the §13 ratchet forbids deleting first). Binary stays `0.0.79`, plugins `0.13.0`.
+
+**Stage 2a-i LANDED (gate-green, additive):** the wildcard-D1 `CfRegistry` capability
+(`crates/driver-cf/src/registry.rs`) — `CfRegistry::with_d1_template(handle)` plus a template
+fallback in `d1()`/`has_d1()`/`is_empty()`. A single template handle (backend + declared catalog,
+`uuid=None`) answers ANY `{database}` key not explicitly registered, with the addressed segment used
+AS the Cloudflare D1 api id (`api_database_id` already falls back to the path name when uuid is
+`None`) — the no-introspection resolution the declared `/cloudflare/d1/{database}` mount needs. An
+explicit `with_d1` (discovered) registration still wins over the template. Unit-tested hermetically
+over `MockCfBackend` (`wildcard_d1_template_resolves_any_database_key_without_introspection`,
+`crates/driver-cf/src/tests.rs`): resolves any key, api-id falls back to the queried name, declared
+catalog served with ZERO backend I/O, discovered-over-template precedence. `cargo test -p
+qfs-driver-cf` 22 pass; `clippy -p qfs-driver-cf --all-targets -D warnings` clean; `fmt` clean.
+Purely internal (no CLI surface) — no plugin version bump, no gen-docs/gen-skills change.
+
+**Stage 2a-ii + 2b remain (the cross-cutting core):** the declared→`CfDriver` composition helper
+(backend from declared inputs — `HttpApiBackend::new(cf_exchange(), at_locator, AUTH-ACCOUNT-bearer)`
+— + `CfRegistry::new().with_d1_template(D1Database::new(backend, resource.catalog()))` → `CfDriver`)
+and wiring it into the three declared-mount facets (`describe.rs:173`, `commit.rs:355-396`,
+`shell.rs:418-448`) as a NESTED `/cloudflare/d1` mount (id `cloudflare/d1`). Then Stages 3–6.
