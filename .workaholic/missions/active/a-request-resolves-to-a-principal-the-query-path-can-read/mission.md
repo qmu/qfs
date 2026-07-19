@@ -5,8 +5,8 @@ slug: a-request-resolves-to-a-principal-the-query-path-can-read
 status: active
 created_at: 2026-07-17T18:05:46+09:00
 author: a@qmu.jp
-assignee:
-drive_authorized:
+assignee: a@qmu.jp
+drive_authorized: true
 tickets: []
 stories: []
 concerns: []
@@ -281,35 +281,35 @@ ticket.**
 - [ ] **"Who am I" is answerable for a request, and its negative is first-class.** A request
       carrying a live session resolves to a named principal; a request with no session resolves to
       an explicit not-signed-in answer — not an error, not a silent fallback to the sole user.
-      Demonstrated by a real run with raw exit codes. (ticket to be cut at /ticket time)
+      Demonstrated by a real run with raw exit codes. (#20260719101202-thread-the-request-principal-to-the-scan-seam.md)
 - [ ] **The principal is reachable on the path a query takes.** The seam that serves a scan can see
       who is asking, without each driver inventing its own route to the answer and without a
       per-face divergence. The shape of the seam is the ticket's to rule against the source.
-      (ticket to be cut at /ticket time)
+      (#20260719101202-thread-the-request-principal-to-the-scan-seam.md)
 - [ ] **The policy gate evaluates the resolved actor, not `anonymous()`.** A t57-narrowed
       (`FOR <subject>`) rule contributes when a principal is present. Proved both directions: the
       rule bites with a principal, and the same rule contributes nothing without one.
-      (ticket to be cut at /ticket time)
+      (#20260719101202-thread-the-request-principal-to-the-scan-seam.md)
 - [ ] **Fail-closed is preserved, pinned by a test that would fail if the default widened.** No
       session ⇒ no user, no roles, no groups, no memberships ⇒ default-deny holds. Threading a
-      principal widens nothing. (ticket to be cut at /ticket time)
+      principal widens nothing. (#20260719101202-thread-the-request-principal-to-the-scan-seam.md)
 - [ ] **The answer is readable as data through the one engine, credential-free.** Reached on the
       closed-set convention — never a bespoke side-channel endpoint — and carrying no credential
       column, matching the `/sys/connections` redaction contract. Verified by a `DESCRIBE` run and a
-      structural test. (ticket to be cut at /ticket time)
+      structural test. (#20260719101202-thread-the-request-principal-to-the-scan-seam.md)
 - [ ] **`Role` is still not a grant, and the open decision is still open.** The mission's outcome
       states plainly that `identity::Role` was not converted into an authorization grant, that
       `Role::Admin` is still not privileged, and that the t55-vs-t53 taxonomy and the
       super-admin/project-admin split remain unruled. The flags at `invite.rs:135-139` and
       `sys.rs:24-27` still stand, or are updated only to record a ruling the developer actually
-      made. (ticket to be cut at /ticket time)
+      made. (#20260719101203-role-stays-not-a-grant-and-the-open-decision-stays-open.md)
 - [ ] **The identity read-back tells the truth.** `whoami --json` emits machine-readable JSON or
       rejects the flag — it does not accept it and emit prose; and `qfs identity --help`
       (`cmd/src/lib.rs:702-706`) no longer asserts a retired sign-up or a pending t46.
-      (ticket to be cut at /ticket time)
+      (#20260719101201-identity-read-back-tells-the-truth.md)
 - [ ] **One live round, developer-attended.** A real request with a session and a real request
       without one, end to end, each resolving to its answer through the shipped path — output and
-      exit codes pasted. (ticket to be cut at /ticket time)
+      exit codes pasted. (#20260719101204-one-live-round-developer-attended.md)
 
 ## Changelog
 
@@ -331,3 +331,12 @@ ticket.**
 - 2026-07-17 — Recorded two identity read-back defects found by execution (`whoami --json` accepts
   and ignores the flag; `identity --help` asserts a retired sign-up and a pending t46 at
   `cmd/src/lib.rs:702-706`, an instance commit `91cde7d`'s sweep did not reach) — mission.md
+- 2026-07-19 — CLAIMED (`assignee: a@qmu.jp`, `drive_authorized: true`) and REPLANNED by a
+  `/monitor` drive leaf. Re-verified the Measured starting state against the tree at `cab0197`
+  (binary `qfs 0.0.81`): the load-bearing line refs still hold (`exec/src/read.rs:48` scan trait;
+  `enforce.rs` `evaluate` → `DecisionContext::anonymous`; `context.rs` DecisionContext;
+  `driver-sys/src/schema.rs` closed-set + redaction; `qfs/src/identity.rs` prose whoami;
+  `cmd/src/lib.rs:702-706` stale help). Emitted the full 8-item ticket set (4 files): identity
+  read-back (item 7); the scan-seam principal thread + `/sys/whoami` + policy-gate wiring
+  (items 1-5); Role-stays-not-a-grant outcome (item 6); developer-attended live round (item 8) —
+  mission.md
