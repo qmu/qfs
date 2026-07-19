@@ -14,6 +14,7 @@ tickets:
   - 20260717010500-claude-steering-rewire.md
   - 20260717010600-claude-session-create-launch.md
   - 20260717010700-claude-compiled-standing-recorded.md
+  - 20260719231005-claude-live-round-owner-attended.md
 stories: []
 concerns: []
 gate_type: live-app
@@ -327,3 +328,17 @@ not drive-ready on the shared host.
   is not drive-ready on the shared host — its DRIVE is parked for an isolated/attended environment.
 - 2026-07-19 — mission replanned — 20260717010500-claude-steering-rewire.md
 - 2026-07-19 — mission replanned — 20260717010600-claude-session-create-launch.md
+- 2026-07-19 — **`/monitor` pass: nothing left is unattended-drivable; consolidated the remaining
+  live proofs into one owner-attended, isolated-environment ticket.** A monitor leaf re-checked the
+  authorized set against the current tree and found the prior replan already landed (the pty/tmux
+  retirement + teams-inbox ruling of commits `1d6ffcc`/`89fd431`/`8180594`) and the launch hermetic
+  implementation already shipped (`a73fa01` / `v0.0.81`). The only remaining work — steering's
+  message-schema capture + live fire, the launch `--bg` live fire, and the composed launch→steer
+  proof — every step spawns or observes a REAL Claude Code process, which the mission's ABSOLUTE
+  safety prohibition bars on this shared host and rules out of unattended / `/monitor` scope. Rather
+  than drive anything unsafe or wire a *guessed* inbox schema (which would silently steer nothing —
+  the exact bug this mission exists to kill), the leaf filed
+  `20260719231005-claude-live-round-owner-attended.md`: a single owner-attended, isolated-box round
+  covering items 5 and 6's live proofs, left in `todo/` and NOT drive-authorized. `drive_authorized`
+  stays unset — deliberately, matching the author's standing decision that the remaining set is not
+  drive-ready on the shared host. No code, version, or CLI surface changed this pass.
