@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
-use qfs_core::{CfsError, RowBatch};
+use qfs_core::{CfsError, RequestContext, RowBatch};
 use qfs_driver_markdown::{
     documents_schema, links_schema, parse_document, tree_and_node_for_path, MarkdownDriver,
     MarkdownNode,
@@ -172,7 +172,7 @@ fn collect_md_files(dir: &FsPath, out: &mut Vec<PathBuf>) {
 
 #[async_trait::async_trait]
 impl ReadDriver for MarkdownReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let (name, node) =
             tree_and_node_for_path(&scan.path).ok_or_else(|| CfsError::InvalidPath {
                 path: scan.path.clone(),
@@ -281,7 +281,8 @@ mod tests {
         q: &str,
     ) -> qfs_exec::RowSet {
         let stmt = qfs_exec::parse(q).expect("parse");
-        qfs_exec::block_on_read(&stmt, &engine.mounts, reads).expect("read through the engine")
+        qfs_exec::block_on_read(&stmt, &engine.mounts, reads, &RequestContext::anonymous())
+            .expect("read through the engine")
     }
 
     /// **The mission's reachability guard (acceptance item 5)**: `documents` returns real rows
@@ -445,7 +446,13 @@ mod tests {
         let dir = fixture_tree();
         let (engine, reads) = engine_and_reads(&dir);
         let stmt = qfs_exec::parse("/markdown/ghost/documents |> LIMIT 1").expect("parse");
-        assert!(qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).is_err());
+        assert!(qfs_exec::block_on_read(
+            &stmt,
+            &engine.mounts,
+            &reads,
+            &RequestContext::anonymous()
+        )
+        .is_err());
     }
 
     /// The declared-drivers convention end-to-end (acceptance items 1 + 5): a persisted

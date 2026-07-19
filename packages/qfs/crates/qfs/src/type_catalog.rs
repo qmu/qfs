@@ -29,7 +29,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use qfs_core::{CfsError, RowBatch};
+use qfs_core::{CfsError, RequestContext, RowBatch};
 use qfs_driver_type::{name_from_path, node_for_path, type_node_schema, TypeNode};
 use qfs_exec::ReadDriver;
 use qfs_pushdown::ScanNode;
@@ -150,7 +150,7 @@ impl TypeReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for TypeReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         node_for_path(&scan.path).ok_or_else(|| CfsError::InvalidPath {
             path: scan.path.clone(),
             reason: "not a /type path",

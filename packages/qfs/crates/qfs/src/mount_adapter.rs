@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use qfs_core::{
     AliasFn, Capabilities, CfsError, Driver, DriverId, EffectKind, NodeDesc, Path, Plan,
-    PlanApplier, ProcId, ProcSig, PushdownProfile, RowBatch, Verb, VersionSupport,
+    PlanApplier, ProcId, ProcSig, PushdownProfile, RequestContext, RowBatch, Verb, VersionSupport,
 };
 use qfs_exec::ReadDriver;
 use qfs_pushdown::{ScanNode, SourceId};
@@ -352,8 +352,8 @@ impl MountReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for MountReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
-        self.inner.scan(&self.remap.scan_in(scan)).await
+    async fn scan(&self, scan: &ScanNode, ctx: &RequestContext) -> Result<RowBatch, CfsError> {
+        self.inner.scan(&self.remap.scan_in(scan), ctx).await
     }
 }
 
@@ -579,7 +579,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ReadDriver for AssertingRead {
-        async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
             assert_eq!(scan.source.as_str(), "mail");
             assert_eq!(scan.path, "/mail/inbox");
             Ok(RowBatch::default())
@@ -596,7 +596,10 @@ mod tests {
             pushed: qfs_pushdown::PushedQuery::default(),
             schema: Schema::new(vec![]),
         };
-        let rows = read.scan(&scan).await.expect("scan succeeds");
+        let rows = read
+            .scan(&scan, &RequestContext::anonymous())
+            .await
+            .expect("scan succeeds");
         assert_eq!(rows.rows.len(), 0);
     }
 

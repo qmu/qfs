@@ -16,7 +16,9 @@
 
 use std::sync::{Arc, RwLock};
 
-use qfs_core::{server_node_schema, CfsError, Engine, Row, RowBatch, ServerNode, Value};
+use qfs_core::{
+    server_node_schema, CfsError, Engine, RequestContext, Row, RowBatch, ServerNode, Value,
+};
 use qfs_exec::{ReadDriver, ReadRegistry};
 use qfs_provision::ServerState;
 use qfs_pushdown::ScanNode;
@@ -61,7 +63,7 @@ pub fn register_server_face(
 
 #[async_trait::async_trait]
 impl ReadDriver for ServerReadFacet {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         // The READ-ONLY per-job run history wins over its `/server/jobs` prefix (the same
         // precedence the driver's describe/capabilities apply): project the recorded firings
         // through the canonical `job_runs_schema` column order. An unknown job name is an empty

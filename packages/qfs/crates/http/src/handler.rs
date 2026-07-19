@@ -15,14 +15,14 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use qfs_core::Engine;
+use qfs_core::{Engine, RequestContext};
 use qfs_exec::{execute_read, ReadRegistry};
 use qfs_server::PolicyDef;
 
 use crate::encode::{encode_rows, negotiate};
 use crate::error::HttpError;
 use crate::params::QueryArgs;
-use crate::policy::assert_read_only;
+use crate::policy::{assert_read_only, decision_for};
 use crate::rewrite::bind_params;
 use crate::route::CompiledRoute;
 use crate::{HttpRequest, HttpResponse};
@@ -125,15 +125,23 @@ async fn dispatch_inner(
     let mut bound = route.query.clone();
     bind_params(&mut bound, &args);
 
-    // 3. Defence-in-depth read-only gate on the bound plan (registration already gated it).
-    //    Snapshot the live policies BEFORE the gate; no lock is held across the later `.await`.
+    // 3. Resolve the request's principal ONCE (the M2 "who am I" seam), then thread it to BOTH the
+    //    policy gate and the read executor — one resolution, no per-face divergence. Anonymous is
+    //    the fail-closed default; the session cookie → `UserId` resolution (which needs an injected
+    //    session store) lands with the developer-attended live round (mission item 8). Wiring the
+    //    seam here is what makes that a drop-in, not a re-plumb.
+    let req_ctx = resolve_request_principal(req);
+
+    // 4. Defence-in-depth policy gate on the bound plan, evaluated UNDER THE RESOLVED ACTOR
+    //    (registration already gated it under anonymous). Snapshot the live policies BEFORE the
+    //    gate; no lock is held across the later `.await`.
     let plan = qfs_exec::build_plan(&bound, &ctx.engine).map_err(HttpError::Eval)?;
     let policies = ctx.policies_snapshot();
     let policy = policies.get(&route.name);
-    assert_read_only(&plan, policy).map_err(HttpError::Policy)?;
+    assert_read_only(&plan, policy, &decision_for(&req_ctx)).map_err(HttpError::Policy)?;
 
-    // 4. Evaluate the bound query through the qfs-exec read executor (t29).
-    let rows = execute_read(&bound, &ctx.engine.mounts, &ctx.reads)
+    // 5. Evaluate the bound query through the qfs-exec read executor (t29), under the principal.
+    let rows = execute_read(&bound, &ctx.engine.mounts, &ctx.reads, &req_ctx)
         .await
         .map_err(HttpError::Eval)?;
 
@@ -157,6 +165,17 @@ async fn dispatch_inner(
     );
 
     Ok(HttpResponse::new(200, content.header(), body))
+}
+
+/// Resolve the request's [`RequestContext`] — the M2 "who am I" seam threaded to the gate and the
+/// read executor. The session cookie → `UserId` resolution needs an injected session store (built
+/// at serve boot); that end-to-end binding lands with the developer-attended live round (mission
+/// item 8). Until then a request carries no principal the handler can VERIFY, so it resolves to the
+/// anonymous (not-signed-in) actor — the fail-closed default. A cookie that cannot be verified
+/// grants nothing; wiring the seam through the handler is what makes item 8 a drop-in, not a
+/// re-plumb.
+fn resolve_request_principal(_req: &HttpRequest) -> RequestContext {
+    RequestContext::anonymous()
 }
 
 /// Whether a query-string key is a RESERVED negotiation knob (not an endpoint param). `format`

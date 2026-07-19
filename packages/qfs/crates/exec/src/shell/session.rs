@@ -227,7 +227,12 @@ impl<'a> Session<'a> {
 
         if matches!(inner, qfs_parser::Statement::Query(_)) {
             // A read: a single listing (builtins never batch reads).
-            let rows = block_on_read(inner, &self.engine.mounts, self.reads)?;
+            let rows = block_on_read(
+                inner,
+                &self.engine.mounts,
+                self.reads,
+                &qfs_core::RequestContext::anonymous(),
+            )?;
             return Ok(Outcome::Listing(rows));
         }
 

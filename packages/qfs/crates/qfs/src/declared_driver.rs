@@ -1811,9 +1811,10 @@ mod tests {
             pushed: qfs_pushdown::PushedQuery::default(),
             schema: qfs_core::Schema::empty(),
         };
-        let batch = qfs_exec::ReadDriver::scan(&facet, &scan)
-            .await
-            .expect("blob view reads");
+        let batch =
+            qfs_exec::ReadDriver::scan(&facet, &scan, &qfs_core::RequestContext::anonymous())
+                .await
+                .expect("blob view reads");
         assert_eq!(batch.schema.columns[0].name, "content");
         assert_eq!(
             batch.rows[0].values[0],

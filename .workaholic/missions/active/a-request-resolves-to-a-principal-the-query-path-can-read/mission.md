@@ -278,20 +278,20 @@ Each item is a criterion, not a design. The ticket that satisfies it is cut agai
 `/ticket` time — **re-verify the *Measured starting state* first; do not paraphrase it into a
 ticket.**
 
-- [ ] **"Who am I" is answerable for a request, and its negative is first-class.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) A request
+- [x] **"Who am I" is answerable for a request, and its negative is first-class.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) A request
       carrying a live session resolves to a named principal; a request with no session resolves to
       an explicit not-signed-in answer — not an error, not a silent fallback to the sole user.
       Demonstrated by a real run with raw exit codes.
-- [ ] **The principal is reachable on the path a query takes.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) The seam that serves a scan can see
+- [x] **The principal is reachable on the path a query takes.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) The seam that serves a scan can see
       who is asking, without each driver inventing its own route to the answer and without a
       per-face divergence. The shape of the seam is the ticket's to rule against the source.
-- [ ] **The policy gate evaluates the resolved actor, not `anonymous()`.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) A t57-narrowed
+- [x] **The policy gate evaluates the resolved actor, not `anonymous()`.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) A t57-narrowed
       (`FOR <subject>`) rule contributes when a principal is present. Proved both directions: the
       rule bites with a principal, and the same rule contributes nothing without one.
-- [ ] **Fail-closed is preserved, pinned by a test that would fail if the default widened.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) No
+- [x] **Fail-closed is preserved, pinned by a test that would fail if the default widened.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) No
       session ⇒ no user, no roles, no groups, no memberships ⇒ default-deny holds. Threading a
       principal widens nothing.
-- [ ] **The answer is readable as data through the one engine, credential-free.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) Reached on the
+- [x] **The answer is readable as data through the one engine, credential-free.** (#20260719101202-thread-the-request-principal-to-the-scan-seam.md) Reached on the
       closed-set convention — never a bespoke side-channel endpoint — and carrying no credential
       column, matching the `/sys/connections` redaction contract. Verified by a `DESCRIBE` run and a
       structural test.
@@ -338,3 +338,22 @@ ticket.**
   (items 1-5); Role-stays-not-a-grant outcome (item 6); developer-attended live round (item 8) —
   mission.md
 - 2026-07-19 — ticket archived — 20260719101201-identity-read-back-tells-the-truth.md
+- 2026-07-19 — SEAM LANDED (items 1-5). Changed the core read trait
+  `ReadDriver::scan(&self, scan, ctx: &RequestContext)` (exec/src/read.rs) — a hard break; every
+  driver impl now receives the principal explicitly (no compat shim). Added `RequestContext`
+  (`Principal::{Anonymous, User(id)}`, secret-free) in qfs-core; threaded it through
+  `execute_read`/`block_on_read` and all ~20 impls/callers. Added the `/sys/whoami` closed-set
+  variant (driver-sys) resolved FROM the request principal in the read facet — credential-free
+  (`signed_in` + `user`, NULL when anonymous), the not-signed-in answer a first-class row. Changed
+  the HTTP policy gate `assert_read_only(plan, policy, actor: &DecisionContext)` to
+  `evaluate_with_context` and added `decision_for(RequestContext)->DecisionContext`. Proofs
+  (hermetic): `/sys/whoami` schema-is-credential-free + resolves-both-ways; policy gate bites for
+  `FOR user:alice` and contributes nothing anonymous (both directions) + fail-closed pinned
+  (no-policy write denied for any actor — the default must never widen). Gates green: build,
+  test (qfs 389 / http +both-directions / exec / driver-sys / core / cmd / watchtower — 0 failed),
+  clippy --all-targets -D warnings, fmt --check. **Boundary (honest):** the HTTP handler resolves
+  the principal through one seam point but the session-cookie→UserId store injection runs at the
+  developer-attended live round (item 8) — the seam is wired end to end so that is a drop-in, not
+  a re-plumb. Roles/groups/memberships resolve later (t57/t58); this supplies the user axis —
+  mission.md
+- 2026-07-19 — ticket archived — 20260719101202-thread-the-request-principal-to-the-scan-seam.md

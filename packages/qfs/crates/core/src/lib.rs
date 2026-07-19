@@ -31,6 +31,7 @@ mod lambda;
 mod membership;
 mod plan;
 mod registry;
+pub mod request;
 mod resolve;
 mod security;
 mod stdlib;
@@ -55,6 +56,7 @@ pub use registry::{
     NameRealm, PathScope, PathScopeError, ProcRegistry, Realm, ScopeResolution, LOCAL_HOST,
     RESERVED_REALMS,
 };
+pub use request::{Principal, RequestContext};
 pub use resolve::{capability_verb_for, write_verb_for, ResolveError, ResolvedCall, Resolver};
 pub use security::{
     secretish_setting_key, Ack, IrreversibleGuard, NeedsPreview, RunMode, SafetyDecision,

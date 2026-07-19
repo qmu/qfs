@@ -25,9 +25,14 @@ fn refresh(req: &ViewRequest) -> i32 {
         qfs_host::refresh_materialized_view_from_config(&req.config, &req.name, now, |query| {
             let spec = StatementSpec::from_canonical(query)
                 .map_err(|e| format!("saved query not rehydratable: {e}"))?;
-            qfs_exec::block_on_read(spec.statement(), &engine.mounts, &reads)
-                .map(|rows| RowBatch::new(rows.schema, rows.rows))
-                .map_err(|e| e.to_string())
+            qfs_exec::block_on_read(
+                spec.statement(),
+                &engine.mounts,
+                &reads,
+                &qfs_core::RequestContext::anonymous(),
+            )
+            .map(|rows| RowBatch::new(rows.schema, rows.rows))
+            .map_err(|e| e.to_string())
         });
 
     match report {

@@ -59,7 +59,11 @@ impl Driver for FakeNs {
 
 #[async_trait::async_trait]
 impl ReadDriver for FakeNs {
-    async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(
+        &self,
+        _scan: &ScanNode,
+        _ctx: &qfs_core::RequestContext,
+    ) -> Result<RowBatch, CfsError> {
         let rows = self
             .names
             .iter()

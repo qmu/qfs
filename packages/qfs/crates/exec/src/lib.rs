@@ -240,7 +240,12 @@ fn run_oneshot_inner(
                     );
                 }
             }
-            let rows = block_on_read(inner, &ctx.engine.mounts, ctx.reads)?;
+            let rows = block_on_read(
+                inner,
+                &ctx.engine.mounts,
+                ctx.reads,
+                &qfs_core::RequestContext::anonymous(),
+            )?;
             renderer.rows(&rows, streams.out).map_err(io_err)?;
             Ok(ExitCode::Ok)
         }
@@ -337,8 +342,13 @@ fn preview_or_commit(
         // (non-null signals effects ran), never just a commit summary.
         if transform_read {
             if let Statement::Query(_) = terminal_statement(inner) {
-                let mut rows =
-                    block_on_read_with(inner, &ctx.engine.mounts, ctx.reads, injected.clone())?;
+                let mut rows = block_on_read_with(
+                    inner,
+                    &ctx.engine.mounts,
+                    ctx.reads,
+                    injected.clone(),
+                    &qfs_core::RequestContext::anonymous(),
+                )?;
                 let affected = counting.as_ref().map_or(0, |c| c.produced());
                 let mut to_apply = plan.clone();
                 refine_transform_affected(&mut to_apply, affected);
@@ -425,7 +435,13 @@ pub(crate) fn materialize_pipeline_source(
     // bytes; the engine is already cross-driver). A `|> transform` stage in the source runs through
     // the injected executor here — at the commit boundary, never on a held/refused commit.
     let source_stmt = Statement::Query((**source).clone());
-    let rows = block_on_read_with(&source_stmt, &engine.mounts, reads, transform)?;
+    let rows = block_on_read_with(
+        &source_stmt,
+        &engine.mounts,
+        reads,
+        transform,
+        &qfs_core::RequestContext::anonymous(),
+    )?;
     if rows.len() > MAX_MATERIALIZED_ROWS {
         return Err(ExecError::new(
             ErrorKind::Usage,
@@ -539,7 +555,13 @@ fn commit_switch(
 ) -> Result<ExitCode, ExecError> {
     // 1. Materialize the source once through the read engine (the same channel a
     //    pipeline-sourced write uses), under the same cap.
-    let rows = block_on_read_with(source, &ctx.engine.mounts, ctx.reads, injected)?;
+    let rows = block_on_read_with(
+        source,
+        &ctx.engine.mounts,
+        ctx.reads,
+        injected,
+        &qfs_core::RequestContext::anonymous(),
+    )?;
     if rows.rows.len() > MAX_MATERIALIZED_ROWS {
         return Err(ExecError::new(
             ErrorKind::Usage,

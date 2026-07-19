@@ -33,7 +33,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use qfs_core::{CfsError, DriverId, Engine, RowBatch};
+use qfs_core::{CfsError, DriverId, Engine, RequestContext, RowBatch};
 use qfs_driver_cf::CfDriver;
 use qfs_driver_local::{scan_rows, LocalError, LocalFsDriver, Sandbox};
 use qfs_exec::shell::{Outcome, Session, VfsPath};
@@ -61,7 +61,7 @@ impl LocalReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for LocalReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         // The ScanNode now carries the full addressed VFS path (t28 pushdown threading), so the
         // scan navigates to the exact node — `ls /local/sub` lists `sub`, not the mount root.
         // An empty path (a synthetic source) falls back to the mount root.
@@ -529,7 +529,7 @@ impl LazyCloudReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for LazyCloudReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let facet = match self.bound.get() {
             Some(facet) => facet.clone(),
             None => match self.bind() {
@@ -549,7 +549,7 @@ impl ReadDriver for LazyCloudReadDriver {
                 }
             },
         };
-        facet.scan(scan).await
+        facet.scan(scan, ctx).await
     }
 }
 
@@ -1275,7 +1275,9 @@ mod tests {
             .build()
             .unwrap();
         let driver = reads.get(&DriverId::new("cf")).expect("cf read fallback");
-        let err = rt.block_on(driver.scan(&scan)).unwrap_err();
+        let err = rt
+            .block_on(driver.scan(&scan, &RequestContext::anonymous()))
+            .unwrap_err();
         match err {
             CfsError::InvalidPath { reason, path } => {
                 assert_eq!(path, "/cf/kv/ns");
@@ -1327,7 +1329,9 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        let err = rt.block_on(driver.scan(&scan)).unwrap_err();
+        let err = rt
+            .block_on(driver.scan(&scan, &RequestContext::anonymous()))
+            .unwrap_err();
 
         match prev_xdg {
             Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),

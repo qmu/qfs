@@ -28,7 +28,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use qfs_core::{CfsError, RowBatch};
+use qfs_core::{CfsError, RequestContext, RowBatch};
 use qfs_driver_sys::{node_for_path, sys_node_schema, SysBackend, SysError, SysNode};
 use qfs_exec::ReadDriver;
 use qfs_pushdown::ScanNode;
@@ -281,6 +281,15 @@ impl SysBackend for SystemDbBackend {
                     ]))
                 },
             )?,
+            // `/sys/whoami` is resolved from the request principal in the read facet
+            // (`SysReadDriver::scan`), never from the backend — the backend has no request
+            // context. Unreachable here by construction; an honest structured rejection if reached.
+            SysNode::Whoami => {
+                return Err(SysError::MalformedEffect {
+                    reason: "/sys/whoami is resolved from the request principal, not the backend"
+                        .into(),
+                })
+            }
         };
         Ok(RowBatch::new(schema, rows))
     }
@@ -1387,16 +1396,37 @@ impl SysReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for SysReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let node = node_for_path(&scan.path).ok_or_else(|| CfsError::InvalidPath {
             path: scan.path.clone(),
             reason: "not a /sys admin path",
         })?;
+        // `/sys/whoami` is resolved from the REQUEST PRINCIPAL, not the backend: the scan seam
+        // carries `ctx` precisely so this face can read *who is asking*. Credential-free
+        // (signed_in + user), and the not-signed-in answer is a first-class row.
+        if matches!(node, SysNode::Whoami) {
+            return Ok(whoami_batch(ctx));
+        }
         self.backend.scan(node).map_err(|e| CfsError::InvalidPath {
             path: scan.path.clone(),
             reason: sys_error_reason(&e),
         })
     }
+}
+
+/// The `/sys/whoami` row, resolved from the request principal (NOT the backend — it carries no
+/// request context). Credential-free by construction: a `signed_in` flag + the acting user id
+/// (`NULL` when anonymous), matching `sys_node_schema(SysNode::Whoami)`. The not-signed-in answer
+/// is a first-class row, never an error and never a silent fallback to a sole user.
+fn whoami_batch(ctx: &RequestContext) -> RowBatch {
+    let (signed_in, user) = match ctx.user() {
+        Some(id) => (true, Value::Text(id.to_string())),
+        None => (false, Value::Null),
+    };
+    RowBatch::new(
+        sys_node_schema(SysNode::Whoami),
+        vec![Row::new(vec![Value::Bool(signed_in), user])],
+    )
 }
 
 /// A stable, secret-free reason code for a `/sys` read failure (the executor maps it to its kind).
@@ -2176,7 +2206,10 @@ mod tests {
             pushed: PushedQuery::default(),
             schema: sys_node_schema(SysNode::Users),
         };
-        let batch = reader.scan(&scan).await.unwrap();
+        let batch = reader
+            .scan(&scan, &RequestContext::anonymous())
+            .await
+            .unwrap();
         assert_eq!(texts(&batch, "primary_email"), vec!["a@qmu.jp"]);
         // An unknown /sys segment is a structured invalid-path error (no panic).
         let bad = ScanNode {
@@ -2185,6 +2218,72 @@ mod tests {
             pushed: PushedQuery::default(),
             schema: Schema::new(vec![]),
         };
-        assert!(reader.scan(&bad).await.is_err());
+        assert!(reader
+            .scan(&bad, &RequestContext::anonymous())
+            .await
+            .is_err());
+    }
+
+    // ---- /sys/whoami: the "who am I" answer on the scan path (mission acceptance 1/5) ----
+
+    fn whoami_scan() -> ScanNode {
+        ScanNode {
+            source: qfs_pushdown::SourceId::new("sys"),
+            path: "/sys/whoami".to_string(),
+            pushed: PushedQuery::default(),
+            schema: sys_node_schema(SysNode::Whoami),
+        }
+    }
+
+    fn bool_at(batch: &RowBatch, col: &str) -> bool {
+        let idx = batch
+            .schema
+            .columns
+            .iter()
+            .position(|c| c.name.as_str() == col)
+            .expect("column present");
+        matches!(batch.rows[0].values[idx], Value::Bool(true))
+    }
+
+    #[test]
+    fn sys_whoami_schema_is_closed_set_and_credential_free() {
+        // The answer is data through the ONE engine on the /sys closed set, and carries NO
+        // credential column — only `signed_in` + `user` (the /sys/connections redaction contract).
+        let schema = sys_node_schema(SysNode::Whoami);
+        let names: Vec<&str> = schema.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["signed_in", "user"]);
+        for banned in ["token", "session", "cookie", "password", "hash", "secret"] {
+            assert!(
+                !names.iter().any(|n| n.contains(banned)),
+                "whoami must expose no credential column, found one containing {banned}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sys_whoami_resolves_the_request_principal_both_ways() {
+        let (_d, backend) = fixture_backend();
+        let reader = SysReadDriver::new(Arc::new(backend));
+
+        // A request carrying a live principal resolves to the named user.
+        let signed = reader
+            .scan(&whoami_scan(), &RequestContext::for_user("7"))
+            .await
+            .unwrap();
+        assert!(bool_at(&signed, "signed_in"));
+        assert_eq!(texts(&signed, "user"), vec!["7"]);
+
+        // A request with no session resolves to an explicit not-signed-in row — a first-class
+        // answer (one row), never an error and never a silent fallback to a sole user.
+        let anon = reader
+            .scan(&whoami_scan(), &RequestContext::anonymous())
+            .await
+            .unwrap();
+        assert_eq!(anon.rows.len(), 1, "not-signed-in is a row, not an absence");
+        assert!(!bool_at(&anon, "signed_in"));
+        assert!(
+            matches!(anon.rows[0].values[1], Value::Null),
+            "anonymous user column is NULL, not the sole user"
+        );
     }
 }
