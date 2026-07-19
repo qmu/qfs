@@ -437,3 +437,37 @@ untouched:
    goes. High regression surface — validate with a full workspace test.
 6. `cloudflare.qfs` `CREATE SQL` D1 arm + cookbook + `gen-skills`; plugin version bump if
    `qfs-cloudflare`'s taught surface changes; binary patch bump; archive + tick mission line 142.
+
+## Drive status — 2026-07-19 (wave-8 /monitor leaf: STAGE 5 + STAGE 6 LANDED — ticket DONE, 7/7)
+
+Both remaining stages landed gate-green; acceptance item 2 (mission line 142) ticked with a
+documented honest exception. Two commits, tree sound after each.
+
+**Stage 5 (`cfbe732`) — demote compiled `/cf` to a minimal queue-pull + artifacts fallback.**
+Deleted `driver_from_backend_with_artifact_sealer`'s D1 + KV discovery loops and the
+`introspect_d1`/`introspect_d1_columns` helpers; `cred_free_cf_registry` now represents only queue +
+artifacts. `CfDriver`/`CfReadDriver`/`cf_apply_driver` stay (the declared twin reuses them). The
+Stage-4 equivalence twin fired the §13 ratchet (green at `f1bd5f3`) and retired with the compiled D1
+path it was gating; the declared D1 path keeps its standalone no-network + no-introspection tests
+(`declared_d1_driver_serves_the_declared_catalog_without_introspection`,
+`declared_d1_read_over_injected_mock_exchange_does_no_network`, and the describe-purity test). The
+compiled `resource_discovery` test was reworked to `minimal_compiled_fallback_registers_only_queue_pull_and_artifacts`
+(asserts ZERO D1/KV discovery). The full `cargo test --workspace` also surfaced a **latent pre-existing**
+`dep_direction` failure (the Stage-4 test-only `qfs-http-core` dev-dep was never in the `qfs-cmd`
+allowlist — prior leaves ran only per-crate); fixed by extending the allowlist (dev-only, never in
+the shipped binary).
+
+**Stage 6 (`1be8fb2`) — declare D1 SQL + docs + versions.** `cloudflare.qfs` grew a
+`CREATE SQL /cloudflare/d1/{database} DIALECT SQLITE OVER /http/cloudflare/…/query TABLES(…)` arm
+(shipped-script ratchet 13→14). The `qfs-cloudflare` cookbook now teaches the new split; skill
+regenerated (only `qfs-cloudflare/SKILL.md` changed). Plugin `version` ×4 bumped **0.13.0 → 0.14.0**
+(taught-surface break), binary **0.0.79 → 0.0.80**.
+
+**HONEST EXCEPTION (recorded on mission acceptance item 2, in the code, and in the cookbook):** queue
+PULL (a POST-to-read with no declared REST primitive) and Artifacts (a git-repo surface, not REST)
+remain compiled — structurally non-declarable today, so per the §13 ratchet they legitimately stay
+compiled (the same tiering that leaves `/claude` compiled), not a violation.
+
+**Gates (all exit 0):** `cargo test --workspace` 2582 passed 0 failed; `clippy --workspace
+--all-targets -D warnings` clean; `fmt --all --check` clean; `gen-docs`/`gen-skills --check` in sync;
+`check-migrations` clean.

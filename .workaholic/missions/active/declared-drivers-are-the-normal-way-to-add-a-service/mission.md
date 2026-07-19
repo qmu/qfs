@@ -349,3 +349,4 @@ live backlog.
   mission's §13 ratchet framing they legitimately stay compiled (the same tiering that leaves
   `/claude` compiled), not a violation. Item 2 ticked. Gates: `cargo test --workspace` exit 0, 2582
   passed 0 failed; clippy/fmt clean; gen-docs/gen-skills `--check` in sync; check-migrations clean.
+- 2026-07-19 — ticket archived — 20260718203326-cf-surface-from-committed-declaration.md
