@@ -340,3 +340,4 @@ ticket.**
   read-back (item 7); the scan-seam principal thread + `/sys/whoami` + policy-gate wiring
   (items 1-5); Role-stays-not-a-grant outcome (item 6); developer-attended live round (item 8) —
   mission.md
+- 2026-07-19 — ticket archived — 20260719101201-identity-read-back-tells-the-truth.md
