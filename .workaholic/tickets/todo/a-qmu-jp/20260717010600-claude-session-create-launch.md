@@ -128,3 +128,23 @@ real, money-spending launch composed with steering (capability 4) is the owner-a
 (mission acceptance ~164); it composes with the steering medium ruled in `20260717010500` and must
 run in the owner's attended session. This ticket therefore **stays in `todo`** — only the
 owner-attended live fire remains.
+
+## Replan (2026-07-19 — the live fire spawns real processes, so it runs ONLY in an isolated environment)
+
+Owner ruling, 2026-07-19: launching a session is inherently process-spawning — QG2 runs
+`claude --bg`, which starts a real background process. On this shared host (which runs the owner's
+live Claude Code sessions) exercising the spawn/steer legs repeatedly crashed the parent session,
+so **QG2's live fire is gated to an isolated environment** (a container/VM with no live sessions)
+and is **out of unattended / `/monitor` scope**. The composed launch→steer proof rides on the
+steering medium, now settled as the **teams inbox** (a durable enqueue that kills no process — see
+`20260717010500`), so the *transport* is no longer the blocker; the process-spawn is.
+
+Standing after this replan:
+
+- **QG1 (owner acknowledgment) — satisfied** (2026-07-18 rulings, above).
+- **QG3 (hermetic implementation) — DONE** (commit `a73fa01` / `v0.0.81`, above): INSERT grammar,
+  `Sessions` widened to Select+Insert, irreversible gate, launcher seam behind a fake, hermetic
+  tests. No further shared-host work exists on this ticket.
+- **QG2 (live proof) — parked for an isolated/attended environment.** It spawns a real session and
+  composes with steering's live fire; both must run in an isolated box, never the shared host. The
+  ticket stays in `todo/`, NOT drive-authorized.

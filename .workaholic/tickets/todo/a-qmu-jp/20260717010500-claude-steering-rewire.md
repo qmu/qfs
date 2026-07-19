@@ -163,3 +163,41 @@ append target (the file + JSON-array format) is known; only the element's field 
 The surface therefore stays fail-closed until the schema is captured and the append is wired and
 hermetically tested (fake inbox dir behind the seam; unknown session fails closed; UPDATE/REMOVE
 still structurally rejected).
+
+## Replan (2026-07-19 — pty/tmux transport RETIRED; teams inbox is the canonical, non-process-killing sink)
+
+Owner ruling, 2026-07-19: the earlier **"(A) qfs-owned pty/tmux" / rendezvous-socket transport is
+RETIRED as unsafe** and must not be pursued. It is process-coupled — speaking a live session's
+pty/rendezvous socket reaches *into* a running process, and exercising it on this shared host
+(which runs the owner's live Claude Code sessions) repeatedly crashed the parent session. This
+supersedes every "the socket is the most promising sink" line in the investigation records above;
+treat those as historical, not the plan.
+
+**The canonical design is the teams inbox — a durable queue, delivered without touching any
+process.** Wire `SessionSource::append_instruction` (seam unchanged) to **append one message object
+to the target session's teams-inbox JSON array** — `~/.claude/teams/<session>/inboxes/<member>.json`
+(a per-recipient array the running session drains on its own schedule). This is a plain durable-file
+enqueue: qfs writes a message and returns; it spawns nothing, signals nothing, and kills nothing.
+The target reads the message when it next drains its inbox. `scan_instructions` reads the same array
+back (the read face stays truthful). Session-id → inbox mapping is `member.agentId = <name>@session-<id>`
+(the sessions relation's `id` is the `session-<id>` half); same-user/same-host only (inbox-dir
+ownership is the boundary); unknown session / non-team session with no inbox fails closed.
+
+**Design decisions to settle at implementation (all within the inbox model — no return to sockets):**
+
+- **The message-object schema.** Still the one unknown: every observed inbox was `[]`, so the element
+  field names (`from`/`to`/`text`/`id`/`ts` or similar) must be captured from one real in-flight
+  message, or read from the CLI's own inbox-writer. Until captured, the surface stays fail-closed.
+- **Non-team (standalone) sessions.** A plain single session may have no `inboxes/` dir. Rule at
+  implementation whether steering such a session is out of scope (fail closed, "no inbox for a
+  non-team session") or gets a different durable sink — but never a process-coupled one.
+
+**Environment gate — this ticket's DRIVE runs ONLY in an isolated environment (owner ruling).**
+The hermetic slice — the append behind a *fake* inbox dir, unknown-session fail-closed, UPDATE/REMOVE
+still rejected, `scan_instructions` round-trip — may be authored anywhere and is pure file I/O over a
+fixture. But the two steps that touch real sessions — **(a) the one-shot inbox message-schema capture
+from a live session, and (b) QG1's live-fire proof that a real target session observes the steered
+text** — MUST run in an isolated box (a container/VM with no live Claude Code sessions), never this
+shared host, and are **out of unattended / `/monitor` scope**. The ticket stays in `todo/`, NOT
+drive-authorized: its live proof is parked for an isolated/attended session even though the transport
+question is now closed.

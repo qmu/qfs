@@ -125,6 +125,20 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
 - Full Claude Code feature parity. The Goal's "anything you can do" is the **direction**; the four
   named capabilities are this mission's measurable surface.
 
+**Environment constraint — items 5 and 6 exercise real OS processes, so they run ONLY in an
+isolated environment (owner ruling, 2026-07-19).** Steering and launch touch live processes:
+launch spawns `claude` processes, and any exercise of steering or launch against real sessions can
+crash co-resident live Claude Code sessions. The earlier **"(A) qfs-owned pty/tmux" steering/launch
+transport is RETIRED as unsafe** — driving it on this shared host, which runs the owner's live
+sessions, repeatedly crashed the parent session. Steering's canonical medium is now the **teams
+inbox**: a durable per-recipient JSON queue the target session drains, so a message is *delivered*
+without spawning or killing any process (see item 5). The hermetic implementation of both items may
+be authored anywhere, but every step that exercises real processes — the steering live fire, the
+inbox message-schema capture, a real `--bg` launch, the composed launch→steer proof — MUST run in
+an isolated box (a container/VM with no live sessions), never the shared host, and is **out of
+unattended / `/monitor` scope**. This is why `drive_authorized` is left unset: the remaining set is
+not drive-ready on the shared host.
+
 ## Acceptance
 
 - [x] **The path canon is ruled and implemented.** The blueprint records `/hosts/<host>/claude/...`
@@ -157,14 +171,23 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
       running session with a truthful `last_message` (`schema.rs:117`), read from the real store —
       closing owner-named capabilities 1 and 3 *(done 2026-07-17: verified live over the gate
       endpoint — 37 rows = the 37 live registry records on this box, zero empty `last_message`)*
-- [ ] **Steering reaches a real session.** An INSERT into
-      `/hosts/<host>/claude/sessions/<id>/instructions` is observed by the target session, rather
-      than appending to a file nothing reads — closing owner-named capability 4, and turning the
-      already-working write leg from a no-op into the feature
+- [ ] **Steering reaches a real session via the teams inbox.** An INSERT into
+      `/hosts/<host>/claude/sessions/<id>/instructions` is observed by the target session by
+      **appending a message to that session's teams inbox** (`~/.claude/teams/<session>/inboxes/
+      <member>.json` — a durable per-recipient JSON array the running session drains), rather than
+      appending to a file nothing reads — closing owner-named capability 4, and turning the
+      already-working write leg from a no-op into the feature. The retired pty/tmux/rendezvous-socket
+      transport is deliberately NOT used: it is process-coupled and unsafe (owner ruling,
+      2026-07-19). Non-process-killing by construction; the live-fire proof runs only in an isolated
+      environment (see the Scope environment constraint)
 - [ ] **Launching a session is designed, then shipped.** Greenfield: no grammar, no capability, no
       prior design. Needs a design brief first (what a launch *is*, whether it is irreversible and
       therefore gated, what identity it runs under, how its id becomes addressable) — closing
-      owner-named capability 2
+      owner-named capability 2 *(hermetic design + implementation done 2026-07-19, commit a73fa01 /
+      v0.0.81: INSERT grammar, `Sessions` widened to Select+Insert, irreversible gate, launcher seam
+      behind a fake, hermetic tests. The remaining live fire spawns a real `claude --bg` process, so
+      it runs ONLY in an isolated environment, out of unattended scope — see the Scope environment
+      constraint)*
 - [x] **`/claude`'s compiled standing is recorded, not left unnamed.** The `declared-drivers-…`
       mission names `/claude` alongside `/cf` as a compiled counter-example, with blueprint §13's
       ratchet framing as what governs it — so the rule stops reading as absolute while two
@@ -285,3 +308,22 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
   drive-ready and both remaining live proofs need an owner-attended session (real Claude spend /
   classifier-blocked daemon probing).
 - 2026-07-18 — mission replanned — design-brief-session-launch.md
+- 2026-07-19 — **Replan: the pty/tmux steering transport is RETIRED as unsafe; the teams inbox is
+  canonical (owner ruling, 2026-07-19).** The earlier candidate transport — the qfs-owned
+  pty/tmux / rendezvous-socket medium the 2026-07-18 changelog leaned toward — is retired: it is
+  process-coupled, and driving the steering/launch legs on this shared host (which runs the owner's
+  live Claude Code sessions) repeatedly crashed the parent session. Steering's canonical medium is
+  now the **teams inbox** identified by the owner-attended probe (commit 89fd431):
+  `~/.claude/teams/<session>/inboxes/<member>.json`, a durable per-recipient JSON array the running
+  session drains — a message is *delivered*, not injected into a process, so steering spawns and
+  kills nothing. Recorded a **Scope environment constraint**: items 5 (steering) and 6 (launch)
+  exercise real OS processes, so every step that touches real sessions (steering's live fire, the
+  inbox message-schema capture, a real `--bg` launch, the composed proof) runs ONLY in an isolated
+  box with no live sessions — never the shared host — and is out of unattended / `/monitor` scope.
+  Acceptance item 5 reworded to name the teams-inbox medium and the retirement; item 6 annotated
+  with the isolated-env constraint on its remaining live fire. Delta tickets 20260717010500
+  (steering) and 20260717010600 (launch) rewritten to the teams-inbox design and the isolated-env
+  gate; both stay in `todo/`, NOT authorized. `drive_authorized` **left unset**: the remaining set
+  is not drive-ready on the shared host — its DRIVE is parked for an isolated/attended environment.
+- 2026-07-19 — mission replanned — 20260717010500-claude-steering-rewire.md
+- 2026-07-19 — mission replanned — 20260717010600-claude-session-create-launch.md
