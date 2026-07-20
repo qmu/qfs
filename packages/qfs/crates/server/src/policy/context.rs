@@ -26,6 +26,11 @@ pub struct DecisionContext {
     /// The acting user's owned id string (the binary maps a live `qfs-identity` `UserId` onto
     /// this), or `None` for an unauthenticated/anonymous actor.
     pub user: Option<String>,
+    /// The acting **agent principal**'s name (blueprint §19 axis B), or `None` when the actor is
+    /// not an agent (an operator / anonymous context). Set ONLY by
+    /// [`DecisionContext::for_agent`]; kept distinct from [`Self::user`] so the agent identity is
+    /// legible in the deny reason and never blurs with an operator (default-deny stays honest).
+    pub agent: Option<String>,
     /// The actor's effective role labels — already **inheritance-expanded** (see
     /// [`DecisionContext::with_roles`]). t55 `Role`s carried as owned strings.
     pub roles: BTreeSet<String>,
@@ -52,6 +57,19 @@ impl DecisionContext {
     pub fn for_user(user: impl Into<String>) -> Self {
         DecisionContext {
             user: Some(user.into()),
+            ..Self::default()
+        }
+    }
+
+    /// A context for a concrete **agent principal** (blueprint §19 axis B). Only an `Agent`-scoped
+    /// rule (`FOR agent <name>`) can match under it; a rule granted to any user/role/group or the
+    /// unscoped `Anyone` still applies exactly as written. Distinct from [`Self::for_user`]: the
+    /// agent identity is carried in [`Self::agent`], NOT [`Self::user`], so a path an operator
+    /// context reaches is default-denied to the agent unless the agent itself was granted it.
+    #[must_use]
+    pub fn for_agent(agent: impl Into<String>) -> Self {
+        DecisionContext {
+            agent: Some(agent.into()),
             ..Self::default()
         }
     }
@@ -92,6 +110,9 @@ impl DecisionContext {
             Subject::User(u) => self.user.as_deref() == Some(u.as_str()),
             Subject::Role(r) => self.roles.contains(r),
             Subject::Group(g) => self.groups.contains(g),
+            // blueprint §19 axis B: an `Agent` rule matches only the acting agent — never an
+            // operator (whose `agent` is `None`), so default-deny holds across the identities.
+            Subject::Agent(a) => self.agent.as_deref() == Some(a.as_str()),
         }
     }
 
@@ -163,6 +184,22 @@ mod tests {
         assert!(!ctx.satisfies_subject(&Subject::Role("admin".into())));
         assert!(ctx.satisfies_condition(&Condition::Always));
         assert!(!ctx.satisfies_condition(&Condition::MemberOf("/directories/x".into())));
+    }
+
+    #[test]
+    fn agent_context_satisfies_only_its_own_agent_subject() {
+        // blueprint §19 axis B: a `for_agent` context satisfies its own `Agent` subject (and the
+        // unscoped `Anyone`), but never a user/role/group subject — and an operator context never
+        // satisfies an `Agent` subject (default-deny holds across identities).
+        let agent = DecisionContext::for_agent("triage");
+        assert!(agent.satisfies_subject(&Subject::Anyone));
+        assert!(agent.satisfies_subject(&Subject::Agent("triage".into())));
+        assert!(!agent.satisfies_subject(&Subject::Agent("other".into())));
+        assert!(!agent.satisfies_subject(&Subject::User("triage".into())));
+        assert!(!agent.satisfies_subject(&Subject::Role("triage".into())));
+
+        let operator = DecisionContext::for_user("op");
+        assert!(!operator.satisfies_subject(&Subject::Agent("triage".into())));
     }
 
     #[test]

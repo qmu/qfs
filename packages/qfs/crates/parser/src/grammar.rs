@@ -2878,15 +2878,18 @@ fn policy_rule_clause(input: &mut Stream<'_>) -> ModalResult<PolicyRuleAst> {
     })
 }
 
-/// `FOR (user|role|group) <name>` — the optional t57 actor clause. `FOR` and the kind words are
-/// contextual UPPERCASE idents (matched case-insensitively via [`word`]), so this adds NO frozen
-/// keyword (the t31 `AT` lesson). The name is a bare identifier.
+/// `FOR (user|role|group|agent) <name>` — the optional t57 actor clause (blueprint §19 adds
+/// `agent`). `FOR` and the kind words are contextual UPPERCASE idents (matched case-insensitively
+/// via [`word`]), so this adds NO frozen keyword (the t31 `AT` lesson). The name is a bare identifier.
 fn policy_for_clause(input: &mut Stream<'_>) -> ModalResult<PolicySubjectAst> {
     let _ = word("FOR").parse_next(input)?;
     let kind = alt((
         word("USER").map(|_| "user"),
         word("ROLE").map(|_| "role"),
         word("GROUP").map(|_| "group"),
+        // blueprint §19 axis B: `FOR agent <name>` — `AGENT` is a contextual UPPERCASE ident
+        // (no new frozen keyword), beside user/role/group.
+        word("AGENT").map(|_| "agent"),
     ))
     .parse_next(input)?;
     let name = ident(input)?;
@@ -2972,6 +2975,9 @@ fn ddl_kind(input: &mut Stream<'_>) -> ModalResult<DdlKind> {
         kw(Keyword::Policy).map(|_| DdlKind::Policy),
         // `CONNECTION` is a contextual ident (no frozen keyword), like `materialized`.
         word("CONNECTION").map(|_| DdlKind::Connection),
+        // `AGENT` is a contextual ident (no frozen keyword), like `CONNECTION` — blueprint §19.
+        // The keyword freeze stays intact, so a column named `agent` still parses everywhere.
+        word("AGENT").map(|_| DdlKind::Agent),
     ))
     .parse_next(input)
 }
@@ -3044,6 +3050,7 @@ fn ddl_kind_segment(kind: DdlKind) -> &'static str {
         DdlKind::Webhook => "webhooks",
         DdlKind::Policy => "policies",
         DdlKind::Connection => "connections",
+        DdlKind::Agent => "agents",
     }
 }
 

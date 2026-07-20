@@ -101,6 +101,27 @@ pub trait Committer: Send + Sync {
         stmt: &Statement,
         policy: Option<&str>,
     ) -> Result<FireOutcome, FireError>;
+
+    /// Commit the bound `stmt` under a **named firing principal** (blueprint §19 axis B/D): the
+    /// agent whose subject the policy gate must evaluate under, threaded as an OWNED, vendor-free
+    /// name (the pure `Committer` seam must not depend on `qfs-server`'s `DecisionContext`; the
+    /// native committer constructs `DecisionContext::for_agent` at the gate). `principal: None` is
+    /// the operator/anonymous context, so the DEFAULT impl delegates to [`Committer::commit`] — an
+    /// ordinary `/server/jobs` fire is unchanged. A committer that gates under a subject (the live
+    /// cron committer) OVERRIDES this to evaluate the agent as subject.
+    ///
+    /// # Errors
+    /// The same errors as [`Committer::commit`].
+    fn commit_for_principal(
+        &self,
+        trigger: &str,
+        stmt: &Statement,
+        policy: Option<&str>,
+        principal: Option<&str>,
+    ) -> Result<FireOutcome, FireError> {
+        let _ = principal;
+        self.commit(trigger, stmt, policy)
+    }
 }
 
 /// A no-creds, no-network test committer (the PREVIEW path), gated behind `native` because it

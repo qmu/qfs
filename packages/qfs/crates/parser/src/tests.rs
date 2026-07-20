@@ -1484,6 +1484,29 @@ fn ddl_webhook_and_policy() {
 }
 
 #[test]
+fn ddl_agent_parses_and_adds_no_frozen_keyword() {
+    // blueprint §19: `CREATE AGENT <name>` — `AGENT` is a contextual UPPERCASE ident (like
+    // CONNECTION/MATERIALIZED), so it adds NO frozen keyword.
+    let stmt = parse_ok("CREATE AGENT triage");
+    let Statement::Ddl(d) = stmt else { panic!() };
+    assert_eq!(d.kind, DdlKind::Agent);
+    assert_eq!(d.name, "triage");
+    assert_eq!(d.target, vec!["server", "agents", "triage"]);
+
+    // An attached POLICY handle rides the frozen `POLICY` keyword (the name is a bare ident).
+    let stmt = parse_ok("CREATE AGENT triage POLICY p");
+    let Statement::Ddl(d) = stmt else { panic!() };
+    assert_eq!(d.kind, DdlKind::Agent);
+    assert_eq!(d.policy.as_deref(), Some("p"));
+
+    // `agent` is NOT a frozen keyword — a column named `agent` still parses everywhere (the
+    // 39-keyword freeze lock stays intact).
+    assert!(!KEYWORDS.contains(&"agent"));
+    assert!(parse_statement("/x |> SELECT agent").is_ok());
+    assert!(parse_statement("/x |> WHERE agent > 3").is_ok());
+}
+
+#[test]
 fn ddl_policy_allow_deny_rules() {
     // The blueprint §10 example: `ALLOW SELECT DENY INSERT,UPDATE,REMOVE,CALL`. `ALLOW`/`DENY` are
     // contextual idents (NOT frozen keywords); verbs span keyword (SELECT/UPDATE/REMOVE/CALL)
@@ -1545,6 +1568,16 @@ fn ddl_policy_t57_actor_scope_and_condition_clauses() {
         }
         other => panic!("expected a member_of(...) call, got {other:?}"),
     }
+
+    // blueprint §19 axis B: `FOR agent <name>` parses as a policy subject beside user/role/group,
+    // adding no frozen keyword (`agent` is a contextual ident).
+    let p = parse_ok("CREATE POLICY ag ALLOW INSERT ON mail FOR agent triage AT /me/mail/**");
+    let Statement::Ddl(d) = p else { panic!() };
+    let r = &d.policy_rules[0];
+    let subject = r.subject.as_ref().expect("a FOR agent clause");
+    assert_eq!(subject.kind, "agent");
+    assert_eq!(subject.name, "triage");
+    assert_eq!(r.scope.as_deref(), Some("/me/mail/**"));
 
     // The clauses are optional: a bare ALLOW rule has none of them.
     let p = parse_ok("CREATE POLICY plain ALLOW SELECT");

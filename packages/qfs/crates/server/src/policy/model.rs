@@ -304,6 +304,12 @@ pub enum Subject {
     Role(String),
     /// A named group/team. Resolved against the actor's group set in the decision context.
     Group(String),
+    /// An **agent principal** (blueprint §19 axis B) — a NEW user principal the language creates
+    /// via `CREATE AGENT`, NOT a reused user/role. Resolved against the acting agent in the
+    /// decision context ([`super::context::DecisionContext::for_agent`]). Default-deny holds: under
+    /// any non-agent context (operator/anonymous) an `Agent` rule never matches, so the agent's
+    /// grants never leak to an operator and the operator's grants never reach the agent.
+    Agent(String),
 }
 
 impl Default for Subject {
@@ -329,6 +335,7 @@ impl Subject {
             Subject::User(u) => format!("user:{u}"),
             Subject::Role(r) => format!("role:{r}"),
             Subject::Group(g) => format!("group:{g}"),
+            Subject::Agent(a) => format!("agent:{a}"),
         }
     }
 
@@ -347,6 +354,7 @@ impl Subject {
             "user" => Subject::User(name.to_string()),
             "role" => Subject::Role(name.to_string()),
             "group" => Subject::Group(name.to_string()),
+            "agent" => Subject::Agent(name.to_string()),
             _ => return None,
         })
     }
@@ -802,9 +810,12 @@ mod tests {
             Subject::User("u1".into()),
             Subject::Role("admin".into()),
             Subject::Group("eng".into()),
+            Subject::Agent("triage".into()),
         ] {
             assert_eq!(Subject::from_label(&s.label()), Some(s));
         }
+        // blueprint §19: the canonical form is `agent:<name>`.
+        assert_eq!(Subject::Agent("triage".into()).label(), "agent:triage");
         assert_eq!(Subject::from_label("nope:"), None);
         assert_eq!(Subject::from_label("bogus:x"), None);
     }
