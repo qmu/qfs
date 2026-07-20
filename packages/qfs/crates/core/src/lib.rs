@@ -38,18 +38,18 @@ mod typeck;
 
 pub use ddl::server::{
     binding_config_row, config_row_batch, desugar_to_insert, from_server_ddl, job_runs_schema,
-    normalize_spans, parse_server_binding_ddl, server_node_schema, server_write_plan, ConfigRow,
-    DdlError as ServerDdlError, DesugarToInsert, EndpointDecl, EventRef, HttpMethod, Interval,
-    JobDecl, PlanSpec, PolicyRef, Route, ServerBindingDdl, StatementSpec, TriggerDecl, ViewDecl,
-    WebhookDecl, CREATE_WRITE_OP,
+    normalize_spans, parse_server_binding_ddl, server_node_schema, server_write_plan, AgentDecl,
+    ConfigRow, DdlError as ServerDdlError, DesugarToInsert, EndpointDecl, EventRef, HttpMethod,
+    Interval, JobDecl, PlanSpec, PolicyRef, Route, ServerBindingDdl, StatementSpec, TriggerDecl,
+    ViewDecl, WebhookDecl, CREATE_WRITE_OP,
 };
-pub use describe::{archetype_hint, DescribeReport, PushdownSummary};
+pub use describe::{archetype_hint, split_selection, DescribeReport, PushdownSummary};
 pub use eval::{call_proc_id, effect_kind_for, EvalError, EvalValue, Evaluator, PlanSource};
 pub use lambda::{
     apply as apply_lambda, eval_expr as eval_lambda_expr, Closure, LambdaValue, ValueEnv,
 };
 pub use membership::{check_membership, MembershipError};
-pub use plan::{plan_pipeline, plan_query, source_registry, PushdownError};
+pub use plan::{plan_pipeline, plan_query, source_registry, PushdownError, SelectionError};
 pub use registry::{
     peel_scope, resolve_name, CodecRegistry, DeclaredTypeDefs, HostScopeError, MountRegistry,
     NameRealm, PathScope, PathScopeError, ProcRegistry, Realm, ScopeResolution, LOCAL_HOST,

@@ -140,10 +140,11 @@ impl Driver for FsDriver {
         // advertises the WIDER schema: a single-file read populates `content`, a directory/glob
         // listing leaves it null. Advertising `content` here is what lets `|> select content |>
         // transform …` type-check at PLAN time (mirrors the `/local` v0.0.60 fix).
-        Ok(NodeDesc::new(
-            Archetype::BlobNamespace,
-            FsRow::content_schema(),
-        ))
+        // 番地の鍵の宣言: a row's `name` is the containment segment itself.
+        Ok(
+            NodeDesc::new(Archetype::BlobNamespace, FsRow::content_schema())
+                .child_entry_name("name"),
+        )
     }
 
     fn capabilities(&self, _path: &Path) -> Capabilities {

@@ -19,6 +19,7 @@
 //! pure [`catalog`]/[`docs`]/[`version`] surface (no runtime, no creds, no I/O).
 
 pub mod account;
+pub mod agent;
 pub mod apply_facets;
 pub mod audit;
 pub mod billing;

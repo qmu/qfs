@@ -12,6 +12,7 @@
 //! writes the file. Credentialed / networked drivers register here behind their live clients as
 //! they land (the execution+auth ticket).
 
+use std::path::Path;
 use std::sync::Arc;
 
 use qfs_core::EffectKind;
@@ -25,12 +26,27 @@ use qfs_secrets::{
 };
 use qfs_types::DriverId;
 
-/// Apply `plan` to the World via the runtime interpreter. Returns `Ok(())` once every leg applied,
-/// or an [`ExecError`] (kind `commit_failed`) if a leg failed or was skipped. Builds a fresh
-/// current-thread tokio runtime to drive the async interpreter (tokio dead-ends here, in the
-/// terminal binary leaf). Never panics.
+/// Apply `plan` to the World with `/local` rooted at the **filesystem root**, so a VFS path
+/// `/local/<p>` maps to host `/<p>`. This is the one-shot / job / server mapping: those launch
+/// contexts address the host absolutely and never carry a session cwd.
+///
+/// An interactive session roots `/local` at its cwd on BOTH faces and must call
+/// [`apply_plan_rooted`] with that cwd instead — see [`crate::shell::run_interactive_shell`].
 pub fn apply_plan(plan: &qfs_core::Plan) -> Result<(), ExecError> {
-    let interp = Interpreter::with_defaults(live_registry());
+    apply_plan_rooted(plan, Path::new("/"))
+}
+
+/// Apply `plan` to the World via the runtime interpreter, resolving `/local/<p>` under
+/// `local_root`. Returns `Ok(())` once every leg applied, or an [`ExecError`] (kind
+/// `commit_failed`) if a leg failed or was skipped. Builds a fresh current-thread tokio runtime
+/// to drive the async interpreter (tokio dead-ends here, in the terminal binary leaf). Never
+/// panics.
+///
+/// `local_root` is the launch context's `/local` root and MUST be the same root that context
+/// planned and previewed against: a preview that resolved under one root and a commit that
+/// applies under another is a mis-targeted write, not a formatting difference.
+pub fn apply_plan_rooted(plan: &qfs_core::Plan, local_root: &Path) -> Result<(), ExecError> {
+    let interp = Interpreter::with_defaults(live_registry(local_root));
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -234,9 +250,11 @@ fn now_rfc3339() -> String {
 /// The live apply-driver registry: the real clients each effect leg applies through, keyed by the
 /// leg's [`DriverId`] (the same id the planner stamped on the `Target`).
 ///
-/// - **local** filesystem (cred-free): rooted at `/` so a VFS path `/local/<p>` maps to host
-///   `/<p>` within the driver's sandbox; real `UPSERT`/`REMOVE` legs apply through its
-///   `LocalApplier`.
+/// - **local** filesystem (cred-free): rooted at `local_root`, so a VFS path `/local/<p>` maps to
+///   host `<local_root>/<p>` within the driver's sandbox; real `UPSERT`/`REMOVE` legs apply
+///   through its `LocalApplier`. The root is the caller's — `/` for the one-shot/job/server
+///   contexts, the session cwd for an interactive shell — because it must match the root that
+///   context's READ facet planned against.
 /// - **github** + **slack** (credentialed HTTP): the real [`reqwest`](crate::transport)
 ///   transport + the encrypted credential store. Always registered so a `/github` or `/slack`
 ///   commit leg routes; the PAT / bot token is resolved **lazily at request time**, so a missing
@@ -244,8 +262,8 @@ fn now_rfc3339() -> String {
 ///
 /// Credentialed Google / SQL / object-store drivers register here as their production clients
 /// (OAuth, connection pools, SigV4) land — each its own execution+auth slice.
-fn live_registry() -> DriverRegistry {
-    let local = qfs_driver_local::LocalFsDriver::new("/");
+fn live_registry(local_root: &Path) -> DriverRegistry {
+    let local = qfs_driver_local::LocalFsDriver::new(local_root);
     let mut reg = DriverRegistry::new().with(
         DriverId::new("local"),
         Arc::new(qfs_driver_local::local_apply_driver(&local)),

@@ -96,6 +96,32 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: cargo build --workspace --target ${{ matrix.target }}
 
+  # packages/qfs-viewer: the fresh-clone BACKSTOP gate for the imported qfs-viewer project
+  # (TypeScript, plgg family). One call to its canonical runner, identical to what a developer
+  # runs locally, so the local and CI paths cannot drift — mirrors the standalone repo's old
+  # run-tests.yml (setup-node 24.x + npm-install.sh + check-all.sh).
+  viewer-check-all:
+    name: qfs-viewer check-all
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/qfs-viewer
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 24: the version the launcher's node_modules type-stripping
+      # behaviour is pinned against (see packages/qfs-viewer/docs/adr/0005).
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+
+      - name: Install every package's dependencies
+        run: ./scripts/npm-install.sh
+
+      - name: Check all (gates + fresh build + npx smoke + full test suite)
+        run: ./scripts/check-all.sh
+
   # t36: the wasm-clean qfs-host CORE builds on wasm32-unknown-unknown (the RuntimeHost/
   # DurableStore traits, the owned DTOs, the wrangler generator, the binding-set derivation,
   # and the parked host-workers scaffold). The `worker`-backed WorkersHost is PARKED (the

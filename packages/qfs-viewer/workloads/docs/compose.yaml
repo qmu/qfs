@@ -1,0 +1,66 @@
+# The docs workload — qfs-viewer serving ANOTHER repository's corpus,
+# read-only, on host port ${WORKAHOLIC_DOCS_PORT:-4101}.
+#
+#   scripts/serve-docs.sh /home/ec2-user/projects/plgg
+#   DOCS_CORPUS=. <compose> -f workloads/docs/compose.yaml down   # to stop
+#
+# (`DOCS_CORPUS` below is `:?` — required, no default — so that no directory is
+# ever served by accident. The cost is that EVERY subcommand needs it set, not
+# just `up`, which is why the stop line above carries a placeholder. `down`
+# mounts nothing, so the value is never used.)
+#
+# Why this exists: the mission wants the plgg and qfs documentation sites
+# "built and served on this mechanism". They do not need to adopt anything for
+# that to be true — running the tool AT a directory is reading it, and the
+# corpora already serve unmodified (measured 2026-07-16, with `.worktrees`
+# pruned: plgg 954 documents in 186ms, qfs 578 in 191ms). This workload is
+# that, standing up, so the people who own those corpora can SEE their own docs
+# rather than read a claim about them.
+#
+# THE CORPUS IS NOT OURS, AND THAT CHANGES EVERYTHING
+# ---------------------------------------------------
+# The development workload serves this repository and grants write authority on
+# purpose — "editable in place" is the mission's own promise for YOUR tree. Here
+# the tree belongs to someone else, so writes are refused TWICE, independently:
+#
+#   1. `--read-only` (the command below) — `serve` never constructs the writer,
+#      so `/edit` does not exist rather than existing and saying no. A route
+#      that was never built cannot be got wrong.
+#   2. `:ro` on the bind mount — the kernel refuses, whatever the process
+#      believes.
+#
+# Either alone would probably do. Both, because the failure they prevent is
+# writing to a repository nobody authorised us to touch, and `guard-repo-
+# confinement.sh` cannot see a write that comes from a browser rather than from
+# an agent (workaholic:design / defense-in-depth).
+#
+# Access control does NOT help here and must not be leaned on: principals are
+# OPEN when none are declared, and a repository that has never heard of this
+# tool declares none. So a writable server pointed at plgg would be a browser
+# with commit rights over plgg, open to anyone who could reach the port.
+services:
+  qfs-viewer-docs:
+    build:
+      # Build context is the repo root: the image needs the package, not the
+      # corpus. The corpus arrives at runtime as a mount, which is what makes
+      # one image serve any directory.
+      context: ../..
+      dockerfile: workloads/docs/Dockerfile
+    ports:
+      - "${WORKAHOLIC_DOCS_PORT:-4101}:4101"
+    volumes:
+      # The tool: this repository, mounted the same way development mounts it,
+      # so the served product is the live source rather than a copy that can
+      # drift.
+      - ../..:/app
+      - /app/packages/qfs-viewer/node_modules
+      # The corpus: SOMEONE ELSE'S repository, READ-ONLY. `${DOCS_CORPUS}` is
+      # required and has no default on purpose — a default here would be a
+      # directory served by accident, and this workload's whole job is pointing
+      # at trees we do not own.
+      - "${DOCS_CORPUS:?set DOCS_CORPUS to the repository to serve}:/corpus:ro"
+    environment:
+      # Named in the boot log and the page title, so someone looking at the
+      # site can tell WHOSE corpus it is. A docs site that cannot say what it is
+      # serving is how the wrong tree gets published quietly.
+      DOCS_CORPUS_NAME: "${DOCS_CORPUS_NAME:-corpus}"

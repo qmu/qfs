@@ -48,6 +48,8 @@ pub mod mock;
 pub mod wrangler;
 
 #[cfg(feature = "host-daemon")]
+pub mod agent;
+#[cfg(feature = "host-daemon")]
 pub mod daemon;
 #[cfg(feature = "host-daemon")]
 pub mod from_server;
@@ -82,8 +84,15 @@ pub use from_server::{bindings_from_config, bindings_from_state, derivation_inpu
 // plan WITHOUT a direct `qfs-server` edge (its dep-allowlist stays the thin-entrypoint set).
 #[cfg(feature = "host-daemon")]
 pub use job::{jobs_from_config, ConfigJobs, JobSpec};
+// blueprint §19 axis C: agent query-function extraction — the agent's saved plan + its bound
+// policy, gated under the AGENT's own DecisionContext by `qfs agent run`.
 #[cfg(feature = "host-daemon")]
-pub use qfs_server::{gate_plan, resolve_policy, GateOutcome, Policy, PolicyDecision, PolicyTable};
+pub use agent::{agents_from_config, AgentSpec, ConfigAgents};
+#[cfg(feature = "host-daemon")]
+pub use qfs_server::{
+    gate_plan, gate_plan_with_context, resolve_policy, DecisionContext, GateOutcome, Policy,
+    PolicyDecision, PolicyTable,
+};
 #[cfg(feature = "host-daemon")]
 pub use view::refresh_materialized_view_from_config;
 

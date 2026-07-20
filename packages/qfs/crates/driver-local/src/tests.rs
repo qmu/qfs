@@ -411,3 +411,16 @@ fn applier_seam_is_reachable_through_driver() {
     // The contract's synchronous applier() seam exists (PlanApplier).
     let _seam: &dyn qfs_plan::PlanApplier = d.applier();
 }
+
+#[test]
+fn describe_declares_entry_name_as_the_child_address() {
+    // 番地の鍵の宣言: a local row's `name` is the containment segment itself.
+    let (dir, _) = fixture();
+    let d = LocalFsDriver::new(dir.path());
+    assert_eq!(
+        d.describe(&Path::new("/local")).unwrap().child_address,
+        qfs_driver::ChildAddress::EntryName {
+            column: "name".to_string()
+        }
+    );
+}

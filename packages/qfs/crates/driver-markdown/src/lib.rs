@@ -100,10 +100,15 @@ impl Driver for MarkdownDriver {
                 verb: "DESCRIBE",
                 supported: Vec::new(),
             })?;
-        Ok(NodeDesc::new(
-            Archetype::RelationalTable,
-            markdown_node_schema(node),
-        ))
+        let desc = NodeDesc::new(Archetype::RelationalTable, markdown_node_schema(node));
+        // 番地の鍵の宣言: a document row is selected by its `path` value
+        // (`…/documents/@<path>`, percent-encoded). A links row is an EDGE, not a tree
+        // node — it declares no child.
+        let desc = match node {
+            MarkdownNode::Documents => desc.child_key(["path"]),
+            _ => desc,
+        };
+        Ok(desc)
     }
 
     fn capabilities(&self, path: &Path) -> Capabilities {
@@ -168,6 +173,28 @@ mod tests {
         assert!(d.describe(&Path::new("/markdown")).is_err());
         assert!(d.describe(&Path::new("/markdown/docs")).is_err());
         assert!(d.describe(&Path::new("/markdown/docs/nope")).is_err());
+    }
+
+    /// 番地の鍵の宣言: a document row is selected by its `path` value
+    /// (`/markdown/docs/documents/@<path>`); the links table declares no child (an edge
+    /// row is not a tree node).
+    #[test]
+    fn describe_declares_child_addresses_for_markdown_tables() {
+        let d = MarkdownDriver::new();
+        assert_eq!(
+            d.describe(&Path::new("/markdown/docs/documents"))
+                .unwrap()
+                .child_address,
+            qfs_driver::ChildAddress::Key {
+                columns: vec!["path".to_string()]
+            }
+        );
+        assert_eq!(
+            d.describe(&Path::new("/markdown/docs/links"))
+                .unwrap()
+                .child_address,
+            qfs_driver::ChildAddress::None
+        );
     }
 
     /// Capability golden gate: both tables are READ-ONLY — every write verb is rejected at the

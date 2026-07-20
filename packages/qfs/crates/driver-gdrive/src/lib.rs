@@ -65,6 +65,7 @@ pub mod client;
 mod effect;
 mod error;
 pub mod export;
+mod name;
 mod path;
 pub mod query;
 pub mod read;
@@ -213,10 +214,13 @@ impl Driver for GDriveDriver {
         // single-file read materialises. describe() is pure (no I/O) and advertises the WIDER
         // schema so `/drive/<file> |> select content |> transform …` type-checks at PLAN time; a
         // folder listing carries the same columns with a null `content` (mirrors the `/local` fix).
-        Ok(NodeDesc::new(
-            Archetype::BlobNamespace,
-            FileMeta::content_schema(),
-        ))
+        // 番地の鍵の宣言: a Drive row's `name` IS the containment segment (`/drive/my/<name>`).
+        // Measured 2026-07-18: rows carry `id`/`name`/`parents` and NO `path` column, so the
+        // truthful child declaration is the entry name — never an implied `path`.
+        Ok(
+            NodeDesc::new(Archetype::BlobNamespace, FileMeta::content_schema())
+                .child_entry_name("name"),
+        )
     }
 
     fn capabilities(&self, path: &Path) -> Capabilities {

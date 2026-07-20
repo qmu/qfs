@@ -1,0 +1,60 @@
+{
+  "name": "qfs-viewer",
+  "version": "0.0.1",
+  "description": "A markdown knowledge browser on the plgg family: scans a repository's markdown, indexes the front matter on memory, and serves it as SSR HTML, a REST API, and an MCP server",
+  "type": "module",
+  "files": [
+    "dist",
+    "src",
+    "bin",
+    "tsconfig.json"
+  ],
+  "bin": {
+    "qfs-viewer": "bin/qfs-viewer.mjs"
+  },
+  "main": "dist/index.es.js",
+  "module": "dist/index.es.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.es.js"
+    }
+  },
+  "imports": {
+    "#qfs-viewer/*": "./src/*.ts"
+  },
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "plgg-bundle",
+    "test": "tsc --noEmit && plgg-test src",
+    "tsc": "tsc --noEmit",
+    "tsc:watch": "tsc --noEmit --watch",
+    "test:watch": "plgg-test src --watch",
+    "coverage": "tsc --noEmit && plgg-test src --coverage",
+    "coverage:watch": "plgg-test src --coverage --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qmu/qfs.git"
+  },
+  "author": "qmu",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/qmu/qfs/issues"
+  },
+  "homepage": "https://github.com/qmu/qfs#readme",
+  "dependencies": {
+    "plgg": "^0.0.27",
+    "plgg-mcp": "^0.0.1",
+    "plgg-md": "^0.0.3",
+    "plgg-server": "^0.0.4",
+    "plgg-view": "^0.0.2",
+    "plggmatic": "^0.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "plgg-bundle": "^0.0.2",
+    "plgg-test": "^0.0.3",
+    "typescript": "^6.0.3"
+  }
+}

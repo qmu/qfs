@@ -64,8 +64,8 @@ pub use serve::{
 // facet + the statement-bridge commit routing, but its thin-entrypoint guard forbids a direct
 // `qfs-server` dep — qfs-http (which legitimately consumes qfs-server) is the serve-side door.
 pub use qfs_server::{
-    job_runs_path_job, lower_statement, reconfigure_channel, ReconfigureHandle, ReconfigureRx,
-    Runtime, ServerConfigApplier, ServerDriver,
+    agent_runs_path_agent, job_runs_path_job, lower_statement, reconfigure_channel,
+    ReconfigureHandle, ReconfigureRx, Runtime, ServerConfigApplier, ServerDriver,
 };
 
 use std::collections::BTreeMap;

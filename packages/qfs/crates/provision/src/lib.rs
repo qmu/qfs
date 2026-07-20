@@ -57,6 +57,6 @@ pub use state::{
 // shared `ServerState` the `ReconcileApplier` holds WITHOUT a direct `qfs-server` edge (the
 // thin-entrypoint guard forbids the binary depending directly on the lower spine).
 pub use qfs_server::{
-    EndpointDef, JobDef, JobRunRecord, PolicyDef, ServerState, StatementSource, TriggerDef,
-    ViewDef, WebhookDef,
+    AgentDef, EndpointDef, JobDef, JobRunRecord, PolicyDef, ServerState, StatementSource,
+    TriggerDef, ViewDef, WebhookDef,
 };

@@ -595,6 +595,10 @@ pub enum DdlKind {
     /// `CONNECTION` is parsed as a contextual UPPERCASE ident (the `AT` lesson, like `MATERIALIZED`)
     /// so it adds NO frozen keyword.
     Connection,
+    /// `CREATE AGENT` — an agent principal declaration (blueprint §19). `AGENT` is parsed as a
+    /// contextual UPPERCASE ident (the `AT`/`CONNECTION` lesson), so it adds NO frozen keyword — a
+    /// column named `agent` still parses everywhere.
+    Agent,
 }
 
 /// An expression (blueprint §3 operators, frozen). The boolean structure (`AND`/`OR`/
@@ -809,12 +813,25 @@ pub struct PathExpr {
 /// One segment of a [`PathExpr`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PathSegment {
-    /// The raw segment name.
+    /// The raw segment name (for a selection segment: the raw text after the `@`).
     pub name: Ident,
     /// An optional `@version` ref bound to this segment (blueprint §4), raw text.
     pub version: Option<String>,
     /// Whether the segment carried a glob character.
     pub glob: bool,
+    /// Whether this is a `@`-led **selection segment** (`/x/@A`, 番地の`@選択`): the raw
+    /// key value(s) in `name` select a row by the node's declared key columns. Lowered
+    /// deterministically to a `where` step at the single lowering site — never a
+    /// containment name. Serialized only when set, so the pinned wire shape of every
+    /// containment-only path is byte-identical to before the field existed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub selection: bool,
+}
+
+/// `skip_serializing_if` helper: keep the additive `selection` flag off the wire when unset.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// A path reference used in expression position (e.g. the target of `EXPAND`), where

@@ -67,7 +67,8 @@ impl qfs_core::Driver for FakeMail {
         &self.mount
     }
     fn describe(&self, _path: &Path) -> Result<NodeDesc, CfsError> {
-        Ok(NodeDesc::new(Archetype::RelationalTable, mail_schema()))
+        // 番地の鍵の宣言: rows are selected by `id`, so `/mail/inbox/@2` is a row address.
+        Ok(NodeDesc::new(Archetype::RelationalTable, mail_schema()).child_key(["id"]))
     }
     fn capabilities(&self, _path: &Path) -> Capabilities {
         // All verbs so the effect-path tests (INSERT/REMOVE) pass the capability gate.
@@ -122,6 +123,83 @@ fn headline_read_returns_rows_through_real_executor() {
         "LIMIT 1 residual trims the over-returned rows"
     );
     assert_eq!(rows.columns(), vec!["id", "subject"]);
+}
+
+#[test]
+fn selection_address_reads_exactly_the_selected_row() {
+    // 番地の`@選択` end-to-end (plan.md, settled 2026-07-18): `/mail/inbox/@2` IS the row
+    // address — parse → the one lowering site (`where id == 2` from the driver's DECLARED
+    // child key) → scan → residual. The fake pushes nothing and over-returns all 3 rows,
+    // so a green here proves the lowered predicate really filters at RUNTIME, not just in
+    // the plan. (Watched red before `FakeMail::describe` declared the key: the address
+    // refused with `selection_no_child_key`.)
+    let engine = engine_with_mail();
+    let reads = reads_with_mail();
+    let stmt = parse("/mail/inbox/@2").unwrap();
+    let rows = block_on_read(&stmt, &engine.mounts, &reads).unwrap();
+    assert_eq!(rows.len(), 1, "the address selects exactly one row");
+    assert_eq!(rows.rows[0].values[0], Value::Int(2));
+    assert_eq!(rows.rows[0].values[1], Value::Text("spam".into()));
+}
+
+#[test]
+fn selection_address_answers_describe() {
+    // 閉包の原理 (plan.md): every 番地 answers describe — the ROW address included.
+    // `describe /mail/inbox/@2` resolves to the row-node view: the base node's shape
+    // (archetype + columns), the FULL row address echoed, and no further `@` child claimed.
+    let engine = engine_with_mail();
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let code = {
+        let mut streams = Streams {
+            out: &mut out,
+            err: &mut err,
+        };
+        qfs_exec::run_describe(
+            "/mail/inbox/@2",
+            &engine.mounts,
+            OutputFormat::Json,
+            &mut streams,
+        )
+        .code()
+    };
+    let out = String::from_utf8(out).unwrap();
+    assert_eq!(
+        code,
+        0,
+        "the row address must describe; stderr: {}",
+        String::from_utf8(err).unwrap()
+    );
+    assert!(
+        out.contains("\"path\":\"/mail/inbox/@2\""),
+        "the report names the FULL row address, got: {out}"
+    );
+    assert!(
+        out.contains("\"child_address\":{\"kind\":\"none\"}"),
+        "a selected row claims no further `@` child today, got: {out}"
+    );
+
+    // The refusals stay structured: a keyless arity mismatch is an error, not a guess.
+    let mut out2: Vec<u8> = Vec::new();
+    let mut err2: Vec<u8> = Vec::new();
+    let code2 = {
+        let mut streams = Streams {
+            out: &mut out2,
+            err: &mut err2,
+        };
+        qfs_exec::run_describe(
+            "/mail/inbox/@1,2",
+            &engine.mounts,
+            OutputFormat::Json,
+            &mut streams,
+        )
+        .code()
+    };
+    assert_ne!(code2, 0, "arity mismatch must refuse");
+    assert!(
+        String::from_utf8(err2).unwrap().contains("selection_arity"),
+        "structured code"
+    );
 }
 
 #[test]

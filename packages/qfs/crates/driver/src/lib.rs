@@ -312,6 +312,41 @@ pub enum NodeCategory {
     Definition,
 }
 
+/// How a row of this node addresses its **child** — the 番地 key declaration (strategy
+/// plan.md「鍵の宣言」, settled 2026-07-18). The DRIVER states it, because only the driver
+/// knows each service's identity columns; a consumer (the REPL, qfs-viewer, a REST lister)
+/// never guesses. Three honest answers exist:
+///
+/// - [`ChildAddress::Key`] — the declared key column(s) select a child row: the address is
+///   the **selection segment** `/x/@<v1>,<v2>` (values positional in declared key order,
+///   percent-encoded), which lowers deterministically to `|> where <key> == <v>` at the one
+///   lowering site. A relational table declares its primary key; an append log its `id`-like
+///   identity (`/mail/INBOX` → `id`, `/slack/<ch>` → `ts`).
+/// - [`ChildAddress::EntryName`] — the entry NAME is the containment segment itself (blob
+///   namespaces): the row whose name column holds `n` IS the child `/x/n`. No `@` needed.
+/// - [`ChildAddress::None`] — this node's rows select no child. Not every table is a tree
+///   (`/rest`'s open `{value}` row has no identity), and declaring that is a valid answer,
+///   never a defect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ChildAddress {
+    /// A row is selected by these declared key column(s), in address order: the child
+    /// address is `/x/@<v1>,<v2>…` with values percent-encoded.
+    Key {
+        /// The key column name(s), in the positional order the selection segment uses.
+        columns: Vec<String>,
+    },
+    /// The entry name is the containment segment itself: the row whose `column` holds `n`
+    /// is the child `/x/n` (the blob-namespace shape; `column` is e.g. `name` or `key`).
+    EntryName {
+        /// The column whose value is the child's containment segment name.
+        column: String,
+    },
+    /// This node's rows select no child — a declared answer, not an omission.
+    None,
+}
+
 /// The archetype + typed [`Schema`] of a node — the output of `DESCRIBE` (blueprint §6).
 ///
 /// This is the reconciliation point between the driver contract and the canonical type
@@ -338,6 +373,11 @@ pub struct NodeDesc {
     /// Which of §5.5's two categories this node's rows are — data, or definitions. Set by
     /// [`NodeDesc::category`]; defaults to [`NodeCategory::Data`].
     pub category: NodeCategory,
+    /// How a row of this node addresses its child (番地の鍵の宣言) — the identity that
+    /// selects a child, stated by the driver. Set by [`NodeDesc::child_key`] /
+    /// [`NodeDesc::child_entry_name`]; defaults to [`ChildAddress::None`] ("no child" is
+    /// a declared, valid answer — not every table is a tree).
+    pub child_address: ChildAddress,
 }
 
 /// Whether an archetype's nodes are navigable **by default** — the value [`NodeDesc::new`] starts
@@ -369,6 +409,7 @@ impl NodeDesc {
             schema,
             navigable: navigable_by_default(archetype),
             category: NodeCategory::Data,
+            child_address: ChildAddress::None,
         }
     }
 
@@ -389,6 +430,37 @@ impl NodeDesc {
     #[must_use]
     pub fn navigable(mut self, navigable: bool) -> Self {
         self.navigable = navigable;
+        self
+    }
+
+    /// Declare the key column(s) whose value(s) select a child row of this node
+    /// ([`ChildAddress::Key`]): a relational table's primary key, an append log's `id`-like
+    /// identity. Order is positional — it is the order a composite selection segment
+    /// (`@<v1>,<v2>`) lists its values in. An empty `columns` keeps the honest default
+    /// ([`ChildAddress::None`]) rather than declaring a key that selects nothing.
+    #[must_use]
+    pub fn child_key<I, S>(mut self, columns: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let columns: Vec<String> = columns.into_iter().map(Into::into).collect();
+        self.child_address = if columns.is_empty() {
+            ChildAddress::None
+        } else {
+            ChildAddress::Key { columns }
+        };
+        self
+    }
+
+    /// Declare that the entry NAME in `column` is the containment segment itself
+    /// ([`ChildAddress::EntryName`]) — the blob-namespace shape: the row whose `column`
+    /// holds `n` is the child `/x/n`.
+    #[must_use]
+    pub fn child_entry_name(mut self, column: impl Into<String>) -> Self {
+        self.child_address = ChildAddress::EntryName {
+            column: column.into(),
+        };
         self
     }
 }
@@ -1116,7 +1188,10 @@ mod tests {
     ]
   },
   "navigable": false,
-  "category": "data"
+  "category": "data",
+  "child_address": {
+    "kind": "none"
+  }
 }"#
         );
 

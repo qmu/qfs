@@ -432,6 +432,65 @@ fn path_at_version_is_preserved() {
 }
 
 #[test]
+fn quoted_path_segment_reaches_the_ast_as_a_raw_name() {
+    // Ticket 20260717120200. Quoting is purely LEXICAL: the AST (and therefore the `/seg/seg`
+    // string every driver re-splits) carries the raw name, with no quotes and no glob flag. That
+    // is what lets drivers keep splitting on `/` unchanged.
+    let stmt = parse_ok("/drive/my/Reports/'Q3 budget (final)?.xlsx'");
+    let Statement::Query(p) = stmt else { panic!() };
+    let Source::Path(path) = p.source else {
+        panic!()
+    };
+    let names: Vec<&str> = path.segments.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["drive", "my", "Reports", "Q3 budget (final)?.xlsx"]
+    );
+    assert!(
+        path.segments.iter().all(|s| !s.glob),
+        "a quoted `?` is a literal character, so no segment globs"
+    );
+}
+
+#[test]
+fn quoted_path_segment_addresses_a_single_file_remove() {
+    // The spelling the incident could not write, which forced the `where name == '…'` detour
+    // onto the over-delete bug (ticket 20260717102000).
+    let stmt = parse_ok("remove /drive/my/'Q3 budget?.xlsx'");
+    let Statement::Effect(e) = stmt else { panic!() };
+    assert_eq!(target_path(&e), "/drive/my/Q3 budget?.xlsx");
+}
+
+#[test]
+fn selection_segment_reaches_the_ast_flagged() {
+    // 番地の`@選択` (plan.md, settled 2026-07-18): `/mail/INBOX/@<id>` parses with the final
+    // segment FLAGGED as a selection carrying the raw key text — never a containment name.
+    // The parser carries shape only; the single lowering site turns it into the where step.
+    let stmt = parse_ok("/mail/INBOX/@197a2b3c |> SELECT subject");
+    let Statement::Query(p) = stmt else { panic!() };
+    let Source::Path(path) = p.source else {
+        panic!()
+    };
+    assert_eq!(path.segments.len(), 3);
+    let sel = &path.segments[2];
+    assert!(sel.selection, "the `@` segment is a selection");
+    assert_eq!(sel.name, "197a2b3c", "raw key text, `@` stripped");
+    assert!(sel.version.is_none() && !sel.glob);
+    assert!(
+        path.segments[..2].iter().all(|s| !s.selection),
+        "containment segments stay unflagged"
+    );
+    // Composite spelling: the raw comma-joined values ride one segment.
+    let stmt = parse_ok("/sql/crm/invoices/@2024,INV-003");
+    let Statement::Query(p) = stmt else { panic!() };
+    let Source::Path(path) = p.source else {
+        panic!()
+    };
+    assert_eq!(path.segments[3].name, "2024,INV-003");
+    assert!(path.segments[3].selection);
+}
+
+#[test]
 fn path_as_of_temporal() {
     let stmt = parse_ok("/sql/pg/orders AS OF '2026-01-01'");
     let Statement::Query(p) = stmt else { panic!() };
@@ -1489,6 +1548,29 @@ fn ddl_webhook_and_policy() {
 }
 
 #[test]
+fn ddl_agent_parses_and_adds_no_frozen_keyword() {
+    // blueprint §19: `CREATE AGENT <name>` — `AGENT` is a contextual UPPERCASE ident (like
+    // CONNECTION/MATERIALIZED), so it adds NO frozen keyword.
+    let stmt = parse_ok("CREATE AGENT triage");
+    let Statement::Ddl(d) = stmt else { panic!() };
+    assert_eq!(d.kind, DdlKind::Agent);
+    assert_eq!(d.name, "triage");
+    assert_eq!(d.target, vec!["server", "agents", "triage"]);
+
+    // An attached POLICY handle rides the frozen `POLICY` keyword (the name is a bare ident).
+    let stmt = parse_ok("CREATE AGENT triage POLICY p");
+    let Statement::Ddl(d) = stmt else { panic!() };
+    assert_eq!(d.kind, DdlKind::Agent);
+    assert_eq!(d.policy.as_deref(), Some("p"));
+
+    // `agent` is NOT a frozen keyword — a column named `agent` still parses everywhere (the
+    // 39-keyword freeze lock stays intact).
+    assert!(!KEYWORDS.contains(&"agent"));
+    assert!(parse_statement("/x |> SELECT agent").is_ok());
+    assert!(parse_statement("/x |> WHERE agent > 3").is_ok());
+}
+
+#[test]
 fn ddl_policy_allow_deny_rules() {
     // The blueprint §10 example: `ALLOW SELECT DENY INSERT,UPDATE,REMOVE,CALL`. `ALLOW`/`DENY` are
     // contextual idents (NOT frozen keywords); verbs span keyword (SELECT/UPDATE/REMOVE/CALL)
@@ -1550,6 +1632,16 @@ fn ddl_policy_t57_actor_scope_and_condition_clauses() {
         }
         other => panic!("expected a member_of(...) call, got {other:?}"),
     }
+
+    // blueprint §19 axis B: `FOR agent <name>` parses as a policy subject beside user/role/group,
+    // adding no frozen keyword (`agent` is a contextual ident).
+    let p = parse_ok("CREATE POLICY ag ALLOW INSERT ON mail FOR agent triage AT /me/mail/**");
+    let Statement::Ddl(d) = p else { panic!() };
+    let r = &d.policy_rules[0];
+    let subject = r.subject.as_ref().expect("a FOR agent clause");
+    assert_eq!(subject.kind, "agent");
+    assert_eq!(subject.name, "triage");
+    assert_eq!(r.scope.as_deref(), Some("/me/mail/**"));
 
     // The clauses are optional: a bare ALLOW rule has none of them.
     let p = parse_ok("CREATE POLICY plain ALLOW SELECT");

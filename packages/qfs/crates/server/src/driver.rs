@@ -21,7 +21,8 @@ use qfs_core::{
 };
 
 use crate::state::{
-    EndpointDef, JobDef, PolicyDef, ServerState, StatementSource, TriggerDef, ViewDef, WebhookDef,
+    AgentDef, EndpointDef, JobDef, PolicyDef, ServerState, StatementSource, TriggerDef, ViewDef,
+    WebhookDef,
 };
 
 /// The reserved mount point for the server-as-a-driver (blueprint §10).
@@ -87,6 +88,22 @@ pub fn job_runs_path_job(path: &str) -> Option<&str> {
     (segs.next() == Some("runs") && segs.next().is_none()).then_some(name)
 }
 
+/// The agent name when `path` addresses the READ-ONLY per-agent cadence-fire history
+/// `/server/agents/<name>/runs` (blueprint §19 axis D), `None` otherwise. The agent's own
+/// run-history read-back, select-only telemetry beside `/server/jobs/<name>/runs`.
+#[must_use]
+pub fn agent_runs_path_agent(path: &str) -> Option<&str> {
+    let rest = path
+        .strip_prefix("/server/")
+        .or_else(|| path.strip_prefix("server/"))?;
+    let mut segs = rest.split('/');
+    if segs.next() != Some("agents") {
+        return None;
+    }
+    let name = segs.next().filter(|s| !s.is_empty())?;
+    (segs.next() == Some("runs") && segs.next().is_none()).then_some(name)
+}
+
 /// The capability set every `/server/...` config node advertises: a relational table
 /// supporting `SELECT/INSERT/UPSERT/UPDATE/REMOVE` (no blob verbs). Single source of truth
 /// shared by [`Driver::capabilities`] and the plan-time verb gate.
@@ -116,8 +133,11 @@ impl Driver for ServerDriver {
 
     fn describe(&self, path: &Path) -> Result<NodeDesc, CfsError> {
         // Pure: returns static schema data; never touches the RwLock or any I/O.
-        // The runs sub-collection wins over its `/server/jobs` prefix (select-only telemetry).
-        if job_runs_path_job(path.as_str()).is_some() {
+        // A runs sub-collection (jobs or agents, blueprint §19 axis D) wins over its config-node
+        // prefix (select-only telemetry) and shares the canonical `job_runs_schema`.
+        if job_runs_path_job(path.as_str()).is_some()
+            || agent_runs_path_agent(path.as_str()).is_some()
+        {
             return Ok(NodeDesc::new(
                 Archetype::RelationalTable,
                 qfs_core::job_runs_schema(),
@@ -135,9 +155,12 @@ impl Driver for ServerDriver {
     }
 
     fn capabilities(&self, path: &Path) -> Capabilities {
-        // The run history is structurally read-only: SELECT and nothing else — a write to
-        // `/server/jobs/<name>/runs` must never fall through to the writable jobs config node.
-        if job_runs_path_job(path.as_str()).is_some() {
+        // A run history (jobs or agents) is structurally read-only: SELECT and nothing else — a
+        // write to `/server/{jobs,agents}/<name>/runs` must never fall through to the writable
+        // config node its prefix would resolve to.
+        if job_runs_path_job(path.as_str()).is_some()
+            || agent_runs_path_agent(path.as_str()).is_some()
+        {
             return Capabilities::none().select();
         }
         // A known /server node is a relational config table; an unknown path denies all.
@@ -279,6 +302,7 @@ fn collection_contains(state: &ServerState, node: ServerNode, name: &str) -> boo
         ServerNode::Views => state.views.contains_key(name),
         ServerNode::Policies => state.policies.contains_key(name),
         ServerNode::Webhooks => state.webhooks.contains_key(name),
+        ServerNode::Agents => state.agents.contains_key(name),
     }
 }
 
@@ -304,6 +328,11 @@ fn remove_row(state: &mut ServerState, node: ServerNode, name: &str) {
         }
         ServerNode::Webhooks => {
             state.webhooks.remove(name);
+        }
+        ServerNode::Agents => {
+            state.agents.remove(name);
+            // The run history lives and dies with its agent row (telemetry has no orphan life).
+            state.agent_runs.remove(name);
         }
     }
 }
@@ -435,6 +464,29 @@ fn insert_row(
                     name,
                     route: text("route"),
                     secret: text("secret"),
+                },
+            );
+        }
+        ServerNode::Agents => {
+            // blueprint §19: credential-free — name, the launch cadence `every` (axis D), the query
+            // function `plan` (axis C), and the optional attached POLICY handle (axis E).
+            // Runtime-field preservation (blueprint §16): a replace-by-name whose args carry NO
+            // `last_run` PRESERVES the existing high-water mark — a reconcile never resets it.
+            let last_run = match get("last_run") {
+                Some(Value::Timestamp(t)) | Some(Value::Int(t)) => Some(*t),
+                _ => state.agents.get(&name).and_then(|a| a.last_run),
+            };
+            state.agents.insert(
+                name.clone(),
+                AgentDef {
+                    name,
+                    every: text("every"),
+                    last_run,
+                    plan: StatementSource::new(text("plan")),
+                    policy: match get("policy") {
+                        Some(Value::Text(s)) if !s.is_empty() => Some(s.clone()),
+                        _ => None,
+                    },
                 },
             );
         }
