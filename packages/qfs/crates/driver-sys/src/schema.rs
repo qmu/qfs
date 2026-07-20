@@ -261,6 +261,10 @@ pub fn sys_node_schema(node: SysNode) -> Schema {
             col("subject", ColumnType::Text, true),
             col("scope", ColumnType::Text, true),
             col("app", ColumnType::Text, true),
+            // `secret_ref` is a REFERENCE (`env:`/`vault:`) a self-contained `CREATE ACCOUNT …
+            // SECRET '<ref>'` declared (20260718203325) — a selector projectable on read, resolved
+            // lazily at bind time, NEVER a token.
+            col("secret_ref", ColumnType::Text, true),
             col("created_at", ColumnType::Text, true),
         ]),
     }

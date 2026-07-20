@@ -218,6 +218,35 @@ pub fn google_stack_for_account(email: &str, app: &str) -> Option<GoogleStack> {
     Some(GoogleStack { api })
 }
 
+/// Exchange the stored `google:<email>:refresh_token` for a LIVE access-token bearer through the
+/// OAuth `<app>`, returned as the `Secret` a request's `Authorization: Bearer` header carries. This
+/// is the OAuth arm of the declared-driver `AUTH ACCOUNT 'google'` adapter (ticket 20260718203328):
+/// a declared google mount's stored credential is a refresh token, not a usable bearer, so the raw
+/// vault row cannot authenticate — this refreshes it transparently at bind time.
+///
+/// # Errors
+/// A structured, secret-free message: naming the missing app when `<app>` is not configured (fail
+/// closed, never a silent unauthenticated call), or surfacing the OAuth exchange error otherwise.
+pub(crate) fn google_account_bearer(email: &str, app: &str) -> Result<Secret, String> {
+    let (client_id, client_secret) = google_app_config(app).ok_or_else(|| {
+        format!(
+            "AUTH ACCOUNT 'google' has no OAuth app '{app}' — add it with `qfs app add google \
+             {app}` (the declaration carries only the app label, never a client secret)"
+        )
+    })?;
+    let transport = crate::transport::google_transport();
+    let store = commit_secret_store();
+    let oauth = OAuthClient::new(client_id, client_secret, all_google_scopes(), transport);
+    let source = StoredTokenSource::new(email.to_string(), store, oauth);
+    let refreshed = source
+        .access_token()
+        .map_err(|e| format!("google token exchange for account '{email}': {e}"))?;
+    let bearer = refreshed
+        .bearer()
+        .ok_or_else(|| "the refreshed google access token was not valid UTF-8".to_string())?;
+    Ok(Secret::from(bearer))
+}
+
 /// **Documented SEAM — the live paste-back browser consent flow.** Run
 /// `qfs_google_auth::authorize`: build the OAuth client over the real transport + the supplied
 /// store, build the consent URL with the portless `http://localhost` redirect (no listener —

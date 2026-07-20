@@ -737,7 +737,11 @@ fn path_boundary_word(s: &str) -> bool {
             | "MAP"
             | "ON"
             | "OF"
+            // `CREATE SQL /<path> … OVER /<wire-endpoint>` — the declared sql-resource arm's two
+            // path-preceding nouns (ticket 20260718203326), like `VIEW`/`MAP` above.
+            | "OVER"
             | "REMOVE"
+            | "SQL"
             | "TABLE"
             | "TO"
             | "TRANSFORM"

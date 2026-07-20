@@ -540,18 +540,56 @@ pub fn db_record_consent_with_app(
     scope: &str,
     app: Option<&str>,
 ) -> Result<(), SecretError> {
+    db_record_consent_full(conn, driver, connection, subject, scope, app, None)
+}
+
+/// Record consent plus the OAuth app label AND the bind-time `secret_ref` (`env:`/`vault:`). Both
+/// are selectors — the reference names WHERE the credential lives, never the credential VALUE
+/// (ticket 20260718203325). A `None` `secret_ref` preserves the pre-declaration state (token sealed
+/// out-of-band).
+pub fn db_record_consent_full(
+    conn: &Connection,
+    driver: &str,
+    connection: &str,
+    subject: &str,
+    scope: &str,
+    app: Option<&str>,
+    secret_ref: Option<&str>,
+) -> Result<(), SecretError> {
     conn.execute(
-        "INSERT INTO connection_consent (driver, connection, subject, scope, app) \
-             VALUES (?1, ?2, ?3, ?4, ?5) \
+        "INSERT INTO connection_consent (driver, connection, subject, scope, app, secret_ref) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
          ON CONFLICT(driver, connection) DO UPDATE SET \
              subject = excluded.subject, \
              scope = excluded.scope, \
              app = excluded.app, \
+             secret_ref = excluded.secret_ref, \
              granted_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')",
-        rusqlite::params![driver, connection, subject, scope, app],
+        rusqlite::params![driver, connection, subject, scope, app, secret_ref],
     )
     .map_err(|e| SecretError::Backend(format!("recording consent: {e}")))?;
     Ok(())
+}
+
+/// Resolve the bind-time `secret_ref` (`env:`/`vault:`) recorded for a `(driver, connection)`
+/// consent row, or `None` if none was declared / the row is unreadable. Best-effort +
+/// passphrase-free (a reference is a selector, not a secret) — the bind path consults it lazily so a
+/// declared `CREATE ACCOUNT … SECRET '<ref>'` resolves its credential with no `qfs account add`.
+#[must_use]
+pub fn db_get_consent_secret_ref(
+    conn: &Connection,
+    driver: &str,
+    connection: &str,
+) -> Option<String> {
+    conn.query_row(
+        "SELECT secret_ref FROM connection_consent WHERE driver = ?1 AND connection = ?2",
+        rusqlite::params![driver, connection],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .flatten()
 }
 
 /// Read the recorded consent for `driver`/`connection`, or `None` if no consent was granted /
@@ -1079,12 +1117,17 @@ mod tests {
                 .unwrap();
             rows
         };
+        // `secret_ref` (migration #18, ticket 20260718203325) is a REFERENCE selector — an
+        // `env:`/`vault:` locator resolved at bind time, never credential material — so it is the
+        // one excepted name; every other secret/token/ciphertext/nonce column stays forbidden.
         assert!(
-            !cols.iter().any(|c| c.contains("secret")
-                || c.contains("token")
-                || c.contains("ciphertext")
-                || c.contains("nonce")),
-            "the consent ledger must carry no secret column, got {cols:?}"
+            !cols.iter().any(|c| c != "secret_ref"
+                && (c.contains("secret")
+                    || c.contains("token")
+                    || c.contains("ciphertext")
+                    || c.contains("nonce"))),
+            "the consent ledger must carry no secret VALUE column (secret_ref selector excepted), \
+             got {cols:?}"
         );
     }
 

@@ -1,5 +1,6 @@
 # release-notes
 
+<!-- okf:generated:begin -->
 * [Wire the qfs binary so the docs run true (v0.0.9 → v0.0.12)](work-20260629-110121.md)
 * [Fix the passphrase prompt to key on the controlling terminal etc](work-20260703-022500.md)
 * [Request the OIDC identity scopes in the Google consent etc](work-20260703-055500.md)
@@ -26,3 +27,4 @@
 * [Sample output in the Cloudflare cookbook is now a neutral example](work-20260715-163500.md)
 * [Unify the qfs statement splitter onto the lexer etc](work-20260715-205333.md)
 * [Re-home the declarative tables into the System DB etc](work-20260716-152000.md)
+<!-- okf:generated:end -->

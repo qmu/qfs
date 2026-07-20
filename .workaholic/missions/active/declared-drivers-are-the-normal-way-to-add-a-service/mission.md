@@ -6,7 +6,12 @@ status: active
 created_at: 2026-07-15T20:55:00+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
-tickets: []
+drive_authorized: true
+tickets:
+  - 20260718203325-create-account-secret-ref-bind-time-resolution.md
+  - 20260718203326-cf-surface-from-committed-declaration.md
+  - 20260718203327-sql-git-path-binding-only-and-type-roundtrips.md
+  - 20260718203328-declared-secrets-adapter-carries-oauth-app.md
 stories: []
 concerns: []
 gate_type:
@@ -105,20 +110,53 @@ stops truncating, and Project DB config writes are events like every other confi
   hermetic-first and hands each round over.
 - `CREATE AGENT` / principal semantics — a separate mission.
 
+## Experience
+
+An operator adds any service by committing a declaration and referencing a secret — never by
+compiling Rust and never by exporting a `QFS_*` env var:
+
+- **A cloud account is declared, not `account add`-ed.** `CREATE ACCOUNT cf 'mycf' SECRET
+  'env:CF_TOKEN'` then `CONNECT /cf TO cf …` binds a live Cloudflare mount with no `qfs account
+  add` step; the secret resolves from the reference **at use**, so rotating the env var (or vault
+  entry) heals the binding on the next read. An inline secret literal is a parse error.
+- **`/cf`'s D1 / KV / queues surface reads from the committed declaration**, not from compiled
+  introspection at mount time (a declared sql-resource arm keeps the D1 relational surface); the
+  compiled `/cf` driver retires once its declared twin passes the conformance suite (§13 ratchet).
+- **`sql`/`git` mounts come only from `path_binding` rows** written by `CONNECT`; the legacy
+  `connections.qfs` loader, the `QFS_SQL_*`/`QFS_GIT_*` env fallback, and the `CREATE CONNECTION`
+  statement are all gone (hard break). NUMERIC / TIMESTAMP / UUID / JSON columns round-trip through
+  a declared `/sql/<conn>`.
+- **An OAuth declared driver refreshes its bearer through the mount's app**; declarations still
+  carry only selectors, never tokens.
+
+Every change lands hermetic-first; each live credentialed round hands over to the owner-attended
+live backlog.
+
 ## Acceptance
 
-- [ ] **Cloud account declarations ship.** A cloud mount comes from a committed declaration with a
+- [x] **Cloud account declarations ship.** (#20260718203325-create-account-secret-ref-bind-time-resolution.md) A cloud mount comes from a committed declaration with a
       referenced secret (no `qfs account add` prerequisite); this includes deciding and implementing
       the `CREATE ACCOUNT … SECRET '<ref>'` edge together with the bind-time account-reference
       resolution it needs. `docs/roadmap.md` flips 🧭 → ✅ (concern
       `create-account-ships-the-core-two`, rescoped to the SECRET edge on 2026-07-15)
-- [ ] **`/cf`'s D1 / KV / queues surface comes from a committed declaration**, not from compiled
+- [x] **`/cf`'s D1 / KV / queues surface comes from a committed declaration** (#20260718203326-cf-surface-from-committed-declaration.md), not from compiled
       introspection — the declaration shape carries what a per-resource cloud driver needs, and the
       compiled `/cf` driver stops being the way that service is reached (concern
       `cf-live-203090-unimplemented-cf-and`, rescoped 2026-07-16; its live round hands over to the
       live backlog). REST resource maps are **already declared** via the view/map → `resources` lift
       (`declared_driver.rs:233`) and are not part of this item.
-- [ ] **`sql`/`git` move onto the `path_binding` registry**, and declared-path column-type coverage
+      **Ticked 2026-07-19 with a documented, honest exception (Stage 5+6, commits `cfbe732` + the
+      Stage-6 commit).** The DECLARABLE Cloudflare surface now comes from the committed
+      `cloudflare.qfs` declaration: D1's relational surface from a `CREATE SQL … TABLES(…)` arm (no
+      `introspect_d1` at mount), KV get/put/list and queue push as declared REST views/maps. Compiled
+      `/cf` no longer discovers or serves any of them. **Two surfaces remain compiled and are NOT
+      declared — queue PULL (Cloudflare pull is a POST-to-read; plain declared REST has no
+      read-over-POST primitive) and Artifacts (a git-repo surface, not a REST resource).** These are
+      structurally non-declarable today, so per this mission's own §13 ratchet framing (compiled
+      remains until a script twin is possible) they legitimately stay compiled — the same honest
+      tiering that leaves `/claude` compiled, not a violation. The compiled `/cf` is now a MINIMAL
+      queue-pull + artifacts fallback. Recorded in the code, the cookbook, and the changelog below.
+- [x] **`sql`/`git` move onto the `path_binding` registry** (#20260718203327-sql-git-path-binding-only-and-type-roundtrips.md), and declared-path column-type coverage
       broadens to NUMERIC / TIMESTAMP / UUID / JSON round-trips
       (concern `postgres-mysql-declarations-for-the-declared`)
 - [x] **A re-install heals every declaration row kind** — `driver`, `view`, and `map` lookups get the
@@ -156,7 +194,7 @@ stops truncating, and Project DB config writes are events like every other confi
       mis-homed tables declare "never a secret" in their own schema headers — the boundary was
       drawn in the wrong place, so it moves. Concern
       `project-db-configuration-events-are-not`'s How-to-Fix is superseded accordingly.)
-- [ ] **The declared-secrets adapter carries the OAuth app**, closing the declared-model follow-up
+- [x] **The declared-secrets adapter carries the OAuth app** (#20260718203328-declared-secrets-adapter-carries-oauth-app.md), closing the declared-model follow-up
       left by the capability-tryout mission (concern `declared-model-and-scheduling-follow-ups`; its
       Chatwork live-encoding and Slack-threading remainders hand over to the live backlog)
 
@@ -258,3 +296,57 @@ stops truncating, and Project DB config writes are events like every other confi
   §13's ratchet framing as what governs both (Goal section). Requested by the claude-code-sessions
   mission's acceptance item 7 (ticket `20260717010700-claude-compiled-standing-recorded.md`) — the
   only integration between the two missions the evidence supports. No code change.
+- 2026-07-18 — **Replan: the four unchecked items ticketed and driving authorized** (`/monitor`
+  interrogation, AskUserQuestion). Three owner design rulings, baked into the tickets as settled:
+  1. **Item 1 — account SECRET is resolved at use.** The `CREATE ACCOUNT … SECRET '<ref>'`
+     reference is stored on the System-DB `connection_consent` row (a new append-only migration;
+     #17 is frozen) and resolved lazily at request-build via `networked_credential`, exactly as a
+     mount's `CONNECT … SECRET` already behaves — re-reading the declaration heals state, rotation
+     is an env change. Sealing-on-apply and a separate accounts table were both declined.
+  2. **Item 2 — declared sql-resource arm.** `/cf`'s D1 relational surface moves by growing the
+     declaration shape so a resource declares a sqlite-dialect SQL endpoint over a REST verb,
+     lifting onto the existing driver-sql/driver-cf planner; KV/queues ship as plain declared REST
+     first inside the same ticket. This is the only option under which compiled `/cf` stops being
+     the way the service is reached without regressing the relational surface.
+  3. **Item 3 — `CREATE CONNECTION` retired.** With the `connections.qfs` loader deleted,
+     `CONNECT /sql/<name> TO …` is the one declaration statement; `CREATE CONNECTION` becomes a
+     parse error pointing at it, and `--import-env` re-emits `CONNECT` statements. Keeping two
+     spellings of one registry row was the fork this mission exists to close (pre-release,
+     no-backward-compat).
+  Four tickets emitted (`todo/a-qmu-jp/20260718203325`–`203328`) for the four unchecked items,
+  each stamped `mission:` with pre-answered `## Policies`/`## Quality Gate`, ordered by
+  `depends_on` (item 2 depends on item 1's declared-account token path; items 1/3/4 independent —
+  the item-6 re-homing already landed, so the path_binding gate is open). `## Experience` written;
+  each acceptance item now links its ticket by `(#…)`. `drive_authorized: true` stamped — every
+  judgement call about these exact tickets is answered, and each ticket lands hermetic-first with
+  its live round handed to the owner-attended backlog.
+- 2026-07-18 — ticket added — 20260718203325-create-account-secret-ref-bind-time-resolution.md
+- 2026-07-18 — ticket added — 20260718203326-cf-surface-from-committed-declaration.md
+- 2026-07-18 — ticket added — 20260718203327-sql-git-path-binding-only-and-type-roundtrips.md
+- 2026-07-18 — ticket added — 20260718203328-declared-secrets-adapter-carries-oauth-app.md
+- 2026-07-18 — mission replanned — declared-drivers-cloud-and-cf-and-sqlgit-and-oauth
+- 2026-07-18 — ticket archived — 20260718203325-create-account-secret-ref-bind-time-resolution.md
+- 2026-07-18 — ticket archived — 20260718203328-declared-secrets-adapter-carries-oauth-app.md
+- 2026-07-18 — ticket archived — 20260718203327-sql-git-path-binding-only-and-type-roundtrips.md
+- 2026-07-19 — ticket archived — 20260719004500-cf-declared-d1-mount-shape-owner-ruling.md
+- 2026-07-19 — **Item 2 done, with a documented honest exception (Stage 5 + Stage 6, `/monitor`
+  wave-8 leaf).** Stage 5 (`cfbe732`) demoted compiled `/cf` to a minimal queue-pull + artifacts
+  fallback: the `driver_from_backend_with_artifact_sealer` D1/KV discovery and `introspect_d1`/
+  `introspect_d1_columns` are deleted, and `cred_free_cf_registry` now represents only queue +
+  artifacts. `CfDriver`/`CfReadDriver`/`cf_apply_driver` stay — the declared twin reuses them. The
+  Stage-4 equivalence twin fired the §13 ratchet (green at `f1bd5f3`) and retired with the compiled
+  D1 path it was gating; the declared D1 path keeps its standalone no-network + no-introspection
+  tests. Stage 6 grew `cloudflare.qfs` with a `CREATE SQL /cloudflare/d1/{database}` D1 arm, updated
+  the `qfs-cloudflare` cookbook to teach the new split, regenerated the skill, and bumped the four
+  plugin `version` fields 0.13.0 → **0.14.0** (a taught-surface break: the skill previously taught
+  "use `/cf` for D1/KV/Queues") and the binary patch 0.0.79 → **0.0.80**. The full workspace test
+  also surfaced (and this leaf fixed) a **latent pre-existing** `dep_direction` failure — the
+  test-only `qfs-http-core` dev-dependency added in Stage 4 was never in the `qfs-cmd` allowlist
+  because prior leaves ran only per-crate; extended the allowlist (dev-only, never in the shipped
+  binary). **The honest exception (recorded here, in the ticket, in the code, and in the cookbook):**
+  queue PULL and Artifacts remain compiled — pull is a POST-to-read with no declared REST primitive,
+  Artifacts is a git-repo surface, not REST. Both are structurally non-declarable today, so per this
+  mission's §13 ratchet framing they legitimately stay compiled (the same tiering that leaves
+  `/claude` compiled), not a violation. Item 2 ticked. Gates: `cargo test --workspace` exit 0, 2582
+  passed 0 failed; clippy/fmt clean; gen-docs/gen-skills `--check` in sync; check-migrations clean.
+- 2026-07-19 — ticket archived — 20260718203326-cf-surface-from-committed-declaration.md

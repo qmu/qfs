@@ -789,44 +789,22 @@ fn ddl_endpoint_as_query() {
 }
 
 #[test]
-fn ddl_connection_driver_at_and_secret() {
-    // The headline form: a postgres connection pointing at a URL, with a SECRET *reference*.
-    let stmt = parse_ok(
+fn create_connection_is_retired_and_points_at_connect() {
+    // `CREATE CONNECTION` is retired (the "declared drivers are the normal way" mission): the sole
+    // declaration statement is `CONNECT /<family>/<name> TO <driver> …`, persisted in the
+    // `path_binding` registry. Every old form now parse-errors, and the message steers the author to
+    // `CONNECT` so a stale `connections.qfs` line fails loudly with a migration hint.
+    for src in [
         "CREATE CONNECTION analytics DRIVER postgres AT 'postgres://db/analytics' SECRET 'env:PG_PASSWORD'",
-    );
-    let Statement::Ddl(d) = stmt else {
-        panic!("expected Ddl")
-    };
-    assert_eq!(d.kind, DdlKind::Connection);
-    assert_eq!(d.name, "analytics");
-    assert_eq!(d.target, vec!["server", "connections", "analytics"]);
-    let c = d.connection.as_deref().expect("connection clauses");
-    assert_eq!(c.driver.as_deref(), Some("postgres"));
-    assert_eq!(c.at_locator.as_deref(), Some("postgres://db/analytics"));
-    assert_eq!(c.secret_ref.as_deref(), Some("env:PG_PASSWORD"));
-}
-
-#[test]
-fn ddl_connection_local_needs_no_secret() {
-    // A local SQLite file: a locator, no secret.
-    let stmt = parse_ok("CREATE CONNECTION orders DRIVER sqlite AT '/data/orders.db'");
-    let Statement::Ddl(d) = stmt else { panic!() };
-    assert_eq!(d.kind, DdlKind::Connection);
-    let c = d.connection.as_deref().expect("connection clauses");
-    assert_eq!(c.driver.as_deref(), Some("sqlite"));
-    assert_eq!(c.at_locator.as_deref(), Some("/data/orders.db"));
-    assert!(c.secret_ref.is_none());
-}
-
-#[test]
-fn ddl_connection_gmail_needs_no_locator() {
-    // Gmail's locator is implicit: a SECRET reference, no AT.
-    let stmt = parse_ok("CREATE CONNECTION work DRIVER gmail SECRET 'vault:gmail/work'");
-    let Statement::Ddl(d) = stmt else { panic!() };
-    let c = d.connection.as_deref().expect("connection clauses");
-    assert_eq!(c.driver.as_deref(), Some("gmail"));
-    assert!(c.at_locator.is_none());
-    assert_eq!(c.secret_ref.as_deref(), Some("vault:gmail/work"));
+        "CREATE CONNECTION orders DRIVER sqlite AT '/data/orders.db'",
+        "CREATE CONNECTION work DRIVER gmail SECRET 'vault:gmail/work'",
+    ] {
+        let err = parse_err(src);
+        assert!(
+            err.message.contains("CREATE CONNECTION is retired") && err.message.contains("CONNECT"),
+            "expected a retired-CONNECTION pointer for `{src}`, got: {err}"
+        );
+    }
 }
 
 // ---- CONNECT / DISCONNECT — defined-path bindings (EPIC 20260701100000) -----
@@ -988,6 +966,41 @@ fn create_account_needs_provider_and_label() {
     // `account` is NOT a frozen keyword — it is a contextual ident (asserted above), so the verb is
     // additive: `CREATE ACCOUNT …` parses without reserving a new keyword.
     assert!(!KEYWORDS.contains(&"account"));
+}
+
+#[test]
+fn create_account_carries_a_secret_reference() {
+    // 20260718203325: an optional `SECRET '<ref>'` rides as the `secret_ref` selector column of the
+    // desugared `/sys/accounts` row — a reference resolved at USE, never an inline token.
+    let e = effect_of(parse_ok("CREATE ACCOUNT cf 'mycf' SECRET 'env:CF_TOKEN'"));
+    assert_eq!(target_path(&e), "/sys/accounts");
+    assert_eq!(values_cell(&e, "provider").as_deref(), Some("cf"));
+    assert_eq!(values_cell(&e, "account").as_deref(), Some("mycf"));
+    assert_eq!(
+        values_cell(&e, "secret_ref").as_deref(),
+        Some("env:CF_TOKEN")
+    );
+
+    // APP and SECRET are order-independent, mirroring CONNECT's clause loop.
+    let e = effect_of(parse_ok(
+        "CREATE ACCOUNT cf 'mycf' SECRET 'vault:cf/mycf' APP 'client'",
+    ));
+    assert_eq!(
+        values_cell(&e, "secret_ref").as_deref(),
+        Some("vault:cf/mycf")
+    );
+    assert_eq!(values_cell(&e, "app").as_deref(), Some("client"));
+
+    // Absent the clause, `secret_ref` is NULL (the token stays sealed out-of-band).
+    let e = effect_of(parse_ok("CREATE ACCOUNT github 'work'"));
+    assert_eq!(values_cell(&e, "secret_ref"), None);
+}
+
+#[test]
+fn create_account_rejects_an_inline_secret() {
+    // References only (`env:`/`vault:`): an inline non-reference secret is a PARSE error, never
+    // material sealed into the statement text.
+    assert!(parse_statement("CREATE ACCOUNT cf 'mycf' SECRET 'hunter2'").is_err());
 }
 
 // ---- §13 declared drivers — CREATE DRIVER / TYPE / declared VIEW / MAP -------
@@ -1261,6 +1274,53 @@ fn create_map_call_signature_and_irreversible() {
 }
 
 #[test]
+fn create_sql_resource_desugars_with_dialect_endpoint_and_table_catalog() {
+    // ticket 20260718203326: the declared sql-resource arm — a sqlite-dialect SQL endpoint over a
+    // wire query verb, with the relation catalog declared INLINE. Desugars to a `kind='sql'`
+    // /sys/drivers row whose `body` carries the dialect, the `/http/<driver>/…` query endpoint, and
+    // the table catalog (the declared twin of a mount-time D1 introspection).
+    let e = effect_of(parse_ok(
+        "CREATE SQL /cloudflare/d1/{database} \
+         OVER /http/cloudflare/accounts/{account}/d1/database/{database}/query \
+         TABLES ( users ( id text PRIMARY KEY, email text NOT NULL, name text ), \
+                  orders ( id text PRIMARY KEY, total int ) )",
+    ));
+    assert_eq!(target_path(&e), "/sys/drivers");
+    assert_eq!(values_cell(&e, "kind").as_deref(), Some("sql"));
+    assert_eq!(
+        values_cell(&e, "name").as_deref(),
+        Some("/cloudflare/d1/{database}")
+    );
+    let body = values_cell(&e, "body").unwrap();
+    assert!(body.contains("\"dialect\":\"sqlite\""), "body: {body}");
+    assert!(
+        body.contains("/http/cloudflare/accounts/{account}/d1/database/{database}/query"),
+        "body carries the query endpoint: {body}"
+    );
+    assert!(body.contains("users") && body.contains("orders") && body.contains("email"));
+    // No secret and no irreversible flag: a declared sql-resource is credential-free by construction.
+    assert!(!values_bool(&e, "irreversible"));
+}
+
+#[test]
+fn create_sql_resource_defaults_dialect_and_rejects_a_non_sqlite_dialect() {
+    // DIALECT is optional (default sqlite). Only sqlite is served today (the driver-cf planner
+    // dialect); any other dialect is a crisp parse error, never a silent mismatch.
+    assert!(
+        parse_statement("CREATE SQL /cf/d1/{db} OVER /http/cf/query TABLES ( t ( id text ) )")
+            .is_ok()
+    );
+    assert!(parse_statement(
+        "CREATE SQL /cf/d1/{db} DIALECT SQLITE OVER /http/cf/query TABLES ( t ( id text ) )"
+    )
+    .is_ok());
+    assert!(parse_statement(
+        "CREATE SQL /cf/d1/{db} DIALECT postgres OVER /http/cf/query TABLES ( t ( id text ) )"
+    )
+    .is_err());
+}
+
+#[test]
 fn server_binding_view_with_bare_ident_still_parses_as_ddl() {
     // Dispatch regression + PRINCIPLE (§5.5): the two `CREATE VIEW` forms are told apart by what KIND
     // of thing the view's OWN name denotes. A PATH name (`CREATE VIEW /chatwork/rooms`) is a
@@ -1307,6 +1367,10 @@ fn declared_driver_nouns_add_no_frozen_keyword() {
         "next",
         "param",
         "max",
+        "sql",
+        "over",
+        "tables",
+        "dialect",
     ] {
         assert!(
             !KEYWORDS.contains(&w),

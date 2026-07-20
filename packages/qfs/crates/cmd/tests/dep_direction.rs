@@ -413,6 +413,14 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // not yet socket-wired). It is a pure leaf consumed only by this terminal binary (asserted by
         // `tunnel_is_a_pure_protocol_leaf` below), so the edge adds no runtime/driver coupling.
         "qfs-tunnel",
+        // ticket 20260718203326 (declared /cloudflare/d1 twin, §13 self-hosting ratchet): a
+        // TEST-ONLY dev-dependency. The declared D1 conformance test in `crates/qfs/src/cf.rs`
+        // (`declared_d1_read_over_injected_mock_exchange_does_no_network`) injects a socket-free
+        // `qfs_driver_cf::MockExchange` through the read/apply-facet backend builder to prove the
+        // declared read runs with NO network; scripting the mock names the `qfs_http_core::HttpResponse`
+        // DTO. It rides `[dev-dependencies]` ONLY — it is never linked into the shipped binary (the
+        // binary reaches the transport through qfs-driver-cf), so the thin-entrypoint invariant holds.
+        "qfs-http-core",
     ];
     let workspace_prefixed: Vec<&String> =
         bin_deps.iter().filter(|d| d.starts_with("qfs")).collect();

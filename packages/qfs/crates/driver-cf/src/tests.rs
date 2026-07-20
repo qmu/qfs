@@ -26,8 +26,8 @@ use qfs_http_core::{HttpMethod, HttpResponse};
 use qfs_secrets::Secret;
 
 use crate::backend::{
-    ArtifactRepo, ArtifactRepoKey, ArtifactTokenSealer, CfBackend, HttpApiBackend, KvEntry,
-    MockCfBackend, MockExchange, NoopArtifactTokenSealer, QueueMsg, RecordedCall,
+    ArtifactRepo, ArtifactRepoKey, ArtifactTokenSealer, CfBackend, D1DatabaseUuid, HttpApiBackend,
+    KvEntry, MockCfBackend, MockExchange, NoopArtifactTokenSealer, QueueMsg, RecordedCall,
 };
 use crate::registry::{CfRegistry, D1Database};
 use crate::{artifacts_repos_schema, cf_apply_driver, CfDriver, CfError, CfNode};
@@ -103,6 +103,56 @@ fn registry_with_artifacts(
 
 fn driver_with(backend: Arc<MockCfBackend>) -> CfDriver {
     CfDriver::new(registry_with(backend))
+}
+
+/// Stage 2a (ticket 20260718203326): the wildcard-D1 `CfRegistry` template that the declared
+/// `/cloudflare/d1/{database}` nested mount resolves against — WITHOUT any mount-time
+/// `list_d1_databases`/`introspect_d1`. A single template (backend + declared catalog, uuid=None)
+/// answers an arbitrary `{database}` key, the queried segment IS the Cloudflare api id, and the
+/// declared catalog is served with zero backend I/O. Proves the no-introspection resolution the
+/// declared twin needs (shape-independent; forced by the no-introspection model).
+#[test]
+fn wildcard_d1_template_resolves_any_database_key_without_introspection() {
+    let backend = Arc::new(MockCfBackend::new());
+    let registry =
+        CfRegistry::new().with_d1_template(D1Database::new(backend.clone(), users_catalog()));
+
+    // Any db key is available (the capability gate reads this), and resolves to the template.
+    assert!(registry.has_d1("anything"));
+    let handle = registry
+        .d1("some-declared-db")
+        .expect("the wildcard template answers any db key");
+    // The addressed `{database}` segment IS the api id: uuid is None, so it falls back to the name.
+    assert_eq!(
+        handle.api_database_id("some-declared-db"),
+        "some-declared-db"
+    );
+    // The DECLARED catalog is served with no I/O (the `users` table came from the declaration).
+    assert!(handle.catalog().table("users").is_some());
+    // Resolving a handle performs ZERO backend introspection — it is a pure in-memory lookup.
+    assert!(
+        backend.recorded().is_empty(),
+        "template resolution performs no introspection I/O"
+    );
+
+    // An explicit (discovered) registration still wins over the template for its own key...
+    let registry = registry.with_d1(
+        "prod",
+        D1Database::discovered(
+            backend.clone(),
+            D1DatabaseUuid::new("uuid-prod"),
+            users_catalog(),
+        ),
+    );
+    assert_eq!(
+        registry.d1("prod").unwrap().api_database_id("prod"),
+        "uuid-prod"
+    );
+    // ...while any other key still falls through to the wildcard template.
+    assert_eq!(
+        registry.d1("other").unwrap().api_database_id("other"),
+        "other"
+    );
 }
 
 /// A single-row RowBatch over the given (name, type, value) triples.
