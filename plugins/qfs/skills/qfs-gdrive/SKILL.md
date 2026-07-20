@@ -107,6 +107,29 @@ of any node. Blob verbs are the same everywhere: `SELECT` to list/read, `UPSERT`
 to trash. (In the [interactive shell](/guide/shell) the familiar `ls`/`cp`/`mv`/`rm` are shorthand
 for these same verbs.)
 
+### Names with spaces, `?`, and other reserved characters
+
+Real Drive names carry spaces, `?`, `#`, `&`, parentheses. **Quote the segment** to address such a
+file directly — inside quotes every character is literal:
+
+```qfs
+/drive/my/Reports/'Q3 budget (final)?.xlsx'
+```
+
+Escape a quote in a name by doubling it (`'it''s here.txt'`). Quoting also turns off globbing, which
+is what makes a `?` addressable at all: `/drive/my/'report?.pdf'` is the **one** file whose name
+contains a `?`, while unquoted `/drive/my/report?.pdf` is still a glob pattern. A `/` can never
+appear inside a quoted segment — the separator is structural.
+
+Prefer this single-file spelling over a `where name == …` filter when you mean one specific file:
+it says exactly what you mean, and it is the safer form for irreversible verbs like `remove`.
+
+Drive also stores a name in whatever Unicode normalization form the uploading client used (macOS
+uploads decomposed/NFD), so a name pasted from a listing may not be byte-identical to the stored
+one. qfs absorbs that difference — a path resolves to a canonically equivalent name — so you can
+paste a listed name and have it work. If a folder genuinely holds both spellings of one name, the
+address is refused as `ambiguous_target` rather than guessing.
+
 ## Browse
 
 **List the two corpora** at the root:
@@ -233,6 +256,13 @@ PREVIEW: 1 effect(s)
 The `(!)` marks the irreversible gate: a one-shot needs `--commit --commit-irreversible` to apply it.
 The `where name == …` trashes **only the matching child** under the addressed folder — a name that
 matches nothing refuses (`not_found`), and two same-named children refuse as `ambiguous_target`.
+
+When you know the file, prefer addressing it directly — quote the segment if the name carries
+spaces or `?`:
+
+```qfs
+remove /drive/my/'Q3 budget (final)?.xlsx'
+```
 
 A **folder** is never trashed through a name path (fail-closed: a folder-path `remove` is refused
 so a filter mishap can never widen to the folder's whole subtree). To deliberately trash a folder

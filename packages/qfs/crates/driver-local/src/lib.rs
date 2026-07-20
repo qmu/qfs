@@ -142,10 +142,11 @@ impl Driver for LocalFsDriver {
         // null. Advertising `content` here is what lets `|> select content |> transform …` and the
         // cookbook PDF-extraction recipe type-check at PLAN time — previously `content` was runtime-
         // only, so the taught pipeline failed `UnknownColumn`/`TransformInputMissing` (round-5 defect).
-        Ok(NodeDesc::new(
-            Archetype::BlobNamespace,
-            LocalRow::content_schema(),
-        ))
+        // 番地の鍵の宣言: a row's `name` is the containment segment itself.
+        Ok(
+            NodeDesc::new(Archetype::BlobNamespace, LocalRow::content_schema())
+                .child_entry_name("name"),
+        )
     }
 
     fn capabilities(&self, _path: &Path) -> Capabilities {

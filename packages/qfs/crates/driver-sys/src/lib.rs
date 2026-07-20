@@ -125,7 +125,15 @@ impl Driver for SysDriver {
         } else {
             Archetype::RelationalTable
         };
-        Ok(NodeDesc::new(archetype, sys_node_schema(node)))
+        let desc = NodeDesc::new(archetype, sys_node_schema(node));
+        // 番地の鍵の宣言: a `/sys/paths` row is selected by its `path` value
+        // (`/sys/paths/@%2Fmail%2FINBOX` — the value percent-encoded). The other admin
+        // tables and the audit tail declare no child.
+        let desc = match node {
+            SysNode::Paths => desc.child_key(["path"]),
+            _ => desc,
+        };
+        Ok(desc)
     }
 
     fn capabilities(&self, path: &Path) -> Capabilities {
@@ -200,6 +208,23 @@ mod tests {
 
         // An unknown /sys segment is not describable (no panic).
         assert!(d.describe(&Path::new("/sys/nope")).is_err());
+    }
+
+    /// 番地の鍵の宣言: `/sys/paths` rows are selected by their `path` value
+    /// (`/sys/paths/@%2Fmail`), and `/sys/users` by `id`; the audit log declares no child.
+    #[test]
+    fn describe_declares_child_addresses_for_sys_tables() {
+        let d = SysDriver::new();
+        assert_eq!(
+            d.describe(&Path::new("/sys/paths")).unwrap().child_address,
+            qfs_driver::ChildAddress::Key {
+                columns: vec!["path".to_string()]
+            }
+        );
+        assert_eq!(
+            d.describe(&Path::new("/sys/audit")).unwrap().child_address,
+            qfs_driver::ChildAddress::None
+        );
     }
 
     /// The redaction contract is structural: `/sys/connections` declares ONLY name/metadata

@@ -25,6 +25,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Unicode canonical normalization (NFC/NFD). Used by name-addressed drivers whose service stores
+# names in a normalization form the operator's terminal does not reproduce (Drive stores NFD from
+# macOS clients; a pasted listing name arrives NFC), so a path segment resolves canonically rather
+# than by raw bytes. Pure tables, no I/O — wasm-clean.
+unicode-normalization = "0.1"
 # Async runtime + combinators for the effect interpreter. tokio/futures are deliberately
 # CONFINED to qfs-runtime (only that crate opts in) so qfs-plan's purity dep-closure test
 # (which forbids tokio/async runtimes) stays green — the effect substrate stays I/O-free.

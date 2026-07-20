@@ -999,6 +999,66 @@ fn multi_row_folder_upsert_replaces_existing_and_creates_new_per_row() {
 }
 
 #[test]
+fn a_name_with_a_question_mark_and_spaces_is_addressable_as_a_single_file_path() {
+    // Ticket 20260717120200 — the DRIVER half of the chain. The parser half
+    // (`quoted_path_segment_addresses_a_single_file_remove`) proves that
+    // `remove /drive/my/'Q3 budget?.xlsx'` renders to exactly the raw path used here; this proves
+    // the driver then reads and trashes that one file. Together they close the loop the incident
+    // could not walk: the safe single-file spelling is now writable AND it resolves.
+    const NAME: &str = "Q3 budget (final)?.xlsx";
+    let path = format!("/drive/my/{NAME}");
+    let file = FileMeta::for_test("q3", NAME, "text/plain", vec!["root".to_string()]);
+
+    // READ: the single-file path resolves and downloads the bytes.
+    let client = MockDriveClient::new()
+        .with_list_page(FilePage {
+            files: vec![file.clone()],
+            next_page_token: None,
+        })
+        .with_download("q3", b"budget\n".to_vec());
+    let batch = read_rows(&client, &path, None).unwrap();
+    assert_eq!(batch.rows.len(), 1);
+    let content_idx = batch
+        .schema
+        .columns
+        .iter()
+        .position(|c| c.name.as_str() == "content")
+        .expect("content column");
+    assert_eq!(
+        batch.rows[0].values[content_idx],
+        Value::Bytes(b"budget\n".to_vec())
+    );
+    // The name reached Drive verbatim: the `?` is a character of the name, neither a glob nor a
+    // `?query=` suffix, and the spaces did not truncate it.
+    let queries: Vec<String> = client
+        .recorded()
+        .iter()
+        .filter_map(|c| match c {
+            RecordedCall::ListFiles { query, .. } => Some(query.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        queries[0].contains(&format!("name = '{NAME}'")),
+        "the reserved characters survive into the lookup, got: {}",
+        queries[0]
+    );
+
+    // REMOVE: the same path trashes exactly that file. It resolves to a FILE, so the fail-closed
+    // folder guard (ticket 20260717102000) correctly does not fire.
+    let client = MockDriveClient::new().with_list_page(FilePage {
+        files: vec![file],
+        next_page_token: None,
+    });
+    let resolver = crate::read::ClientResolver { client: &client };
+    let node = EffectNode::new(NodeId(0), EffectKind::Remove, target(&path));
+    match DriveEffect::from_node_with(&node, &resolver).unwrap() {
+        DriveEffect::Trash { id } => assert_eq!(id, "q3", "only the addressed file is trashed"),
+        other => panic!("expected Trash of the one matched file, got {other:?}"),
+    }
+}
+
+#[test]
 fn remove_defaults_to_trash_not_permanent_delete() {
     let node = EffectNode::new(NodeId(0), EffectKind::Remove, target("id:f1"));
     assert!(node.irreversible, "REMOVE is inherently irreversible");
@@ -1701,4 +1761,23 @@ async fn multi_row_remove_fails_closed() {
         "multi-row REMOVE is refused: {err:?}"
     );
     assert!(mock.recorded().is_empty(), "nothing was trashed");
+}
+
+#[test]
+fn describe_declares_entry_name_as_the_child_address() {
+    // 番地の鍵の宣言: a Drive row's `name` IS the containment segment (`/drive/my/<name>`).
+    // Measured 2026-07-18: rows carry `id`/`name`/`parents` and NO `path` column — the
+    // truthful child declaration is the entry name, never a promised `path`.
+    let (d, _) = driver_with_mock();
+    let desc = d.describe(&Path::new("/drive/my/reports")).unwrap();
+    assert_eq!(
+        desc.child_address,
+        qfs_driver::ChildAddress::EntryName {
+            column: "name".to_string()
+        }
+    );
+    assert!(
+        desc.schema.column("path").is_none(),
+        "no `path` column exists — describe must not imply one"
+    );
 }

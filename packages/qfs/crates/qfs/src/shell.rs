@@ -107,8 +107,16 @@ pub fn run_interactive_shell() -> i32 {
     use std::io::BufReader;
     // The local mount root is the process cwd (a sandbox boundary). A missing cwd falls back to
     // `.`, which the sandbox canonicalises; the shell never escapes it.
+    //
+    // This ONE root is threaded into every face of the session — the plan mount, the read facet,
+    // and the commit applier below — because they must agree: the interactive `/local` is
+    // cwd-rooted on all of them. (One-shot `qfs run` and JOBs are `/`-rooted on all of theirs;
+    // see `run_engine_and_reads` and `commit::apply_plan`.) The sandbox boundary this comment
+    // claims is only real while the applier honours the same root: the commit leg used to
+    // hardcode `/`, so a preview that resolved under the cwd committed against the filesystem
+    // root.
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let (mut engine, reads) = local_engine_and_reads(root);
+    let (mut engine, reads) = local_engine_and_reads(root.clone());
     // Parity with the one-shot `qfs run` path: mount every CONNECTed cloud/sql/git/declared surface
     // and `/sys`, so a documented `cp /local/x /drive/y` resolves `/drive` to a canonical write node
     // (not an unrouted literal that historically committed a zero-byte Drive upload). `/local` stays
@@ -116,14 +124,26 @@ pub fn run_interactive_shell() -> i32 {
     let reads = register_cloud_and_sys_mounts(&mut engine, reads);
     let start = VfsPath::root("local");
 
+    // The commit leg, rooted at the SAME cwd the mount and read facet use above.
+    let apply = local_apply_hook(root);
+
     let stdin = std::io::stdin();
     let mut input = BufReader::new(stdin.lock());
     let mut out = std::io::stdout();
-    if let Err(e) = run_repl(&engine, &reads, start, &mut input, &mut out) {
+    if let Err(e) = run_repl(&engine, &reads, start, &apply, &mut input, &mut out) {
         // A broken stdout pipe is not a domain error; surface it without a panic.
         let _ = writeln!(std::io::stderr(), "shell io error: {e}");
     }
     0
+}
+
+/// The session's commit leg, resolving `/local/<p>` under `root` — the same root its caller
+/// passed to [`local_engine_and_reads`].
+///
+/// This exists as a named seam so the shell's commit face and its test can be built from ONE
+/// definition: the divergence this closes was two callers each choosing their own literal.
+fn local_apply_hook(root: PathBuf) -> impl Fn(&qfs_core::Plan) -> Result<(), qfs_exec::ExecError> {
+    move |plan: &qfs_core::Plan| crate::commit::apply_plan_rooted(plan, &root)
 }
 
 /// Build a read registry with the local mount's read facet registered under the `local` driver
@@ -678,10 +698,14 @@ fn render(outcome: &Outcome, out: &mut dyn Write) -> std::io::Result<()> {
 ///
 /// A bare `COMMIT` on its own line is the typed confirmation that applies the **previous**
 /// previewed effect line (the safety gate). Any other line is evaluated PREVIEW-by-default.
+///
+/// `apply` is the session's commit leg, injected by the launch context so its `/local` root is
+/// the caller's rather than a literal chosen here.
 fn run_repl(
     engine: &Engine,
     reads: &ReadRegistry,
     start: VfsPath,
+    apply: &qfs_exec::WorldApply,
     input: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> std::io::Result<()> {
@@ -690,7 +714,7 @@ fn run_repl(
         reads,
         start,
         history_path(),
-        Some(&crate::commit::apply_plan),
+        Some(apply),
         input,
         out,
     )
@@ -852,6 +876,65 @@ mod tests {
         std::fs::write(dir.path().join("sub").join("c.md"), b"gamma").unwrap();
         let (engine, reads) = local_engine_and_reads(dir.path().to_path_buf());
         (dir, engine, reads)
+    }
+
+    /// Run a scripted session through the REAL commit leg rooted at `root`, returning the
+    /// transcript. Mirrors `run_interactive_shell`'s wiring (same `local_apply_hook`), so the
+    /// commit face this exercises is the one the shell actually launches.
+    fn run_script_committing(
+        engine: &Engine,
+        reads: &ReadRegistry,
+        root: &std::path::Path,
+        script: &str,
+    ) -> String {
+        let apply = local_apply_hook(root.to_path_buf());
+        let mut input = Cursor::new(script.as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        run_repl_with_history_and_apply(
+            engine,
+            reads,
+            VfsPath::root("local"),
+            None,
+            Some(&apply),
+            &mut input,
+            &mut out,
+        )
+        .expect("repl runs");
+        String::from_utf8(out).expect("utf8 transcript")
+    }
+
+    /// An interactive UPSERT commits under the SESSION's cwd — the root its preview resolved
+    /// against — and never against the filesystem root.
+    ///
+    /// The commit applier used to hardcode `LocalFsDriver::new("/")` while the shell rooted its
+    /// mount and read facet at the process cwd, so `/local/out.txt` previewed as `<cwd>/out.txt`
+    /// and committed to `/out.txt`: a mis-targeted write, surfacing only as a PermissionDenied
+    /// for an unprivileged user and landing silently at `/` for a privileged one.
+    ///
+    /// The root here is always a tempdir, so the assertion can never depend on `/` being
+    /// unwritable — the `/out.txt` check below is a read-only witness, not the mechanism.
+    #[test]
+    fn repl_commit_targets_the_session_root_not_the_filesystem_root() {
+        let (dir, engine, reads) = fixture();
+        let transcript = run_script_committing(
+            &engine,
+            &reads,
+            dir.path(),
+            "upsert into /local/out.txt values ('hi')\nCOMMIT\n",
+        );
+
+        assert!(transcript.contains("COMMITTED"), "committed: {transcript}");
+        // The preview and the commit name the same host path: the file is under the session root.
+        let landed = dir.path().join("out.txt");
+        assert!(
+            landed.is_file(),
+            "write lands under the session root: {transcript}"
+        );
+        // ...and nothing was aimed at the filesystem root.
+        assert!(
+            !std::path::Path::new("/out.txt").exists(),
+            "an interactive commit must never target the filesystem root"
+        );
     }
 
     /// Run a scripted session and return the captured transcript.
