@@ -1170,7 +1170,9 @@ node's key columns, and effect positions refuse an unlowered selection (a red te
 "one containment path segment = one column." The owner reconsiders: the column axis is closer to
 the semantics as **the stages of a complete query pipeline, `where` included** — a column is a
 pipeline stage, not merely a path segment. Concrete anchor: in the plggmatic reference exhibit,
-the Clients / Projects **search-condition form is a `where` stage** rendered as a column.
+the Clients / Projects **search-condition form is a `where` stage** rendered as a column. The full
+design space this opened — linear-vs-structure, the intension/extension weld, actors vs viewports,
+and the split primitive — is mapped in §14c *(open; nothing settled)*.
 
 This is a generalisation of the shipped seam, not a rebuild — `@` already lowers to `where`, so
 the lowering target is unchanged. What widens is the segment's expressive range: from "select one
@@ -1244,6 +1246,131 @@ repository. The remaining qfs-design sections — the closure/key/relation model
 markdown collection path (§13b), and the subject model (§8) — are now migrated here; the plan book
 keeps pointers plus the qmu.app-level product vision: the managed service, on-demand UI generation,
 and plggmatic's rendering engine.)*
+
+## 14c. The viewer, reconsidered — the design space *(open; nothing settled, 2026-07)*
+
+§14b describes the *shipped* address strip and flags its column model as under reconsideration.
+This section is that reconsideration written out: a map of the requirements raised, from several
+viewpoints, and of how each can be reasoned about — **not a decision**. It exists so a later ruling
+is made against a full picture rather than the first framing. Every claim below is a candidate.
+
+**The starting tension: a linear strip vs the real structure.** The shipped viewer renders an
+address as a left-to-right Miller-column strip — column `i` is the resolution of address prefix
+`i`. But qfs's real semantic structure is not sequential: a query is a DAG (joins and unions fan
+*in*; one source can fan *out*). Sequential form is a *serialization* of that DAG — the shape a
+linear medium (text, a strip) forces onto it. So "one column = one prefix" shows a *path through*
+the structure, not the structure itself. The honest question is whether the viewer should reflect
+the structure (a visual-scripting graph) or keep serving the serialized walk (the strip) — or
+whether that is a false choice (below).
+
+**What pipe languages actually lack: fan-out (split).** Merge exists everywhere as "a stage that
+takes another stream as an argument" (join / union / zip). Fan-out — one flow feeding several
+downstream — has *no* well-designed pipe syntax; `tee` and variable-binding are the crude
+substitutes. In a path/set language both may reduce to **a named node plus references**: a merge
+references several named nodes as inputs; a split is several nodes referencing one named node.
+Wires would then be the *rendering* of references, not a new language primitive — consistent with
+"everything is a path." The missing, foundational primitive is the clean **split**, and defining
+it well serves the human gesture and the AI tool call equally (below).
+
+**A clarifying distinction: definition-time vs application-time.** Two activities were being
+conflated. *Definition* composes the query's real, possibly non-linear structure — this is where a
+graph view reflects the structure faithfully. *Application* is what happens after a query resolves:
+walking the concrete result transitively (pick a row, follow a relation, one step at a time) — this
+is inherently linear and is exactly what the strip is good at. On this reading the **strip is the
+after-generation exploration surface** and the **graph is the structure-definition surface**.
+
+**The dualism objection.** Committing to those as two separate views risks a two-paradigm split,
+which cuts against qfs's governing spirit — *one core concept; a new face adds no new symbol*. The
+resistance to the split is therefore principled, not merely aesthetic: a viewer that is "a graph
+tool bolted to a table tool" has two concepts, not one.
+
+**Two ways the dualism may dissolve** (either, both, or neither):
+- **Topological.** A path is a branch-free graph — the strip is the *degenerate, path-shaped* case
+  of the graph. One renderer draws the query as a node graph; it *looks like* a strip while the
+  structure is straight and grows wires where it branches. Then there is no "second view," only one
+  substance at variable topology — §14b's "a trail is one path within the path concept," pushed down
+  to the UI substance itself.
+- **Intensional / extensional.** The deeper dualism is *definition* (abstract structure, the
+  program) vs *result* (concrete data, the trace) — intension vs extension. Most systems keep these
+  as two artifacts in two places (a query editor and a result grid), which forces two surfaces. qfs
+  welds them: a path is simultaneously a query (intension) and resolves to a set (extension), and
+  every prefix carries both — `describe` is the intensional contract (schema, keys, relations),
+  `read` is the extension (rows). So a graph view foregrounds intension and a strip foregrounds
+  extension, but both render **one object seen from two aspects**, not two artifacts. That weld is
+  the seam where the program/trace split — the thing that forces two paradigms elsewhere — is sewn
+  shut. *Caveat:* the unity is cleanest for reads; writes/effects reintroduce a distinct
+  preview/commit aspect (§7), so the seam is not seamless at the write edge.
+
+**The enabling foundation: `path = query = set`.** Unlike a filesystem path (a static address that
+a *separate* query takes as an argument), a qfs path is a set-valued *expression* whose segments are
+operators: containment is select-from, `@A` lowers to `where <key> == A`, a relation segment is a
+join, `|>` stages are explicit operators. It lowers deterministically to a pipe query (§14b's
+one-lowering rule); evaluating it yields a set; even `ls`/`cd` are `enumerate`/select. So the path
+*is* the query in written form and *resolves to* the set — the single object that makes the
+intension/extension unification above possible. This is the load-bearing premise of the whole
+reconsideration: if it holds, the viewer need not be two things.
+
+**Actors and viewports are two separate axes** (they were being mixed):
+- *Who drives the surface.* A human via touch/mouse, or a browser-side realtime-API **AI agent that
+  tool-calls** (WebMCP) to build the pipeline while the viewer co-renders pipeline *and* result. The
+  AI is a co-operator of the same surface, not a separate modality; this implies **one operation
+  vocabulary** exercised by both — the tools the agent calls are the primitives the columns expose —
+  and it enables live human/AI handoff over one pipeline object (watch it build, take it over, hand
+  it back). An open sub-question: is the human/AI relation *co-edit* of one live object, or
+  *produce-then-review* (the agent yields a pipeline the human inspects before commit)? That choice
+  sets how live and how shared the viewer state must be.
+- *Which viewport renders.* A 420×640 phone vs a desktop — different *layouts* of the same graph.
+  Voice is inherently sequential (an utterance the agent turns into tool calls); a phone favors
+  focused, card-at-a-time navigation; only the desktop can show wires/lanes at once. Hence **one
+  canonical graph, several projections**, echoing qfs's existing "one resource, many faces."
+
+**Developer acceptance.** Developers may not love linear pipes intrinsically; linear dominates
+because good split+merge semantics are missing and text forces a linearization (CTEs and variables
+are the workaround). The likely real acceptance driver is **round-trip fidelity to the query text** —
+a developer trusts a visual pipe surface when it is a lossless projection of the query they could
+have typed, droppable back to text at any moment. That same property serves the AI actor (which
+writes text) and the human (who reads/edits columns) with a *single* artifact, which is itself an
+argument for the one-substance reading.
+
+**Multi-channel rendering candidates** (all open, none chosen): lanes/tracks (a timeline of
+horizontal channels that combine at explicit merge columns); named-channel references (one strip
+visible, other channels collapsed to expandable source chips — the "tree of named linear pipes");
+nesting/fractal (a column that contains a sub-strip); parallel-lens (channels as simultaneous
+renderings — rows / aggregate / chart / diff-over-`@ref` — of one prefix); focus+context. Each keeps
+the single-channel case identical to today's strip and reveals structure only when a genuine second
+input exists. The governing rule a ruling must set: **when is a second input an in-strip relation
+segment (a declared relation) vs a new channel (an independent source)?** That boundary is the
+simplicity governor.
+
+**The delivery seam.** Whatever the viewer becomes must be renderable by the column-oriented UI
+engine (plggmatic), which depends only on the `(declaration, rows)` protocol and is supplier-blind;
+its parts (the strip container, the typed-table renderer, the preview/commit dialog, the connection
+manager) are reusable components. So the qfs-side deliverable is fixed regardless of which UI reading
+wins: **every path/trail must answer `describe` (schema, keys, relations), `enumerate` (child
+addresses), `read` (rows), and `preview`/`commit`**, all through the one typed envelope (§14
+contract 1). Driver configuration is anticipated to be authored through the *same* surface —
+building `CREATE DRIVER`/`VIEW`/`MAP` as columns, previewed and committed into `/sys/drivers` — which
+additionally requires qfs to **describe the addable-provider / declared-driver surface** (an
+enumerate contract that does not yet exist).
+
+**What this makes of the current missions.** The two active foundation missions are not features
+but the qfs-side substrate the viewer consumes. The file-collection-as-a-declared-set mission
+produces `(declaration, rows)` over collected file sets (the strip's content for local knowledge);
+the declared-driver-DSL mission defines the authorable, describable vocabulary the visual surface
+manipulates. The reconsideration surfaces further foundation items **not yet missioned**: the
+enumerate-root plumbing (§14b), the request-principal seam that would let the *first column* derive
+from the caller (the "empty home" root — a fresh, initially-empty personal namespace that fills as
+one connects/declares, rather than the union-of-all-drivers root), a first-class **split** primitive,
+and a **one-language** spelling in which a column action *is* a qfs statement, so authoring in the
+viewer is authoring qfs itself.
+
+**Consolidated open questions.** (1) The predicate/merge-column spelling — how a rich `where` or a
+`join` is written as one address segment. (2) `split`'s language form (references vs a fork gesture).
+(3) One substance (topology) or two views. (4) The in-strip-relation vs new-channel boundary. (5)
+Co-edit vs produce-then-review for the human/AI relation. (6) The per-viewport projections (voice /
+phone / desktop). (7) Where the intension/extension unity ends (the write edge). (8) The
+addable-provider `enumerate` contract. None of these is decided here; this is the map against which
+the viewer's nature is to be ruled.
 
 ## 15. `transform` — the model-calling pipe stage — *implemented (grammar, execution, whole-tree routing, consent gate, three live providers); live-provider run owner-attended*
 
