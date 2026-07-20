@@ -2,12 +2,14 @@
 
 ## active
 
+* [a-file-collection-is-a-declared-set-over-any-blob-source](active/a-file-collection-is-a-declared-set-over-any-blob-source/mission.md) - A file collection is a declared set over any blob source
 * [a-request-resolves-to-a-principal-the-query-path-can-read](active/a-request-resolves-to-a-principal-the-query-path-can-read/mission.md) - A request resolves to a principal the query path can read
 * [claude-code-sessions-are-queryable-and-steerable-as-qfs-paths](active/claude-code-sessions-are-queryable-and-steerable-as-qfs-paths/mission.md) - Claude Code sessions are queryable and steerable as qfs paths
 * [declared-drivers-are-the-normal-way-to-add-a-service](active/declared-drivers-are-the-normal-way-to-add-a-service/mission.md) - Declared drivers are the normal way to add a service
 * [markdown-trees-are-queryable-as-documents-and-links-tables](active/markdown-trees-are-queryable-as-documents-and-links-tables/mission.md) - Markdown trees are queryable as documents and links tables
 * [qfs-viewer-mvp](active/qfs-viewer-mvp/mission.md) - qfs-viewer MVP
 * [support-create-agent-semantics-that-introduce-a-new-user-principal-with-query-functions-scheduled-launch-and-access-control-to-resources](active/support-create-agent-semantics-that-introduce-a-new-user-principal-with-query-functions-scheduled-launch-and-access-control-to-resources/mission.md) - support CREATE AGENT semantics that introduce a new user principal with query functions, scheduled launch, and access control to resources
+* [the-declared-driver-dsl-covers-the-compiled-drivers-concisely](active/the-declared-driver-dsl-covers-the-compiled-drivers-concisely/mission.md) - The declared driver DSL covers the compiled drivers concisely
 
 ## archive
 
