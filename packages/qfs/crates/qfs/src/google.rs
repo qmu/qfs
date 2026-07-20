@@ -238,10 +238,10 @@ pub(crate) fn google_account_bearer(email: &str, app: &str) -> Result<Secret, St
     let store = commit_secret_store();
     let oauth = OAuthClient::new(client_id, client_secret, all_google_scopes(), transport);
     let source = StoredTokenSource::new(email.to_string(), store, oauth);
-    let token = source
+    let refreshed = source
         .access_token()
         .map_err(|e| format!("google token exchange for account '{email}': {e}"))?;
-    let bearer = token
+    let bearer = refreshed
         .bearer()
         .ok_or_else(|| "the refreshed google access token was not valid UTF-8".to_string())?;
     Ok(Secret::from(bearer))
