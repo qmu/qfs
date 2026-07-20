@@ -6,7 +6,7 @@ status: active
 created_at: 2026-07-17T00:29:05+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
-drive_authorized:
+drive_authorized: true
 tickets: [20260717020101-qfs-connection-seam-with-swappable-issuance-forms.md, 20260717020102-describe-generic-browsing-as-default-columns.md, 20260717020103-resolve-addresses-with-prefix-closure.md, 20260717020104-strip-ui-on-the-plggmatic-engine.md, 20260717020105-markdown-browsing-over-the-qfs-collection-path.md, 20260717020106-keep-npx-distribution-true-through-the-ui-replacement.md, 20260717020107-run-the-final-demo-end-to-end.md, 20260716092321-prove-a-plggmatic-ui-can-be-an-mcp-app.md]
 stories: []
 concerns: []
@@ -219,7 +219,7 @@ appended as (#…) markers when each ticket is filed.
       an addressed `/resolve` column. qfs is FOUND, never bundled or
       fetched (docs/adr/0009); with none reachable the viewer still starts
       and says what is missing and how to get it.
-- [ ] **The final demo end to end**: at the `qmu/strategy` root, npx start →
+- [x] **The final demo end to end**: at the `qmu/strategy` root, npx start →
       browse `docs/` markdown in columns → browse a qfs resource via the
       generic describe view → revisit a `/resolve` address and see the same
       columns. (all legs)
@@ -411,3 +411,56 @@ appended as (#…) markers when each ticket is filed.
   the workaround's removal. Not reproducible from a source checkout —
   relocation is a no-op there — which is why only the packed path sees it.
 - 2026-07-17 — story reported — work-20260717-150001.md
+- 2026-07-19 — mission replanned — night-monitor-authorize-final-demo
+- 2026-07-19 — **Final-demo attempt BLOCKED by the npm min-release-age
+  hold; acceptance item 7 NOT ticked, ticket kept in todo** (night
+  /monitor). The demo needs the viewer built and installed, and the
+  developer's `~/.npmrc` `min-release-age=7` (npm `before=2026-07-12`)
+  excludes the two releases it requires: `plgg-bundle 0.0.6` (2026-07-13,
+  clears ~2026-07-20) fails `npm install` first with `ETARGET — No matching
+  version found for plgg-bundle@^0.0.6 with a date before 2026/7/12`, and
+  the binding one is `plggmatic ^0.2.0` — the UI engine required to *run*
+  the viewer — whose only satisfying version 0.2.0 (2026-07-17) clears
+  ~**2026-07-24**. No `node_modules` exists anywhere on the machine (main
+  checkout, other worktrees, global, packed `.tgz`, prebuilt `dist/` all
+  absent), so the "reuse the main checkout's deps" fallback had nothing to
+  copy; pinning/bypassing is the developer's call per Considerations, not
+  the drive's. Real evidence, not prose: qfs 0.0.80 on PATH and the
+  qmu/strategy root (docs/ present) were both verified — the substrate is
+  ready; only the JS install is held. Re-run the demo once the hold clears
+  (2026-07-24, or earlier if lifted) —
+  20260717020107-run-the-final-demo-end-to-end.md
+- 2026-07-19 — **FINAL DEMO RAN end to end; acceptance item 7 ticked →
+  mission 7/7** (night /monitor, after the developer lifted the npm hold by
+  commenting out `min-release-age` in `~/.npmrc`). Fresh `npm install`
+  resolved with no ETARGET (plggmatic 0.2.0, plgg-bundle 0.0.6 et al.), and
+  `scripts/check-all.sh` exits **0** (dependency + vendor-boundary gates,
+  dist build, npx smoke under node/bun/deno, tsc, coverage 99.42% stmts). The
+  four legs, run as ONE against `/home/ec2-user/projects/strategy` with the
+  PACKED+installed bin (`npm pack` → install the tarball into a scratch
+  consumer → `node .../node_modules/.bin/qfs-viewer serve --port 4130
+  --read-only`) and **qfs 0.0.80** on PATH:
+  - **Leg 1 — start.** Boot log `{"event":"qfs.ready","form":"Spawn",
+    "version":"qfs 0.0.80"}`, `{"event":"collection.attached","path":
+    "/markdown/strategy/documents"}`, `{"event":"collection.read",
+    "documents":14,"errors":0}`, listening. `/api/health` →
+    `{"documentCount":14,"errorCount":0}`; `/` renders the plggmatic ENGINE
+    strip (pm-row/pm-col/pm-colhead/pm-crumbs/pm-pane).
+  - **Leg 2 — markdown as column strips**, via qfs's collection path
+    `/markdown/strategy/{documents,links}` (14 docs / 88 links, connected
+    `CONNECT /markdown/strategy TO markdown AT '<root>'`, NOT the retiring
+    scanner). Prefix closure measured: `/` = 1 col; `/resolve/docs/plan.md`
+    = 2; `…,docs/metamodel.md` = 3; `…,docs/overview.md` = 4 — each segment
+    one more column, breadcrumb = the trail.
+  - **Leg 3 — generic describe view.** `/resolve/qfs:/local/home/ec2-user/
+    projects/strategy` renders a `blob_namespace` describe view (2 cols) whose
+    rows (CLAUDE.md, README.md, docs, …) are containment links appending a
+    `qfs:` segment; deepening `…,qfs:/local/…/docs` = 3 cols. A
+    `relational_table` path (`qfs:/markdown/strategy/documents`) renders the
+    same way — no per-resource code.
+  - **Leg 4 — address reproduces.** `/resolve/docs/plan.md,docs/metamodel.md,
+    docs/overview.md` fetched twice = **byte-identical** (sha256
+    0788d815…, 68363 bytes) — the address determines the columns, revisiting
+    reproduces them. All demo legs green; the four-leg demo composes —
+    20260717020107-run-the-final-demo-end-to-end.md
+- 2026-07-19 — ticket archived — 20260717020107-run-the-final-demo-end-to-end.md
