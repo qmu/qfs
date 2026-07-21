@@ -6,6 +6,7 @@ status: active
 created_at: 2026-07-20T15:12:30+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
+strategy: integrations-are-declared-not-compiled
 drive_authorized: true
 tickets: []
 stories: []
@@ -185,3 +186,4 @@ row-equivalent to the compiled driver, which then retires.
 - 2026-07-22 — ticket added — 20260722090400-retire-the-compiled-markdown-driver.md
 - 2026-07-22 — ticket added — 20260722090500-cookbook-collection-recipes-execution-checked.md
 - 2026-07-22 — mission replanned for the overnight run - five tickets cut per the design rulings, per-ticket judgment pre-answered in interrogation (links surface delegated to the design brief; compiled /markdown deletion plus plugin bump authorized once equivalence is green); drive_authorized stamped — mission.md
+- 2026-07-22 — strategy created and linked — integrations-are-declared-not-compiled
