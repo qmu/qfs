@@ -6,6 +6,7 @@ status: active
 created_at: 2026-07-20T15:12:33+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
+strategy: integrations-are-declared-not-compiled
 drive_authorized: true
 tickets: []
 stories: []
@@ -193,3 +194,4 @@ the four downstream missions with their entry conditions.
 - 2026-07-22 — ticket added — 20260722091400-conciseness-bar-stated-and-measured.md
 - 2026-07-22 — ticket added — 20260722091500-conversion-playbook-and-honest-tiering.md
 - 2026-07-22 — mission replanned for the overnight run - five tickets cut, interrogation answered the open judgment calls (proof target fixed to read-over-POST; autonomous section-13 rulings authorized by the owner); drive_authorized stamped — mission.md
+- 2026-07-22 — strategy created and linked — integrations-are-declared-not-compiled
