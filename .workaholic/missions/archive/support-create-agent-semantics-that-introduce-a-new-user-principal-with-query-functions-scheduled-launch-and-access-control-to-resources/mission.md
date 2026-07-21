@@ -2,7 +2,7 @@
 type: Mission
 title: support CREATE AGENT semantics that introduce a new user principal with query functions, scheduled launch, and access control to resources
 slug: support-create-agent-semantics-that-introduce-a-new-user-principal-with-query-functions-scheduled-launch-and-access-control-to-resources
-status: active
+status: achieved
 created_at: 2026-07-12T04:34:26+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
@@ -219,3 +219,4 @@ one owner-attended live round proving a real fire and a visible denial.
     `snoop`'s target sat outside it. Daemon torn down cleanly (SIGTERM; port 4120 closed) and the `.live-round/`
     scratch removed — no live daemon left running.
 - 2026-07-19 — ticket archived — 20260718203335-agent-live-proof-round.md
+- 2026-07-22 — mission achieved — mission.md

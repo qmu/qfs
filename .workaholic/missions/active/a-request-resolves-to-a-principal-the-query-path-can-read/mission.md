@@ -5,7 +5,7 @@ slug: a-request-resolves-to-a-principal-the-query-path-can-read
 status: active
 created_at: 2026-07-17T18:05:46+09:00
 author: a@qmu.jp
-assignee:
+assignee: a@qmu.jp
 drive_authorized:
 tickets: []
 stories: []
@@ -331,3 +331,4 @@ ticket.**
 - 2026-07-17 — Recorded two identity read-back defects found by execution (`whoami --json` accepts
   and ignores the flag; `identity --help` asserts a retired sign-up and a pending t46 at
   `cmd/src/lib.rs:702-706`, an instance commit `91cde7d`'s sweep did not reach) — mission.md
+- 2026-07-22 — mission claimed by a@qmu.jp for the overnight run; tickets cut in the mission worktree — mission.md
