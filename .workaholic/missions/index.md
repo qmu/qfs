@@ -4,6 +4,7 @@
 
 * [a-file-collection-is-a-declared-set-over-any-blob-source](active/a-file-collection-is-a-declared-set-over-any-blob-source/mission.md) - A file collection is a declared set over any blob source
 * [a-request-resolves-to-a-principal-the-query-path-can-read](active/a-request-resolves-to-a-principal-the-query-path-can-read/mission.md) - A request resolves to a principal the query path can read
+* [a-walk-extends-one-trail-one-column-at-a-time](active/a-walk-extends-one-trail-one-column-at-a-time/mission.md) - A walk extends one trail one column at a time
 * [claude-code-sessions-are-queryable-and-steerable-as-qfs-paths](active/claude-code-sessions-are-queryable-and-steerable-as-qfs-paths/mission.md) - Claude Code sessions are queryable and steerable as qfs paths
 * [declared-drivers-are-the-normal-way-to-add-a-service](active/declared-drivers-are-the-normal-way-to-add-a-service/mission.md) - Declared drivers are the normal way to add a service
 * [markdown-trees-are-queryable-as-documents-and-links-tables](active/markdown-trees-are-queryable-as-documents-and-links-tables/mission.md) - Markdown trees are queryable as documents and links tables
