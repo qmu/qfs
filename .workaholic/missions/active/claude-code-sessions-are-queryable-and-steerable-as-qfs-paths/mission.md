@@ -6,6 +6,8 @@ status: active
 created_at: 2026-07-16T01:50:14+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
+strategy: ai-sessions-are-ordinary-qfs-surfaces
+drive_authorized: true
 tickets:
   - 20260717010100-claude-real-store-reader.md
   - 20260717010200-claude-mount-registration-and-e2e-guard.md
@@ -15,6 +17,8 @@ tickets:
   - 20260717010600-claude-session-create-launch.md
   - 20260717010700-claude-compiled-standing-recorded.md
   - 20260719231005-claude-live-round-owner-attended.md
+  - 20260719105527-tmux-session-teardown-must-not-kill-server.md
+  - 20260721190756-slack-driver-channel-id-resolution.md
 stories: []
 concerns: []
 gate_type: live-app
@@ -136,9 +140,34 @@ inbox**: a durable per-recipient JSON queue the target session drains, so a mess
 without spawning or killing any process (see item 5). The hermetic implementation of both items may
 be authored anywhere, but every step that exercises real processes — the steering live fire, the
 inbox message-schema capture, a real `--bg` launch, the composed launch→steer proof — MUST run in
-an isolated box (a container/VM with no live sessions), never the shared host, and is **out of
-unattended / `/monitor` scope**. This is why `drive_authorized` is left unset: the remaining set is
-not drive-ready on the shared host.
+an isolated box (a container/VM with no live sessions), never the shared host.
+
+**Container ruling (owner, 2026-07-22): a container on this host qualifies as the isolated box.**
+The host's `docker` command is podman 5.8.4. Every process-exercising step — the steering live
+fire, the inbox message-schema capture, a real `--bg` launch, the composed launch→steer proof,
+and any tmux server a test spawns — runs **inside a container** with no live sessions: never
+mount the host's `~/.claude`, never inherit the host's tmux sockets or `TMUX_TMPDIR`. Under that
+constraint the remaining set IS unattended-drivable, so `drive_authorized` is stamped for the
+overnight run; anything that cannot be containerized escalates instead of running on the shared
+host.
+
+## Experience
+
+What must be observable when this mission is achieved (added 2026-07-22 when the schema began
+requiring it; restates the Goal's owner-named capabilities, no new scope):
+
+- An operator (or agent) asks a machine "how many sessions are running, and what did each last
+  say" with one qfs query over `/hosts/<host>/claude/sessions` and gets one truthful row per
+  live session, read from the real on-disk store — never an invented layout.
+- Steering is a query: an INSERT into `.../sessions/<id>/instructions` appends to the target
+  session's durable teams inbox and is observed by that session — delivered without spawning
+  or killing any process. A write that nothing would read fails closed instead of pretending.
+- Launching is a query: an INSERT into the sessions set starts a new session behind the
+  irreversible gate, and the new session's id is addressable by the same paths immediately.
+- Bare `/claude` paths answer with the canonical `/hosts/<host>/claude/...` spelling in the
+  error, so the retired shape teaches the current one.
+- Every process-exercising proof runs in an isolated container, never on a shared host with
+  live sessions (see the Scope environment constraint).
 
 ## Acceptance
 
@@ -342,3 +371,7 @@ not drive-ready on the shared host.
   covering items 5 and 6's live proofs, left in `todo/` and NOT drive-authorized. `drive_authorized`
   stays unset — deliberately, matching the author's standing decision that the remaining set is not
   drive-ready on the shared host. No code, version, or CLI surface changed this pass.
+- 2026-07-22 — ticket added — 20260719105527-tmux-session-teardown-must-not-kill-server.md
+- 2026-07-22 — ticket added (rider: compiled slack driver bugfix, owner-directed onto this overnight queue) — 20260721190756-slack-driver-channel-id-resolution.md
+- 2026-07-22 — strategy created and linked — ai-sessions-are-ordinary-qfs-surfaces
+- 2026-07-22 — mission replanned for the overnight run - owner ruling 2026-07-22: a container on this host (docker=podman) qualifies as the isolated box, so the remaining set is unattended-drivable in-container; Experience section added per the mission schema; drive_authorized stamped — mission.md
