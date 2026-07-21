@@ -2,7 +2,7 @@
 type: Mission
 title: Markdown trees are queryable as documents and links tables
 slug: markdown-trees-are-queryable-as-documents-and-links-tables
-status: active
+status: achieved
 created_at: 2026-07-17T00:05:09+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
@@ -207,3 +207,4 @@ what this mission must preserve):
 - 2026-07-17 — ticket archived — 20260717021000-rule-the-markdown-path-shape-and-root-declaration.md
 - 2026-07-17 — ticket archived — 20260717021100-markdown-scanner-driver-crate-documents-and-links.md
 - 2026-07-17 — ticket archived — 20260717021200-mount-declared-markdown-roots-through-the-engine.md
+- 2026-07-22 — mission achieved — mission.md

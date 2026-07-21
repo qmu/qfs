@@ -2,7 +2,7 @@
 type: Mission
 title: qfs-viewer MVP
 slug: qfs-viewer-mvp
-status: active
+status: achieved
 created_at: 2026-07-17T00:29:05+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
@@ -464,3 +464,4 @@ appended as (#…) markers when each ticket is filed.
     reproduces them. All demo legs green; the four-leg demo composes —
     20260717020107-run-the-final-demo-end-to-end.md
 - 2026-07-19 — ticket archived — 20260717020107-run-the-final-demo-end-to-end.md
+- 2026-07-22 — mission achieved — mission.md

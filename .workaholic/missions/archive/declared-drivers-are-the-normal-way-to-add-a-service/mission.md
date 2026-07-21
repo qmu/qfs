@@ -2,7 +2,7 @@
 type: Mission
 title: Declared drivers are the normal way to add a service
 slug: declared-drivers-are-the-normal-way-to-add-a-service
-status: active
+status: achieved
 created_at: 2026-07-15T20:55:00+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
@@ -350,3 +350,4 @@ live backlog.
   `/claude` compiled), not a violation. Item 2 ticked. Gates: `cargo test --workspace` exit 0, 2582
   passed 0 failed; clippy/fmt clean; gen-docs/gen-skills `--check` in sync; check-migrations clean.
 - 2026-07-19 — ticket archived — 20260718203326-cf-surface-from-committed-declaration.md
+- 2026-07-22 — mission achieved — mission.md
