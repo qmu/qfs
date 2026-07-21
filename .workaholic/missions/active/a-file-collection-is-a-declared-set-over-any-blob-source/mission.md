@@ -6,7 +6,7 @@ status: active
 created_at: 2026-07-20T15:12:30+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
-drive_authorized:
+drive_authorized: true
 tickets: []
 stories: []
 concerns: []
@@ -132,38 +132,38 @@ row-equivalent to the compiled driver, which then retires.
 
 ## Acceptance
 
-- [ ] **Requirement 1 (verbatim gate): "a simple `/local` path pointing at a local
+- [ ] **Requirement 1 (verbatim gate): (#20260722090200-per-row-decode-over-collected-sets.md) "a simple `/local` path pointing at a local
       directory."** A `/local` mount over a local directory is the collection's source; a
       hermetic engine-level test collects a fixture tree through it with no mechanism beyond
       the mount and the pipeline.
-- [ ] **Requirement 2 (verbatim gate): "under it, collect Markdown, JSON, YAML, or whatever
+- [ ] **Requirement 2 (verbatim gate): (#20260722090200-per-row-decode-over-collected-sets.md) "under it, collect Markdown, JSON, YAML, or whatever
       files over the qfs query engine's pipelines."** `DECODE` over a multi-row collected set
       decodes per row and unions: hermetic tests cover a `*.md` glob (one row per file), a
       `*.json`/`*.yaml` set, and the provenance `path` column on every decoded row;
       `decode_needs_single_blob` is retired with the single-file case passing as the one-row
       instance.
-- [ ] **Requirement 3 (verbatim gate): "for collected articles, apply a `WHERE` clause that
+- [ ] **Requirement 3 (verbatim gate): (#20260722090200-per-row-decode-over-collected-sets.md) "for collected articles, apply a `WHERE` clause that
       filters on fields parsed out of a Markdown file's YAML front matter."** A hermetic test
       runs `… *.md |> decode md |> where <front-matter key> == …` over a fixture tree and gets
       exactly the matching files' rows; sparse keys (a file missing the key) read as null, not
       an error.
-- [ ] **The §13b ruling is recorded.** Blueprint §13b's "builtin driver, or one
+- [ ] **The §13b ruling is recorded.** (#20260722090100-design-brief-codec-relation-surface-and-13b-ruling.md) Blueprint §13b's "builtin driver, or one
       alias-registration set" open question is closed in the blueprint text as ruled above
       (alias registration; `/markdown` demoted to an instance; zero new grammar via §3), and
       the codec-relation surface (how the link relation is named/reached) is ruled in a
       design brief before implementation.
-- [ ] **`documents`/`links` are declared registrations over the generic path,
+- [ ] **`documents`/`links` are declared registrations (#20260722090300-documents-links-as-declared-registrations.md) over the generic path,
       row-equivalent.** On the same fixture trees, the declared views reproduce the compiled
       `/markdown` driver's `documents` and `links` rows — including `title` derivation,
       front matter, `target_doc` normalization, and the full nested `section_path` (JSON
       array, pre-heading `[]`) — proven by a hermetic equivalence test; `DESCRIBE` reports
       both schemas.
-- [ ] **The compiled `/markdown` driver retires on the ratchet.** Once the equivalence test is
+- [ ] **The compiled `/markdown` driver retires on the ratchet.** (#20260722090400-retire-the-compiled-markdown-driver.md) Once the equivalence test is
       green, `crates/driver-markdown`'s driver surface is deleted (its pure parser survives
       wherever the codec layer homes it), `CONNECT … TO markdown` maps onto the registered-set
       shape or is retired with it, and docs/skills regenerate (plugin version bump per
       CLAUDE.md if a taught surface moves).
-- [ ] **The cookbook stops teaching what the binary rejects.** Every multi-file `decode`
+- [ ] **The cookbook stops teaching what the binary rejects.** (#20260722090500-cookbook-collection-recipes-execution-checked.md) Every multi-file `decode`
       recipe in `docs/query-cookbook.md` / the cookbook articles either executes against a
       hermetic fixture in the test ratchet (execution-checked, not parse-only, for at least
       the collection recipes) or is corrected; docs-true is restored on this surface.
@@ -179,3 +179,9 @@ row-equivalent to the compiled driver, which then retires.
   design session's judgment, recorded for the driving session to execute or overturn with
   cause. No tickets cut yet — a claiming session interrogates and cuts its own;
   `drive_authorized` deliberately left empty (no per-ticket interrogation has happened).
+- 2026-07-22 — ticket added — 20260722090100-design-brief-codec-relation-surface-and-13b-ruling.md
+- 2026-07-22 — ticket added — 20260722090200-per-row-decode-over-collected-sets.md
+- 2026-07-22 — ticket added — 20260722090300-documents-links-as-declared-registrations.md
+- 2026-07-22 — ticket added — 20260722090400-retire-the-compiled-markdown-driver.md
+- 2026-07-22 — ticket added — 20260722090500-cookbook-collection-recipes-execution-checked.md
+- 2026-07-22 — mission replanned for the overnight run - five tickets cut per the design rulings, per-ticket judgment pre-answered in interrogation (links surface delegated to the design brief; compiled /markdown deletion plus plugin bump authorized once equivalence is green); drive_authorized stamped — mission.md

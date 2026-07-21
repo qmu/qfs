@@ -1,0 +1,51 @@
+---
+created_at: 2026-07-22T09:04:00+09:00
+author: a@qmu.jp
+type: enhancement
+layer: [Domain]
+effort:
+commit_hash:
+category: Removed
+depends_on: [20260722090300-documents-links-as-declared-registrations.md]
+mission: a-file-collection-is-a-declared-set-over-any-blob-source
+---
+
+# The compiled /markdown driver retires on the ratchet
+
+## Overview
+
+Mission acceptance item 6. With the equivalence test green (depends_on), the specialized
+compiled driver retires — the ratchet, not a leap:
+
+1. Delete `crates/driver-markdown`'s **driver surface**. Its pure parser survives wherever the
+   codec layer homed it in the previous tickets — delete the driver shell, not the
+   interpretation.
+2. `CONNECT … TO markdown` maps onto the registered-set shape, or is retired with the driver —
+   whichever the declaration surface supports cleanly; record the choice in the mission
+   changelog.
+3. Regenerate everything derived: `cargo run -p xtask -- gen-docs` (drivers.md loses the
+   compiled entry), `gen-skills` for any cookbook article that taught the `/markdown` surface —
+   correct the articles first, regenerate after.
+4. **Plugin version bump per CLAUDE.md**: a taught CLI surface moves, so bump all four plugin
+   `version` fields in the same PR (minor — this is a taught-surface break).
+
+Owner authorization (2026-07-22): deletion, regeneration, and the plugin bump are authorized
+for the overnight run **provided the equivalence gate is green**. If the equivalence test is
+not green, stop at the previous ticket — do not delete against a red or skipped oracle.
+
+## Policies
+
+- Hard break sanctioned; no deprecation shim, no compatibility alias for the retired paths.
+- The retirement is gated on the ratchet: equivalence green first, deletion second, in that
+  order within the ticket too.
+- Nothing the viewer could do before is lost — the declared views are already proven
+  row-equivalent when this ticket starts.
+
+## Quality Gate
+
+- `crates/driver-markdown` no longer registers a driver; the workspace builds without it.
+- `cargo test --workspace` (the equivalence test now runs against the declared views alone),
+  clippy `-D warnings`, `cargo fmt --all --check` pass.
+- `gen-docs --check` and `gen-skills --check` pass after regeneration; no hand-edited
+  generated file.
+- All four plugin `version` fields are bumped in the same change.
