@@ -6,6 +6,7 @@ status: active
 created_at: 2026-07-17T18:05:46+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
+strategy: access-derives-from-the-resolved-principal
 drive_authorized: true
 tickets: []
 stories: []
@@ -367,3 +368,4 @@ ticket.**
   end so the live round + the session-cookie→UserId store injection is a drop-in for a
   developer-attended `/drive`. Escalation: item 8 needs the developer to run the two requests
   (session + no session) and paste output + exit codes — mission.md
+- 2026-07-22 — strategy created and linked — access-derives-from-the-resolved-principal
