@@ -17,16 +17,18 @@
 //! owned by this decode application, not by any codec.
 //!
 //! ## The codec tail
-//! Lowering stops at the first codec (`qfs_pushdown::lower_query`), so `DECODE`/`ENCODE` and the
-//! relational ops that follow them form the **codec tail**, evaluated here over the decoded
-//! (data-dependent) schema the planner could not know. `WHERE`/`LIMIT` after a decode run locally
-//! over the decoded batch; a trailing op the local tail cannot yet run returns a clear error
-//! rather than silently mis-ordering.
+//! The read executor plans only the **pre-codec** ops (`stmt_without_codec_tail`), so `DECODE`/
+//! `ENCODE` and the relational ops that follow them form the **codec tail**, evaluated here over
+//! the decoded (data-dependent) schema the planner could not know. A run of trailing relational
+//! ops (`WHERE`/`SELECT`/`EXTEND`/`ORDER BY`/`LIMIT`/`DISTINCT`/`AGGREGATE`) runs over the decoded
+//! relation through the engine's own lower→partition→`MiniEvaluator` machinery; a **cross-source**
+//! stage (`JOIN`/`UNION`/…) after a codec is not yet supported and returns a clear error rather
+//! than silently mis-ordering.
 
-use qfs_core::{CodecRegistry, Column, ColumnType, Row, RowBatch, Schema, Value};
-use qfs_engine::apply_residual;
-use qfs_parser::{PipeOp, Statement};
-use qfs_pushdown::lower_predicate;
+use qfs_core::{CodecRegistry, Column, ColumnType, PushdownProfile, Row, RowBatch, Schema, Value};
+use qfs_engine::{CombineEngine, MiniEvaluator, ScanResults};
+use qfs_parser::{PipeOp, Pipeline, Source, Statement};
+use qfs_pushdown::{lower_query, partition_by_source, SourceId, SourceRegistry};
 
 use crate::error::{ErrorKind, ExecError};
 
@@ -36,6 +38,11 @@ const CONTENT_COL: &str = "content";
 /// The provenance/join-id column the decode application carries through every decoded row
 /// (the source's root-relative address). Owned here, never by a codec.
 const PATH_COL: &str = "path";
+/// The synthetic source id the codec tail's trailing relational ops route to. `PushdownProfile::
+/// None` keeps every op residual, so the engine runs `WHERE`/`SELECT`/`ORDER BY`/`AGGREGATE`/…
+/// over the already-decoded batch (the same lower→partition→`MiniEvaluator` machinery the declared
+/// view body and the main read path use).
+const DECODED_SOURCE: &str = "(decoded)";
 
 /// Whether `stmt` carries a `DECODE` stage — the signal the read executor uses to ask a blob
 /// scan to materialize each row's `content` bytes (blueprint §13b, plan-driven materialization).
@@ -91,52 +98,84 @@ pub(crate) fn apply_codecs(batch: RowBatch, stmt: &Statement) -> Result<RowBatch
     // The six shipped codecs are builtins; resolve through a fresh builtin registry. A
     // backend-registered custom codec would thread the engine's CodecRegistry here instead.
     let registry = CodecRegistry::with_builtins();
+    let tail = &pipeline.ops[start..];
     let mut current = batch;
-    for op in &pipeline.ops[start..] {
-        current = apply_tail_op(current, op, &registry)?;
+    let mut i = 0;
+    while i < tail.len() {
+        match &tail[i] {
+            PipeOp::Decode(c) => {
+                current = decode_set(current, &c.fmt, &registry)?;
+                i += 1;
+            }
+            PipeOp::Encode(c) => {
+                current = encode_rows(&current, &c.fmt, &registry)?;
+                i += 1;
+            }
+            // A run of relational ops after a decode (`WHERE`/`SELECT`/`ORDER BY`/`LIMIT`/
+            // `DISTINCT`/`AGGREGATE`/…) evaluates locally over the decoded relation — the decoded
+            // schema is late-bound (only known after the decode runs), so these must run here, not
+            // in the pushdown plan (blueprint §13b).
+            _ => {
+                let mut j = i;
+                while j < tail.len() && !matches!(tail[j], PipeOp::Decode(_) | PipeOp::Encode(_)) {
+                    j += 1;
+                }
+                current = run_trailing_ops(current, &pipeline.source, &tail[i..j])?;
+                i = j;
+            }
+        }
     }
     Ok(current)
 }
 
-/// Run one codec-tail op over `batch`.
-fn apply_tail_op(batch: RowBatch, op: &PipeOp, reg: &CodecRegistry) -> Result<RowBatch, ExecError> {
-    match op {
-        PipeOp::Decode(c) => decode_set(batch, &c.fmt, reg),
-        PipeOp::Encode(c) => encode_rows(&batch, &c.fmt, reg),
-        // A `WHERE` after a decode filters the decoded relation locally (the decoded schema is
-        // late-bound — only known after the decode runs; blueprint §13b Requirement 3).
-        PipeOp::Where(e) => {
-            let predicate = lower_predicate(e).map_err(|err| {
-                ExecError::new(
-                    ErrorKind::Usage,
-                    "codec_where_unsupported",
-                    format!("this WHERE cannot be evaluated after a decode: {err:?}"),
-                )
-            })?;
-            Ok(apply_residual(batch, &predicate))
-        }
-        // A `LIMIT` after a decode truncates the decoded relation.
-        PipeOp::Limit(n) => {
-            let keep = (*n).max(0) as usize;
-            let mut b = batch;
-            b.rows.truncate(keep);
-            Ok(b)
-        }
-        // Schema-neutral / effect-adjacent ops are positionally harmless (they neither reorder
-        // nor reshape the decoded relation in a way the tail must model).
-        PipeOp::Extend(_) | PipeOp::Set(_) | PipeOp::As(_) | PipeOp::Call(_) => Ok(batch),
-        // Any other relational op after a codec is not yet evaluable locally over the decoded
-        // relation — a clear, named error beats silently mis-ordering.
-        other => Err(ExecError::new(
-            ErrorKind::Usage,
+/// Evaluate a run of trailing relational ops over the already-decoded `batch`, reusing the
+/// engine's lower→partition→[`MiniEvaluator`] machinery (the same the declared view body and the
+/// main read path run). The synthetic source keeps every op residual, so the engine executes them
+/// over the injected decoded batch. Returns `batch` unchanged for an empty run.
+///
+/// # Errors
+/// [`ExecError`] (usage class) if the ops cannot be lowered/planned over the decoded relation.
+fn run_trailing_ops(
+    batch: RowBatch,
+    source: &Source,
+    ops: &[PipeOp],
+) -> Result<RowBatch, ExecError> {
+    if ops.is_empty() {
+        return Ok(batch);
+    }
+    let schema = batch.schema.clone();
+    let source_of = |_: &[String]| SourceId::new(DECODED_SOURCE);
+    let schema_of = |_: &SourceId| schema.clone();
+    let transform_of = |_: &str| None::<qfs_core::ResolvedTransform>;
+    let pipeline = Pipeline {
+        source: source.clone(),
+        ops: ops.to_vec(),
+    };
+    let usage = |code: &'static str, msg: String| ExecError::new(ErrorKind::Usage, code, msg);
+    let logical = lower_query(&pipeline, &source_of, &schema_of, &transform_of).map_err(|e| {
+        usage(
             "codec_then_query",
             format!(
-                "the `{}` stage after DECODE/ENCODE is not yet supported — only WHERE/LIMIT run \
-                 after a decode today",
-                op_label(other)
+                "a stage after DECODE/ENCODE cannot be evaluated over the decoded relation: {e:?}"
             ),
-        )),
-    }
+        )
+    })?;
+    let mut reg = SourceRegistry::new();
+    reg.register(SourceId::new(DECODED_SOURCE), PushdownProfile::None);
+    let physical = partition_by_source(&logical, &reg).map_err(|e| {
+        usage(
+            "codec_then_query",
+            format!("could not plan the post-decode stages: {e:?}"),
+        )
+    })?;
+    MiniEvaluator::new()
+        .execute(&physical, ScanResults::new(vec![batch]))
+        .map_err(|e| {
+            usage(
+                "codec_then_query",
+                format!("post-decode evaluation failed: {e:?}"),
+            )
+        })
 }
 
 /// `DECODE <fmt>` over a content-bearing batch: decode **each row's** `content` bytes and union
@@ -296,27 +335,6 @@ fn encoded_batch(bytes: Vec<u8>) -> RowBatch {
     RowBatch::new(schema, vec![Row::new(vec![Value::Text(text)])])
 }
 
-/// A short label for a pipe op, for the `codec_then_query` diagnostic.
-fn op_label(op: &PipeOp) -> &'static str {
-    match op {
-        PipeOp::Where(_) => "WHERE",
-        PipeOp::Select(_) => "SELECT",
-        PipeOp::Extend(_) => "EXTEND",
-        PipeOp::Set(_) => "SET",
-        PipeOp::Aggregate(_) => "AGGREGATE",
-        PipeOp::GroupBy(_) => "GROUP BY",
-        PipeOp::OrderBy(_) => "ORDER BY",
-        PipeOp::Limit(_) => "LIMIT",
-        PipeOp::Distinct => "DISTINCT",
-        PipeOp::Join(_) => "JOIN",
-        PipeOp::Union(_) => "UNION",
-        PipeOp::Except(_) => "EXCEPT",
-        PipeOp::Intersect(_) => "INTERSECT",
-        PipeOp::Expand(_) => "EXPAND",
-        _ => "this",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +456,28 @@ mod tests {
         let out = apply_codecs(batch, &stmt).unwrap();
         assert_eq!(out.rows.len(), 1, "only b.json matches k == 2");
         assert!(matches!(&out.rows[0].values[0], Value::Text(s) if s == "/local/b.json"));
+    }
+
+    /// `SELECT` + `ORDER BY` after a decode run over the decoded relation (blueprint §13b, the
+    /// design brief's trailing-relational-op ruling) — the cookbook's collection recipes shape.
+    #[test]
+    fn select_and_order_by_after_decode_run_over_the_decoded_relation() {
+        let stmt = parse_statement(
+            "/local/*.json |> decode json |> where n >= 2 |> order by n desc |> select path, n",
+        )
+        .unwrap();
+        let batch = set_batch(&[
+            ("/local/a.json", b"{\"n\":1}"),
+            ("/local/b.json", b"{\"n\":3}"),
+            ("/local/c.json", b"{\"n\":2}"),
+        ]);
+        let out = apply_codecs(batch, &stmt).unwrap();
+        // n>=2 keeps b(3) and c(2); ordered desc → b then c; projected to (path, n).
+        assert_eq!(out.rows.len(), 2);
+        assert_eq!(out.schema.columns.len(), 2);
+        assert_eq!(out.schema.columns[0].name.as_str(), "path");
+        assert!(matches!(&out.rows[0].values[0], Value::Text(s) if s == "/local/b.json"));
+        assert!(matches!(&out.rows[1].values[0], Value::Text(s) if s == "/local/c.json"));
     }
 
     /// The single-file case passes as the one-row instance of the per-row rule (no single-blob

@@ -1005,6 +1005,54 @@ mod tests {
         assert!(paths[0].ends_with("todo1.md") && paths[1].ends_with("todo2.md"));
     }
 
+    /// **Ticket 20260722090500 — the cookbook collection recipe is execution-checked.** The
+    /// `docs/query-cookbook.md` recipe "Find every workaholic ticket still in todo, newest first"
+    /// (`… *.md |> decode md |> where status == 'todo' |> order by created_at desc |> select …`)
+    /// runs against a hermetic fixture tree and its result shape is asserted — not just parsed.
+    /// Reverting the per-row decode (the single-blob refusal) makes this fail.
+    #[test]
+    fn cookbook_todo_tickets_collection_recipe_executes() {
+        let dir = TempDir::new().expect("tempdir");
+        std::fs::write(
+            dir.path().join("t1.md"),
+            b"---\nid: T1\ntitle: One\nstatus: todo\ncreated_at: 2026-07-01\n---\n# One\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("t2.md"),
+            b"---\nid: T2\ntitle: Two\nstatus: todo\ncreated_at: 2026-07-20\n---\n# Two\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("t3.md"),
+            b"---\nid: T3\ntitle: Three\nstatus: done\ncreated_at: 2026-07-10\n---\n# Three\n",
+        )
+        .unwrap();
+        let (engine, reads) = local_engine_and_reads(dir.path().to_path_buf());
+        let stmt = qfs_exec::parse(
+            "/local/*.md |> decode md |> where status == 'todo' \
+             |> order by created_at desc |> select id, title, created_at",
+        )
+        .expect("parse");
+        let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+        // Only the two todo tickets, newest first (T2 then T1), projected to the three columns.
+        assert_eq!(out.rows.len(), 2, "done ticket excluded");
+        assert_eq!(
+            out.schema.columns.len(),
+            3,
+            "projected to id, title, created_at"
+        );
+        let ids: Vec<String> = out
+            .rows
+            .iter()
+            .filter_map(|r| match cell(&out.schema, r, "id") {
+                Value::Text(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["T2", "T1"], "ordered by created_at desc");
+    }
+
     /// A `*.json` and a `*.yaml` collected set decode the same per-row way — the codec never knew
     /// the driver, and every decoded row still carries `path`.
     #[test]

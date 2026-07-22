@@ -164,7 +164,7 @@ row-equivalent to the compiled driver, which then retires.
       wherever the codec layer homes it), `CONNECT … TO markdown` maps onto the registered-set
       shape or is retired with it, and docs/skills regenerate (plugin version bump per
       CLAUDE.md if a taught surface moves).
-- [ ] **The cookbook stops teaching what the binary rejects.** (#20260722090500-cookbook-collection-recipes-execution-checked.md) Every multi-file `decode`
+- [x] **The cookbook stops teaching what the binary rejects.** (#20260722090500-cookbook-collection-recipes-execution-checked.md) Every multi-file `decode`
       recipe in `docs/query-cookbook.md` / the cookbook articles either executes against a
       hermetic fixture in the test ratchet (execution-checked, not parse-only, for at least
       the collection recipes) or is corrected; docs-true is restored on this surface.
@@ -189,3 +189,4 @@ row-equivalent to the compiled driver, which then retires.
 - 2026-07-22 — strategy created and linked — integrations-are-declared-not-compiled
 - 2026-07-22 — ticket archived — 20260722090100-design-brief-codec-relation-surface-and-13b-ruling.md
 - 2026-07-22 — ticket archived — 20260722090200-per-row-decode-over-collected-sets.md
+- 2026-07-22 — ticket archived — 20260722090500-cookbook-collection-recipes-execution-checked.md

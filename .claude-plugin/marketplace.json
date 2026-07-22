@@ -1,6 +1,6 @@
 {
   "name": "qfs",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "One pipe-SQL query language for every service, plus a skill teaching coding agents to drive it",
   "owner": {
     "name": "tamurayoshiya",
@@ -10,7 +10,7 @@
     {
       "name": "qfs",
       "description": "Use when a task needs to read or modify any service the user has connected — mail, files, databases, GitHub, Slack, git, cloud storage — through the qfs pipe-SQL query language and the qfs CLI.",
-      "version": "0.14.0",
+      "version": "0.14.1",
       "author": {
         "name": "tamurayoshiya",
         "email": "a@qmu.jp"

@@ -1,6 +1,6 @@
 {
   "name": "qfs",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "Use when a task needs to read or modify any service the user has connected — mail, files, databases, GitHub, Slack, git, cloud storage — through the qfs pipe-SQL query language and the qfs CLI.",
   "author": {
     "name": "tamurayoshiya",
