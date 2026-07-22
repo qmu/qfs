@@ -56,6 +56,23 @@ construction, not by remembering to isolate:
 - Wherever a teardown line issues `kill-server`, replace it per the rule above and add a guard so
   the default socket can never be the target.
 
+## Policies
+
+- **Never touch the host's tmux (owner rulings 2026-07-19 / 2026-07-22).** Tests and
+  verification harnesses must not spawn, signal, or tear down any tmux server on the shared
+  host. Any test that exercises a real tmux server runs inside the mission's sanctioned
+  container (fresh $HOME, no host sockets, dedicated `-L` name); refusal-logic tests that
+  never reach a real server are preferred and may run in the ordinary hermetic suite.
+- Safety by construction, not by environment variables: the dedicated `-L` socket name
+  travels as an argument on every command.
+
+## Quality Gate
+
+- The three Acceptance bullets below hold, with the isolation-refusal test implemented so it
+  never contacts a real tmux server on the shared host (mock or in-container only).
+- `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo fmt --all --check` pass.
+
 ## Acceptance
 
 - No code path or test issues a `tmux kill-server` (or `kill-session`) that can resolve to the

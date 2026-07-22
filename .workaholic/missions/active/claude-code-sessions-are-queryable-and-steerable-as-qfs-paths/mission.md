@@ -375,3 +375,4 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-07-22 — ticket added (rider: compiled slack driver bugfix, owner-directed onto this overnight queue) — 20260721190756-slack-driver-channel-id-resolution.md
 - 2026-07-22 — strategy created and linked — ai-sessions-are-ordinary-qfs-surfaces
 - 2026-07-22 — mission replanned for the overnight run - owner ruling 2026-07-22: a container on this host (docker=podman) qualifies as the isolated box, so the remaining set is unattended-drivable in-container; Experience section added per the mission schema; drive_authorized stamped — mission.md
+- 2026-07-22 — live round re-ruled autonomous-in-container (owner directive 2026-07-22); minimal claude credential copy into the container permitted, host claude state and sockets never mounted; tmux ticket gains container-only policies — 20260719231005-claude-live-round-owner-attended.md
