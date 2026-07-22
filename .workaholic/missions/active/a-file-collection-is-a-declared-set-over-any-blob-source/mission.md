@@ -133,17 +133,17 @@ row-equivalent to the compiled driver, which then retires.
 
 ## Acceptance
 
-- [ ] **Requirement 1 (verbatim gate): (#20260722090200-per-row-decode-over-collected-sets.md) "a simple `/local` path pointing at a local
+- [x] **Requirement 1 (verbatim gate): (#20260722090200-per-row-decode-over-collected-sets.md) "a simple `/local` path pointing at a local
       directory."** A `/local` mount over a local directory is the collection's source; a
       hermetic engine-level test collects a fixture tree through it with no mechanism beyond
       the mount and the pipeline.
-- [ ] **Requirement 2 (verbatim gate): (#20260722090200-per-row-decode-over-collected-sets.md) "under it, collect Markdown, JSON, YAML, or whatever
+- [x] **Requirement 2 (verbatim gate): (#20260722090200-per-row-decode-over-collected-sets.md) "under it, collect Markdown, JSON, YAML, or whatever
       files over the qfs query engine's pipelines."** `DECODE` over a multi-row collected set
       decodes per row and unions: hermetic tests cover a `*.md` glob (one row per file), a
       `*.json`/`*.yaml` set, and the provenance `path` column on every decoded row;
       `decode_needs_single_blob` is retired with the single-file case passing as the one-row
       instance.
-- [ ] **Requirement 3 (verbatim gate): (#20260722090200-per-row-decode-over-collected-sets.md) "for collected articles, apply a `WHERE` clause that
+- [x] **Requirement 3 (verbatim gate): (#20260722090200-per-row-decode-over-collected-sets.md) "for collected articles, apply a `WHERE` clause that
       filters on fields parsed out of a Markdown file's YAML front matter."** A hermetic test
       runs `… *.md |> decode md |> where <front-matter key> == …` over a fixture tree and gets
       exactly the matching files' rows; sparse keys (a file missing the key) read as null, not
@@ -188,3 +188,4 @@ row-equivalent to the compiled driver, which then retires.
 - 2026-07-22 — mission replanned for the overnight run - five tickets cut per the design rulings, per-ticket judgment pre-answered in interrogation (links surface delegated to the design brief; compiled /markdown deletion plus plugin bump authorized once equivalence is green); drive_authorized stamped — mission.md
 - 2026-07-22 — strategy created and linked — integrations-are-declared-not-compiled
 - 2026-07-22 — ticket archived — 20260722090100-design-brief-codec-relation-surface-and-13b-ruling.md
+- 2026-07-22 — ticket archived — 20260722090200-per-row-decode-over-collected-sets.md

@@ -220,6 +220,7 @@ impl<'p> Acc<'p> {
             path: self.path,
             pushed: self.pushed,
             schema,
+            materialize_content: false,
         });
         for op in self.residual {
             node = PhysicalPlan::combine1(op, node);
@@ -440,6 +441,7 @@ fn federate(plan: &LogicalPlan, reg: &SourceRegistry) -> Result<PhysicalPlan, Pl
                 path: path.clone(),
                 pushed: PushedQuery::default(),
                 schema: schema.clone(),
+                materialize_content: false,
             }))
         }
     }

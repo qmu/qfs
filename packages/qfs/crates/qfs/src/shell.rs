@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use qfs_core::{CfsError, DriverId, Engine, RowBatch};
 use qfs_driver_cf::CfDriver;
-use qfs_driver_local::{scan_rows, LocalError, LocalFsDriver, Sandbox};
+use qfs_driver_local::{scan_rows_with, LocalError, LocalFsDriver, Sandbox};
 use qfs_exec::shell::{Outcome, Session, VfsPath};
 use qfs_exec::{ReadDriver, ReadRegistry};
 use qfs_pushdown::ScanNode;
@@ -71,7 +71,10 @@ impl ReadDriver for LocalReadDriver {
             scan.path.clone()
         };
         let project = scan.pushed.project.as_deref();
-        scan_rows(&self.sandbox, &vfs, project).map_err(|e| local_to_qfs(&e))
+        // A downstream DECODE (blueprint §13b) asks a glob/directory listing to materialize each
+        // file entry's `content` bytes, so a per-row decode over a collected set has bytes to read.
+        scan_rows_with(&self.sandbox, &vfs, project, scan.materialize_content)
+            .map_err(|e| local_to_qfs(&e))
     }
 }
 
@@ -898,6 +901,7 @@ mod tests {
     //! gate end-to-end (ticket t28 acceptance). The local mount root is ALWAYS a tempdir — these
     //! tests never touch a system path.
     use super::*;
+    use qfs_core::{Schema, Value};
     use std::io::Cursor;
     use tempfile::TempDir;
 
@@ -910,6 +914,115 @@ mod tests {
         std::fs::write(dir.path().join("sub").join("c.md"), b"gamma").unwrap();
         let (engine, reads) = local_engine_and_reads(dir.path().to_path_buf());
         (dir, engine, reads)
+    }
+
+    /// A temp-dir local mount holding a small tree of front-matter markdown, JSON and YAML files
+    /// (mission `a-file-collection-is-a-declared-set-over-any-blob-source`), plus the engine +
+    /// reads wired to it. The collection-set decode tests read these through the real pipeline.
+    fn collection_fixture() -> (TempDir, Engine, ReadRegistry) {
+        let dir = TempDir::new().expect("tempdir");
+        std::fs::write(
+            dir.path().join("todo1.md"),
+            b"---\nstatus: todo\nowner: a@qmu.jp\n---\n# First\n\nbody one\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("todo2.md"),
+            b"---\nstatus: todo\n---\n# Second\n\nbody two\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("done.md"),
+            b"---\nstatus: done\n---\n# Third\n\nbody three\n",
+        )
+        .unwrap();
+        // A markdown file with NO front-matter `status` key — its `status` must read as null,
+        // not error, under a WHERE (mission acceptance Requirement 3).
+        std::fs::write(dir.path().join("plain.md"), b"# Plain\n\nno frontmatter\n").unwrap();
+        std::fs::write(dir.path().join("data.json"), b"{\"k\":1}").unwrap();
+        std::fs::write(dir.path().join("conf.yaml"), b"k: 2\n").unwrap();
+        let (engine, reads) = local_engine_and_reads(dir.path().to_path_buf());
+        (dir, engine, reads)
+    }
+
+    /// The value of `col` in `row` under `schema`, or `Value::Null` if absent.
+    fn cell<'a>(schema: &Schema, row: &'a qfs_core::Row, col: &str) -> &'a Value {
+        schema
+            .columns
+            .iter()
+            .position(|c| c.name.as_str() == col)
+            .and_then(|i| row.values.get(i))
+            .unwrap_or(&Value::Null)
+    }
+
+    /// Mission acceptance Requirement 1 & 2: a `/local` glob collects Markdown files through the
+    /// mount and the pipeline alone; `DECODE md` decodes **per row** (one row per file) and every
+    /// decoded row carries its `path` provenance.
+    #[test]
+    fn local_glob_decodes_markdown_per_row_through_the_engine() {
+        let (_d, engine, reads) = collection_fixture();
+        let stmt = qfs_exec::parse("/local/*.md |> decode md").expect("parse");
+        let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+        assert_eq!(out.rows.len(), 4, "one decoded row per top-level .md file");
+        // Provenance: every decoded row carries a non-null `path`.
+        for row in &out.rows {
+            assert!(
+                matches!(cell(&out.schema, row, "path"), Value::Text(p) if p.contains(".md")),
+                "each decoded row carries its file path"
+            );
+        }
+        // Front-matter keys became columns; `body` is present.
+        assert!(out
+            .schema
+            .columns
+            .iter()
+            .any(|c| c.name.as_str() == "status"));
+        assert!(out.schema.columns.iter().any(|c| c.name.as_str() == "body"));
+    }
+
+    /// Mission acceptance Requirement 3: a `WHERE` over a front-matter key returns exactly the
+    /// matching files' rows, and a file missing the key reads as null (not an error).
+    #[test]
+    fn where_over_frontmatter_key_filters_the_collected_set() {
+        let (_d, engine, reads) = collection_fixture();
+        let stmt =
+            qfs_exec::parse("/local/*.md |> decode md |> where status == 'todo'").expect("parse");
+        let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+        assert_eq!(
+            out.rows.len(),
+            2,
+            "todo1.md + todo2.md match; done + plain do not"
+        );
+        let mut paths: Vec<String> = out
+            .rows
+            .iter()
+            .filter_map(|r| match cell(&out.schema, r, "path") {
+                Value::Text(p) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        paths.sort();
+        assert!(paths[0].ends_with("todo1.md") && paths[1].ends_with("todo2.md"));
+    }
+
+    /// A `*.json` and a `*.yaml` collected set decode the same per-row way — the codec never knew
+    /// the driver, and every decoded row still carries `path`.
+    #[test]
+    fn json_and_yaml_sets_decode_per_row_with_provenance() {
+        let (_d, engine, reads) = collection_fixture();
+        for (glob, key, want) in [
+            ("/local/*.json |> decode json", "k", Value::Int(1)),
+            ("/local/*.yaml |> decode yaml", "k", Value::Int(2)),
+        ] {
+            let stmt = qfs_exec::parse(glob).expect("parse");
+            let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+            assert_eq!(out.rows.len(), 1, "one row per file for {glob}");
+            assert_eq!(cell(&out.schema, &out.rows[0], key), &want);
+            assert!(
+                matches!(cell(&out.schema, &out.rows[0], "path"), Value::Text(_)),
+                "provenance path present for {glob}"
+            );
+        }
     }
 
     /// Run a scripted session through the REAL commit leg rooted at `root`, returning the
@@ -1307,6 +1420,7 @@ mod tests {
             path: "/cf/queue/q".to_string(),
             pushed: qfs_pushdown::PushedQuery::default(),
             schema: qfs_core::Schema::new(Vec::new()),
+            materialize_content: false,
         };
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
@@ -1360,6 +1474,7 @@ mod tests {
             path: "/mail2/inbox".to_string(),
             pushed: qfs_pushdown::PushedQuery::default(),
             schema: qfs_core::Schema::new(Vec::new()),
+            materialize_content: false,
         };
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()

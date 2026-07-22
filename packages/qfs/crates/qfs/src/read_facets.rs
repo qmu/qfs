@@ -904,6 +904,7 @@ mod tests {
             path: path.to_string(),
             pushed: PushedQuery::default(),
             schema: Schema::new(Vec::new()),
+            materialize_content: false,
         }
     }
 
@@ -951,6 +952,7 @@ mod tests {
                 ..PushedQuery::default()
             },
             schema: Schema::new(Vec::new()),
+            materialize_content: false,
         }
     }
 
@@ -1022,6 +1024,7 @@ mod tests {
             path: "/sql/orders/orders".to_string(),
             pushed,
             schema: Schema::new(Vec::new()),
+            materialize_content: false,
         };
         let filtered = read.scan(&scan).await.unwrap();
         assert_eq!(filtered.rows.len(), 2, "WHERE total>100 keeps bob + carol");
