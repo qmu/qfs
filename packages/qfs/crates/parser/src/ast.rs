@@ -881,12 +881,23 @@ pub struct FnRef {
     pub span: Span,
 }
 
-/// A `DECODE fmt` / `ENCODE fmt` codec reference — the codec registry seam (blueprint §4).
+/// A `DECODE fmt[.relation]` / `ENCODE fmt` codec reference — the codec registry seam
+/// (blueprint §4/§13b).
+///
+/// The optional `.relation` suffix (design brief Ruling 1) addresses one of a codec's
+/// **declared named relations** by a relation-qualified format token: `decode md` is the codec's
+/// primary relation, `decode md.documents` / `decode md.links` its named relations. `None` means
+/// the primary; a codec that declares only one relation ignores the suffix (a relation-qualified
+/// token over such a codec is a resolve-time usage error). The parser validates shape only — the
+/// relation name is resolved later against the codec's declared relation set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Codec {
     /// The codec format name (`json`/`yaml`/`csv`/…), resolved later.
     pub fmt: Ident,
-    /// Source span of the codec format token.
+    /// The optional relation-qualified suffix (`md.documents` → `Some("documents")`), resolved
+    /// later against the codec's declared relations. `None` is the codec's primary relation.
+    pub relation: Option<Ident>,
+    /// Source span of the codec format token (through the relation suffix, if any).
     #[serde(
         serialize_with = "serialize_span",
         deserialize_with = "deserialize_span"

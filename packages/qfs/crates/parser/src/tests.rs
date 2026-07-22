@@ -119,6 +119,31 @@ fn decode_and_encode_codecs() {
         panic!("expected Encode")
     };
     assert_eq!(e.fmt, "yaml");
+    // A bare codec carries no relation suffix (the primary relation).
+    assert_eq!(d.relation, None);
+    assert_eq!(e.relation, None);
+}
+
+#[test]
+fn decode_relation_qualified_token_parses() {
+    // The `.relation` suffix (design brief Ruling 1) addresses a codec's declared named relation:
+    // `decode md.documents` / `decode md.links`. A leaf addition to the codec stage, resolved
+    // later against the codec's relation set — the parser records fmt + relation only.
+    let stmt = parse_ok("/local/docs/*.md |> DECODE md.documents");
+    let Statement::Query(p) = stmt else { panic!() };
+    let PipeOp::Decode(ref d) = p.ops[0] else {
+        panic!("expected Decode")
+    };
+    assert_eq!(d.fmt, "md");
+    assert_eq!(d.relation.as_deref(), Some("documents"));
+
+    let stmt = parse_ok("/local/docs/*.md |> DECODE md.links");
+    let Statement::Query(p) = stmt else { panic!() };
+    let PipeOp::Decode(ref d) = p.ops[0] else {
+        panic!("expected Decode")
+    };
+    assert_eq!(d.fmt, "md");
+    assert_eq!(d.relation.as_deref(), Some("links"));
 }
 
 // ---- transform stage (blueprint §15, decision W) --------------------------
@@ -1796,10 +1821,12 @@ fn closed_core_variant_counts_are_locked() {
         PipeOp::Expand(vec![]),
         PipeOp::Decode(Codec {
             fmt: String::new(),
+            relation: None,
             span: Span::new(0, 0),
         }),
         PipeOp::Encode(Codec {
             fmt: String::new(),
+            relation: None,
             span: Span::new(0, 0),
         }),
         PipeOp::Call(CallRef {

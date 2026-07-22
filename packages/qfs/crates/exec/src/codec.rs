@@ -104,7 +104,7 @@ pub(crate) fn apply_codecs(batch: RowBatch, stmt: &Statement) -> Result<RowBatch
     while i < tail.len() {
         match &tail[i] {
             PipeOp::Decode(c) => {
-                current = decode_set(current, &c.fmt, &registry)?;
+                current = decode_set(current, &c.fmt, c.relation.as_deref(), &registry)?;
                 i += 1;
             }
             PipeOp::Encode(c) => {
@@ -178,10 +178,21 @@ fn run_trailing_ops(
         })
 }
 
-/// `DECODE <fmt>` over a content-bearing batch: decode **each row's** `content` bytes and union
-/// the per-file relations with schema-widening, carrying the source `path` provenance column onto
-/// every decoded row. The single-file case is the one-row instance of this rule.
-fn decode_set(batch: RowBatch, fmt: &str, reg: &CodecRegistry) -> Result<RowBatch, ExecError> {
+/// `DECODE <fmt>[.<relation>]` over a content-bearing batch: decode **each row's** `content` bytes
+/// into the named relation (`relation = None` selects the codec's primary relation) and union the
+/// per-file relations with schema-widening, carrying the source `path` provenance column onto every
+/// decoded row. The single-file case is the one-row instance of this rule.
+///
+/// Provenance (design brief Ruling 3): each row's `path` value is both carried onto the decoded
+/// rows AND threaded to the codec as its `source_path` — a relation whose values normalize against
+/// the source's address (the markdown `links` relation's `target_doc`) resolves against the same
+/// join id the decoded rows carry, so `links.target_doc` joins `documents.path` for free.
+fn decode_set(
+    batch: RowBatch,
+    fmt: &str,
+    relation: Option<&str>,
+    reg: &CodecRegistry,
+) -> Result<RowBatch, ExecError> {
     let codec = reg.resolve(fmt).map_err(|e| ExecError::from_qfs(&e))?;
     let content_idx = batch
         .schema
@@ -223,11 +234,20 @@ fn decode_set(batch: RowBatch, fmt: &str, reg: &CodecRegistry) -> Result<RowBatc
                 ))
             }
         };
-        let decoded = codec.decode(&bytes).map_err(|e| ExecError::from_qfs(&e))?;
         let path_val = path_idx
             .and_then(|i| row.values.get(i))
             .cloned()
             .unwrap_or(Value::Null);
+        // The source's address is the codec's `source_path` provenance (Ruling 3): a relation
+        // that normalizes against it (markdown `links.target_doc`) resolves against the very join
+        // id the decoded rows carry as `path`.
+        let source_path = match &path_val {
+            Value::Text(s) => Some(s.as_str()),
+            _ => None,
+        };
+        let decoded = codec
+            .decode_relation(relation, &bytes, source_path)
+            .map_err(|e| ExecError::from_qfs(&e))?;
         for srow in &decoded.rows {
             let mut cells: Vec<(usize, Value)> = Vec::new();
             for (col, val) in decoded.schema.columns.iter().zip(&srow.values) {
@@ -478,6 +498,100 @@ mod tests {
         assert_eq!(out.schema.columns[0].name.as_str(), "path");
         assert!(matches!(&out.rows[0].values[0], Value::Text(s) if s == "/local/b.json"));
         assert!(matches!(&out.rows[1].values[0], Value::Text(s) if s == "/local/c.json"));
+    }
+
+    /// `decode md.documents` over a collected `*.md` set (design brief Ruling 1 + the grammar
+    /// suffix): the relation-qualified token routes to the codec's `documents` relation — one row
+    /// per file with `title` derived (frontmatter, else first heading) — each carrying its `path`
+    /// provenance. The bare `path` column is the join id `links.target_doc` resolves against.
+    #[test]
+    fn decode_md_documents_relation_over_a_set() {
+        let stmt = parse_statement("/local/*.md |> decode md.documents").unwrap();
+        let batch = set_batch(&[
+            (
+                "notes/first.md",
+                b"# First note\n\nback to [plan](../plan.md)\n",
+            ),
+            (
+                "plan.md",
+                "---\ntitle: The Plan\n---\n\n# H1\n\n## H2\n\n[the note](notes/first.md)\n"
+                    .as_bytes(),
+            ),
+        ]);
+        let out = apply_codecs(batch, &stmt).unwrap();
+        assert_eq!(out.rows.len(), 2, "one documents row per file");
+        assert_eq!(out.schema.columns[0].name.as_str(), "path");
+        let path = |i: usize| match &out.rows[i].values[0] {
+            Value::Text(s) => s.as_str(),
+            _ => "",
+        };
+        assert_eq!(path(0), "notes/first.md");
+        assert_eq!(path(1), "plan.md");
+        let title_idx = out
+            .schema
+            .columns
+            .iter()
+            .position(|c| c.name.as_str() == "title")
+            .expect("title column");
+        // `title`: notes/first.md → first ATX heading; plan.md → frontmatter title.
+        assert!(matches!(&out.rows[0].values[title_idx], Value::Text(s) if s == "First note"));
+        assert!(matches!(&out.rows[1].values[title_idx], Value::Text(s) if s == "The Plan"));
+    }
+
+    /// `decode md.links` over a collected `*.md` set: the `links` relation yields zero-or-more rows
+    /// per file, each carrying the full nested `source_section_path`, and `target_doc` normalized
+    /// against the source's `path` provenance so it JOINS `documents.path` (Ruling 3). Proves the
+    /// per-file cardinality difference rides the same per-row-then-union machinery.
+    #[test]
+    fn decode_md_links_relation_normalizes_target_doc_against_provenance() {
+        let stmt = parse_statement("/local/*.md |> decode md.links").unwrap();
+        let batch = set_batch(&[(
+            "notes/first.md",
+            b"# First note\n\n## Detail\n\nsee [plan](../plan.md) and [ext](https://x.example/y)\n",
+        )]);
+        let out = apply_codecs(batch, &stmt).unwrap();
+        // Two links in one file; each row carries the source's provenance path.
+        assert_eq!(out.rows.len(), 2);
+        assert_eq!(out.schema.columns[0].name.as_str(), "path");
+        let col = |name: &str| {
+            out.schema
+                .columns
+                .iter()
+                .position(|c| c.name.as_str() == name)
+                .unwrap_or_else(|| panic!("column {name}"))
+        };
+        let sec = col("source_section_path");
+        let tgt = col("target");
+        let tdoc = col("target_doc");
+        // The in-tree link: nested heading path in order, target_doc joinable to documents.path.
+        let section: Vec<String> = match &out.rows[0].values[sec] {
+            Value::Array(items) => items
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Text(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect(),
+            other => panic!("source_section_path should be an Array, got {other:?}"),
+        };
+        assert_eq!(section, vec!["First note", "Detail"]);
+        // `../plan.md` from `notes/first.md` normalizes to the root-relative `plan.md` join id.
+        assert!(matches!(&out.rows[0].values[tdoc], Value::Text(s) if s == "plan.md"));
+        // The external link keeps its target and is not joinable.
+        assert!(matches!(&out.rows[1].values[tgt], Value::Text(s) if s == "https://x.example/y"));
+        assert!(matches!(&out.rows[1].values[tdoc], Value::Null));
+    }
+
+    /// A relation qualifier over a single-relation codec is a clear usage error, not a silent
+    /// wrong decode (design brief Ruling 1: `decode json.nope`).
+    #[test]
+    fn relation_on_a_single_relation_codec_is_an_error() {
+        let stmt = parse_statement("/local/a.json |> decode json.nope").unwrap();
+        let err = apply_codecs(set_batch(&[("a.json", b"{\"k\":1}")]), &stmt).unwrap_err();
+        assert!(
+            err.to_string().contains("nope") || err.to_string().contains("relation"),
+            "a bad relation names the offending relation: {err}"
+        );
     }
 
     /// The single-file case passes as the one-row instance of the per-row rule (no single-blob
