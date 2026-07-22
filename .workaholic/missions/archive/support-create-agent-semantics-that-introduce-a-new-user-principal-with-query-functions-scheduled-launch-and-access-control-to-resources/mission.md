@@ -6,7 +6,7 @@ status: achieved
 created_at: 2026-07-12T04:34:26+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
-drive_authorized: true
+drive_authorized: false
 tickets:
   - 20260718203330-agent-model-blueprint-chapter.md
   - 20260718203331-create-agent-grammar-registry.md
@@ -220,3 +220,4 @@ one owner-attended live round proving a real fire and a visible denial.
     scratch removed — no live daemon left running.
 - 2026-07-19 — ticket archived — 20260718203335-agent-live-proof-round.md
 - 2026-07-22 — mission achieved — mission.md
+- 2026-07-22 — drive authorization revoked on archive - an achieved mission must not keep authorizing its leftover queue tickets for unattended runs (audit finding, 2026-07-22) — mission.md
