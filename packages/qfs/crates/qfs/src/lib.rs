@@ -75,6 +75,7 @@ pub mod store;
 pub mod sweeper;
 pub mod sys;
 pub mod telemetry;
+pub mod tmux;
 pub mod transform;
 pub mod transform_providers;
 pub mod transport;

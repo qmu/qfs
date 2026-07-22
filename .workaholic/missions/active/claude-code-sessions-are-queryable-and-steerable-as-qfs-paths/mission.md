@@ -379,3 +379,4 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-07-22 — ticket added (rider: slack user-token DM write channel_not_found bugfix; QG hermetic, no third-party DM) — 20260722171439-slack-driver-user-token-dm-write-channel-not-found.md
 - 2026-07-22 — ticket archived — 20260721190756-slack-driver-channel-id-resolution.md
 - 2026-07-22 — ticket archived — 20260722171439-slack-driver-user-token-dm-write-channel-not-found.md
+- 2026-07-22 — ticket archived — 20260719105527-tmux-session-teardown-must-not-kill-server.md
