@@ -159,7 +159,7 @@ the four downstream missions with their entry conditions.
       driver using the new semantic installs, describes, plans, and reads/writes against
       hermetic wire fixtures through the real tier-2 evaluator — the proof pattern
       `cloudflare.qfs`'s SQL arm set — so the rulings are demonstrated, not speculative.
-- [ ] **The conciseness bar is stated and measured.** (#20260722091400-conciseness-bar-stated-and-measured.md) The blueprint records the target (a
+- [x] **The conciseness bar is stated and measured.** (#20260722091400-conciseness-bar-stated-and-measured.md) The blueprint records the target (a
       tier-1/tier-2 REST service ≈ one screen of statements, chatwork as the calibration
       point) and the inventory's *expressible today* dispositions are measured against it;
       terseness devices adopted (defaults, shared fragments, prelude aliases, type shorthand)
@@ -207,3 +207,4 @@ the four downstream missions with their entry conditions.
 - 2026-07-22 — ticket archived — 20260722091100-coverage-inventory-of-compiled-driver-surfaces.md
 - 2026-07-22 — ticket archived — 20260722091200-rule-the-semantic-gaps-in-blueprint-13.md
 - 2026-07-22 — ticket archived — 20260722091300-ship-read-over-post-hermetically.md
+- 2026-07-22 — ticket archived — 20260722091400-conciseness-bar-stated-and-measured.md

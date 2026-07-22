@@ -160,7 +160,41 @@ and G2 (declared pushdown) gate the slack/github conversions and full `/cf` reti
 mission; G3–G5 gate Gmail; G7 is the Drive blob-ergonomics question; G8 is the non-REST-arm
 decision. 091200 rules each; 091300 ships G1 (read-over-POST) with a hermetic end-to-end proof.
 
-## Conciseness measurements (filled by ticket 091400)
+## Conciseness measurements (ticket 091400)
 
-*(Per 091400's policy: statement-line counts per "expressible today" family land here so a later
-conversion mission reads bar and evidence in one place. Placeholder until 091400 runs.)*
+Measured against the blueprint §13.2 bar: a tier-1/tier-2 REST service ≈ one screen, **≤ ~40
+statement-lines** (non-comment, non-blank), calibrated on `chatwork.qfs` = **32 statement-lines /
+15 statements** for a full tier-1 service including file transfer. Statement-lines counted as
+`grep -vE '^\s*--|^\s*$'`; statements counted by `;`.
+
+**Shipped calibration (real files):**
+
+| Declared driver | statement-lines | statements |
+|-----------------|-----------------|------------|
+| `github_account.qfs` (read-only slice) | 18 | 11 |
+| `chatwork.qfs` (full tier-1 + file transfer — calibration) | 32 | 15 |
+| `cloudflare.qfs` (zones/DNS/KV/queue/D1-SQL) | 41 | 22 |
+
+**Per-family "expressible today" read cost** (parse-checked snippets, statement-lines):
+
+| Driver | read views (families) | ~statement-lines for the read surface |
+|--------|-----------------------|----------------------------------------|
+| Slack | messages, replies, users (+files list/blob) | ~8–10 (1 driver + 1–3 types + 4–5 views) |
+| GitHub | 8 namespaces + objects + sub-collections | ~12–14 (1 driver + few types + ~10 views, one line each) |
+| Drive | id-list, download, export | ~5–6 (1 driver + 1 type + 3 views) |
+| Gmail | labels, message, thread, attachment | ~6–8 (1 driver + 2 types + 4 views; list hydration adds one G4 stage) |
+
+**Projected full-twin statement-line counts** (read + write + CALL + the landed §13.1 rulings),
+each **under the ~40-line bar**:
+
+| Twin | projected statement-lines | drivers of the count |
+|------|---------------------------|----------------------|
+| slack | ~25–30 | 6 node families + 5 CALL maps + POST-alias; DM needs G1+G4 |
+| github | ~30 (at the bar) | 8 namespaces + objects/sub-collections + 3 CALL maps; verbose per-column UPDATE |
+| drive | ~15 | blob ops as views/maps + copy CALL; G7 ergonomics parked (no line cost) |
+| gmail | ~20 | labels/message/thread/attachment + G3 `ENCODE message` send/draft + G4 hydration + G6 SEND alias |
+
+**Reading:** every projected twin lands under the bar, and the sharpest walls (Gmail MIME via G3's
+`ENCODE message`, read-over-POST via G1's `|> POST` stage) cost **one word / one stage**, not a
+descriptor block — so the rulings keep conciseness, they do not spend it. Terseness-device
+before/after evidence and the adopted/future/rejected verdicts are in blueprint §13.2.

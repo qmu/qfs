@@ -1165,6 +1165,76 @@ in §13.2 (ticket 20260722091400): a tier-1/tier-2 REST service ≈ one screen o
 calibration. Every G-ruling above states its declaration-cost so the property is measured, not
 asserted.
 
+### 13.2 The conciseness bar — a measured property, not a vibe *(stated 2026-07-22, ticket 20260722091400)*
+
+Conciseness is what makes a declared driver the *normal* way to add a service rather than a
+grudging fallback, so it is stated as a measurable bar and every §13.1 ruling is priced against it.
+
+**The bar.** A tier-1/tier-2 REST service's full declaration is **≈ one screen of statements** —
+concretely **≤ ~40 statement-lines** (non-comment, non-blank), with the shipped **`chatwork.qfs` as
+the calibration point: 32 statement-lines / 15 statements for a *complete* tier-1 service including
+file transfer** (driver + 3 types + 3 read views + a post map + a FOLLOW-download view + an
+`ENCODE multipart` upload map). A device or ruling that makes a declaration **longer than the
+compiled driver's own docs** is the wrong device — reject it, do not tune it (mission policy).
+
+**Calibration measurements** (statement-lines / statements, measured on the shipped examples):
+
+| Declared driver | statement-lines | statements | what it covers |
+|-----------------|-----------------|------------|----------------|
+| `github_account.qfs` | 18 | 11 | read-only `/ghdecl` slice (proves `AUTH ACCOUNT`) |
+| `chatwork.qfs` | **32** | 15 | **full tier-1 service + file transfer — the calibration point** |
+| `cloudflare.qfs` | 41 | 22 | zones + DNS + KV get/put + queue push + D1 SQL arm |
+
+The per-family measurements of the inventory's *expressible today* dispositions — and the projected
+full-twin statement-line counts for slack/github/drive/mail — live **next to the dispositions** in
+`inventory-compiled-driver-surfaces.md` (mission dir) so a later conversion mission reads bar and
+evidence in one place. Every projected twin lands **under ~40 statement-lines**, i.e. under the bar.
+
+**Terseness devices — adopted (with before/after), future (with expected saving), or rejected (in
+writing).** A device is adopted only where its ruling landed and its *after* is measurably shorter
+**without hiding the contract**.
+
+- **Driver-level default with per-view override — ADOPTED (shipped, pagination).** The `PAGINATE`
+  descriptor lives once on `CREATE DRIVER`, not on every view. *Before* (per-view, 5 views): 5
+  duplicated `PAGINATE CURSOR (…)` clauses. *After* (`chatwork.qfs`/`cloudflare.qfs`, real): one
+  driver-level clause. **Saving: N−1 lines** for an N-view driver (Slack: 4 lines). §13.1 **G2**
+  extends the *same* shape to `PUSHDOWN` (driver-level default, per-view override) — adopted in the
+  ruling, implemented when the slack/github twins land (its ruling records the shape).
+- **`ENCODE`-slot codec for body shapes — ADOPTED (shipped `multipart`; ruled `message`, §13.1 G3).**
+  *Before*: a bespoke per-service upload/MIME descriptor. *After* (`chatwork.qfs`, real):
+  `INSERT INTO /http/chatwork/rooms/{room}/files |> ENCODE multipart VALUES (row)` — **one word** in
+  the existing slot. G3's `ENCODE message` reuses the identical slot for Gmail (**+0 clauses**), so
+  the sharpest Gmail wall costs one word, not a descriptor block.
+- **Read-over-POST as a `|> POST` stage — ADOPTED (shipped, §13.1 G1).** *Before*: a compiled driver
+  for the whole service (the `/cf` queue-pull holdout). *After*: **+1 pipe stage** on one view.
+- **Declared prelude alias `CREATE ALIAS` — FUTURE (ruled G6), adopted for *caller* ergonomics only.**
+  Honest measurement: it **adds one line to the declaration** (`CREATE ALIAS SEND FOR maild.send`)
+  while shortening every *caller* (`SEND …` vs `CALL mail.send(…)`). By the *declaration-length* bar
+  it is neutral-to-negative, so it is **not adopted to shorten a declaration** — only where the
+  caller-side ergonomics of a hot verb (Slack `POST`, Gmail `SEND`) justify the one line. Recorded as
+  such, not silently counted as terseness.
+- **`OF`-type inline shorthand / inference — FUTURE (rides §5.6 `of (…)`), expected saving 3–5 lines
+  per one-shot type.** *Before*: a separate `CREATE TYPE x (…)` (3–5 lines) + `OF x` for a type used
+  by exactly one view. *After* (available today): drop `OF` entirely (untyped view — the tier-2
+  evaluator still shapes by the delivered rows) or inline `|> of (col text, …)` at the view. Adopt
+  per-view where the type is not reused; keep `CREATE TYPE` where the contract is shared (github
+  `pull`/`issue` share columns — a named type is not ceremony there). Expected saving measured in the
+  inventory per driver.
+- **Shared pipeline fragments (§5.9 pipeline-valued lambdas) — FUTURE (blueprint §5.9, not shipped),
+  expected saving 1 line × repeated fragments.** Every list view repeats `|> DECODE json |> EXPAND
+  result`; a bound fragment would factor it. Expected saving is modest (one short stage per view) and
+  the ruling is not landed, so it is **recorded as future work with its expected saving**, not
+  implemented here.
+- **REJECTED — a per-driver "response envelope" descriptor.** A `CREATE DRIVER … ENVELOPE 'result'`
+  style descriptor saves **nothing measurable**: envelope unwrapping is already the one-word
+  `|> EXPAND result` (an ordinary engine op, blueprint §13 tier-2), so a descriptor would add a
+  driver clause *and* keep the per-view op for the non-uniform cases. It makes declarations longer,
+  not shorter — rejected, not tuned.
+- **REJECTED — an OpenAPI/manifest import as the terseness path.** Already rejected in §13
+  (rejected-alternatives): a manifest is *input the LLM reads while authoring*, never what qfs
+  evaluates; importing one trades a readable one-screen declaration for an opaque generated blob —
+  longer to review, not shorter to write.
+
 ## 13b. The markdown collection path — *implemented (documents/links tables, full section context); relation-vocabulary typing blueprint*
 
 *(Mission `markdown-trees-are-queryable-as-documents-and-links-tables`.)* A markdown tree is a
