@@ -148,7 +148,7 @@ row-equivalent to the compiled driver, which then retires.
       runs `… *.md |> decode md |> where <front-matter key> == …` over a fixture tree and gets
       exactly the matching files' rows; sparse keys (a file missing the key) read as null, not
       an error.
-- [ ] **The §13b ruling is recorded.** (#20260722090100-design-brief-codec-relation-surface-and-13b-ruling.md) Blueprint §13b's "builtin driver, or one
+- [x] **The §13b ruling is recorded.** (#20260722090100-design-brief-codec-relation-surface-and-13b-ruling.md) Blueprint §13b's "builtin driver, or one
       alias-registration set" open question is closed in the blueprint text as ruled above
       (alias registration; `/markdown` demoted to an instance; zero new grammar via §3), and
       the codec-relation surface (how the link relation is named/reached) is ruled in a
@@ -187,3 +187,4 @@ row-equivalent to the compiled driver, which then retires.
 - 2026-07-22 — ticket added — 20260722090500-cookbook-collection-recipes-execution-checked.md
 - 2026-07-22 — mission replanned for the overnight run - five tickets cut per the design rulings, per-ticket judgment pre-answered in interrogation (links surface delegated to the design brief; compiled /markdown deletion plus plugin bump authorized once equivalence is green); drive_authorized stamped — mission.md
 - 2026-07-22 — strategy created and linked — integrations-are-declared-not-compiled
+- 2026-07-22 — ticket archived — 20260722090100-design-brief-codec-relation-surface-and-13b-ruling.md
