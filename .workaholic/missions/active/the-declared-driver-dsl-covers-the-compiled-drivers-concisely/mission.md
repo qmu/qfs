@@ -164,12 +164,12 @@ the four downstream missions with their entry conditions.
       point) and the inventory's *expressible today* dispositions are measured against it;
       terseness devices adopted (defaults, shared fragments, prelude aliases, type shorthand)
       each show a before/after on a real declaration.
-- [ ] **The conversion playbook exists and names the downstream missions** (#20260722091500-conversion-playbook-and-honest-tiering.md): `slack` →
+- [x] **The conversion playbook exists and names the downstream missions** (#20260722091500-conversion-playbook-and-honest-tiering.md): `slack` →
       `github` → `drive` → `mail`, each with its entry condition (which rulings it needs
       landed), its fixture/row-equivalence bar, and its retirement steps (compiled deletion,
       gen-docs/gen-skills regeneration, plugin version bump per CLAUDE.md). The playbook
       states plainly that none of the four starts before this mission's rulings land.
-- [ ] **Honest tiering is restated, not eroded** (#20260722091500-conversion-playbook-and-honest-tiering.md): `/git`, `/claude`, queue-pull/Artifacts (as
+- [x] **Honest tiering is restated, not eroded** (#20260722091500-conversion-playbook-and-honest-tiering.md): `/git`, `/claude`, queue-pull/Artifacts (as
       far as still compiled), blob primitives, and `/sql` engines are recorded as named
       structural exceptions with reasons, so "declared is the normal way" keeps its honest
       boundary and no silent exception rides the conversions.
@@ -208,3 +208,4 @@ the four downstream missions with their entry conditions.
 - 2026-07-22 — ticket archived — 20260722091200-rule-the-semantic-gaps-in-blueprint-13.md
 - 2026-07-22 — ticket archived — 20260722091300-ship-read-over-post-hermetically.md
 - 2026-07-22 — ticket archived — 20260722091400-conciseness-bar-stated-and-measured.md
+- 2026-07-22 — ticket archived — 20260722091500-conversion-playbook-and-honest-tiering.md

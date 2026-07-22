@@ -1235,6 +1235,66 @@ writing).** A device is adopted only where its ruling landed and its *after* is 
   evaluates; importing one trades a readable one-screen declaration for an opaque generated blob —
   longer to review, not shorter to write.
 
+### 13.3 The conversion playbook — the four downstream twin missions *(stated 2026-07-22, ticket 20260722091500)*
+
+This mission is the **gate**. The four per-driver twin conversions are **named and ordered here, not
+created here** — each becomes its own mission only after this mission's §13.1 rulings land (they
+have, in this repository). A fresh session starting the slack conversion reads this section plus
+§13.1/§13.2 and needs to re-derive **nothing**.
+
+**None of the four starts before the rulings land.** They exist so four missions do not each
+rediscover the same wall; the wall got one answer in §13.1. Order is **ascending service-quirk
+difficulty**: `slack` → `github` → `drive` → `mail` (Gmail last because its MIME/batch rulings —
+G3/G4 — must exist first, which they now do).
+
+Each twin follows the §13 **twin-and-retire ratchet**: the compiled driver stays until its declared
+twin is **row-equivalent on shared fixtures**, then the compiled driver is deleted. The shared
+retirement steps (per every twin, done only after equivalence holds):
+
+1. **Delete the compiled driver crate** and its registration in `qfs::describe::compiled_describe_registry`.
+2. **Regenerate the reference docs** — `cargo run -p xtask -- gen-docs` (the driver drops out of
+   `docs/drivers.md`) and **`gen-skills`** (any cookbook recipe naming the compiled path is retired).
+   Never hand-edit the generated files.
+3. **Bump the plugin version** in all four fields (`plugins/qfs/.claude-plugin/plugin.json`,
+   `.codex-plugin/plugin.json`, both `version` fields in `.claude-plugin/marketplace.json`) per
+   CLAUDE.md — **minor**, because deleting a compiled path is a taught-surface break — so installed
+   skill caches stop teaching the retired mount.
+4. **Bump the binary patch** (`crates/qfs/Cargo.toml`) per the every-shipped-PR rule.
+
+| # | Mission (to be created later) | Entry condition — §13.1 rulings it needs landed | Row-equivalence bar |
+|---|-------------------------------|--------------------------------------------------|---------------------|
+| 1 | **slack twin** | **G1** (read-over-POST — DM `conversations.open`), **G2** (pushdown `oldest`/`latest`/`limit`), **G5** (typed CALL sigs for react/pin/unpin/update/delete). All ruled; G1 shipped. | declared reads row-equivalent to `driver-slack` on the shared message/thread/reaction/file/user fixtures; the 5 CALL maps + post map effect-equivalent. |
+| 2 | **github twin** | **G2** (pushdown `state`/`labels`/`assignee`/`per_page`), **G5** (merge/dispatch/review sigs). (No G1 — GitHub REST is GET-shaped; GraphQL stays a park.) | declared reads row-equivalent to `driver-github` on the 8-namespace + object + sub-collection fixtures; merge/dispatch/review effect-equivalent (merge stays `IRREVERSIBLE`). |
+| 3 | **drive twin** | **G2** (Drive `q=` translation), **G4** (path→id parent-pointer resolution), **G5** (`copy` sig). **G7** (blob-namespace ergonomics) is **parked** — the twin exposes the ops as views/maps, not the `cp`/`ls`/`mv`/`rm` shell archetype. | declared reads row-equivalent to `driver-gdrive` on the folder/file/id/export fixtures; upload/update/trash/move/copy effect-equivalent. |
+| 4 | **mail twin** | **G3** (`ENCODE message` MIME for send/draft), **G4** (list→detail hydration), **G2** (Gmail `q=`), **G5** (send/reply sigs), **G6** (`SEND` alias, optional). Gmail last precisely because G3/G4 must exist — they do. | declared reads row-equivalent to `driver-gmail` on the label/message/thread/attachment fixtures; draft/send/reply effect-equivalent (send stays `IRREVERSIBLE`); `batch` and push/`watch` remain parks. |
+
+**Honest tiering — the structural exceptions, restated with reasons (not eroded).** "Declared is the
+normal way" keeps its honest boundary: these stay **compiled**, each for a stated reason, so no
+silent exception rides the conversions. Re-verified against the compiled driver registry at HEAD
+(the four conversions above are the only planned deletions; everything below stays):
+
+- **`/git`** — a *local repository*, not a wire: no base URL, no HTTP auth, no `/http/<drv>` host to
+  confine. Ruled a **park** by §13.1 **G8** (the declared shape stays wire-only). Compiled.
+- **`/claude`** — a *local on-disk session store* (a path façade over session metadata + an
+  append-log; NOT qfs calling an LLM — that is §15 `transform`). No base URL/auth. G8 park. Compiled.
+- **`/cf` queue pull** — a read-over-POST. The **declared spelling now exists** (§13.1 G1, shipped
+  this mission), so the *wall is gone*; but the compiled queue-pull is **still present at HEAD** —
+  its retirement (declare the twin, prove row-equivalence, delete the compiled queue-pull) is a
+  **mechanical follow-up**, deliberately not widened into the G1 ship ticket. Recorded here as the
+  one exception whose reason is "not yet done", not "cannot be done".
+- **`/cf` Artifacts** — a **git-repo surface** (a Git remote hosted on Cloudflare), so it is a git
+  shape, not plain REST; it rides the same G8 reasoning as `/git`. Compiled.
+- **`/local` / `/fs` / `/s3` / `/r2` blob primitives** — the BlobNamespace **primitives** the
+  compiled set shrinks *toward* (wire, codecs, secrets, objstore), not services to convert. Their
+  filesystem-shell ergonomics are §13.1 **G7** (parked for declared drivers). Compiled.
+- **`/sql` engines** (SQLite / Postgres / MySQL dialects) — a SQL **engine is a primitive**, not a
+  REST service. The declared surface already *connects to* one (the `CREATE SQL … OVER …` D1 arm),
+  but the dialect engine itself stays compiled. Compiled.
+- **Out of conversion scope (not exceptions, just not these four):** `/google-analytics` is REST-shaped
+  and convertible in principle but is not one of the four coverage-bar service drivers; `/sys`,
+  `/type`, `/transform`, `/markdown` are internal/local qfs surfaces, not external services. None is
+  a hidden exception — they are simply outside the slack/github/drive/mail conversion set.
+
 ## 13b. The markdown collection path — *implemented (documents/links tables, full section context); relation-vocabulary typing blueprint*
 
 *(Mission `markdown-trees-are-queryable-as-documents-and-links-tables`.)* A markdown tree is a

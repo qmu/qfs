@@ -5,7 +5,7 @@ type: enhancement
 layer: [Domain]
 effort:
 commit_hash:
-category:
+category: Added
 depends_on: [20260722091200-rule-the-semantic-gaps-in-blueprint-13.md]
 mission: the-declared-driver-dsl-covers-the-compiled-drivers-concisely
 ---
