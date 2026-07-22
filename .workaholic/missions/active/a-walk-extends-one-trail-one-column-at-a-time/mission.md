@@ -203,13 +203,13 @@ design rulings, not implementation.
       type, form-filling as a walk (partial struct = valid intermediate value; effect only at
       the terminal column — no I/O until COMMIT), condition-split as a declared, checkable
       path-branch that keeps walks linear, and "who drives is not the design axis."
-- [ ] **The remaining open items stay open, each naming its downstream mission.** (#20260722122500-consolidate-14c-open-list-and-hold-non-goals.md) §14c's
+- [x] **The remaining open items stay open, each naming its downstream mission.** (#20260722122500-consolidate-14c-open-list-and-hold-non-goals.md) §14c's
       consolidated open list keeps (at least): the ASK-grammar / predicate- and merge-column
       spellings (candidates, unsettled), the split primitive + in-column DAG editor, the
       request-principal seam / empty-home root, the enumerate-root plumbing, the per-viewport
       projections, and the intension/extension write edge — with the named-but-not-created
       downstream missions of ## Scope attached, and none of them created by this mission.
-- [ ] **The non-goals held.** (#20260722122500-consolidate-14c-open-list-and-hold-non-goals.md) No grammar shipped, no viewer code changed, no ASK/split
+- [x] **The non-goals held.** (#20260722122500-consolidate-14c-open-list-and-hold-non-goals.md) No grammar shipped, no viewer code changed, no ASK/split
       implemented; the diff on the mission branch touches design/knowledge documents only
       (blueprint, mission bookkeeping), verified by reading the shipped PR's file list.
 
@@ -234,3 +234,4 @@ design rulings, not implementation.
 - 2026-07-22 — ticket archived — 20260722122200-define-trail-and-walk-in-14b.md
 - 2026-07-22 — ticket archived — 20260722122300-rewrite-14c-settled-points-as-rulings.md
 - 2026-07-22 — ticket archived — 20260722122400-record-the-ai-letter-rulings.md
+- 2026-07-22 — ticket archived — 20260722122500-consolidate-14c-open-list-and-hold-non-goals.md

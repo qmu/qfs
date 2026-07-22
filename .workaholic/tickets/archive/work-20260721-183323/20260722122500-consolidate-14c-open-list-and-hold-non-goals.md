@@ -5,7 +5,7 @@ type: enhancement
 layer: [Domain]
 effort:
 commit_hash:
-category:
+category: Changed
 depends_on: 20260722122200-define-trail-and-walk-in-14b.md, 20260722122300-rewrite-14c-settled-points-as-rulings.md, 20260722122400-record-the-ai-letter-rulings.md
 mission: a-walk-extends-one-trail-one-column-at-a-time
 ---

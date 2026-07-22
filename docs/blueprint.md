@@ -1410,13 +1410,36 @@ one connects/declares, rather than the union-of-all-drivers root), a first-class
 and a **one-language** spelling in which a column action *is* a qfs statement, so authoring in the
 viewer is authoring qfs itself.
 
-**Consolidated open questions.** (1) The predicate/merge-column spelling — how a rich `where` or a
-`join` is written as one address segment. (2) `split`'s language form (references vs a fork gesture).
-(3) One substance (topology) or two views. (4) The in-strip-relation vs new-channel boundary. (5)
-Co-edit vs produce-then-review for the human/AI relation. (6) The per-viewport projections (voice /
-phone / desktop). (7) Where the intension/extension unity ends (the write edge). (8) The
-addable-provider `enumerate` contract. None of these is decided here; this is the map against which
-the viewer's nature is to be ruled.
+**Consolidated open list — each item names the downstream mission that owns it.** The rulings above
+settle the viewer's shape; what remains genuinely open is listed here, and **each open item names a
+downstream mission that is named but deliberately NOT created by this recording mission** (creating
+one would violate this mission's non-goals):
+
+- **The ASK-grammar / predicate- and merge-column spellings** — how a rich `where` or a `join` is
+  written as one address segment, and how a human-supplied value is inserted through a type-derived
+  UI. These are **candidate spellings, explicitly unsettled**. → *the ASK-type-INTO-path grammar
+  mission* (the predicate/merge-column spelling rides the same mission).
+- **The `split` primitive + the in-column DAG editor** — the clean fan-out primitive (a named node
+  plus references, wires as its rendering) and the non-linear define surface it lives inside (ruling
+  2). → *the split-primitive-and-in-column-DAG-editor mission*.
+- **The request-principal seam / "empty home" root** — the seam that lets the *first column* derive
+  from the caller: a fresh, initially-empty personal namespace that fills as one connects/declares,
+  rather than the union-of-all-drivers root. → *the request-principal-seam / empty-home-root mission*.
+- **The enumerate-root plumbing** (§14b's own named follow-up) — the qfs-core seam that lets a walk
+  drill rightward from the root. → *the enumerate-root-plumbing mission*.
+- **The per-viewport projections** — one canonical graph rendered several ways (voice / phone /
+  desktop), plus the still-open co-edit-vs-produce-then-review shape of the human/AI relation. → *the
+  qfs-viewer minimal-walk implementation mission (scope "(い)")*.
+- **The intension/extension write edge** — the caveat retained from ruling 3: the path = query = set
+  unity is cleanest for reads, and writes/effects reintroduce a distinct preview/commit aspect (§7),
+  so where the unity ends is not yet ruled. → *the qfs-viewer minimal-walk implementation mission
+  (scope "(い)")*, where the write-edge preview/commit surface is realized.
+
+Two further boundary questions stay open under the same downstream owners: the **in-strip-relation
+vs new-channel boundary** (when a second input is a declared relation segment vs an independent
+channel — the simplicity governor) and the **addable-provider `enumerate` contract** (describing the
+declared-driver surface so driver configuration is authored through the same columns). None of the
+named downstream missions is created here; this recording mission only maps them.
 
 ## 15. `transform` — the model-calling pipe stage — *implemented (grammar, execution, whole-tree routing, consent gate, three live providers); live-provider run owner-attended*
 
