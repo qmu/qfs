@@ -45,7 +45,7 @@ if [ -n "$ROUND" ] && [ -f "$HERE/$ROUND" ]; then
     -v "$HERE":/round:ro \
     --mount type=volume,dst=/work \
     -w /work \
-    "$IMAGE" sh "/round/$ROUND"
+    "$IMAGE" "/round/$ROUND"
 fi
 
 echo ">> entering container: source at /src (ro), scratch at /work"
