@@ -1268,71 +1268,61 @@ markdown collection path (§13b), and the subject model (§8) — are now migrat
 keeps pointers plus the qmu.app-level product vision: the managed service, on-demand UI generation,
 and plggmatic's rendering engine.)*
 
-## 14c. The viewer, reconsidered — the design space *(open; nothing settled, 2026-07)*
+## 14c. The viewer, reconsidered — the design space *(rulings settled 2026-07-21; open items named below)*
 
 §14b describes the *shipped* address strip, flags its column model as under reconsideration, and
 **defines the domain terms *trail* and *walk*** — a trail is one recorded path (the canonical
 address plus its relation segments); a walk is the act of extending a trail one column at a time.
 This section reconsiders how the viewer renders a **walk over trails**, and uses those §14b terms
-rather than paraphrasing them. It is that reconsideration written out: a map of the requirements
-raised, from several viewpoints. It exists so the ruling is made against a full picture rather than
-the first framing.
+rather than paraphrasing them. The long design conversation of 2026-07-21 converged: the tensions
+this map first posed as open are now **rulings**, recorded below, and only the genuinely-open items
+remain on the consolidated list at the end, each naming the downstream mission that owns it.
 
-**The starting tension: a linear strip vs the real structure.** The shipped viewer renders an
-address as a left-to-right Miller-column strip — column `i` is the resolution of address prefix
-`i`. But qfs's real semantic structure is not sequential: a query is a DAG (joins and unions fan
-*in*; one source can fan *out*). Sequential form is a *serialization* of that DAG — the shape a
-linear medium (text, a strip) forces onto it. So "one column = one prefix" shows a *path through*
-the structure, not the structure itself. The honest question is whether the viewer should reflect
-the structure (a visual-scripting graph) or keep serving the serialized walk (the strip) — or
-whether that is a false choice (below).
+**The rulings (settled 2026-07-21).** The long reconsideration converged. Four rulings fix the
+viewer's shape; the tensions this map first posed as a choice are now dissolved, not chosen.
 
-**What pipe languages actually lack: fan-out (split).** Merge exists everywhere as "a stage that
-takes another stream as an argument" (join / union / zip). Fan-out — one flow feeding several
-downstream — has *no* well-designed pipe syntax; `tee` and variable-binding are the crude
-substitutes. In a path/set language both may reduce to **a named node plus references**: a merge
-references several named nodes as inputs; a split is several nodes referencing one named node.
-Wires would then be the *rendering* of references, not a new language primitive — consistent with
-"everything is a path." The missing, foundational primitive is the clean **split**, and defining
-it well serves the human gesture and the AI tool call equally (below).
+1. **The column-oriented layout is a display pattern for post-execution semantics — kept simple.**
+   The strip does exactly one thing: *display the semantics after a query is exercised, in columns.*
+   It is **not** an isomorphic re-encoding of qfs's query structure, and it must **not** be
+   over-abstracted into a higher-abstracted container or a design-pattern abstraction — that framing
+   was explicitly retracted by the owner. Column `i` remains the resolution of the trail's prefix `i`
+   (§14b); the columns show the walk's trace, no more.
 
-**A clarifying distinction: definition-time vs application-time.** Two activities were being
-conflated. *Definition* composes the query's real, possibly non-linear structure — this is where a
-graph view reflects the structure faithfully. *Application* is what happens after a query resolves:
-walking the concrete result transitively (pick a row, follow a relation, one step at a time) — this
-is inherently linear and is exactly what the strip is good at. On this reading the **strip is the
-after-generation exploration surface** and the **graph is the structure-definition surface**.
+2. **Linear-vs-graph is dissolved by placement, not by choosing one.** The earlier tension — a linear
+   strip cannot show a query's DAG (joins and unions fan *in*; one source can fan *out*) — does not
+   force a choice between a strip and a graph view. The strip stays **linear across columns** (a walk
+   is always linear — §14b); a DAG, the non-linear define-time structure (e.g. a React-Flow-like
+   pipeline editor), lives **inside a single column**, not across columns. Non-linearity is confined
+   to a column's interior while the column sequence stays a one-way linear walk. One row can hold a
+   stored-procedure menu (enumerate) → a DAG-editor column (define; non-linear; wide) → a preview
+   column → a result column (extension): getting into the query semantics and out to the exercised
+   result, in the same single row.
 
-**The dualism objection.** Committing to those as two separate views risks a two-paradigm split,
-which cuts against qfs's governing spirit — *one core concept; a new face adds no new symbol*. The
-resistance to the split is therefore principled, not merely aesthetic: a viewer that is "a graph
-tool bolted to a table tool" has two concepts, not one.
+3. **Definition (intension) and application (extension) are welded by `path = query = set`.** Unlike
+   a filesystem path (a static address a *separate* query takes as an argument), a qfs path is a
+   set-valued *expression* whose segments are operators: containment is select-from, `@A` lowers to
+   `where <key> == A`, a relation segment is a join, `|>` stages are explicit operators. A path is
+   therefore simultaneously a **query** (intension — `describe` gives schema, keys, relations) and
+   **resolves to a set** (extension — `read` gives rows), and every prefix carries **both aspects of
+   ONE object**, not two artifacts. A graph view foregrounds intension and a strip foregrounds
+   extension, but both render one object at two aspects — the weld that lets the viewer be one
+   substance rather than two paradigms. *Caveat (retained as open):* the unity is cleanest for reads;
+   writes/effects reintroduce a distinct preview/commit aspect (§7), so the seam is not seamless at
+   the write edge — where the intension/extension unity ends is on the open list below.
 
-**Two ways the dualism may dissolve** (either, both, or neither):
-- **Topological.** A path is a branch-free graph — the strip is the *degenerate, path-shaped* case
-  of the graph. One renderer draws the query as a node graph; it *looks like* a strip while the
-  structure is straight and grows wires where it branches. Then there is no "second view," only one
-  substance at variable topology — §14b's "a trail is one path within the path concept," pushed down
-  to the UI substance itself.
-- **Intensional / extensional.** The deeper dualism is *definition* (abstract structure, the
-  program) vs *result* (concrete data, the trace) — intension vs extension. Most systems keep these
-  as two artifacts in two places (a query editor and a result grid), which forces two surfaces. qfs
-  welds them: a path is simultaneously a query (intension) and resolves to a set (extension), and
-  every prefix carries both — `describe` is the intensional contract (schema, keys, relations),
-  `read` is the extension (rows). So a graph view foregrounds intension and a strip foregrounds
-  extension, but both render **one object seen from two aspects**, not two artifacts. That weld is
-  the seam where the program/trace split — the thing that forces two paradigms elsewhere — is sewn
-  shut. *Caveat:* the unity is cleanest for reads; writes/effects reintroduce a distinct
-  preview/commit aspect (§7), so the seam is not seamless at the write edge.
+4. **100% parity between what the query language expresses and what the viewer configures is
+   deliberately given up.** The viewer does not aim to configure everything the language can express.
+   It is a **faithful representation of the subset it covers**, not a lossy projection of the whole;
+   fidelity is the **content's** responsibility (e.g. the DAG inside a column — ruling 2), not the
+   container's.
 
-**The enabling foundation: `path = query = set`.** Unlike a filesystem path (a static address that
-a *separate* query takes as an argument), a qfs path is a set-valued *expression* whose segments are
-operators: containment is select-from, `@A` lowers to `where <key> == A`, a relation segment is a
-join, `|>` stages are explicit operators. It lowers deterministically to a pipe query (§14b's
-one-lowering rule); evaluating it yields a set; even `ls`/`cd` are `enumerate`/select. So the path
-*is* the query in written form and *resolves to* the set — the single object that makes the
-intension/extension unification above possible. This is the load-bearing premise of the whole
-reconsideration: if it holds, the viewer need not be two things.
+**Still open — the clean split primitive.** Merge exists everywhere as "a stage that takes another
+stream as an argument" (join / union / zip). Fan-out — one flow feeding several downstream — has *no*
+well-designed pipe syntax; `tee` and variable-binding are the crude substitutes. In a path/set
+language both may reduce to **a named node plus references**: a merge references several named nodes
+as inputs; a split is several nodes referencing one named node, so wires are the *rendering* of
+references, not a new language primitive — consistent with "everything is a path." The clean
+**split** primitive and its in-column DAG editor stay unsettled (see the open list below).
 
 **Actors and viewports are two separate axes** (they were being mixed):
 - *Who drives the surface.* A human via touch/mouse, or a browser-side realtime-API **AI agent that

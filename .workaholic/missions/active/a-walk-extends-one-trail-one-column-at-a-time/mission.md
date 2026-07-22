@@ -188,7 +188,7 @@ design rulings, not implementation.
       walk produces the trail; always linear — exactly one trail, never a graph; a DAG's
       non-linearity never appears in a walk); address ⊆ trail; and the sharpened "choose one
       of the steps the current trail admits, and extend" definition covering reads and writes.
-- [ ] **§14c's settled points move from open to ruled.** (#20260722122300-rewrite-14c-settled-points-as-rulings.md) Rulings 1–4 of ## Goal are written
+- [x] **§14c's settled points move from open to ruled.** (#20260722122300-rewrite-14c-settled-points-as-rulings.md) Rulings 1–4 of ## Goal are written
       as rulings in §14c: the column layout as a display pattern for post-execution semantics
       (kept simple), placement-dissolution of linear-vs-graph (DAG confined to a column's
       interior), the path=query=set intension/extension weld (write-edge caveat retained as
@@ -232,3 +232,4 @@ design rulings, not implementation.
 - 2026-07-22 — mission replanned for the overnight run - five docs-only recording tickets cut from the six acceptance criteria (fold 14c, define trail/walk, rule the settled points, record the AI-letter rulings, consolidate the open list and hold the non-goals); per-ticket judgment pre-answered (documentation-only, verified by reading the shipped blueprint; downstream missions named not created); drive_authorized stamped — mission.md
 - 2026-07-22 — ticket archived — 20260722122100-fold-the-unmerged-14c-map-into-the-mission-branch.md
 - 2026-07-22 — ticket archived — 20260722122200-define-trail-and-walk-in-14b.md
+- 2026-07-22 — ticket archived — 20260722122300-rewrite-14c-settled-points-as-rulings.md
