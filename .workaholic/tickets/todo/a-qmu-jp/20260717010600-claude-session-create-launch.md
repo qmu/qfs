@@ -148,3 +148,33 @@ Standing after this replan:
 - **QG2 (live proof) — parked for an isolated/attended environment.** It spawns a real session and
   composes with steering's live fire; both must run in an isolated box, never the shared host. The
   ticket stays in `todo/`, NOT drive-authorized.
+
+## Live fire (2026-07-22 — overnight DRIVE leaf, IN-CONTAINER, transcript)
+
+Ran in the sanctioned `containers/live-round` box (fresh $HOME, no host ~/.claude, host `claude`
+binary mounted read-only, minimal claudeAiOauth credential copied into a writable ~/.claude). The
+qfs launch path was driven against a REAL `claude` 2.1.217. Verbatim results:
+
+- **PREVIEW (no --commit):** `{"preview":{"rows":[{"verb":"INSERT","target":{"driver":"claude","path":"/claude/sessions"},"affected":{"exact":1},"irreversible":true}],"irreversible":[0],"is_pure":false},"committed":false}` — effect-free, marked irreversible. ✅
+- **--commit ALONE:** `{"error":{"code":"irreversible_ack_required","kind":"commit_required","message":"plan contains an irreversible effect (REMOVE / CALL); re-run with --commit-irreversible to apply"}}` — FAILS CLOSED. ✅
+- **--commit --commit-irreversible:** `{"preview":{...},"committed":true}` — a REAL `claude --bg` session spawned. ✅
+- **Sessions relation after launch:** the new session appears —
+  `eb5300ad-f06d-45fb-8082-e7a9948af1f6 | idle | /work` — matching `claude agents --json`
+  (`pid 50, sessionId eb5300ad..., name "Print the single word ok and then stop.", cwd /work`). ✅
+
+So **launch spawns a real session and the new id appears in `/hosts/local/claude/sessions`** — the
+launch half of QG2 is proven live.
+
+**Findings (blockers / follow-ups):**
+1. **Harness:** bind-mounting the credential file at `~/.claude/.credentials.json` makes `~/.claude`
+   root-owned under `--userns=keep-id`, so `claude --bg` fails `EACCES: mkdir ~/.claude/jobs`. Fixed
+   in `containers/live-round/run.sh`: copy the credential into a container-owned `~/.claude` at boot
+   and mount the host `claude` binary read-only (the image's `install.sh` currently 404s).
+2. **Launcher id capture is wrong** (new ticket `20260722213000`): the launcher takes the first
+   stdout line as the session id, but `claude --bg` prints `Starting background service…` first, so
+   `RETURNING id` is garbage (the session is still discoverable in the relation by its true id). The
+   argv contract `claude --bg '<prompt>'` is CORRECT (the CLI itself confirms it).
+
+**Remaining for QG2:** the "…and is steerable (capabilities 2+4 compose)" clause needs the steering
+live drain, which is blocked on standing up a container-local team member (see `20260717010500`). So
+this ticket stays in `todo/`: launch-spawn proven live, launch→steer composition still parked.

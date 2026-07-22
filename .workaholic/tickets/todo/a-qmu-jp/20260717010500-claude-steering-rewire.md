@@ -201,3 +201,53 @@ text** — MUST run in an isolated box (a container/VM with no live Claude Code 
 shared host, and are **out of unattended / `/monitor` scope**. The ticket stays in `todo/`, NOT
 drive-authorized: its live proof is parked for an isolated/attended session even though the transport
 question is now closed.
+
+## Progress (2026-07-22 — overnight DRIVE leaf, hermetic slice landed + SCHEMA CAPTURED)
+
+**Hermetic slice done** (commit on this branch): `crates/qfs/src/teams_inbox.rs` — a schema-agnostic
+`TeamsInbox` primitive (append an opaque message object to a per-recipient inbox JSON array, scan it
+back, fail closed on an unknown/non-team recipient), 5 hermetic tests over a fake inbox dir.
+Production `ClaudeStoreSource::append_instruction` was left FAIL-CLOSED (per the leaf's instruction:
+do not wire a guessed schema).
+
+**The message-object element SCHEMA is now CAPTURED** — via the ticket's sanctioned route
+"read from the CLI's own inbox-writer" (Claude Code 2.1.217, `TeammateMailbox.writeToMailbox`, read
+from the binary; no live session needed, no process interaction). The written inbox-array element is:
+
+```
+{ ...message, ...ZDt(), type: "message", read: false }
+```
+
+where the base teammate-message zod schema (`gXu`) is:
+
+```
+from:      string   (required — the sender member name)
+text:      string   (required — the message body; empty/null/non-string entries are DROPPED on read)
+timestamp: string   (required — an ISO-8601 string, `new Date().toISOString()`)
+read:      boolean  (optional; the writer sets read:false)
+color:     string   (optional)
+summary:   string   (optional)
+```
+
+and `ZDt()` adds `{ msgV: 1, msg_id: <crypto.randomUUID()> }`. So a fully-written element is:
+
+```json
+{ "from": "<sender>", "text": "<body>", "timestamp": "<ISO8601>",
+  "color": "<opt>", "summary": "<opt>",
+  "type": "message", "read": false, "msgV": 1, "msg_id": "<uuid>" }
+```
+
+Path: `getInboxPath(agent, team)` = `<claude-home>/teams/<team>/inboxes/<agent>.json`; the
+`InboxPoller` drains a **team member's** inbox — a standalone (non-team) `claude --bg` session has no
+inbox dir (fail closed, as designed). The message identity key is `from|timestamp|text`.
+
+**So the mission's single unknown is retired.** Wiring `append_instruction` to build this exact
+element (from = the qfs steerer's member name, text = the instruction, timestamp = now ISO) and
+append it to `teams/<team>/inboxes/<member>.json` is now a guess-free change.
+
+**Still BLOCKED (container-only):** QG1's live-fire proof that a real target session OBSERVES the
+steered text needs a running **team member** whose `InboxPoller` drains the inbox. Standing up an
+Agent Team (multi-agent) session non-interactively in-container was not achieved this run — a lone
+`claude --bg` background agent has no team inbox to drain. The live drain proof stays parked for a
+session that can orchestrate a container-local team (or an owner-attended snapshot). The ticket
+stays in `todo/`.

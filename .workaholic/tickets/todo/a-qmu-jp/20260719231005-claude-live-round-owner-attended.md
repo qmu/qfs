@@ -89,3 +89,35 @@ transcript verbatim; the developer reviews it in the morning.
 
 **Gate that must pass.** The transcript shows the correct behaviour and exit codes; the branch
 gates (build/test/clippy/fmt/xtask) green.
+
+## Round result (2026-07-22 — overnight DRIVE leaf, autonomous in-container)
+
+Ran the round in `containers/live-round` (podman 5.8.4). Leg outcomes:
+
+- **Leg 0 — CLI auth in-container: RESOLVED (was the flagged blocker).** The image's own
+  `install.sh` 404s, but the host `claude` 2.1.217 binary (a static aarch64 ELF needing only glibc)
+  mounted read-only authenticates from the minimal `claudeAiOauth` credential: `claude -p 'reply ok'`
+  → `ok`, rc=0. Harness (`run.sh`) updated to mount the host binary + set up a writable ~/.claude
+  from a neutral `/cred` mount (a direct bind-mount at `~/.claude/*` root-owns it → `claude --bg`
+  `EACCES mkdir ~/.claude/jobs`).
+- **Leg 1 — build qfs: done.** `cargo build -p qfs --bin qfs` in-container → `qfs 0.0.81`.
+- **Leg 2 — teams-inbox message schema: CAPTURED (guess-free).** Read from the CLI's own inbox-writer
+  (`TeammateMailbox.writeToMailbox`). The element is `{from,text,timestamp(ISO),color?,summary?,
+  type:"message",read:false,msgV:1,msg_id:<uuid>}`; `from|timestamp|text` is the identity key; the
+  path is `teams/<team>/inboxes/<member>.json`. Full detail recorded in ticket `20260717010500`.
+- **Leg 5 — launch live fire: PROVEN.** qfs `INSERT INTO /hosts/local/claude/sessions … --commit
+  --commit-irreversible` spawned a real `claude --bg`; the new id `eb5300ad-…` appears in the
+  sessions relation. `--commit` alone fails closed (`irreversible_ack_required`); PREVIEW marks it
+  irreversible. Full transcript in ticket `20260717010600`.
+- **Legs 3/4/6 — steering wire + steering live fire + composed proof: BLOCKED.** The steering append
+  is now guess-free (schema captured), but the live DRAIN proof needs a running **team member** whose
+  `InboxPoller` drains the inbox; a lone `claude --bg` agent has no team inbox. Standing up an Agent
+  Team (multi-agent) session non-interactively in-container was not achieved this run. Missing piece:
+  a container-local team-member session (or an owner-attended snapshot) to observe the steered text.
+
+**Host-safety:** every `claude` spawn ran ONLY inside the `--rm` container (processes died with it);
+no host `claude`/tmux was ever spawned, killed, or steered; no global podman prune (only the round's
+own image). This ticket stays in `todo/`: launch proven, steering drain parked.
+
+**New ticket minted:** `20260722213000-claude-launcher-id-capture-mismatch` (launcher `RETURNING id`
+captures the wrong `claude --bg` stdout line).
