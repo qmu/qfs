@@ -5,7 +5,7 @@ type: enhancement
 layer: [Domain]
 effort:
 commit_hash:
-category:
+category: Changed
 depends_on: [20260722091100-coverage-inventory-of-compiled-driver-surfaces.md]
 mission: the-declared-driver-dsl-covers-the-compiled-drivers-concisely
 ---

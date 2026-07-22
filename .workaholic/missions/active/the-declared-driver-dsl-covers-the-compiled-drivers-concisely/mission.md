@@ -150,7 +150,7 @@ the four downstream missions with their entry conditions.
       compiled describe registry (the `gen-docs` source, not prose) and disposed as
       *expressible today* / *needs a ruled semantic* / *named park* — each disposition with
       evidence (a working declaration snippet, or the concrete missing primitive).
-- [ ] **Every "needs a ruled semantic" gap has a recorded ruling in blueprint §13** (#20260722091200-rule-the-semantic-gaps-in-blueprint-13.md) —
+- [x] **Every "needs a ruled semantic" gap has a recorded ruling in blueprint §13** (#20260722091200-rule-the-semantic-gaps-in-blueprint-13.md) —
       grammar/evaluator redesigns stated as redefinitions (hard breaks sanctioned, no
       migration framing), each with its declaration-cost note; read-over-POST and declared
       pushdown are ruled explicitly (they gate the slack/github conversions and full `/cf`
@@ -196,3 +196,4 @@ the four downstream missions with their entry conditions.
 - 2026-07-22 — mission replanned for the overnight run - five tickets cut, interrogation answered the open judgment calls (proof target fixed to read-over-POST; autonomous section-13 rulings authorized by the owner); drive_authorized stamped — mission.md
 - 2026-07-22 — strategy created and linked — integrations-are-declared-not-compiled
 - 2026-07-22 — ticket archived — 20260722091100-coverage-inventory-of-compiled-driver-surfaces.md
+- 2026-07-22 — ticket archived — 20260722091200-rule-the-semantic-gaps-in-blueprint-13.md

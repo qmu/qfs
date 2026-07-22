@@ -1000,6 +1000,161 @@ CREATE MAP INSERT /chatwork/rooms/{room}/messages AS
   per-service Rust crates as the growth path (the compiled set shrinks toward primitives:
   wire, codecs, secrets, OAuth).
 
+### 13.1 Ruled semantics — closing the declared-driver expressiveness gaps *(ruled 2026-07-22, mission `the-declared-driver-dsl-covers-the-compiled-drivers-concisely`; owner pre-authorized autonomous recording)*
+
+*(These rulings dispose every gap the coverage inventory
+(`.workaholic/missions/active/…/inventory-compiled-driver-surfaces.md`, gaps **G1–G8**) marked
+"needs a ruled semantic" for the compiled slack/github/gdrive/gmail surfaces. Each is a
+**redefinition** — hard breaks are sanctioned, no migration or deprecation framing (experimental
+policy). Each carries a **declaration-cost note**: a device that makes a declaration longer than
+the compiled driver's docs is the wrong device (§13.1's conciseness invariant, measured in the
+inventory). The declared spelling of G1 (read-over-POST) ships and is proven hermetically in
+ticket 20260722091300; the rest are ruled here and implemented as their conversions demand.)*
+
+**G1 — read-over-POST is a wire source with a body.** A read whose wire shape is a POST (a queue
+pull, a body-carried search, a GraphQL query) is a **VIEW whose leading `/http/<drv>/…` source
+carries a `POST <body>` clause**. The body is a struct-literal expression (`{…}`, closed over the
+view's `{param}` bindings — never over `row`, a read has no incoming row); the wire applier issues
+the POST, and the **response decodes into rows through the ordinary pipeline exactly as a GET's
+would** (`|> DECODE json |> EXPAND …`). The redefinition: *a wire read is no longer GET-only.* This
+generalizes the already-shipped POST-to-read of the `CREATE SQL … OVER …/query` arm (a declared
+SQL query is a POST that returns rows) from the SQL dialect to any declared VIEW. Semantics: a
+read-over-POST is a **READ effect** (pure, no mutation, no irreversibility gate) even though its
+method is POST — the method is transport, the effect kind is read; the applier marks it
+retry-unsafe (POST) but returns a `RowBatch`, not an affected-count. Host confinement is unchanged:
+the source is still `/http/<drv>/…`, confined at load time and plan time. Spelling:
+
+```sql
+CREATE VIEW /cfd/accounts/{account}/queues/{queue}/pull OF cfd/message AS
+  /http/cfd/accounts/{account}/queues/{queue}/messages/pull POST { visibility_timeout_ms: 5000 }
+  |> DECODE json |> EXPAND result.messages
+```
+
+*Declaration-cost:* **+1 clause** (`POST { … }`) on the one view that reads over POST — a queue-pull
+view is ~3 lines, well under the compiled `/cf` queue-pull's Rust. Reads that are plain GET are
+untouched (no clause).
+
+**G2 — declared pushdown is a per-column param map with residual honesty.** Which predicates push
+to the wire is declared, not compiled, by a **`PUSHDOWN ( <col> <op> => '<param>' [EXACT | PREFILTER], … )`**
+clause (on a VIEW, or driver-level as a default with per-view override — the same
+default-with-override shape pagination already has). Each entry maps a typed column/operator to a
+wire query (or POST-body) parameter and is tagged **EXACT** (the param means *exactly* the
+predicate, so the conjunct is pushed and dropped from the residual) or **PREFILTER** (the param is
+looser, so it is pushed *and* the exact predicate is kept as the local residual — over-fetch then
+filter, never wrong rows). This is the compiled pushdown modules' own discipline
+(`driver-slack/pushdown.rs`, `driver-github/pushdown.rs`, `driver-gmail/query.rs`,
+`driver-gdrive/query.rs`) lifted to declaration data: the evaluator lowers a `WHERE` predicate
+through the declared map identically. The redefinition: *residual truthfulness is a declared
+property the planner enforces, not a per-driver Rust routine.* Spelling:
+
+```sql
+CREATE VIEW /slackd/{channel}/messages OF slackd/message AS
+  /http/slackd/conversations.history?channel={channel} |> DECODE json |> EXPAND messages
+  PUSHDOWN ( ts >= => 'oldest' EXACT, ts <= => 'latest' EXACT, ts > => 'oldest' PREFILTER,
+             ts < => 'latest' PREFILTER, LIMIT => 'limit' )
+```
+
+*Declaration-cost:* **+1 line per pushed column** (a driver-level default collapses repeats). A view
+with no `PUSHDOWN` clause is honest-but-chatty (everything residual), so the clause is opt-in
+optimization, never a correctness prerequisite — a twin ships correct first, fast by declaration
+later.
+
+**G3 — MIME/body assembly is the `message` codec (a primitive).** Gmail send/draft's RFC 5322 +
+base64url `raw` field is assembled by a new **`|> ENCODE message`** codec — the compiled
+`driver-gmail/mime.rs::build_mime` (CRLF, RFC 2047 subject, `multipart/mixed` attachments,
+base64url) lifted to a named codec in `qfs-codec`. This is sanctioned by §13's rejected-alternatives
+("the compiled set shrinks toward primitives: wire, codecs, secrets, OAuth"): a codec is a
+primitive, not per-service Rust. The encode consumes a row shaped `{to, subject, body, attachments:
+Array(Struct{filename, mime, bytes})}` and emits the base64url message string the wire body wraps
+(`{message:{raw: …}}`). **Consumes, does not fork, the sibling mission
+`a-file-collection-is-a-declared-set-over-any-blob-source`'s per-row codec-application rule**: the
+`message` codec is applied per row by that mission's shared rule, exactly like `DECODE`/`ENCODE
+multipart`. Spelling:
+
+```sql
+CREATE MAP CALL maild.send /maild/drafts AS
+  INSERT INTO /http/maild/users/me/messages/send |> ENCODE message VALUES (row) IRREVERSIBLE
+```
+
+*Declaration-cost:* **+0 clauses, one word** (`message` in the existing `ENCODE` slot). Attachment
+assembly is inside the codec, not the declaration.
+
+**G4 — batch/subrequest fan-out generalizes `FOLLOW` from bytes to rows.** The list→detail
+hydration (`messages.list` returns id stubs; each needs a detail GET), the DM `conversations.open`,
+and the Drive path→id parent walk are all **per-row fan-out**. `|> FOLLOW <field>` is redefined:
+its shipped form (a second GET off a delivered URL field → raw bytes) is the **bytes case of a
+general per-row fan-out** `|> FOLLOW <id-field> INTO /http/<drv>/<detail-template>`, which for each
+input row issues the templated detail request (substituting the id field) and splices the decoded
+detail back into the row. The bytes-download form is the no-template shorthand (unchanged spelling).
+The redefinition: *`FOLLOW` is a per-row join-to-wire, of which blob download is one instance.*
+Batch endpoints (Gmail `batch`) are a **named park** as a *transport optimization* the evaluator MAY
+coalesce into when a driver declares one — the ruled correctness baseline is honest N+1 fan-out.
+Spelling:
+
+```sql
+CREATE VIEW /maild/{label} OF maild/message AS
+  /http/maild/users/me/messages?labelIds={label} |> DECODE json |> EXPAND messages
+  |> FOLLOW id INTO /http/maild/users/me/messages/{id}
+```
+
+*Declaration-cost:* **+1 stage** (`FOLLOW … INTO …`) per hydration; the twin declares it once per
+list node. It is chatty by construction (this is honest, not a defect — the compiled driver is too);
+batch is the later fast path.
+
+**G5 — a declared `CALL` grows a typed signature.** `CREATE MAP CALL <drv>.<action>` is redefined to
+take an **optional typed parameter list** — `CREATE MAP CALL <drv>.<action> ( <param> <type>, … )
+/<node> AS <effect> [IRREVERSIBLE]` — so the declared CALL reports the same typed signature the
+compiled describe registry does (`react(channel: Text, ts: Text, emoji: Text)`), and the params bind
+into the effect body as `row.<param>`. Without the list the CALL is untyped (today's behavior),
+preserved as the no-signature shorthand. The redefinition: *a declared procedure's contract is
+declarable, not just its effect.* Spelling:
+
+```sql
+CREATE MAP CALL slackd.react ( channel text, ts text, emoji text ) /slackd/{channel}/messages AS
+  INSERT INTO /http/slackd/reactions.add VALUES (row)
+```
+
+*Declaration-cost:* **+1 clause** (the param list), the same length as the compiled proc's own
+signature — parity, not inflation.
+
+**G6 — prelude aliases are declared.** A bare-verb prelude shorthand (compiled `POST → slack.post`,
+`SEND → mail.send`) is declared by **`CREATE ALIAS <WORD> FOR <drv>.<action>`**. The redefinition:
+*the prelude table is registry data, not a compiled constant.* This is a terseness device: it is
+adopted for a twin only if it measurably shortens the common call without hiding the contract (ticket
+20260722091400 measures; a device that saves nothing measurable is rejected in writing). Spelling:
+`CREATE ALIAS SEND FOR maild.send`. *Declaration-cost:* **+1 line per alias.**
+
+**G7 — the blob-namespace archetype ergonomics are a named park for declared drivers.** A declared
+driver is relational/effect-shaped (VIEWs + MAPs); the compiled BlobNamespace archetype's filesystem
+**shell builtins** (`cp`/`ls`/`mv`/`rm`) are ergonomics over the compiled blob primitives
+(`/local`, `/s3`), themselves honest structural exceptions. The Drive raw operations (list, download,
+export, upload, metadata update, trash, move, copy) are each expressible as declared views/maps
+(inventory: all *expressible today*); only the `cp file file` **shell sugar** is not what a
+declaration produces. **Ruling: park the archetype ergonomics with a reason** — a declared twin
+reaches every Drive effect through `SELECT`/`UPSERT`/`REMOVE`/`CALL`; reproducing the shell-builtin
+archetype is not required for coverage and would import the blob-primitive exception into the
+declared shape. If a future need forces it, an `ARCHETYPE blob_namespace` driver tag reopens it as a
+scoped addition. *Declaration-cost:* n/a (parked); the raw ops cost is measured under Drive in the
+inventory.
+
+**G8 — the non-REST arm does NOT grow; the park stands (this closes the declared-drivers mission's
+reopen clause).** The declared shape stays **wire-only**: every declared body addresses
+`/http/<drv>/…`, and the whole confinement + credential-free story is built on that wire mount.
+Non-wire sources — `/git` (a local repo, no base URL/auth), `/claude` (an on-disk session store),
+the `/local`/`/s3`-class blob primitives, and the `/sql` engines — have no HTTP shape for the
+declared DSL to confine or authenticate, so absorbing them buys nothing and dilutes the invariant
+that a declared driver is *structurally* unable to read one host and write another. **Ruling: the
+declared shape does not grow a non-REST arm; these stay compiled structural exceptions** (restated
+with reasons by the playbook, ticket 20260722091500). This answers the mission
+`declared-drivers-are-the-normal-way-to-add-a-service`'s "reopens if the shape grows one": it does
+not. *Declaration-cost:* n/a (parked).
+
+**The conciseness invariant these rulings are measured against** is stated with its calibration point
+in §13.2 (ticket 20260722091400): a tier-1/tier-2 REST service ≈ one screen of statements, with
+`chatwork.qfs` (~30 statement lines for a full tier-1 service including file transfer) as the
+calibration. Every G-ruling above states its declaration-cost so the property is measured, not
+asserted.
+
 ## 13b. The markdown collection path — *implemented (documents/links tables, full section context); relation-vocabulary typing blueprint*
 
 *(Mission `markdown-trees-are-queryable-as-documents-and-links-tables`.)* A markdown tree is a
