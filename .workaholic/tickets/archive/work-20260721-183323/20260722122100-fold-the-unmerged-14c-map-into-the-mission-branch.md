@@ -5,7 +5,7 @@ type: enhancement
 layer: [Domain]
 effort:
 commit_hash:
-category:
+category: Changed
 depends_on:
 mission: a-walk-extends-one-trail-one-column-at-a-time
 ---

@@ -176,7 +176,7 @@ design rulings, not implementation.
 
 ## Acceptance
 
-- [ ] **The unmerged §14c map reaches main through this mission, folded not re-derived.** (#20260722122100-fold-the-unmerged-14c-map-into-the-mission-branch.md)
+- [x] **The unmerged §14c map reaches main through this mission, folded not re-derived.** (#20260722122100-fold-the-unmerged-14c-map-into-the-mission-branch.md)
       Commit d0218aa (branch work-20260721-031401) is folded into the mission branch
       (cherry-pick preferred; rebase-and-tidy if it merged first), the viewer-reconsideration
       worktree is never written, and the tidied §14b/§14c ship to main via the normal
@@ -230,3 +230,4 @@ design rulings, not implementation.
 - 2026-07-22 — ticket added — 20260722122500-consolidate-14c-open-list-and-hold-non-goals.md
 - 2026-07-22 — strategy created and linked — the-viewer-renders-qfs-as-a-walk-over-trails
 - 2026-07-22 — mission replanned for the overnight run - five docs-only recording tickets cut from the six acceptance criteria (fold 14c, define trail/walk, rule the settled points, record the AI-letter rulings, consolidate the open list and hold the non-goals); per-ticket judgment pre-answered (documentation-only, verified by reading the shipped blueprint; downstream missions named not created); drive_authorized stamped — mission.md
+- 2026-07-22 — ticket archived — 20260722122100-fold-the-unmerged-14c-map-into-the-mission-branch.md
