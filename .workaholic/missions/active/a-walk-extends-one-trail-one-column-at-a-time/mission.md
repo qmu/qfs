@@ -6,7 +6,8 @@ status: active
 created_at: 2026-07-21T18:33:32+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
-drive_authorized:
+strategy: the-viewer-renders-qfs-as-a-walk-over-trails
+drive_authorized: true
 tickets: []
 stories: []
 concerns: []
@@ -175,26 +176,26 @@ design rulings, not implementation.
 
 ## Acceptance
 
-- [ ] **The unmerged §14c map reaches main through this mission, folded not re-derived.**
+- [ ] **The unmerged §14c map reaches main through this mission, folded not re-derived.** (#20260722122100-fold-the-unmerged-14c-map-into-the-mission-branch.md)
       Commit d0218aa (branch work-20260721-031401) is folded into the mission branch
       (cherry-pick preferred; rebase-and-tidy if it merged first), the viewer-reconsideration
       worktree is never written, and the tidied §14b/§14c ship to main via the normal
       /report → /ship cycle with the patch version bumped per CLAUDE.md.
-- [ ] **trail and walk are defined in §14b and cross-referenced from §14c.** The definitions
+- [ ] **trail and walk are defined in §14b and cross-referenced from §14c.** (#20260722122200-define-trail-and-walk-in-14b.md) The definitions
       carry all pinned distinctions: trail = noun/static/result (one written path within the
       path concept: canonical backbone + selection/relation/reverse segments; "where you have
       walked, recorded"); walk = verb/dynamic/act (extending a trail one column at a time; the
       walk produces the trail; always linear — exactly one trail, never a graph; a DAG's
       non-linearity never appears in a walk); address ⊆ trail; and the sharpened "choose one
       of the steps the current trail admits, and extend" definition covering reads and writes.
-- [ ] **§14c's settled points move from open to ruled.** Rulings 1–4 of ## Goal are written
+- [ ] **§14c's settled points move from open to ruled.** (#20260722122300-rewrite-14c-settled-points-as-rulings.md) Rulings 1–4 of ## Goal are written
       as rulings in §14c: the column layout as a display pattern for post-execution semantics
       (kept simple), placement-dissolution of linear-vs-graph (DAG confined to a column's
       interior), the path=query=set intension/extension weld (write-edge caveat retained as
       open), and the deliberate surrender of 100% viewer/language parity (fidelity is the
       content's responsibility). The retracted "higher-abstracted container/design-pattern"
       framing is removed from the section.
-- [ ] **The AI-letter rulings are recorded in the blueprint as design rulings.** Rulings 5–8
+- [ ] **The AI-letter rulings are recorded in the blueprint as design rulings.** (#20260722122400-record-the-ai-letter-rulings.md) Rulings 5–8
       of ## Goal appear (a §14c subsection or a section §14c points to): envelope =
       context + interactivity, inward confinement named as the same principle as
       declared-driver host-confinement, single typed egress (reply = typed INSERT into the
@@ -202,13 +203,13 @@ design rulings, not implementation.
       type, form-filling as a walk (partial struct = valid intermediate value; effect only at
       the terminal column — no I/O until COMMIT), condition-split as a declared, checkable
       path-branch that keeps walks linear, and "who drives is not the design axis."
-- [ ] **The remaining open items stay open, each naming its downstream mission.** §14c's
+- [ ] **The remaining open items stay open, each naming its downstream mission.** (#20260722122500-consolidate-14c-open-list-and-hold-non-goals.md) §14c's
       consolidated open list keeps (at least): the ASK-grammar / predicate- and merge-column
       spellings (candidates, unsettled), the split primitive + in-column DAG editor, the
       request-principal seam / empty-home root, the enumerate-root plumbing, the per-viewport
       projections, and the intension/extension write edge — with the named-but-not-created
       downstream missions of ## Scope attached, and none of them created by this mission.
-- [ ] **The non-goals held.** No grammar shipped, no viewer code changed, no ASK/split
+- [ ] **The non-goals held.** (#20260722122500-consolidate-14c-open-list-and-hold-non-goals.md) No grammar shipped, no viewer code changed, no ASK/split
       implemented; the diff on the mission branch touches design/knowledge documents only
       (blueprint, mission bookkeeping), verified by reading the shipped PR's file list.
 
@@ -222,3 +223,10 @@ design rulings, not implementation.
   session to inscribe into the blueprint. No tickets cut yet — a claiming session
   interrogates and cuts its own; drive_authorized deliberately left empty (no per-ticket
   interrogation has happened).
+- 2026-07-22 — ticket added — 20260722122100-fold-the-unmerged-14c-map-into-the-mission-branch.md
+- 2026-07-22 — ticket added — 20260722122200-define-trail-and-walk-in-14b.md
+- 2026-07-22 — ticket added — 20260722122300-rewrite-14c-settled-points-as-rulings.md
+- 2026-07-22 — ticket added — 20260722122400-record-the-ai-letter-rulings.md
+- 2026-07-22 — ticket added — 20260722122500-consolidate-14c-open-list-and-hold-non-goals.md
+- 2026-07-22 — strategy created and linked — the-viewer-renders-qfs-as-a-walk-over-trails
+- 2026-07-22 — mission replanned for the overnight run - five docs-only recording tickets cut from the six acceptance criteria (fold 14c, define trail/walk, rule the settled points, record the AI-letter rulings, consolidate the open list and hold the non-goals); per-ticket judgment pre-answered (documentation-only, verified by reading the shipped blueprint; downstream missions named not created); drive_authorized stamped — mission.md
