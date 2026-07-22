@@ -74,6 +74,7 @@ pub mod sql_contracts;
 pub mod store;
 pub mod sweeper;
 pub mod sys;
+pub mod teams_inbox;
 pub mod telemetry;
 pub mod tmux;
 pub mod transform;
