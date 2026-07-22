@@ -1218,6 +1218,27 @@ cycle is a valid trail. **Open**: the deterministic naming rule for derived reve
 (`~projects`); whether a type-agnostic edge (`linked`/`~linked`) is admitted at all (only as a union
 view over typed edges, never a rehabilitation of untyped links); and the `/resolve` name itself.
 
+**trail and walk, defined — *domain terms (2026-07-21)*.** The two words name a noun and a verb
+over the same substance, and the viewer's design (§14c) rests on the pair.
+
+- A **trail** is a NOUN — STATIC, a RESULT: **one written path within the path concept**. It is the
+  canonical containment backbone (the containment-only *address*) plus the segments beyond bare
+  containment — selection (`@A`), declared-relation (`/client`), derived reverse-edge (`~projects`).
+  A trail is *where you have walked, recorded* — the trace, held still. The containment chain is a
+  strict inclusion: **address/path (the canonical backbone) ⊆ trail (backbone + relation segments)**;
+  a containment-only spelling is the degenerate trail.
+- A **walk** is a VERB — DYNAMIC, an ACT: **extending a trail one step — one column — at a time.**
+  **The walk produces the trail** — the trail is the walk's trace. A walk is **always linear**: it
+  traverses exactly ONE trail, never a graph; the non-linearity of a DAG never appears in a walk
+  (where a graph's structure is needed it lives *inside* a column, not across the walk — §14c). A
+  walk = the act that builds and traverses a trail.
+- **The sharpened, operational definition covers reads and writes in one sentence:** a walk is
+  *"choose one of the steps the current trail admits, and extend."* For a **read**, the admitted
+  steps are `describe`'s declared relations and keys (the next column drills rightward through a
+  declared edge). For a **write**, the admitted step is the next input type, dependent on the values
+  bound so far (filling a struct field-by-field is a walk whose effect fires only at the terminal
+  column — §14c). One definition, both directions: extend the trail one column at a time.
+
 **Resolve runs as the caller's principal.** Because many trails reach one resource,
 `/resolve/<trail>` evaluates under the **caller's principal**, and RBAC binds the underlying paths
 and relations, never the trail spelling — no chain of relation segments reads what the canonical
@@ -1249,10 +1270,13 @@ and plggmatic's rendering engine.)*
 
 ## 14c. The viewer, reconsidered — the design space *(open; nothing settled, 2026-07)*
 
-§14b describes the *shipped* address strip and flags its column model as under reconsideration.
-This section is that reconsideration written out: a map of the requirements raised, from several
-viewpoints, and of how each can be reasoned about — **not a decision**. It exists so a later ruling
-is made against a full picture rather than the first framing. Every claim below is a candidate.
+§14b describes the *shipped* address strip, flags its column model as under reconsideration, and
+**defines the domain terms *trail* and *walk*** — a trail is one recorded path (the canonical
+address plus its relation segments); a walk is the act of extending a trail one column at a time.
+This section reconsiders how the viewer renders a **walk over trails**, and uses those §14b terms
+rather than paraphrasing them. It is that reconsideration written out: a map of the requirements
+raised, from several viewpoints. It exists so the ruling is made against a full picture rather than
+the first framing.
 
 **The starting tension: a linear strip vs the real structure.** The shipped viewer renders an
 address as a left-to-right Miller-column strip — column `i` is the resolution of address prefix

@@ -5,7 +5,7 @@ type: enhancement
 layer: [Domain]
 effort:
 commit_hash:
-category:
+category: Changed
 depends_on: 20260722122100-fold-the-unmerged-14c-map-into-the-mission-branch.md
 mission: a-walk-extends-one-trail-one-column-at-a-time
 ---
