@@ -51,3 +51,26 @@ generically.
 - A `DESCRIBE` test shows both registered views with their schemas.
 - `cargo test --workspace`, clippy `-D warnings`, `cargo fmt --all --check`,
   `gen-docs --check` all pass.
+
+## Replan note (2026-07-23) — design settled; complete the registration, do NOT re-escalate
+
+The two points the overnight leaf flagged are already ruled in the mission's
+`design-brief-codec-relation-surface.md` (Ruling 3), so no fresh design decision is needed:
+
+1. **Provenance column names.** `documents` uses `path`; `links` keeps the compiled driver's
+   `source_doc` / `target_doc`. There is no "source_doc vs path" fork: `links.source_doc`'s VALUE
+   is the file's root-relative `path` (the brief asserts both are the same value). `links` carries
+   two distinct document references (source and target), so a single `path` column cannot name
+   both — the compiled names stay, and row-equivalence + qfs-viewer backlinks require them.
+2. **`/local` path normalization.** Root-relative `path` is the join id (brief Ruling 3). The
+   `/local` listing carries the VFS path (`/local/notes/a.md`); deriving the root-relative form is
+   a small resolution step stripping the declared-collection root prefix — implementation, not a
+   design choice.
+
+**Done so far:** the codec half shipped (commit 0a894ef) — `md.documents`/`md.links` named
+relations + a hermetic row-equivalence test vs the compiled driver.
+
+**Remaining (drive this ticket to completion):** the declared-VIEW registration through the
+definition layer; `DESCRIBE` of the registered views; the `/local` root-relative derivation; and
+the registration-level equivalence + `DESCRIBE` tests named in the Quality Gate above. Then the
+retirement ticket (20260722090400) deletes the compiled driver once the equivalence gate is green.

@@ -190,3 +190,4 @@ row-equivalent to the compiled driver, which then retires.
 - 2026-07-22 — ticket archived — 20260722090100-design-brief-codec-relation-surface-and-13b-ruling.md
 - 2026-07-22 — ticket archived — 20260722090200-per-row-decode-over-collected-sets.md
 - 2026-07-22 — ticket archived — 20260722090500-cookbook-collection-recipes-execution-checked.md
+- 2026-07-23 — mission replanned — design points confirmed settled in the brief (root-relative path join id; links keeps source_doc/target_doc), t3 annotated to complete the registration layer without re-escalation — 20260722090300-documents-links-as-declared-registrations.md
