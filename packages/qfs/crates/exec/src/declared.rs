@@ -146,7 +146,7 @@ pub fn eval_view_body<F, G>(
     follow: G,
 ) -> Result<RowBatch, CfsError>
 where
-    F: FnOnce(&str) -> Result<RowBatch, CfsError>,
+    F: FnOnce(&str, Option<Value>) -> Result<RowBatch, CfsError>,
     G: FnOnce(&str) -> Result<Vec<u8>, CfsError>,
 {
     let invalid = |reason: &'static str| CfsError::InvalidPath {
@@ -168,7 +168,7 @@ where
     // 1. Rehydrate the stored body (serde, no re-parse). A view body is a read query.
     let stmt: Statement = serde_json::from_str(body_json)
         .map_err(|_| invalid("declared view body is not rehydratable"))?;
-    let Statement::Query(pipeline) = stmt else {
+    let Statement::Query(mut pipeline) = stmt else {
         return Err(invalid("declared view body is not a read query"));
     };
 
@@ -180,10 +180,29 @@ where
     let wire_resource = confined_wire_resource(&source_path, driver_name)
         .ok_or_else(|| invalid("declared view body addresses a foreign host (§13 confinement)"))?;
 
+    // 2a. Read-over-POST (blueprint §13.1 G1): a leading `POST <body>` op makes the wire read a
+    //     POST carrying the evaluated struct-literal body (a read has no incoming `row`, so the
+    //     body is evaluated against an empty row — constants + `{param}`-free struct literals). The
+    //     op is stripped here so the remaining pipeline (its leading `DECODE`, then `EXPAND`/…) runs
+    //     exactly as a GET view's would; a POST op in any OTHER position falls through to lowering,
+    //     which refuses it (defense in depth). Confinement is unaffected — the source host is
+    //     already checked above; the body is data.
+    let post_body: Option<Value> = if matches!(pipeline.ops.first(), Some(PipeOp::Post(_))) {
+        let PipeOp::Post(pref) = pipeline.ops.remove(0) else {
+            unreachable!("matches! guarded a leading Post op");
+        };
+        let scalar = lower_scalar(&pref.body)
+            .map_err(|_| invalid("declared view POST body is not a per-read expression"))?;
+        Some(eval_value(&scalar, &Schema::empty(), &Row::new(vec![])))
+    } else {
+        None
+    };
+
     // 3. Fetch the wire resource over the caller's confined applier (leading `DECODE` = the applier
-    //    codec). The stock `/rest/<name>/<resource>` addressing the applier resolves.
+    //    codec; a `Some` post_body makes it a POST-to-read). The stock `/rest/<name>/<resource>`
+    //    addressing the applier resolves.
     let rest_path = format!("/rest/{driver_name}/{wire_resource}");
-    let fetched = fetch(&rest_path)?;
+    let fetched = fetch(&rest_path, post_body)?;
 
     // 4. Split the body at its `FOLLOW <field>` stage, if any (blueprint §13, ticket
     //    20260711121526): the ops BEFORE it run over the fetched batch as usual, then the named
@@ -572,7 +591,7 @@ mod tests {
         let of = vec!["ts".to_string(), "user".to_string(), "text".to_string()];
 
         let mut fetched_path = None;
-        let batch = eval_view_body(&body, "slack", "/slack/history", Some(&of), None, &[], |path| {
+        let batch = eval_view_body(&body, "slack", "/slack/history", Some(&of), None, &[], |path, _post| {
             fetched_path = Some(path.to_string());
             Ok(decode(
                 br#"{"ok":true,"messages":[{"ts":"1","user":"U1","text":"hi"},{"ts":"2","user":"U2","text":"yo"}]}"#,
@@ -613,7 +632,7 @@ mod tests {
             Some(&of),
             None,
             &[],
-            |_path| {
+            |_path, _post| {
                 Ok(decode(
                     br#"[{"room_id":1,"name":"general","type":"group","sticky":false,"unread_num":3},
                         {"room_id":2,"name":"dev","type":"group","sticky":true,"unread_num":0}]"#,
@@ -654,7 +673,7 @@ mod tests {
             Some(&of),
             None,
             &[],
-            |_path| panic!("the fetch must NOT run for an unreadable OF contract"),
+            |_path, _post| panic!("the fetch must NOT run for an unreadable OF contract"),
             no_follow,
         )
         .unwrap_err();
@@ -680,7 +699,7 @@ mod tests {
             None,
             None,
             &[],
-            |_path| -> Result<RowBatch, CfsError> {
+            |_path, _post| -> Result<RowBatch, CfsError> {
                 panic!("the fetch must NOT run for a foreign source");
             },
             no_follow,
@@ -718,7 +737,7 @@ mod tests {
             None,
             None,
             &params,
-            |path| {
+            |path, _post| {
                 fetched_path = Some(path.to_string());
                 Ok(decode(br#"[{"message_id":"m1","body":"hi"}]"#))
             },
@@ -774,7 +793,7 @@ mod tests {
             Some(&of),
             Some(&refinement),
             &[],
-            |_path| {
+            |_path, _post| {
                 Ok(decode(
                     br#"{"ok":true,"messages":[{"ts":"1","user":"U1","text":"hi"}]}"#,
                 ))
@@ -792,7 +811,7 @@ mod tests {
             Some(&of),
             Some(&refinement),
             &[],
-            |_path| {
+            |_path, _post| {
                 Ok(decode(
                     br#"{"ok":true,"messages":[{"ts":"2","user":"bot","text":"yo"}]}"#,
                 ))
@@ -912,7 +931,7 @@ mod tests {
             None,
             None,
             &params,
-            |path| {
+            |path, _post| {
                 // The query-string suffix rides behind the substituted {file} template.
                 assert_eq!(path, "/rest/chatwork/rooms/1/files/9?create_download_url=1");
                 Ok(decode(
@@ -954,7 +973,7 @@ mod tests {
             None,
             None,
             &[],
-            |_| Ok(decode(br#"[{"url":"https://a"},{"url":"https://b"}]"#)),
+            |_, _| Ok(decode(br#"[{"url":"https://a"},{"url":"https://b"}]"#)),
             |_| panic!("no follow on an ambiguous batch"),
         )
         .unwrap_err();
@@ -972,7 +991,7 @@ mod tests {
             None,
             None,
             &[],
-            |_| Ok(decode(br#"[{"other":"x"}]"#)),
+            |_, _| Ok(decode(br#"[{"other":"x"}]"#)),
             |_| panic!("no follow without the field"),
         )
         .unwrap_err();

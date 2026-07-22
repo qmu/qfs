@@ -155,7 +155,7 @@ the four downstream missions with their entry conditions.
       migration framing), each with its declaration-cost note; read-over-POST and declared
       pushdown are ruled explicitly (they gate the slack/github conversions and full `/cf`
       retirement); the non-REST-arm question is ruled or parked with a reason.
-- [ ] **At least one ruled semantic ships and is proven hermetically end-to-end** (#20260722091300-ship-read-over-post-hermetically.md): a declared
+- [x] **At least one ruled semantic ships and is proven hermetically end-to-end** (#20260722091300-ship-read-over-post-hermetically.md): a declared
       driver using the new semantic installs, describes, plans, and reads/writes against
       hermetic wire fixtures through the real tier-2 evaluator — the proof pattern
       `cloudflare.qfs`'s SQL arm set — so the rulings are demonstrated, not speculative.
@@ -195,5 +195,15 @@ the four downstream missions with their entry conditions.
 - 2026-07-22 — ticket added — 20260722091500-conversion-playbook-and-honest-tiering.md
 - 2026-07-22 — mission replanned for the overnight run - five tickets cut, interrogation answered the open judgment calls (proof target fixed to read-over-POST; autonomous section-13 rulings authorized by the owner); drive_authorized stamped — mission.md
 - 2026-07-22 — strategy created and linked — integrations-are-declared-not-compiled
+- 2026-07-22 — G1 read-over-POST shipped (ticket 091300) and proven hermetically. During
+  implementation the §13.1 G1 spelling was refined with cause: from a bare `<source> POST <body>`
+  source clause to a leading `|> POST { … }` **pipe stage** (`PipeOp::Post`, the 23rd closed-core
+  pipe variant) — same semantics, and the pipe-op form is the tier-2 "quirks are ordinary pipe
+  ops" idiom (consistent with `EXPAND`/`FOLLOW`); it minimised the closed-core AST disruption. The
+  §13.1 text was corrected in the same change. Proof: `read_over_post_pulls_rows_through_the_real_evaluator`
+  drives a declared Cloudflare queue-pull twin through the real tier-2 evaluator over a wire
+  fixture (POST asserted on the recorded request, rows decoded + shaped to the OF type). Full `/cf`
+  queue-pull retirement was NOT done here (a follow-up); the declared spelling now exists for it.
 - 2026-07-22 — ticket archived — 20260722091100-coverage-inventory-of-compiled-driver-surfaces.md
 - 2026-07-22 — ticket archived — 20260722091200-rule-the-semantic-gaps-in-blueprint-13.md
+- 2026-07-22 — ticket archived — 20260722091300-ship-read-over-post-hermetically.md

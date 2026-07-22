@@ -63,6 +63,11 @@ pub enum LowerError {
     /// evaluator, which splits it out of the body before lowering — so any follow here is
     /// outside a declared driver view body, where it has no meaning.
     FollowOutsideDeclaredBody,
+    /// A `POST <body>` read-over-POST stage reached the general read-plan lowering (blueprint
+    /// §13.1 G1). Like `FOLLOW`, it is a declared-view body stage the declared evaluator strips
+    /// before lowering — so any `POST` here is outside a declared driver view body, where it has
+    /// no meaning.
+    PostOutsideDeclaredBody,
 }
 
 impl LowerError {
@@ -77,6 +82,7 @@ impl LowerError {
             LowerError::TransformInputMissing { .. } => "transform_input_missing",
             LowerError::SwitchNotTerminal => "switch_not_terminal",
             LowerError::FollowOutsideDeclaredBody => "follow_outside_declared_body",
+            LowerError::PostOutsideDeclaredBody => "post_outside_declared_body",
         }
     }
 }
@@ -116,6 +122,11 @@ impl std::fmt::Display for LowerError {
                 "a follow stage is only valid inside a declared driver view body (blueprint \
                  §13: it performs the driver's second wire GET off a delivered URL field) — it \
                  cannot appear in a general query pipeline",
+            ),
+            LowerError::PostOutsideDeclaredBody => f.write_str(
+                "a post stage is only valid as the leading op of a declared driver view body \
+                 (blueprint §13.1 G1: it makes the driver's wire read a POST carrying the \
+                 evaluated body) — it cannot appear in a general query pipeline",
             ),
         }
     }
@@ -420,6 +431,7 @@ fn lower_op(
         // error, never a silent passthrough.
         PipeOp::Switch(_) => Err(LowerError::SwitchNotTerminal),
         PipeOp::Follow(_) => Err(LowerError::FollowOutsideDeclaredBody),
+        PipeOp::Post(_) => Err(LowerError::PostOutsideDeclaredBody),
     }
 }
 

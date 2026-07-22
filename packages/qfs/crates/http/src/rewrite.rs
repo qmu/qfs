@@ -167,6 +167,7 @@ fn rewrite_pipe_op(op: &mut PipeOp, args: &QueryArgs) {
         | PipeOp::Encode(_)
         | PipeOp::Transform(_)
         | PipeOp::Follow(_)
+        | PipeOp::Post(_)
         | PipeOp::Of(_) => {}
     }
 }
@@ -381,6 +382,7 @@ fn collect_pipe_op(op: &PipeOp, out: &mut std::collections::BTreeSet<String>) {
         | PipeOp::Encode(_)
         | PipeOp::Transform(_)
         | PipeOp::Follow(_)
+        | PipeOp::Post(_)
         | PipeOp::Of(_) => {}
     }
 }

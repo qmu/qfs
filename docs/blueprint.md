@@ -1013,26 +1013,36 @@ ticket 20260722091300; the rest are ruled here and implemented as their conversi
 
 **G1 — read-over-POST is a wire source with a body.** A read whose wire shape is a POST (a queue
 pull, a body-carried search, a GraphQL query) is a **VIEW whose leading `/http/<drv>/…` source
-carries a `POST <body>` clause**. The body is a struct-literal expression (`{…}`, closed over the
-view's `{param}` bindings — never over `row`, a read has no incoming row); the wire applier issues
-the POST, and the **response decodes into rows through the ordinary pipeline exactly as a GET's
-would** (`|> DECODE json |> EXPAND …`). The redefinition: *a wire read is no longer GET-only.* This
-generalizes the already-shipped POST-to-read of the `CREATE SQL … OVER …/query` arm (a declared
-SQL query is a POST that returns rows) from the SQL dialect to any declared VIEW. Semantics: a
-read-over-POST is a **READ effect** (pure, no mutation, no irreversibility gate) even though its
-method is POST — the method is transport, the effect kind is read; the applier marks it
-retry-unsafe (POST) but returns a `RowBatch`, not an affected-count. Host confinement is unchanged:
-the source is still `/http/<drv>/…`, confined at load time and plan time. Spelling:
+carries a leading `|> POST <body>` pipe stage** (the tier-2 "quirks are ordinary pipe ops"
+principle, not a bespoke source clause — the same shape as `EXPAND`/`DECODE`/`FOLLOW`). The body is
+a struct-literal expression (`{…}`, closed over the view's `{param}` bindings — never over `row`, a
+read has no incoming row); the declared evaluator strips the leading `POST`, the wire applier issues
+the POST carrying the evaluated body, and the **response decodes into rows through the rest of the
+pipeline exactly as a GET's would** (`|> DECODE json |> EXPAND …`). The redefinition: *a wire read is
+no longer GET-only.* This generalizes the already-shipped POST-to-read of the `CREATE SQL … OVER
+…/query` arm (a declared SQL query is a POST that returns rows) from the SQL dialect to any declared
+VIEW. Semantics: a read-over-POST is a **READ effect** (pure, no mutation, no irreversibility gate)
+even though its method is POST — the method is transport, the effect kind is read; the applier
+returns a `RowBatch`, not an affected-count (`HttpEffect::from_node` routes a body-carrying READ to a
+POST, `apply_effect`'s single-exchange arm decodes the response). Host confinement is unchanged: the
+source is still `/http/<drv>/…`, confined at load time and plan time; a `POST` in any position other
+than the leading stage of a declared view body is a structured lowering/eval refusal
+(`post_outside_declared_body`), exactly like `FOLLOW`. Spelling:
 
 ```sql
 CREATE VIEW /cfd/accounts/{account}/queues/{queue}/pull OF cfd/message AS
-  /http/cfd/accounts/{account}/queues/{queue}/messages/pull POST { visibility_timeout_ms: 5000 }
-  |> DECODE json |> EXPAND result.messages
+  /http/cfd/accounts/{account}/queues/{queue}/messages/pull
+  |> POST { visibility_timeout_ms: 5000 } |> DECODE json |> EXPAND result
 ```
 
-*Declaration-cost:* **+1 clause** (`POST { … }`) on the one view that reads over POST — a queue-pull
-view is ~3 lines, well under the compiled `/cf` queue-pull's Rust. Reads that are plain GET are
-untouched (no clause).
+*Declaration-cost:* **+1 stage** (`|> POST { … }`) on the one view that reads over POST — a
+queue-pull view is ~3 lines, well under the compiled `/cf` queue-pull's Rust. Reads that are plain
+GET are untouched (no stage). *(Shipped and proven hermetically end-to-end, ticket 20260722091300:
+`PipeOp::Post` is the 23rd closed-core pipe variant; the `read_over_post_pulls_rows_through_the_real_evaluator`
+test drives a declared queue-pull twin through the real tier-2 evaluator over a wire fixture and
+asserts the wire saw a POST carrying the evaluated body. Refined from a bare `<source> POST <body>`
+source clause to the `|> POST` pipe stage during implementation — same semantics, and the pipe-op
+form is the tier-2 idiom; recorded in the mission changelog.)*
 
 **G2 — declared pushdown is a per-column param map with residual honesty.** Which predicates push
 to the wire is declared, not compiled, by a **`PUSHDOWN ( <col> <op> => '<param>' [EXACT | PREFILTER], … )`**

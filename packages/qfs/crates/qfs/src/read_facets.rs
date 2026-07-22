@@ -240,12 +240,18 @@ impl ReadDriver for RestReadDriver {
                 spec.of_columns.as_deref(),
                 spec.of_refinement.as_ref(),
                 &params,
-                |rest_path| {
-                    qfs_driver_http::rest_read_rows(&self.applier, rest_path).map_err(|e| {
-                        CfsError::InvalidPath {
-                            path: rest_path.to_string(),
-                            reason: e.code(),
+                |rest_path, post_body| {
+                    // §13.1 G1: a `Some` post_body is a declared read-over-POST — POST the encoded
+                    // wire body and decode the response; `None` is the ordinary GET read.
+                    let result = match post_body {
+                        Some(body) => {
+                            qfs_driver_http::rest_read_rows_post(&self.applier, rest_path, &body)
                         }
+                        None => qfs_driver_http::rest_read_rows(&self.applier, rest_path),
+                    };
+                    result.map_err(|e| CfsError::InvalidPath {
+                        path: rest_path.to_string(),
+                        reason: e.code(),
                     })
                 },
                 // The §13 FOLLOW second fetch: raw bytes off the delivered URL, no auth, the
