@@ -378,3 +378,4 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-07-22 — live round re-ruled autonomous-in-container (owner directive 2026-07-22); minimal claude credential copy into the container permitted, host claude state and sockets never mounted; tmux ticket gains container-only policies — 20260719231005-claude-live-round-owner-attended.md
 - 2026-07-22 — ticket added (rider: slack user-token DM write channel_not_found bugfix; QG hermetic, no third-party DM) — 20260722171439-slack-driver-user-token-dm-write-channel-not-found.md
 - 2026-07-22 — ticket archived — 20260721190756-slack-driver-channel-id-resolution.md
+- 2026-07-22 — ticket archived — 20260722171439-slack-driver-user-token-dm-write-channel-not-found.md

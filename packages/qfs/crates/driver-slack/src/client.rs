@@ -677,10 +677,16 @@ impl SlackClient for RestSlackClient {
                 client_msg_id,
                 is_dm,
             } => {
+                // Resolve the target to the id `chat.postMessage` requires: a `/dms/<user>` node
+                // opens the IM directly (`is_dm`); every other segment (a `#name` channel, or a bare
+                // `Uxxxx` addressed as `.../messages` under a user token) goes through the shared
+                // resolver — the same resolution the read path performs, so a DM/channel that lists
+                // rows accepts a post. `Uxxxx` → `conversations.open` → `Dxxxx` is the user-token DM
+                // fix (ticket 20260722171439); an already-`Dxxxx` segment passes through unopened.
                 let channel = if *is_dm {
                     self.open_dm_channel(channel)?
                 } else {
-                    channel.clone()
+                    self.resolve_channel_segment(channel)?
                 };
                 let mut payload = serde_json::json!({
                     "channel": channel, "text": text, "client_msg_id": client_msg_id,

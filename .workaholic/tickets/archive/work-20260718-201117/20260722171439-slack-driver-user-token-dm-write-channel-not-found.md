@@ -5,7 +5,7 @@ type: bugfix
 layer: [Domain]
 effort:
 commit_hash:
-category:
+category: Changed
 depends_on: 20260721190756-slack-driver-channel-id-resolution.md
 mission: claude-code-sessions-are-queryable-and-steerable-as-qfs-paths
 ---
