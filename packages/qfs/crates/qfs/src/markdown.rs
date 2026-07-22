@@ -260,6 +260,65 @@ mod tests {
             .collect()
     }
 
+    /// **The mission's row-equivalence gate (acceptance item 5, ticket 20260722090300).** The
+    /// markdown interpretation rehomed into the codec layer (`qfs_core::decode_markdown_relation`)
+    /// reproduces the compiled `qfs-driver-markdown` driver's `documents` and `links` rows —
+    /// including `title` derivation, front matter, `target_doc` normalization, and the full nested
+    /// `section_path` — byte-for-byte on the shared fixture tree. This is the twin that must be
+    /// green before the compiled driver may retire.
+    #[test]
+    fn codec_relations_are_row_equivalent_to_the_compiled_driver() {
+        let dir = fixture_tree();
+        // The same set of documents the driver's tree walk scans, root-relative.
+        let files = [
+            (
+                "plan.md",
+                std::fs::read(dir.path().join("plan.md")).unwrap(),
+            ),
+            (
+                "notes/first.md",
+                std::fs::read(dir.path().join("notes/first.md")).unwrap(),
+            ),
+        ];
+        // Schemas are identical (the codec owns the canonical relation schemas).
+        assert_eq!(
+            qfs_core::markdown_documents_schema(),
+            qfs_driver_markdown::documents_schema()
+        );
+        assert_eq!(
+            qfs_core::markdown_links_schema(),
+            qfs_driver_markdown::links_schema()
+        );
+        for (rel_path, bytes) in &files {
+            let text = std::str::from_utf8(bytes).unwrap();
+            let driver_doc = qfs_driver_markdown::parse_document(rel_path, text);
+
+            let codec_docs = qfs_core::decode_markdown_relation(
+                qfs_core::MarkdownRelation::Documents,
+                bytes,
+                rel_path,
+            )
+            .unwrap();
+            assert_eq!(
+                codec_docs.rows,
+                vec![driver_doc.document_row()],
+                "documents row for {rel_path} matches the compiled driver"
+            );
+
+            let codec_links = qfs_core::decode_markdown_relation(
+                qfs_core::MarkdownRelation::Links,
+                bytes,
+                rel_path,
+            )
+            .unwrap();
+            assert_eq!(
+                codec_links.rows,
+                driver_doc.link_rows(),
+                "links rows for {rel_path} match the compiled driver (section_path + target_doc)"
+            );
+        }
+    }
+
     /// Build `(engine, reads)` with the /markdown mount + read facet registered — the same
     /// two-registry shape `register_markdown_mounts` wires from bindings.
     fn engine_and_reads(dir: &TempDir) -> (qfs_core::Engine, qfs_exec::ReadRegistry) {

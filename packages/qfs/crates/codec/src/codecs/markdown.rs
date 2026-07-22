@@ -27,9 +27,44 @@ const BODY: &str = "body";
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MarkdownFrontmatterCodec;
 
+/// The `md` codec's declared named relations (blueprint §13b): the flat per-document relation is
+/// the primary (bare `decode md`), and the tree interpretation adds `documents` and `links`.
+const MD_RELATIONS: &[&str] = &["documents", "links"];
+
 impl Codec for MarkdownFrontmatterCodec {
     fn fmt(&self) -> &str {
         "md"
+    }
+
+    fn relations(&self) -> &'static [&'static str] {
+        MD_RELATIONS
+    }
+
+    fn decode_relation(
+        &self,
+        relation: Option<&str>,
+        bytes: &[u8],
+        source_path: Option<&str>,
+    ) -> Result<RowBatch, CfsError> {
+        match relation {
+            // Bare `decode md` — the flat front-matter+body relation, unchanged.
+            None => self.decode(bytes),
+            // `decode md.documents` / `decode md.links` — the tree interpretation. `target_doc`
+            // normalizes against the source's root-relative path (the provenance), so a link set
+            // without a path resolves against the empty root.
+            Some(name) => {
+                let rel =
+                    super::markdown_tree::MarkdownRelation::from_label(name).ok_or_else(|| {
+                        CfsError::Decode {
+                            fmt: "md",
+                            detail: format!(
+                            "the `md` codec has no relation `{name}` (declared: documents, links)"
+                        ),
+                        }
+                    })?;
+                super::markdown_tree::decode_relation(rel, bytes, source_path.unwrap_or(""))
+            }
+        }
     }
 
     fn decode(&self, bytes: &[u8]) -> Result<RowBatch, CfsError> {
