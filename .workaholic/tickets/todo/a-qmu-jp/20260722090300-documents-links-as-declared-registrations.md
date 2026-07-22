@@ -74,3 +74,27 @@ relations + a hermetic row-equivalence test vs the compiled driver.
 definition layer; `DESCRIBE` of the registered views; the `/local` root-relative derivation; and
 the registration-level equivalence + `DESCRIBE` tests named in the Quality Gate above. Then the
 retirement ticket (20260722090400) deletes the compiled driver once the equivalence gate is green.
+
+## Drive note (2026-07-23) — query surface done; registration layer blocked on disk
+
+Overnight leaf progress (commit `2e23317`, per-crate green):
+
+- **Done, committed:** the `decode <fmt>.<relation>` grammar suffix (`Codec.relation`, parser)
+  and its exec wiring — `decode md.documents` / `decode md.links` now parse and route through
+  `Codec::decode_relation`, with each decoded row's `path` provenance threaded to the codec as
+  `source_path` (so `links.target_doc` normalizes against and joins `documents.path`, Ruling 3).
+  Tests: `qfs-parser` (+2), `qfs-exec` (`decode_md_documents_relation_over_a_set`,
+  `decode_md_links_relation_normalizes_target_doc_against_provenance`, bad-relation error).
+  clippy `-D warnings` clean, fmt applied. `gen-docs --check` unaffected (codec EBNF in
+  `crates/lang/reference.rs` untouched — a follow-up should add the `.relation` suffix there and
+  regen when the binary can be built).
+- **NOT done — blocked on disk:** the declared-VIEW registration (`CREATE VIEW` desugar over the
+  collection), `DESCRIBE` of the registered views, the `/local` root-relative prefix stripping,
+  and the registration-level equivalence + `DESCRIBE` tests. All require building the full `qfs`
+  binary (System DB + `driver-local` + declared-view resolution + `xtask gen-docs`). Shared host
+  had ~8.7G free vs the sibling worktree's 13G-equivalent workspace build; per-crate builds fit,
+  the binary does not. Not attempted, to avoid an os-error-28 that would harm co-tenant containers.
+- **Design note for the resumer:** the engine's `PlanSource::Codec` (`core/eval.rs`) is a
+  schema-passthrough; the live decode is `exec/codec.rs::apply_codecs`. Confirm the declared-view
+  body evaluation path (`qfs_exec::declared`) routes decode through `apply_codecs` (relation-aware)
+  and NOT the engine fold, or thread `relation` into `PlanSource::Codec` too.

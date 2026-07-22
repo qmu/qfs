@@ -41,6 +41,16 @@ not green, stop at the previous ticket — do not delete against a red or skippe
 - Nothing the viewer could do before is lost — the declared views are already proven
   row-equivalent when this ticket starts.
 
+## Drive note (2026-07-23) — BLOCKED: equivalence gate not green
+
+This ticket's `depends_on` (20260722090300) did NOT reach its registration-level equivalence
+gate this run — that gate is disk-blocked (the declared-VIEW registration + equivalence test need
+the full `qfs` binary build, which the shared host's free disk could not accommodate; see t3's
+Drive note). Per this ticket's own guard ("If the equivalence test is not green, stop at the
+previous ticket — do not delete against a red or skipped oracle") and the overnight authorization,
+NOTHING here was done: `crates/driver-markdown` is untouched, no docs/skills regenerated, no
+plugin version bumped. Unblock only once t3's registration-level equivalence test is GREEN.
+
 ## Quality Gate
 
 - `crates/driver-markdown` no longer registers a driver; the workspace builds without it.
