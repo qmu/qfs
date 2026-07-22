@@ -337,18 +337,30 @@ impl RestSlackClient {
         params: &[(String, String)],
     ) -> Result<Vec<(String, String)>, SlackError> {
         let mut resolved = params.to_vec();
-        let Some((_, channel)) = resolved.iter_mut().find(|(k, _)| k == "channel") else {
-            return Ok(resolved);
-        };
-        if needs_dm_open(channel) {
-            *channel = self.open_dm_channel(channel)?;
-            return Ok(resolved);
+        if let Some((_, channel)) = resolved.iter_mut().find(|(k, _)| k == "channel") {
+            *channel = self.resolve_channel_segment(channel)?;
         }
-        if !needs_channel_lookup(channel) {
-            return Ok(resolved);
-        }
-        *channel = self.resolve_channel_id(channel)?;
         Ok(resolved)
+    }
+
+    /// Resolve ONE channel segment to the id every ID-requiring Slack API call needs — the single
+    /// resolution the read path (`resolve_params`) and every write (`apply`) share, so a segment that
+    /// resolves for `SELECT` resolves identically for `REMOVE` / `chat.delete` / `chat.postMessage` /
+    /// the `slack.*` procedures (tickets 20260721190756, 20260722171439). Three cases:
+    ///
+    /// - a `Uxxxx` user id (or `@Uxxxx`) opens (or reuses) the IM channel via `conversations.open`
+    ///   → `Dxxxx` — the fix for a user-token DM write addressed by user id;
+    /// - a `#name`/bare-name channel is looked up to its `Cxxxx`/`Gxxxx` via `conversations.list`;
+    /// - an already-resolved `Cxxxx`/`Gxxxx`/`Dxxxx` passes through untouched (no double-open, no
+    ///   redundant lookup — an ID-addressed channel keeps working unchanged).
+    fn resolve_channel_segment(&self, channel: &str) -> Result<String, SlackError> {
+        if needs_dm_open(channel) {
+            self.open_dm_channel(channel)
+        } else if needs_channel_lookup(channel) {
+            self.resolve_channel_id(channel)
+        } else {
+            Ok(channel.to_string())
+        }
     }
 
     fn resolve_channel_id(&self, channel: &str) -> Result<String, SlackError> {
@@ -686,6 +698,7 @@ impl SlackClient for RestSlackClient {
                 Ok(1)
             }
             SlackEffect::AddReaction { channel, ts, emoji } => {
+                let channel = self.resolve_channel_segment(channel)?;
                 let payload =
                     serde_json::json!({ "channel": channel, "timestamp": ts, "name": emoji });
                 self.send_write(
@@ -697,6 +710,7 @@ impl SlackClient for RestSlackClient {
                 Ok(1)
             }
             SlackEffect::RemoveReaction { channel, ts, emoji } => {
+                let channel = self.resolve_channel_segment(channel)?;
                 let payload =
                     serde_json::json!({ "channel": channel, "timestamp": ts, "name": emoji });
                 self.send_write(
@@ -708,21 +722,25 @@ impl SlackClient for RestSlackClient {
                 Ok(1)
             }
             SlackEffect::DeleteMessage { channel, ts } => {
+                let channel = self.resolve_channel_segment(channel)?;
                 let payload = serde_json::json!({ "channel": channel, "ts": ts });
                 self.send_write("chat.delete", SlackApiCall::ChatDelete, payload, false)?;
                 Ok(1)
             }
             SlackEffect::UpdateMessage { channel, ts, text } => {
+                let channel = self.resolve_channel_segment(channel)?;
                 let payload = serde_json::json!({ "channel": channel, "ts": ts, "text": text });
                 self.send_write("chat.update", SlackApiCall::ChatUpdate, payload, false)?;
                 Ok(1)
             }
             SlackEffect::Pin { channel, ts } => {
+                let channel = self.resolve_channel_segment(channel)?;
                 let payload = serde_json::json!({ "channel": channel, "timestamp": ts });
                 self.send_write("pins.add", SlackApiCall::PinsAdd, payload, swallow)?;
                 Ok(1)
             }
             SlackEffect::Unpin { channel, ts } => {
+                let channel = self.resolve_channel_segment(channel)?;
                 let payload = serde_json::json!({ "channel": channel, "timestamp": ts });
                 self.send_write("pins.remove", SlackApiCall::PinsRemove, payload, swallow)?;
                 Ok(1)
@@ -733,6 +751,12 @@ impl SlackClient for RestSlackClient {
                 bytes,
                 channel,
             } => {
+                // The optional share target is a channel too — resolve a `#name`/`Uxxxx` to its id so
+                // `files.completeUploadExternal`'s `channel_id` gets a value Slack accepts.
+                let channel = channel
+                    .as_deref()
+                    .map(|c| self.resolve_channel_segment(c))
+                    .transpose()?;
                 self.upload_external(name, mime.as_deref(), bytes, channel.as_deref())?;
                 Ok(1)
             }
