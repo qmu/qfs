@@ -26,7 +26,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use crate::binding::HttpBinding;
-use crate::handler::{dispatch, EndpointCtx};
+use crate::handler::{dispatch, EndpointCtx, PrincipalResolver};
 use crate::route::Router;
 use crate::{HttpRequest, HttpResponse, Method};
 
@@ -109,6 +109,7 @@ pub async fn serve_config_full(
         max_rows,
         extra_bindings,
         fallback,
+        None,
         Runtime::new(),
     )
     .await
@@ -122,6 +123,10 @@ pub async fn serve_config_full(
 ///
 /// # Errors
 /// A boxed error if boot fails, the listener cannot bind, or the runtime wiring fails.
+///
+/// `resolver` is the optional injected [`PrincipalResolver`] (the binary's `qfs_session` cookie →
+/// `UserId` seam, built over the session store) — the same closure-seam the [`Fallback`] uses, so
+/// `qfs-http` gains no session dependency. `None` resolves every request to the anonymous actor.
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_config_shared(
     config: &Path,
@@ -131,11 +136,19 @@ pub async fn serve_config_shared(
     max_rows: usize,
     extra_bindings: Vec<Box<dyn qfs_server::Binding>>,
     fallback: Option<Fallback>,
+    resolver: Option<PrincipalResolver>,
     runtime: Runtime,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Construct the binding and capture its shared router handle BEFORE boxing it into the
-    // runtime (the listener reads the same atomically-swapped table the runtime reconciles).
-    let binding = HttpBinding::new(Arc::clone(&engine), Arc::clone(&reads), max_rows);
+    // runtime (the listener reads the same atomically-swapped table the runtime reconciles). The
+    // injected principal resolver rides into every per-request context via the binding.
+    let binding = {
+        let binding = HttpBinding::new(Arc::clone(&engine), Arc::clone(&reads), max_rows);
+        match resolver {
+            Some(resolver) => binding.with_principal_resolver(resolver),
+            None => binding,
+        }
+    };
     let router = binding.router_handle();
     let ctx = binding.ctx();
 

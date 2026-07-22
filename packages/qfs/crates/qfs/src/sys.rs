@@ -1429,6 +1429,70 @@ fn whoami_batch(ctx: &RequestContext) -> RowBatch {
     )
 }
 
+/// A minimal, always-available [`SysBackend`] for the serve face when NO System DB resolves: it
+/// backs the credential-free `/sys/whoami` facet (which [`SysReadDriver::scan`] answers from the
+/// request principal, NEVER the backend) so the not-signed-in answer stays a first-class row even
+/// pre-init. Every backend-touching node — and every write — is fail-closed (`/sys` over serve is
+/// read-only anyway), since without a System DB there is nothing to read or mutate.
+#[derive(Debug, Default)]
+pub struct AnonymousSysBackend;
+
+impl AnonymousSysBackend {
+    /// A fresh whoami-only backend.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+/// The fail-closed error every backend-touching `AnonymousSysBackend` method returns (whoami never
+/// reaches the backend, so this is only hit by a real `/sys/<node>` read or a write over serve).
+fn no_system_db() -> SysError {
+    SysError::Backend("no system database configured".to_string())
+}
+
+impl SysBackend for AnonymousSysBackend {
+    fn scan(&self, _node: SysNode) -> Result<RowBatch, SysError> {
+        Err(no_system_db())
+    }
+    fn insert_policy(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn set_setting(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn set_billing(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn upsert_binding(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn remove_binding(&self, _path: &str) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn update_policy(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn remove_policy(&self, _name: &str) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn remove_setting(&self, _key: &str) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn remove_driver(&self, _name: &str) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn insert_driver(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn record_account(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn remove_account(&self, _provider: &str, _account: &str) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+}
+
 /// A stable, secret-free reason code for a `/sys` read failure (the executor maps it to its kind).
 fn sys_error_reason(e: &SysError) -> &'static str {
     match e {

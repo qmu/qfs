@@ -27,6 +27,15 @@ use crate::rewrite::bind_params;
 use crate::route::CompiledRoute;
 use crate::{HttpRequest, HttpResponse};
 
+/// Resolve the acting [`RequestContext`] for a request from its raw parts (the M2 "who am I"
+/// seam). INJECTED by the terminal binary — which OWNS the session store — so `qfs-http` gains NO
+/// `qfs-session`/`qfs-store` dependency (the SAME closure-seam the [`crate::Fallback`] uses for the
+/// watchtower ingest). The binary's implementation reads the `qfs_session` cookie, looks the
+/// session up, and returns the bound `UserId`; an absent/invalid/unknown/expired session resolves
+/// to [`RequestContext::anonymous`] (fail closed). A [`None`] resolver on the [`EndpointCtx`] means
+/// none was wired, so every request is the anonymous actor.
+pub type PrincipalResolver = Arc<dyn Fn(&HttpRequest) -> RequestContext + Send + Sync>;
+
 /// The shared, request-independent context the handler evaluates against: the engine
 /// (mounts + codecs), the read-driver registry, the resolved policies, and the bounded
 /// result-row cap. Cloned cheaply (everything is `Arc`/owned-small) into each request future
@@ -42,6 +51,9 @@ pub struct EndpointCtx {
     pub policies: Arc<RwLock<Arc<BTreeMap<String, PolicyDef>>>>,
     /// The bounded in-memory result-row cap (413 beyond it).
     pub max_rows: usize,
+    /// The injected principal resolver (the binary's `qfs_session` cookie → `UserId` seam). `None`
+    /// → every request resolves to the fail-closed anonymous actor.
+    pub resolver: Option<PrincipalResolver>,
 }
 
 impl EndpointCtx {
@@ -58,7 +70,16 @@ impl EndpointCtx {
             reads,
             policies,
             max_rows,
+            resolver: None,
         }
+    }
+
+    /// Attach the injected [`PrincipalResolver`] (builder form). Without it the context resolves
+    /// every request to the fail-closed anonymous actor.
+    #[must_use]
+    pub fn with_principal_resolver(mut self, resolver: PrincipalResolver) -> Self {
+        self.resolver = Some(resolver);
+        self
     }
 
     /// Snapshot the live policies (clones the inner `Arc`; the guard is dropped immediately so
@@ -126,11 +147,11 @@ async fn dispatch_inner(
     bind_params(&mut bound, &args);
 
     // 3. Resolve the request's principal ONCE (the M2 "who am I" seam), then thread it to BOTH the
-    //    policy gate and the read executor — one resolution, no per-face divergence. Anonymous is
-    //    the fail-closed default; the session cookie → `UserId` resolution (which needs an injected
-    //    session store) lands with the developer-attended live round (mission item 8). Wiring the
-    //    seam here is what makes that a drop-in, not a re-plumb.
-    let req_ctx = resolve_request_principal(req);
+    //    policy gate and the read executor — one resolution, no per-face divergence. The injected
+    //    resolver (built at serve boot over the session store) reads the `qfs_session` cookie and
+    //    returns the bound user; anonymous is the fail-closed default when no resolver is wired or
+    //    the session is absent/invalid.
+    let req_ctx = resolve_request_principal(req, ctx);
 
     // 4. Defence-in-depth policy gate on the bound plan, evaluated UNDER THE RESOLVED ACTOR
     //    (registration already gated it under anonymous). Snapshot the live policies BEFORE the
@@ -168,14 +189,16 @@ async fn dispatch_inner(
 }
 
 /// Resolve the request's [`RequestContext`] — the M2 "who am I" seam threaded to the gate and the
-/// read executor. The session cookie → `UserId` resolution needs an injected session store (built
-/// at serve boot); that end-to-end binding lands with the developer-attended live round (mission
-/// item 8). Until then a request carries no principal the handler can VERIFY, so it resolves to the
-/// anonymous (not-signed-in) actor — the fail-closed default. A cookie that cannot be verified
-/// grants nothing; wiring the seam through the handler is what makes item 8 a drop-in, not a
-/// re-plumb.
-fn resolve_request_principal(_req: &HttpRequest) -> RequestContext {
-    RequestContext::anonymous()
+/// read executor. Delegates to the [`EndpointCtx`]'s injected [`PrincipalResolver`] (built at serve
+/// boot over the session store); it reads the `qfs_session` cookie, looks the session up, and
+/// returns the bound user. When no resolver is wired — or the cookie is absent/invalid/unknown —
+/// the request resolves to the anonymous (not-signed-in) actor, the fail-closed default. A cookie
+/// that cannot be verified grants nothing.
+fn resolve_request_principal(req: &HttpRequest, ctx: &EndpointCtx) -> RequestContext {
+    match &ctx.resolver {
+        Some(resolve) => resolve(req),
+        None => RequestContext::anonymous(),
+    }
 }
 
 /// Whether a query-string key is a RESERVED negotiation knob (not an endpoint param). `format`
