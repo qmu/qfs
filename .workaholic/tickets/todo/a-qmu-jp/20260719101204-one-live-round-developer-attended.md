@@ -334,3 +334,32 @@ fn resolve_request_principal(_req: &HttpRequest) -> RequestContext {
 #####################################################################################
 RUN EXIT: 0
 ```
+
+## Addendum — 2026-07-23 (dependency shipped; container re-run disk-blocked)
+
+**Outcome: still `blocked` — but now on disk only, no longer on un-shipped code.** The two
+un-shipped pieces this round blocked on are now implemented and committed on this branch as
+**b4f1997** ("Add serve /sys and session principal resolution", ticket
+`20260723090000-serve-sys-and-session-principal-resolution.md`):
+
+1. `qfs serve` now registers the credential-free `/sys` read facet, so an endpoint `AS /sys/whoami`
+   resolves over HTTP (no more `UnroutedPath`; `GET /whoami` is 200, not 404).
+2. `crates/http/src/handler.rs::resolve_request_principal` now reads the `qfs_session` cookie via an
+   injected resolver the binary builds over the session store, resolving a live session to its
+   `UserId` and falling back to anonymous (fail closed).
+
+Both are proven hermetically (`cargo test -p qfs serve::tests`, 4 tests: registration without
+`UnroutedPath`, whoami over the serve face, valid cookie → the user, absent/invalid → anonymous,
+and the end-to-end signed-in whoami row).
+
+**Why this round did NOT re-run in the container:** the in-container full RELEASE build needs
+~9–13 GB in a podman volume on `/`, and the shared host had only ~6.9 GB free at run time (`df -h /`
+→ `6.9G avail`), shared with other projects' running containers. A build that fills `/` harms
+co-tenant containers, so per this ticket's own host-safety rule the round did not attempt it and did
+not gamble on the disk.
+
+**Dependency + re-run note:** this ticket depends on the now-shipped
+`20260723090000-serve-sys-and-session-principal-resolution.md`. Re-run
+`containers/live-round/run.sh` to prove the session-carrying case end to end (the earlier harness
+`exec`/`ENTRYPOINT` fix is already applied) **once `/` has ~13 GB free** — then paste the fresh
+transcript here and tick mission acceptance item 8's live-round leg.
