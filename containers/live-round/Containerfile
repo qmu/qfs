@@ -1,0 +1,31 @@
+# Live-round container for the who-am-I round (mission:
+# a-request-resolves-to-a-principal-the-query-path-can-read, ticket 20260719101204).
+#
+# Purpose: build the qfs release binary from THIS branch and exercise the shipped
+# who-am-I path — anonymous /sys/whoami (signed_in=false) and a real session-carrying
+# request (signed_in=true) — inside an isolated container, capturing a verbatim
+# transcript for morning review.
+#
+# Safety: this image carries NO credentials. The round touches only qfs's own LOCAL
+# identity store and LOCAL OAuth sign-in face bound to localhost inside the container.
+# No host ~/.claude, no host sockets, no cloud tokens are ever present.
+FROM docker.io/library/rust:1-slim-bookworm
+
+# Build deps for the qfs workspace (SQLite via bundled feature needs a C toolchain).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates pkg-config libssl-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Unprivileged build/run user with its own fresh HOME — never the host's.
+RUN useradd -m -u 1000 agent
+USER agent
+WORKDIR /work
+
+# Source is bind-mounted read-only at /src at run time (see run.sh); the build writes
+# ONLY under /work (isolated CARGO_TARGET_DIR + TMPDIR) so the host tree and host /tmp
+# are never touched.
+ENV CARGO_TARGET_DIR=/work/target \
+    TMPDIR=/work/tmp \
+    CARGO_TERM_COLOR=never
+
+ENTRYPOINT ["/bin/sh"]
