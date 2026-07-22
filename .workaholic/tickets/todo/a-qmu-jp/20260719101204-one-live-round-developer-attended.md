@@ -6,7 +6,7 @@ layer: [Infrastructure]
 effort: 1h
 commit_hash:
 category: Changed
-depends_on:
+depends_on: [20260723090000-serve-sys-and-session-principal-resolution.md]
 mission: a-request-resolves-to-a-principal-the-query-path-can-read
 ---
 
