@@ -6,7 +6,7 @@ status: achieved
 created_at: 2026-07-15T20:55:00+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
-drive_authorized: true
+drive_authorized: false
 tickets:
   - 20260718203325-create-account-secret-ref-bind-time-resolution.md
   - 20260718203326-cf-surface-from-committed-declaration.md
@@ -351,3 +351,4 @@ live backlog.
   passed 0 failed; clippy/fmt clean; gen-docs/gen-skills `--check` in sync; check-migrations clean.
 - 2026-07-19 — ticket archived — 20260718203326-cf-surface-from-committed-declaration.md
 - 2026-07-22 — mission achieved — mission.md
+- 2026-07-22 — drive authorization revoked on archive - an achieved mission must not keep authorizing its leftover queue tickets for unattended runs (audit finding, 2026-07-22) — mission.md
