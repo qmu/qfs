@@ -1020,7 +1020,7 @@ fn rest_client_user_token_dm_write_opens_im_before_posting() {
     // token, so `is_dm` is false) must mirror the read path — `conversations.open(users=Uxxxx)` →
     // `Dxxxx`, then post to the `Dxxxx`. Before the fix the bare `Uxxxx` reached chat.postMessage
     // and Slack answered `channel_not_found`.
-    let (secrets, key) = store_with_token("xoxp-user-token");
+    let (secrets, key) = store_with_token("dummy-user-token");
     let open = HttpResponse::new(200, br#"{"ok":true,"channel":{"id":"D0RECIP"}}"#.to_vec());
     let post = HttpResponse::new(200, br#"{"ok":true,"ts":"1.1"}"#.to_vec());
     let transport = Arc::new(RecordingTransport::with(vec![open, post]));
@@ -1056,7 +1056,7 @@ fn rest_client_user_token_dm_write_opens_im_before_posting() {
 fn rest_client_dm_write_to_already_opened_channel_does_not_double_open() {
     // Ticket 20260722171439 QG: an already-`Dxxxx`-addressed write target keeps working unchanged —
     // no second conversations.open.
-    let (secrets, key) = store_with_token("xoxp-user-token");
+    let (secrets, key) = store_with_token("dummy-user-token");
     let post = HttpResponse::new(200, br#"{"ok":true,"ts":"1.1"}"#.to_vec());
     let transport = Arc::new(RecordingTransport::with(vec![post]));
     let client = RestSlackClient::new(transport.clone(), secrets, key, BodyErrorRule::On);
