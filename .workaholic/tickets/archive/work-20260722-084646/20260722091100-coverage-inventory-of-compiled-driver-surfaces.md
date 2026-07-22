@@ -5,7 +5,7 @@ type: enhancement
 layer: [Domain]
 effort:
 commit_hash:
-category:
+category: Added
 depends_on:
 mission: the-declared-driver-dsl-covers-the-compiled-drivers-concisely
 ---

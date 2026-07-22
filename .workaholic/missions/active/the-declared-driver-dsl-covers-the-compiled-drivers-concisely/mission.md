@@ -145,7 +145,7 @@ the four downstream missions with their entry conditions.
 
 ## Acceptance
 
-- [ ] **The coverage inventory exists and is verified.** (#20260722091100-coverage-inventory-of-compiled-driver-surfaces.md) Every node, verb, and `CALL`
+- [x] **The coverage inventory exists and is verified.** (#20260722091100-coverage-inventory-of-compiled-driver-surfaces.md) Every node, verb, and `CALL`
       procedure the compiled slack/github/gdrive/gmail drivers expose is enumerated from the
       compiled describe registry (the `gen-docs` source, not prose) and disposed as
       *expressible today* / *needs a ruled semantic* / *named park* — each disposition with
@@ -195,3 +195,4 @@ the four downstream missions with their entry conditions.
 - 2026-07-22 — ticket added — 20260722091500-conversion-playbook-and-honest-tiering.md
 - 2026-07-22 — mission replanned for the overnight run - five tickets cut, interrogation answered the open judgment calls (proof target fixed to read-over-POST; autonomous section-13 rulings authorized by the owner); drive_authorized stamped — mission.md
 - 2026-07-22 — strategy created and linked — integrations-are-declared-not-compiled
+- 2026-07-22 — ticket archived — 20260722091100-coverage-inventory-of-compiled-driver-surfaces.md
