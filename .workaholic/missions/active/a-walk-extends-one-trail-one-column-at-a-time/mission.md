@@ -195,7 +195,7 @@ design rulings, not implementation.
       open), and the deliberate surrender of 100% viewer/language parity (fidelity is the
       content's responsibility). The retracted "higher-abstracted container/design-pattern"
       framing is removed from the section.
-- [ ] **The AI-letter rulings are recorded in the blueprint as design rulings.** (#20260722122400-record-the-ai-letter-rulings.md) Rulings 5–8
+- [x] **The AI-letter rulings are recorded in the blueprint as design rulings.** (#20260722122400-record-the-ai-letter-rulings.md) Rulings 5–8
       of ## Goal appear (a §14c subsection or a section §14c points to): envelope =
       context + interactivity, inward confinement named as the same principle as
       declared-driver host-confinement, single typed egress (reply = typed INSERT into the
@@ -233,3 +233,4 @@ design rulings, not implementation.
 - 2026-07-22 — ticket archived — 20260722122100-fold-the-unmerged-14c-map-into-the-mission-branch.md
 - 2026-07-22 — ticket archived — 20260722122200-define-trail-and-walk-in-14b.md
 - 2026-07-22 — ticket archived — 20260722122300-rewrite-14c-settled-points-as-rulings.md
+- 2026-07-22 — ticket archived — 20260722122400-record-the-ai-letter-rulings.md

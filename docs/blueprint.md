@@ -1338,6 +1338,38 @@ references, not a new language primitive — consistent with "everything is a pa
   focused, card-at-a-time navigation; only the desktop can show wires/lanes at once. Hence **one
   canonical graph, several projections**, echoing qfs's existing "one resource, many faces."
 
+**The AI-letter — rulings 5–8 (settled 2026-07-21).** The AI-letter concept rides the **same column
+UI** as the rest of the viewer; it introduces no new surface and no new mechanism. Its qfs mapping is
+ruled:
+
+5. **A letter is an envelope carrying context and its own interactivity.** The envelope encloses both
+   the bounded context data and the interactivity that operates on it, and it rides the same column
+   strip as any other trail — a letter is a walk over enclosed context, not a separate app.
+
+6. **Inward confinement is the same principle as declared-driver host-confinement.** A letter's reach
+   is confined *inward*: the recipient can reference and manipulate **only** the enclosed context,
+   never reach back into the sender's live world. This is named explicitly as the **same confinement
+   principle a declared driver applies to its host** (§ the declared-driver model) — applied here to
+   the letter's data scope, not a new sandboxing mechanism.
+
+7. **The only way out is a single typed egress.** A reply is a **typed `INSERT` into the sender's
+   inbox** — one egress, typed, with no side channel. The letter's kind fixes the target reply type;
+   nothing else leaves the envelope.
+
+8. **Interactivity is derived from the type; form-filling is a walk.** The interactivity is derived
+   from the type, not authored as a second attribute: an enum type → choice buttons, a struct type →
+   a form, free text → conversation. The input **modality** is free (tap / form / voice / free
+   conversation) but must land on the **fixed target type** — free input is distilled to the typed
+   target and confirmed before egress ("enter freely, confirm typed, exit"). **Filling a form is a
+   walk**: a struct input is a trail of per-field input columns, a partially-filled struct is a valid
+   intermediate value (the prefix-closure analogue), and the **effect fires only at the terminal
+   column** — no I/O until COMMIT. A **condition-split** — the next step depends on the value bound so
+   far (reject ⇒ a reason column grows; approve ⇒ it does not) — branches the *path*, not the
+   data-flow; it is a **declared, checkable** rule (not existential search), so it keeps every walk
+   linear (this is the ruling that sharpens walk's operational definition — §14b). And **"who drives
+   is not the design axis":** a human ultimately instructs either way, so the **same surface serves
+   human and agent**, and the UI must stand on its own without AI.
+
 **Developer acceptance.** Developers may not love linear pipes intrinsically; linear dominates
 because good split+merge semantics are missing and text forces a linearization (CTEs and variables
 are the workaround). The likely real acceptance driver is **round-trip fidelity to the query text** —
