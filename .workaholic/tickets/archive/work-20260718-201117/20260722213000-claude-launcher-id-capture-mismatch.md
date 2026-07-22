@@ -5,7 +5,7 @@ type: bugfix
 layer: [Infrastructure]
 effort:
 commit_hash:
-category:
+category: Changed
 depends_on:
 mission: claude-code-sessions-are-queryable-and-steerable-as-qfs-paths
 ---

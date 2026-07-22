@@ -244,22 +244,37 @@ impl SessionLauncher for ClaudeCliLauncher {
                 reason: format!("session binary exited unsuccessfully ({})", output.status),
             });
         }
-        // The new session id: the launched CLI prints its handle to stdout (`--bg` returns
-        // immediately). Take the first non-empty trimmed line. The exact id-discovery contract is
-        // validated in the owner-attended live proof; hermetically a fake binary prints a known id.
-        let id = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::trim)
-            .find(|l| !l.is_empty())
-            .unwrap_or_default()
-            .to_string();
-        if id.is_empty() {
-            return Err(ClaudeError::LaunchFailed {
-                reason: "the launch produced no session id".to_string(),
-            });
-        }
+        // The new session id: `claude --bg` prints a multi-line banner and the id lives on the
+        // `backgrounded · <shortid>` line — NOT the first line (Claude Code 2.1.217 emits
+        // `Starting background service…` first, so first-line capture returned that banner text
+        // verbatim instead of the id; ticket 20260722213000). Parse the `backgrounded` line. The
+        // exact id-discovery contract is re-proven in the owner-attended live round; hermetically a
+        // fake binary emits the same banner shape.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let id = parse_backgrounded_id(&stdout).ok_or_else(|| ClaudeError::LaunchFailed {
+            reason: "the launch output carried no `backgrounded · <id>` session id".to_string(),
+        })?;
         Ok(id)
     }
+}
+
+/// Extract the session id from a `claude --bg` banner. Claude Code prints the launched session's
+/// short handle on a line shaped `backgrounded · <shortid>` (after a leading
+/// `Starting background service…` line and before a help block). This finds the first line whose
+/// first whitespace token is `backgrounded` and returns that line's LAST whitespace token — the
+/// id — independent of the exact separator glyph (`·`). `None` when no such line carries an id.
+fn parse_backgrounded_id(stdout: &str) -> Option<String> {
+    stdout.lines().find_map(|line| {
+        let mut tokens = line.split_whitespace();
+        if tokens.next() != Some("backgrounded") {
+            return None;
+        }
+        // The id is the last token; the separator token(s) (`·`) sit between and are skipped.
+        line.split_whitespace()
+            .next_back()
+            .filter(|id| *id != "backgrounded" && !id.is_empty())
+            .map(str::to_string)
+    })
 }
 
 /// One parsed `sessions/<pid>.json` record — the selectors-only subset this module surfaces.
@@ -639,15 +654,21 @@ mod tests {
     }
 
     /// Write an executable fake `claude` binary that records its argv + cwd to `record` and prints
-    /// a canned session id — the hermetic stand-in for the real CLI (no real launch, no spend).
+    /// the REAL `claude --bg` banner shape to stdout — the hermetic stand-in for the CLI (no real
+    /// launch, no spend). The banner leads with `Starting background service…`, carries the id on a
+    /// `backgrounded · <shortid>` line, then a help block — exactly the 2.1.217 output the launcher
+    /// must parse (first-line capture would wrongly return the `Starting…` banner).
     #[cfg(unix)]
     fn write_fake_binary(path: &Path, record: &Path, session_id: &str) {
         use std::os::unix::fs::PermissionsExt;
         // `printf '%s\n' "$@"` writes each ARGUMENT on its own line — if our launcher had built a
         // shell line instead of discrete args, the recorded argv would be mangled. `pwd` records
-        // the cwd the child ran in. Then echo the session id to stdout (what the launcher captures).
+        // the cwd the child ran in. Then print the multi-line banner (what the launcher parses).
         let script = format!(
-            "#!/bin/sh\n{{ pwd; printf 'ARG:%s\\n' \"$@\"; }} > \"{record}\"\necho '{session_id}'\n",
+            "#!/bin/sh\n{{ pwd; printf 'ARG:%s\\n' \"$@\"; }} > \"{record}\"\n\
+             printf 'Starting background service\\342\\200\\246\\n'\n\
+             printf 'backgrounded \\302\\267 {session_id}\\n'\n\
+             printf '  claude agents             list sessions\\n'\n",
             record = record.display(),
         );
         std::fs::write(path, script).unwrap();
@@ -696,6 +717,34 @@ mod tests {
         );
         assert_eq!(args[2], "--name");
         assert_eq!(args[3], "nightly-run");
+    }
+
+    /// The RECORDED real `claude --bg` banner (Claude Code 2.1.217, live-fire 2026-07-22): the id
+    /// is on the `backgrounded · <shortid>` line, NOT the leading `Starting background service…`
+    /// line. The parser returns the short handle, never the banner text.
+    #[test]
+    fn parse_backgrounded_id_reads_the_recorded_banner() {
+        // The exact bytes the CLI printed: an ellipsis `…` and a middle-dot `·` separator.
+        let banner = "Starting background service\u{2026}\n\
+                      backgrounded \u{b7} eb5300ad\n\
+                      \x20 claude agents             list sessions\n\
+                      \x20 claude logs               tail output\n";
+        assert_eq!(
+            parse_backgrounded_id(banner),
+            Some("eb5300ad".to_string()),
+            "the id comes from the `backgrounded` line, not the `Starting…` first line"
+        );
+    }
+
+    /// No `backgrounded` line ⇒ no id: the parser refuses rather than inventing one (e.g. from the
+    /// banner's first line), so `launch` fails closed instead of handing back garbage.
+    #[test]
+    fn parse_backgrounded_id_absent_line_is_none() {
+        assert_eq!(
+            parse_backgrounded_id("Starting background service\u{2026}\n"),
+            None
+        );
+        assert_eq!(parse_backgrounded_id(""), None);
     }
 
     /// A launch whose cwd does not exist is a structured, secret-free refusal — never a spawn.

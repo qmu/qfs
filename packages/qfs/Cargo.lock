@@ -2261,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "qfs"
-version = "0.0.81"
+version = "0.0.89"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
