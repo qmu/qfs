@@ -305,7 +305,7 @@ ticket.**
 - [x] **The identity read-back tells the truth.** (#20260719101201-identity-read-back-tells-the-truth.md) `whoami --json` emits machine-readable JSON or
       rejects the flag — it does not accept it and emit prose; and `qfs identity --help`
       (`cmd/src/lib.rs:702-706`) no longer asserts a retired sign-up or a pending t46.
-- [ ] **One live round, developer-attended.** (#20260719101204-one-live-round-developer-attended.md) A real request with a session and a real request
+- [ ] **One live round — autonomous in an isolated container, transcript reviewed (re-ruled 2026-07-22; was developer-attended).** (#20260719101204-one-live-round-developer-attended.md) A real request with a session and a real request
       without one, end to end, each resolving to its answer through the shipped path — output and
       exit codes pasted.
 
@@ -369,3 +369,4 @@ ticket.**
   developer-attended `/drive`. Escalation: item 8 needs the developer to run the two requests
   (session + no session) and paste output + exit codes — mission.md
 - 2026-07-22 — strategy created and linked — access-derives-from-the-resolved-principal
+- 2026-07-22 — live round re-ruled autonomous-in-container (owner directive 2026-07-22: the overnight run waits for nobody; the developer reviews the recorded transcript in the morning) — 20260719101204-one-live-round-developer-attended.md
