@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-16T16:14:56+09:00
+last_seen: 2026-07-23T23:59:51+09:00
 severity: low
 status: active
 resolved_by_pr: 
