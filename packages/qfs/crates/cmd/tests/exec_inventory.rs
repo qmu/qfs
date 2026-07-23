@@ -104,6 +104,18 @@ fn strip_cfg_test_modules(src: &str) -> String {
     kept
 }
 
+/// Drop whole-line comments (`///`, `//!`, `//`) so a doc/line comment that merely NAMES
+/// `Command::new(<configured binary>)` in prose (the launcher's docs on the pure driver crate, the
+/// applier's safety note, etc.) is not miscounted as a production spawn site. Only real code lines
+/// carry a spawn; a spawn never lives on a comment line, so this cannot hide one. Trailing inline
+/// comments are left intact (they never begin a line and never precede a `Command::new(`).
+fn strip_comment_lines(src: &str) -> String {
+    src.lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Every `Command::new(<token>)` occurrence: `(program-token, ())`. The token is the raw text
 /// between the parens (`"git"`, `OPENER`, …).
 fn spawn_tokens(src: &str) -> Vec<String> {
@@ -146,6 +158,15 @@ fn every_process_spawn_site_is_on_the_allowlist() {
     //     developer-tooling only, no query-derived argv.
     //   * qfs/src/tty.rs — the desktop opener (`OPENER` = the platform `open`/`xdg-open` constant),
     //     Stdio::null, launched with a single operator-facing URL/path, never fetched data.
+    //   * qfs/src/claude.rs — the `/claude` session LAUNCH applier (`INSERT INTO
+    //     /hosts/<host>/claude/sessions`): `Command::new(&self.binary)` where `binary` is the
+    //     CONFIGURED CLI path (`QFS_CLAUDE_BINARY`, default `claude`) — operator config, never query
+    //     text — and `cwd`/`prompt`/`name` cross as DISCRETE arguments (`.arg(..)`), never a shell
+    //     line (ticket 20260717010600; live-fire proven 2026-07-22 in the sanctioned container).
+    //   * qfs/src/tmux.rs — the safe tmux teardown (`TmuxSocket`): `Command::new("tmux")` with a
+    //     FIXED program and argv `-L <dedicated-socket> kill-session -t <session>` — the socket is a
+    //     generated unique name and the session a label, never a shell and never a program derived
+    //     from data (ticket 20260719105527). Only the isolated-socket teardown path spawns.
     let mut expected: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     expected.insert(
         "crates/driver-git/src/applier.rs",
@@ -157,6 +178,8 @@ fn every_process_spawn_site_is_on_the_allowlist() {
         vec!["\"git\"", "\"git\""],
     );
     expected.insert("crates/qfs/src/tty.rs", vec!["OPENER"]);
+    expected.insert("crates/qfs/src/claude.rs", vec!["&self.binary"]);
+    expected.insert("crates/qfs/src/tmux.rs", vec!["\"tmux\""]);
     //   * xtask/src/main.rs — BUILD-ONLY release tooling (`publish = false`, a TERMINAL_LEAVES
     //     crate never shipped in any artifact, per the dep-direction guard): `cmd` spawns the
     //     platform checksum tool (`sha256sum` / `shasum -a 256`) over release tarballs, and
@@ -169,6 +192,7 @@ fn every_process_spawn_site_is_on_the_allowlist() {
     for file in &files {
         let src = std::fs::read_to_string(file).unwrap();
         let src = strip_cfg_test_modules(&src);
+        let src = strip_comment_lines(&src);
         let tokens = spawn_tokens(&src);
         if tokens.is_empty() {
             continue;

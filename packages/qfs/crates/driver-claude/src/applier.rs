@@ -1,47 +1,69 @@
 //! [`ClaudeApplier`] — the `/claude` driver's apply leg (blueprint §7). It lowers a write effect
-//! node into the one gated mutation this driver ships: `INSERT INTO /claude/sessions/<id>/
-//! instructions` (a REVERSIBLE append that steers a running agent). Every other write is rejected
-//! here (belt-and-suspenders over the parse-time capability gate): `/claude/sessions` is read-only
-//! and the instructions log is append-only (no `UPDATE`/`REMOVE`).
+//! node into the two gated mutations this driver ships: `INSERT INTO /claude/sessions` (a session
+//! LAUNCH — irreversible, ticket 20260717010600, routed to the [`SessionLauncher`] seam) and
+//! `INSERT INTO /claude/sessions/<id>/instructions` (a REVERSIBLE append that steers a running
+//! agent, routed to the [`SessionSource`]). Every other write is rejected here
+//! (belt-and-suspenders over the parse-time capability gate): neither node accepts `UPDATE`/
+//! `REMOVE`.
 //!
-//! The real I/O happens in the injected [`SessionSource`] (binary-side, on-disk); the applier is a
-//! pure router over the owned effect node, so it is stateless and `&self`-applies through the
-//! runtime's [`SharedApplier`] bridge.
+//! The real I/O happens in the injected [`SessionSource`] (read + steer) and [`SessionLauncher`]
+//! (spawn) — both binary-side; the applier is a pure router over the owned effect node, so it is
+//! stateless and `&self`-applies through the runtime's [`SharedApplier`] bridge.
 //!
 //! ## Safety floor (blueprint §15, decision W supersedes decision K)
 //! Steering is an `Insert` (a reversible append) — it adds a message to the agent's instruction
-//! log, it never removes session state. "Stop the agent", if ever added, would be a separate
-//! `EffectKind::Remove` (irreversible → extra acknowledgement), NEVER a silent reversible op. This
-//! applier therefore services ONLY `Insert` on the instructions node; it hosts no LLM call. (The
-//! model-calling surface is `|> transform` — §15 / decision W — in `qfs-driver-transform` + the
-//! binary, never this façade.)
+//! log, it never removes session state. A session LAUNCH is also an `Insert`, but IRREVERSIBLE (the
+//! turn runs, the spend lands), so the planner flags it and `COMMIT` gates it behind the
+//! irreversible ack. "Stop the agent", if ever added, would be a separate `EffectKind::Remove`
+//! (irreversible → extra acknowledgement), NEVER a silent reversible op. The launch spawns a
+//! process via a configured binary; NEITHER path hosts an LLM call (the model-calling surface is
+//! `|> transform` — §15 / decision W — in `qfs-driver-transform` + the binary, never this façade).
 
 use qfs_plan::{AppliedEffect, ApplyError, EffectKind, EffectNode, PlanApplier};
 use qfs_runtime::{EffectError, EffectOutput, SharedApplier};
 
 use std::sync::Arc;
 
-use crate::backend::{ClaudeError, SessionSource};
+use crate::backend::{ClaudeError, LaunchSpec, SessionLauncher, SessionSource};
 use crate::schema::{instruction_session, node_for_path, ClaudeNode};
 
-/// The synchronous `/claude` apply leg. Holds the injected session source behind an `Arc` (so the
-/// leg is cheap to clone and `&self`-apply). Stateless across calls.
+/// The synchronous `/claude` apply leg. Holds the injected session source (read + steer) and the
+/// optional launcher seam (session launch) behind `Arc`s (so the leg is cheap to clone and
+/// `&self`-apply). Stateless across calls.
 #[derive(Clone)]
 pub struct ClaudeApplier {
     source: Arc<dyn SessionSource>,
+    /// The launcher for `INSERT INTO /claude/sessions` (a session launch). `None` = fail-closed:
+    /// a binary with no launcher configured refuses the spawn rather than launching nothing.
+    launcher: Option<Arc<dyn SessionLauncher>>,
 }
 
 impl ClaudeApplier {
     /// Build an applier over an injected [`SessionSource`] (the binary's on-disk implementation).
+    /// No launcher is wired by default — a session launch fails closed until [`Self::with_launcher`]
+    /// supplies one (the opt-in posture of the whole `/claude` write surface).
     #[must_use]
     pub fn new(source: Arc<dyn SessionSource>) -> Self {
-        Self { source }
+        Self {
+            source,
+            launcher: None,
+        }
     }
 
-    /// Route one effect node to the source: resolve the `/claude` node, gate the verb, and apply.
-    /// Only `INSERT INTO /claude/sessions/<id>/instructions` is permitted; everything else is a
-    /// structured rejection (so even a hand-built plan that bypassed the parse-time gate cannot
-    /// mutate the read-only sessions relation or `UPDATE`/`REMOVE` the append-log).
+    /// Wire the launcher seam (`INSERT INTO /claude/sessions` → spawn a new session). The real
+    /// launcher (`Command::new(<configured binary>)`) lives binary-side; hermetic tests inject a
+    /// fake that records the spawn without spending anything.
+    #[must_use]
+    pub fn with_launcher(mut self, launcher: Arc<dyn SessionLauncher>) -> Self {
+        self.launcher = Some(launcher);
+        self
+    }
+
+    /// Route one effect node: resolve the `/claude` node, gate the verb, and apply. Two writes are
+    /// permitted — `INSERT INTO /claude/sessions` (a session LAUNCH, irreversible, via the launcher
+    /// seam) and `INSERT INTO /claude/sessions/<id>/instructions` (a reversible steer). Everything
+    /// else is a structured rejection (defence in depth over the parse-time capability gate: even a
+    /// hand-built plan cannot `UPDATE`/`REMOVE` here).
     fn apply_node(&self, node: &EffectNode) -> Result<u64, ClaudeError> {
         let path = node.target.path.as_str();
         let claude_node = node_for_path(path).ok_or_else(|| ClaudeError::UnknownNode {
@@ -49,7 +71,20 @@ impl ClaudeApplier {
         })?;
 
         match (&node.kind, claude_node) {
-            // The one gated write: append a steering instruction to a session's log (reversible).
+            // The launch: spawn a new session (irreversible). Fail-closed without a launcher.
+            (EffectKind::Insert, ClaudeNode::Sessions) => {
+                let launcher = self
+                    .launcher
+                    .as_ref()
+                    .ok_or(ClaudeError::LaunchNotConfigured)?;
+                let spec = LaunchSpec::from_row_batch(&node.args)?;
+                // The launcher returns the new session id; the runtime effect channel carries only
+                // an affected count, so the id surfaces through the seam (proven hermetically) and
+                // the plan's `RETURNING id` schema types the projection. One session launched.
+                launcher.launch(&spec)?;
+                Ok(1)
+            }
+            // The steer: append a steering instruction to a session's log (reversible).
             (EffectKind::Insert, ClaudeNode::Instructions) => {
                 let session =
                     instruction_session(path).ok_or_else(|| ClaudeError::UnknownNode {
@@ -57,8 +92,8 @@ impl ClaudeApplier {
                     })?;
                 self.source.append_instruction(&session, &node.args)
             }
-            // Everything else: read-only sessions, or UPDATE/REMOVE on the append-log. Reject in
-            // the applier too (defence in depth over the parse-time capability gate).
+            // Everything else: UPDATE/REMOVE on either node. Reject in the applier too (defence in
+            // depth over the parse-time capability gate).
             (kind, n) => Err(ClaudeError::Unsupported {
                 node: n.label(),
                 verb: static_verb_label(kind),
@@ -141,6 +176,21 @@ mod tests {
         }
     }
 
+    /// An in-memory fake launcher (no process, no spend): records every [`LaunchSpec`] it was asked
+    /// to launch and hands back a canned session id, so the applier's LAUNCH routing + payload
+    /// extraction can be proven without spawning a real session.
+    #[derive(Default)]
+    struct FakeLauncher {
+        launched: Mutex<Vec<LaunchSpec>>,
+    }
+
+    impl SessionLauncher for FakeLauncher {
+        fn launch(&self, spec: &LaunchSpec) -> Result<String, ClaudeError> {
+            self.launched.lock().unwrap().push(spec.clone());
+            Ok("s-new-42".to_string())
+        }
+    }
+
     fn instruction_row() -> RowBatch {
         let schema = Schema::new(vec![Column::new("instruction", ColumnType::Text, false)]);
         RowBatch::new(
@@ -149,6 +199,21 @@ mod tests {
                 "focus on the failing test".into(),
             )])],
         )
+    }
+
+    /// An `INSERT INTO /claude/sessions (cwd, prompt [, name])` VALUES payload — the row the
+    /// planner lowers, columns named by the explicit list.
+    fn launch_row(cwd: &str, prompt: &str, name: Option<&str>) -> RowBatch {
+        let mut cols = vec![
+            Column::new("cwd", ColumnType::Text, false),
+            Column::new("prompt", ColumnType::Text, false),
+        ];
+        let mut vals = vec![Value::Text(cwd.into()), Value::Text(prompt.into())];
+        if let Some(n) = name {
+            cols.push(Column::new("name", ColumnType::Text, true));
+            vals.push(Value::Text(n.into()));
+        }
+        RowBatch::new(Schema::new(cols), vec![Row::new(vals)])
     }
 
     fn effect(kind: EffectKind, path: &str, args: RowBatch) -> EffectNode {
@@ -179,15 +244,72 @@ mod tests {
     }
 
     #[test]
-    fn write_to_read_only_sessions_is_rejected_in_the_applier() {
-        // Belt-and-suspenders over the parse-time gate: even a hand-built plan cannot write the
-        // read-only sessions relation.
+    fn launch_into_sessions_routes_to_the_launcher() {
+        let launcher = Arc::new(FakeLauncher::default());
+        let applier =
+            ClaudeApplier::new(Arc::new(FakeSource::default())).with_launcher(launcher.clone());
+        let node = effect(
+            EffectKind::Insert,
+            "/claude/sessions",
+            launch_row("/home/dev/proj", "run the tests", Some("nightly")),
+        );
+        let out = applier.apply_shared(&node).expect("a launch applies");
+        assert_eq!(out.affected, 1, "one session launched");
+        let launched = launcher.launched.lock().unwrap();
+        assert_eq!(launched.len(), 1, "the spec reached the launcher");
+        assert_eq!(
+            launched[0],
+            LaunchSpec {
+                cwd: "/home/dev/proj".into(),
+                prompt: "run the tests".into(),
+                name: Some("nightly".into()),
+            },
+            "cwd/prompt/name are extracted as DATA and passed through the seam"
+        );
+    }
+
+    #[test]
+    fn launch_accepts_an_omitted_name() {
+        let launcher = Arc::new(FakeLauncher::default());
+        let applier =
+            ClaudeApplier::new(Arc::new(FakeSource::default())).with_launcher(launcher.clone());
+        let node = effect(
+            EffectKind::Insert,
+            "/claude/sessions",
+            launch_row("/home/dev/proj", "triage the backlog", None),
+        );
+        applier
+            .apply_shared(&node)
+            .expect("a nameless launch applies");
+        assert_eq!(launcher.launched.lock().unwrap()[0].name, None);
+    }
+
+    #[test]
+    fn launch_without_a_launcher_fails_closed() {
+        // Fail-closed: no launcher wired ⇒ the sessions INSERT is refused, never a silent no-op.
         let applier = ClaudeApplier::new(Arc::new(FakeSource::default()));
         let node = effect(
             EffectKind::Insert,
             "/claude/sessions",
-            RowBatch::new(Schema::new(vec![]), vec![]),
+            launch_row("/home/dev/proj", "go", None),
         );
+        let err = applier.apply_shared(&node).unwrap_err();
+        // The structured error names the fail-closed reason and carries no secret.
+        let msg = err.to_string();
+        assert!(msg.contains("not configured"), "{msg}");
+    }
+
+    #[test]
+    fn launch_with_a_malformed_payload_is_rejected() {
+        // A launch missing the required `cwd`/`prompt` columns is refused (never spawned blank),
+        // even with a launcher wired.
+        let applier = ClaudeApplier::new(Arc::new(FakeSource::default()))
+            .with_launcher(Arc::new(FakeLauncher::default()));
+        let no_prompt = RowBatch::new(
+            Schema::new(vec![Column::new("cwd", ColumnType::Text, false)]),
+            vec![Row::new(vec![Value::Text("/home/dev/proj".into())])],
+        );
+        let node = effect(EffectKind::Insert, "/claude/sessions", no_prompt);
         assert!(applier.apply_shared(&node).is_err());
     }
 

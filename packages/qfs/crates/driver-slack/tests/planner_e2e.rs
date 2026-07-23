@@ -703,7 +703,9 @@ fn s6_body_error_on_write_path_is_terminal_not_false_success() {
     let node = EffectNode::new(
         NodeId(0),
         EffectKind::Insert,
-        target("/slack/acme/#general/messages"),
+        // ID-addressed so the single queued response feeds the post itself (no resolution detour):
+        // this test is about the ok:false→terminal classification of chat.postMessage.
+        target("/slack/acme/C0GENERAL/messages"),
     )
     .with_args(args(&[("text", Value::Text("hi".into()))]));
     let (out, transport) = commit_one_via_rest(node, vec![resp]);
@@ -746,7 +748,8 @@ fn s7_remove_absent_reaction_no_reaction_outcome() {
     let node = EffectNode::new(
         NodeId(0),
         EffectKind::Remove,
-        target("/slack/acme/#general/messages/9.9/reactions"),
+        // ID-addressed: the single queued response is the reactions.remove itself (no resolution).
+        target("/slack/acme/C0GENERAL/messages/9.9/reactions"),
     )
     // §7: a REMOVE's `emoji` is a WHERE key, so it rides the selector; `args` stays empty.
     .with_selector(args(&[("emoji", Value::Text("tada".into()))]));
@@ -776,7 +779,8 @@ fn s7_unpin_already_unpinned_not_pinned_outcome() {
     let node = EffectNode::new(
         NodeId(0),
         EffectKind::Call(ProcId::new("slack.unpin")),
-        target("/slack/acme/#general/messages"),
+        // ID-addressed: the single queued response is the pins.remove itself (no resolution).
+        target("/slack/acme/C0GENERAL/messages"),
     )
     .with_args(args(&[("ts", Value::Text("5.5".into()))]));
     let (out, _t) = commit_one_via_rest(node, vec![resp]);
@@ -802,7 +806,8 @@ fn s7_control_add_side_already_done_is_swallowed() {
     let add = EffectNode::new(
         NodeId(0),
         EffectKind::Insert,
-        target("/slack/acme/#general/messages/9.9/reactions"),
+        // ID-addressed so the single queued response is the reactions.add (no resolution detour).
+        target("/slack/acme/C0GENERAL/messages/9.9/reactions"),
     )
     .with_args(args(&[("emoji", Value::Text("tada".into()))]));
     let (out, _t) = commit_one_via_rest(
@@ -817,7 +822,7 @@ fn s7_control_add_side_already_done_is_swallowed() {
     let pin = EffectNode::new(
         NodeId(0),
         EffectKind::Call(ProcId::new("slack.pin")),
-        target("/slack/acme/#general/messages"),
+        target("/slack/acme/C0GENERAL/messages"),
     )
     .with_args(args(&[("ts", Value::Text("5.5".into()))]));
     let (out, _t) = commit_one_via_rest(
@@ -839,7 +844,8 @@ fn s7_genuine_remove_failure_still_surfaces_terminal() {
     let node = EffectNode::new(
         NodeId(0),
         EffectKind::Remove,
-        target("/slack/acme/#general/messages/9.9/reactions"),
+        // ID-addressed: the single queued response is the reactions.remove itself (no resolution).
+        target("/slack/acme/C0GENERAL/messages/9.9/reactions"),
     )
     // §7: a REMOVE's `emoji` is a WHERE key, so it rides the selector; `args` stays empty.
     .with_selector(args(&[("emoji", Value::Text("tada".into()))]));
@@ -858,7 +864,7 @@ fn s7_genuine_remove_failure_still_surfaces_terminal() {
     let unpin = EffectNode::new(
         NodeId(0),
         EffectKind::Call(ProcId::new("slack.unpin")),
-        target("/slack/acme/#general/messages"),
+        target("/slack/acme/C0GENERAL/messages"),
     )
     .with_args(args(&[("ts", Value::Text("5.5".into()))]));
     let (out, _t) = commit_one_via_rest(
@@ -1165,7 +1171,9 @@ async fn e2e_commit_body_error_records_failed_leg() {
         EffectNode::new(
             NodeId(0),
             EffectKind::Insert,
-            target("/slack/acme/#general/messages"),
+            // ID-addressed so the single ok:false response is the post's own body error, not a
+            // conversations.list resolution step's.
+            target("/slack/acme/C0GENERAL/messages"),
         )
         .with_args(args(&[("text", Value::Text("hi".into()))])),
     );

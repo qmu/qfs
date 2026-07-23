@@ -122,14 +122,14 @@ Pushdown: where=true project=true limit=true order=true join=false aggregate=tru
 ### `/hosts/<host>/claude` — RelationalTable
 
 - example node: `/hosts/local/claude/sessions`
-- native verbs: SELECT
+- native verbs: SELECT INSERT
 
 Universal verbs (✓ supported / ✗ rejected at parse time):
 
 | verb | supported |
 |------|-----------|
 | `select` | ✓ |
-| `insert` | ✗ |
+| `insert` | ✓ |
 | `upsert` | ✗ |
 | `update` | ✗ |
 | `remove` | ✗ |

@@ -876,7 +876,9 @@ fn rest_client_post_ok_false_becomes_a_terminal_body_error() {
     let client = RestSlackClient::new(transport.clone(), secrets, key, BodyErrorRule::On);
     let err = client
         .apply(&SlackEffect::PostMessage {
-            channel: "#general".into(),
+            // An already-resolved id, so no conversations.list detour precedes the post — this test
+            // asserts the ok:false→terminal classification of chat.postMessage itself.
+            channel: "C0GENERAL".into(),
             text: "hi".into(),
             thread_ts: None,
             client_msg_id: "qfs-1".into(),
@@ -925,6 +927,159 @@ fn rest_client_opens_dm_before_posting_to_user_id() {
         String::from_utf8_lossy(post_body).contains(r#""channel":"D123""#),
         "posts to the opened DM channel"
     );
+}
+
+// ---- write-path channel resolution (tickets 20260721190756 / 20260722171439) -------------
+
+#[test]
+fn rest_client_resolves_channel_name_before_deleting_a_message() {
+    // Ticket 20260721190756: `chat.delete` (and every ID-requiring write) must resolve a
+    // name-addressed channel to its `Cxxxx` id, exactly as the read path does — a message the
+    // same token just posted by name must be removable by name.
+    let (secrets, key) = store_with_token("test-bot-token");
+    let channels = HttpResponse::new(
+        200,
+        br#"{"ok":true,"channels":[{"id":"CMAIN","name":"main"}]}"#.to_vec(),
+    );
+    let delete = HttpResponse::new(200, br#"{"ok":true}"#.to_vec());
+    let transport = Arc::new(RecordingTransport::with(vec![channels, delete]));
+    let client = RestSlackClient::new(transport.clone(), secrets, key, BodyErrorRule::On);
+
+    client
+        .apply(&SlackEffect::DeleteMessage {
+            channel: "main".into(),
+            ts: "1.1".into(),
+        })
+        .unwrap();
+
+    let reqs = transport.recorded();
+    assert_eq!(reqs.len(), 2, "resolve the name, then delete");
+    assert!(reqs[0].url.contains("/conversations.list?"));
+    assert!(reqs[1].url.ends_with("/chat.delete"));
+    let body = String::from_utf8_lossy(reqs[1].body.as_deref().unwrap_or_default()).into_owned();
+    assert!(
+        body.contains(r#""channel":"CMAIN""#),
+        "chat.delete got the resolved id, not the name: {body}"
+    );
+}
+
+#[test]
+fn rest_client_resolves_channel_name_for_update_procedure() {
+    // The `slack.update` (`chat.update`) procedure's `channel` param goes through the same name→ID
+    // resolution as the read path (ticket 20260721190756 QG: at least one procedure covered).
+    let (secrets, key) = store_with_token("test-bot-token");
+    let channels = HttpResponse::new(
+        200,
+        br#"{"ok":true,"channels":[{"id":"CMAIN","name":"main"}]}"#.to_vec(),
+    );
+    let update = HttpResponse::new(200, br#"{"ok":true}"#.to_vec());
+    let transport = Arc::new(RecordingTransport::with(vec![channels, update]));
+    let client = RestSlackClient::new(transport.clone(), secrets, key, BodyErrorRule::On);
+
+    client
+        .apply(&SlackEffect::UpdateMessage {
+            channel: "#main".into(),
+            ts: "1.1".into(),
+            text: "edited".into(),
+        })
+        .unwrap();
+
+    let reqs = transport.recorded();
+    assert_eq!(reqs.len(), 2);
+    assert!(reqs[1].url.ends_with("/chat.update"));
+    let body = String::from_utf8_lossy(reqs[1].body.as_deref().unwrap_or_default()).into_owned();
+    assert!(body.contains(r#""channel":"CMAIN""#), "{body}");
+}
+
+#[test]
+fn rest_client_id_addressed_channel_delete_does_not_resolve() {
+    // Ticket 20260721190756 QG: a `Cxxxx`-addressed channel keeps working unchanged — no lookup
+    // call, the id passes straight through.
+    let (secrets, key) = store_with_token("test-bot-token");
+    let delete = HttpResponse::new(200, br#"{"ok":true}"#.to_vec());
+    let transport = Arc::new(RecordingTransport::with(vec![delete]));
+    let client = RestSlackClient::new(transport.clone(), secrets, key, BodyErrorRule::On);
+
+    client
+        .apply(&SlackEffect::DeleteMessage {
+            channel: "C0LREADY".into(),
+            ts: "1.1".into(),
+        })
+        .unwrap();
+
+    let reqs = transport.recorded();
+    assert_eq!(reqs.len(), 1, "no conversations.list lookup for an ID");
+    assert!(reqs[0].url.ends_with("/chat.delete"));
+    let body = String::from_utf8_lossy(reqs[0].body.as_deref().unwrap_or_default()).into_owned();
+    assert!(body.contains(r#""channel":"C0LREADY""#), "{body}");
+}
+
+#[test]
+fn rest_client_user_token_dm_write_opens_im_before_posting() {
+    // Ticket 20260722171439: a DM write addressed by USER ID (the `.../messages` node under a user
+    // token, so `is_dm` is false) must mirror the read path — `conversations.open(users=Uxxxx)` →
+    // `Dxxxx`, then post to the `Dxxxx`. Before the fix the bare `Uxxxx` reached chat.postMessage
+    // and Slack answered `channel_not_found`.
+    let (secrets, key) = store_with_token("dummy-user-token");
+    let open = HttpResponse::new(200, br#"{"ok":true,"channel":{"id":"D0RECIP"}}"#.to_vec());
+    let post = HttpResponse::new(200, br#"{"ok":true,"ts":"1.1"}"#.to_vec());
+    let transport = Arc::new(RecordingTransport::with(vec![open, post]));
+    let client = RestSlackClient::new(transport.clone(), secrets, key, BodyErrorRule::On);
+
+    client
+        .apply(&SlackEffect::PostMessage {
+            channel: "U0RECIP".into(),
+            text: "hi".into(),
+            thread_ts: None,
+            client_msg_id: "qfs-1".into(),
+            is_dm: false, // the `/slack-me/<ws>/<USER_ID>/messages` node, not `/dms/<user>`
+        })
+        .unwrap();
+
+    let reqs = transport.recorded();
+    assert_eq!(reqs.len(), 2, "open the IM, then post");
+    assert!(reqs[0].url.ends_with("/conversations.open"));
+    assert!(
+        String::from_utf8_lossy(reqs[0].body.as_deref().unwrap_or_default())
+            .contains(r#""users":"U0RECIP""#),
+        "opens the IM with the addressed user id"
+    );
+    assert!(reqs[1].url.ends_with("/chat.postMessage"));
+    let body = String::from_utf8_lossy(reqs[1].body.as_deref().unwrap_or_default()).into_owned();
+    assert!(
+        body.contains(r#""channel":"D0RECIP""#),
+        "posts to the opened DM channel, not the bare user id: {body}"
+    );
+}
+
+#[test]
+fn rest_client_dm_write_to_already_opened_channel_does_not_double_open() {
+    // Ticket 20260722171439 QG: an already-`Dxxxx`-addressed write target keeps working unchanged —
+    // no second conversations.open.
+    let (secrets, key) = store_with_token("dummy-user-token");
+    let post = HttpResponse::new(200, br#"{"ok":true,"ts":"1.1"}"#.to_vec());
+    let transport = Arc::new(RecordingTransport::with(vec![post]));
+    let client = RestSlackClient::new(transport.clone(), secrets, key, BodyErrorRule::On);
+
+    client
+        .apply(&SlackEffect::PostMessage {
+            channel: "D0RECIP".into(),
+            text: "hi".into(),
+            thread_ts: None,
+            client_msg_id: "qfs-1".into(),
+            is_dm: false,
+        })
+        .unwrap();
+
+    let reqs = transport.recorded();
+    assert_eq!(
+        reqs.len(),
+        1,
+        "no conversations.open for an already-open Dxxxx"
+    );
+    assert!(reqs[0].url.ends_with("/chat.postMessage"));
+    let body = String::from_utf8_lossy(reqs[0].body.as_deref().unwrap_or_default()).into_owned();
+    assert!(body.contains(r#""channel":"D0RECIP""#), "{body}");
 }
 
 #[test]

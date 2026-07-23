@@ -2185,9 +2185,11 @@ command-execution risk" is a load-bearing security property. As with §15's one-
 lock, this section turns that from an audit claim into a **mechanically enforced invariant**
 (ticket 20260711121536). Two properties, one lock each.
 
-**The spawn inventory.** The whole shipped runtime spawns exactly one external program family —
-`git` — from a small, fixed set of sites, plus a desktop opener. `crates/cmd/tests/exec_inventory.rs`
-scans every `crates/*/src` and `xtask/src` source file (test harnesses excluded) for
+**The spawn inventory.** The shipped runtime spawns `git` (a small, fixed set of sites) plus a
+desktop opener, and — under the `/claude` AI-sessions surface — the configured `claude` CLI (a
+session launch) and `tmux` (an isolated-socket teardown). `crates/cmd/tests/exec_inventory.rs` scans
+every `crates/*/src` and `xtask/src` source file (test harnesses AND whole-line comments excluded, so
+a doc comment that merely names `Command::new(...)` in prose is not miscounted) for
 `Command::new(...)` and asserts the set of `(file, spawned-program)` pairs matches an exact
 allowlist:
 
@@ -2197,6 +2199,8 @@ allowlist:
 | `qfs/src/git.rs` (×2) | `git` | the `/git` read facet — `cat-file` / `show-ref` repo introspection |
 | `qfs/src/migration_guard.rs` (×2) | `git` | release-tag / shipped-migration introspection (dev tooling) |
 | `qfs/src/tty.rs` (×1) | `OPENER` | the desktop opener (`open`/`xdg-open`), `Stdio::null` |
+| `qfs/src/claude.rs` (×1) | `&self.binary` | the `/claude` session LAUNCH — the CONFIGURED CLI (`QFS_CLAUDE_BINARY`, default `claude`); `cwd`/`prompt`/`name` cross as discrete `.arg(..)`, never a shell (ticket 20260717010600) |
+| `qfs/src/tmux.rs` (×1) | `"tmux"` | the safe tmux teardown — fixed program, argv `-L <dedicated-socket> kill-session -t <session>`; the socket is a generated unique name, never a shell (ticket 20260719105527) |
 | `xtask/src/main.rs` (×2) | `cmd`/`program` | **build-only** release tooling (`publish=false`, never shipped) |
 
 A new `Command::new` — from a future driver, a transform executor, a declared-driver evaluator, a

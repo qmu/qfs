@@ -6,6 +6,8 @@ status: active
 created_at: 2026-07-16T01:50:14+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
+strategy: ai-sessions-are-ordinary-qfs-surfaces
+drive_authorized: true
 tickets:
   - 20260717010100-claude-real-store-reader.md
   - 20260717010200-claude-mount-registration-and-e2e-guard.md
@@ -14,6 +16,9 @@ tickets:
   - 20260717010500-claude-steering-rewire.md
   - 20260717010600-claude-session-create-launch.md
   - 20260717010700-claude-compiled-standing-recorded.md
+  - 20260719231005-claude-live-round-owner-attended.md
+  - 20260719105527-tmux-session-teardown-must-not-kill-server.md
+  - 20260721190756-slack-driver-channel-id-resolution.md
 stories: []
 concerns: []
 gate_type: live-app
@@ -125,6 +130,45 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
 - Full Claude Code feature parity. The Goal's "anything you can do" is the **direction**; the four
   named capabilities are this mission's measurable surface.
 
+**Environment constraint — items 5 and 6 exercise real OS processes, so they run ONLY in an
+isolated environment (owner ruling, 2026-07-19).** Steering and launch touch live processes:
+launch spawns `claude` processes, and any exercise of steering or launch against real sessions can
+crash co-resident live Claude Code sessions. The earlier **"(A) qfs-owned pty/tmux" steering/launch
+transport is RETIRED as unsafe** — driving it on this shared host, which runs the owner's live
+sessions, repeatedly crashed the parent session. Steering's canonical medium is now the **teams
+inbox**: a durable per-recipient JSON queue the target session drains, so a message is *delivered*
+without spawning or killing any process (see item 5). The hermetic implementation of both items may
+be authored anywhere, but every step that exercises real processes — the steering live fire, the
+inbox message-schema capture, a real `--bg` launch, the composed launch→steer proof — MUST run in
+an isolated box (a container/VM with no live sessions), never the shared host.
+
+**Container ruling (owner, 2026-07-22): a container on this host qualifies as the isolated box.**
+The host's `docker` command is podman 5.8.4. Every process-exercising step — the steering live
+fire, the inbox message-schema capture, a real `--bg` launch, the composed launch→steer proof,
+and any tmux server a test spawns — runs **inside a container** with no live sessions: never
+mount the host's `~/.claude`, never inherit the host's tmux sockets or `TMUX_TMPDIR`. Under that
+constraint the remaining set IS unattended-drivable, so `drive_authorized` is stamped for the
+overnight run; anything that cannot be containerized escalates instead of running on the shared
+host.
+
+## Experience
+
+What must be observable when this mission is achieved (added 2026-07-22 when the schema began
+requiring it; restates the Goal's owner-named capabilities, no new scope):
+
+- An operator (or agent) asks a machine "how many sessions are running, and what did each last
+  say" with one qfs query over `/hosts/<host>/claude/sessions` and gets one truthful row per
+  live session, read from the real on-disk store — never an invented layout.
+- Steering is a query: an INSERT into `.../sessions/<id>/instructions` appends to the target
+  session's durable teams inbox and is observed by that session — delivered without spawning
+  or killing any process. A write that nothing would read fails closed instead of pretending.
+- Launching is a query: an INSERT into the sessions set starts a new session behind the
+  irreversible gate, and the new session's id is addressable by the same paths immediately.
+- Bare `/claude` paths answer with the canonical `/hosts/<host>/claude/...` spelling in the
+  error, so the retired shape teaches the current one.
+- Every process-exercising proof runs in an isolated container, never on a shared host with
+  live sessions (see the Scope environment constraint).
+
 ## Acceptance
 
 - [x] **The path canon is ruled and implemented.** The blueprint records `/hosts/<host>/claude/...`
@@ -157,14 +201,23 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
       running session with a truthful `last_message` (`schema.rs:117`), read from the real store —
       closing owner-named capabilities 1 and 3 *(done 2026-07-17: verified live over the gate
       endpoint — 37 rows = the 37 live registry records on this box, zero empty `last_message`)*
-- [ ] **Steering reaches a real session.** An INSERT into
-      `/hosts/<host>/claude/sessions/<id>/instructions` is observed by the target session, rather
-      than appending to a file nothing reads — closing owner-named capability 4, and turning the
-      already-working write leg from a no-op into the feature
+- [ ] **Steering reaches a real session via the teams inbox.** An INSERT into
+      `/hosts/<host>/claude/sessions/<id>/instructions` is observed by the target session by
+      **appending a message to that session's teams inbox** (`~/.claude/teams/<session>/inboxes/
+      <member>.json` — a durable per-recipient JSON array the running session drains), rather than
+      appending to a file nothing reads — closing owner-named capability 4, and turning the
+      already-working write leg from a no-op into the feature. The retired pty/tmux/rendezvous-socket
+      transport is deliberately NOT used: it is process-coupled and unsafe (owner ruling,
+      2026-07-19). Non-process-killing by construction; the live-fire proof runs only in an isolated
+      environment (see the Scope environment constraint)
 - [ ] **Launching a session is designed, then shipped.** Greenfield: no grammar, no capability, no
       prior design. Needs a design brief first (what a launch *is*, whether it is irreversible and
       therefore gated, what identity it runs under, how its id becomes addressable) — closing
-      owner-named capability 2
+      owner-named capability 2 *(hermetic design + implementation done 2026-07-19, commit a73fa01 /
+      v0.0.81: INSERT grammar, `Sessions` widened to Select+Insert, irreversible gate, launcher seam
+      behind a fake, hermetic tests. The remaining live fire spawns a real `claude --bg` process, so
+      it runs ONLY in an isolated environment, out of unattended scope — see the Scope environment
+      constraint)*
 - [x] **`/claude`'s compiled standing is recorded, not left unnamed.** The `declared-drivers-…`
       mission names `/claude` alongside `/cf` as a compiled counter-example, with blueprint §13's
       ratchet framing as what governs it — so the rule stops reading as absolute while two
@@ -262,3 +315,71 @@ query, and `/claude`'s standing as a compiled driver is recorded rather than lef
   session (`19b46573-…`, status `busy`) — exit 0; the bare `/claude/sessions |> LIMIT 1`
   returned `{"code":"retired_path","kind":"capability"}` naming
   `/hosts/local/claude/sessions`, exit 3.
+- 2026-07-18 — **Replan: the two open owner decisions blocking items 5–6 were ruled**
+  (`/monitor` interrogation, AskUserQuestion). Four rulings recorded durably in the tickets and
+  the launch brief:
+  1. **Steering medium (item 5) — owner-attended probe.** Not the `--resume -p` turn fallback,
+     not fail-closed retirement: the transport is chosen by an owner-attended probe from an
+     unrestricted shell. New evidence this replan — `~/.claude/daemon/roster.json` is readable
+     and shows each live worker carrying a `rendezvousSock`/`ptySock` under `/tmp/cc-daemon-1000`
+     with per-worker `rvAuth`/`ptyAuth` tokens and a daemon `control.key`, so the medium is a
+     token-authenticated per-session unix socket (ahead of the teams/tasks dirs as the sink). The
+     socket dir was absent at probe time and `teams/session-*` reads were classifier-denied, so
+     the wire framing stays unverified from here. **Item 5 remains fail-closed, escalation-blocked
+     on the owner-attended probe.**
+  2–4. **Launch (item 6) — design acknowledged.** INSERT grammar (`Sessions` → `Select+Insert`,
+     `RETURNING id`); irreversible-gated (`--commit-irreversible`/ack); optional `name` column
+     accepted. **Quality gate 1 (owner acknowledgment before implementing commits) is satisfied.**
+     The hermetic implementation (QG3) is now drive-ready; QG2's live proof stays owner-attended
+     because it composes with the still-blocked steering.
+  No tickets emitted and no acceptance items added or reworded — this replan resolved round-4
+  per-ticket decisions on the existing tickets 010500/010600. `drive_authorized` **not** stamped:
+  the steering medium is deferred to owner-attended work, so the remaining set is not uniformly
+  drive-ready and both remaining live proofs need an owner-attended session (real Claude spend /
+  classifier-blocked daemon probing).
+- 2026-07-18 — mission replanned — design-brief-session-launch.md
+- 2026-07-19 — **Replan: the pty/tmux steering transport is RETIRED as unsafe; the teams inbox is
+  canonical (owner ruling, 2026-07-19).** The earlier candidate transport — the qfs-owned
+  pty/tmux / rendezvous-socket medium the 2026-07-18 changelog leaned toward — is retired: it is
+  process-coupled, and driving the steering/launch legs on this shared host (which runs the owner's
+  live Claude Code sessions) repeatedly crashed the parent session. Steering's canonical medium is
+  now the **teams inbox** identified by the owner-attended probe (commit 89fd431):
+  `~/.claude/teams/<session>/inboxes/<member>.json`, a durable per-recipient JSON array the running
+  session drains — a message is *delivered*, not injected into a process, so steering spawns and
+  kills nothing. Recorded a **Scope environment constraint**: items 5 (steering) and 6 (launch)
+  exercise real OS processes, so every step that touches real sessions (steering's live fire, the
+  inbox message-schema capture, a real `--bg` launch, the composed proof) runs ONLY in an isolated
+  box with no live sessions — never the shared host — and is out of unattended / `/monitor` scope.
+  Acceptance item 5 reworded to name the teams-inbox medium and the retirement; item 6 annotated
+  with the isolated-env constraint on its remaining live fire. Delta tickets 20260717010500
+  (steering) and 20260717010600 (launch) rewritten to the teams-inbox design and the isolated-env
+  gate; both stay in `todo/`, NOT authorized. `drive_authorized` **left unset**: the remaining set
+  is not drive-ready on the shared host — its DRIVE is parked for an isolated/attended environment.
+- 2026-07-19 — mission replanned — 20260717010500-claude-steering-rewire.md
+- 2026-07-19 — mission replanned — 20260717010600-claude-session-create-launch.md
+- 2026-07-19 — **`/monitor` pass: nothing left is unattended-drivable; consolidated the remaining
+  live proofs into one owner-attended, isolated-environment ticket.** A monitor leaf re-checked the
+  authorized set against the current tree and found the prior replan already landed (the pty/tmux
+  retirement + teams-inbox ruling of commits `1d6ffcc`/`89fd431`/`8180594`) and the launch hermetic
+  implementation already shipped (`a73fa01` / `v0.0.81`). The only remaining work — steering's
+  message-schema capture + live fire, the launch `--bg` live fire, and the composed launch→steer
+  proof — every step spawns or observes a REAL Claude Code process, which the mission's ABSOLUTE
+  safety prohibition bars on this shared host and rules out of unattended / `/monitor` scope. Rather
+  than drive anything unsafe or wire a *guessed* inbox schema (which would silently steer nothing —
+  the exact bug this mission exists to kill), the leaf filed
+  `20260719231005-claude-live-round-owner-attended.md`: a single owner-attended, isolated-box round
+  covering items 5 and 6's live proofs, left in `todo/` and NOT drive-authorized. `drive_authorized`
+  stays unset — deliberately, matching the author's standing decision that the remaining set is not
+  drive-ready on the shared host. No code, version, or CLI surface changed this pass.
+- 2026-07-22 — ticket added — 20260719105527-tmux-session-teardown-must-not-kill-server.md
+- 2026-07-22 — ticket added (rider: compiled slack driver bugfix, owner-directed onto this overnight queue) — 20260721190756-slack-driver-channel-id-resolution.md
+- 2026-07-22 — strategy created and linked — ai-sessions-are-ordinary-qfs-surfaces
+- 2026-07-22 — mission replanned for the overnight run - owner ruling 2026-07-22: a container on this host (docker=podman) qualifies as the isolated box, so the remaining set is unattended-drivable in-container; Experience section added per the mission schema; drive_authorized stamped — mission.md
+- 2026-07-22 — live round re-ruled autonomous-in-container (owner directive 2026-07-22); minimal claude credential copy into the container permitted, host claude state and sockets never mounted; tmux ticket gains container-only policies — 20260719231005-claude-live-round-owner-attended.md
+- 2026-07-22 — ticket added (rider: slack user-token DM write channel_not_found bugfix; QG hermetic, no third-party DM) — 20260722171439-slack-driver-user-token-dm-write-channel-not-found.md
+- 2026-07-22 — ticket archived — 20260721190756-slack-driver-channel-id-resolution.md
+- 2026-07-22 — ticket archived — 20260722171439-slack-driver-user-token-dm-write-channel-not-found.md
+- 2026-07-22 — ticket archived — 20260719105527-tmux-session-teardown-must-not-kill-server.md
+- 2026-07-23 — 3 tickets moved to icebox (steering rewire, session launch, live round) — the steering live-drain needs an attended multi-agent Agent Team run, so they are set aside from the unattended queue by developer approval; the launcher-id bug remains drive-ready for tonight — claude-steering-and-live-round-tickets
+- 2026-07-23 — ticket archived — 20260722213000-claude-launcher-id-capture-mismatch.md
+- 2026-07-24 — story reported — work-20260718-201117.md

@@ -347,7 +347,15 @@ fn live_registry(local_root: &Path) -> DriverRegistry {
     // applier above manages definitions, and the model call itself runs exec-side through the
     // injected provider, not in any applier.)
     if let Some(source) = crate::claude::ClaudeStoreSource::open_default() {
-        let applier = qfs_driver_claude::ClaudeApplier::new(std::sync::Arc::new(source));
+        // The launcher seam (`INSERT INTO /claude/sessions` — a session LAUNCH, irreversible;
+        // ticket 20260717010600) is wired alongside the store: `Command::new(<configured binary>)`
+        // with cwd/prompt/name passed as discrete ARGUMENTS (never a shell line). The whole
+        // `/claude` write surface stays fail-closed on the store (`open_default` above): with
+        // QFS_CLAUDE_SESSIONS unset this block is skipped and no applier registers.
+        let applier = qfs_driver_claude::ClaudeApplier::new(std::sync::Arc::new(source))
+            .with_launcher(std::sync::Arc::new(
+                crate::claude::ClaudeCliLauncher::open_default(),
+            ));
         reg = reg.with(
             DriverId::new("claude"),
             Arc::new(qfs_driver_claude::claude_apply_driver(&applier)),
