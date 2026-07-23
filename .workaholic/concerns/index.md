@@ -9,6 +9,7 @@
 * [Declared-model and scheduling follow-ups](declared-model-and-scheduling-follow-ups.md)
 * [G1 read-over-POST spelling required refinement during implementation](g1-read-over-post-spelling-required.md)
 * [G7 and G8 parks create scoping risk for downstream conversions](g7-and-g8-parks-create-scoping.md)
+* [Golden/anti-drift crate not exercised by per-crate runs](golden-anti-drift-crate-not-exercised.md)
 * [/local write materialization is narrow](local-write-materialization-is-narrow.md)
 * [Owner-attended live verification backlog](owner-attended-live-verification-backlog.md)
 * [Policy-less or denied job re-fires every sweep](policy-less-or-denied-job-re.md)

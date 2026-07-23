@@ -13,8 +13,8 @@ first_seen: 2026-07-24T00:40:59+09:00
 last_seen: 2026-07-24T00:40:59+09:00
 severity: moderate
 status: active
-resolved_by_pr:
-resolved_by_commit:
+resolved_by_pr: 
+resolved_by_commit: 
 ---
 
 # G1 read-over-POST spelling required refinement during implementation

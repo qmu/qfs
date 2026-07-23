@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/32
 origin_branch: work-20260709-023822
 origin_commit: 22c61e4
 created_at: 2026-07-11T04:39:49+09:00
-last_seen: 2026-07-24T00:40:59+09:00
+last_seen: 2026-07-24T00:48:25+09:00
 first_seen: 2026-07-11T04:39:49+09:00
 concern_id: qfs-runtime-span-buffer-test-flakes
 severity: low

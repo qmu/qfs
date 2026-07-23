@@ -13,8 +13,8 @@ first_seen: 2026-07-24T00:40:59+09:00
 last_seen: 2026-07-24T00:40:59+09:00
 severity: moderate
 status: active
-resolved_by_pr:
-resolved_by_commit:
+resolved_by_pr: 
+resolved_by_commit: 
 ---
 
 # G7 and G8 parks create scoping risk for downstream conversions

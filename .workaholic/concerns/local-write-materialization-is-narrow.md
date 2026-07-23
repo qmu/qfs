@@ -4,7 +4,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/11
 origin_branch: work-20260629-110121
 origin_commit: 3c6f995
 created_at: 2026-07-02T01:21:00+09:00
-last_seen: 2026-07-24T00:40:59+09:00
+last_seen: 2026-07-24T00:48:25+09:00
 first_seen: 2026-07-02T01:21:00+09:00
 concern_id: local-write-materialization-is-narrow
 severity: low
