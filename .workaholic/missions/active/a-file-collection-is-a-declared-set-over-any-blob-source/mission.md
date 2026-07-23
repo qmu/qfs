@@ -196,3 +196,4 @@ row-equivalent to the compiled driver, which then retires.
 - 2026-07-23 — ticket added — wire read-by-path mount for registered views (the wired-production surface t4's retirement needs; t3 proved equivalence at the helper level only) — 20260723100000-wire-read-by-path-mount-for-registered-views.md
 - 2026-07-23 — ticket archived — 20260723100000-wire-read-by-path-mount-for-registered-views.md
 - 2026-07-23 — ticket archived — 20260722090400-retire-the-compiled-markdown-driver.md
+- 2026-07-24 — story reported — work-20260722-084645.md
