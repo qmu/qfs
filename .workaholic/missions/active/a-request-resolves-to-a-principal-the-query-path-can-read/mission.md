@@ -374,3 +374,4 @@ ticket.**
 - 2026-07-23 — ticket archived — 20260723090000-serve-sys-and-session-principal-resolution.md
 - 2026-07-23 — ticket archived — 20260719101204-one-live-round-developer-attended.md
 - 2026-07-24 — story reported — work-20260719-101118.md
+- 2026-07-24 — concern deferred (stuck) — live-proof-of-the-session-case.md
