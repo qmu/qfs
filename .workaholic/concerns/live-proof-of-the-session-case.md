@@ -13,8 +13,8 @@ first_seen: 2026-07-24T01:02:01+09:00
 last_seen: 2026-07-24T01:02:01+09:00
 severity: moderate
 status: active
-resolved_by_pr:
-resolved_by_commit:
+resolved_by_pr: 
+resolved_by_commit: 
 ---
 
 # Live proof of the session case deferred on host disk

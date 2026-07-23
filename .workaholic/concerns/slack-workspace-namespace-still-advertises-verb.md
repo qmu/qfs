@@ -9,7 +9,7 @@ origin_branch: work-20260713-233938
 origin_commit: 3dae249
 created_at: 2026-07-14T01:07:13+09:00
 first_seen: 2026-07-14T01:07:13+09:00
-last_seen: 2026-07-24T01:02:01+09:00
+last_seen: 2026-07-24T01:08:52+09:00
 severity: low
 status: active
 resolved_by_pr: 
