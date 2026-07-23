@@ -2,7 +2,7 @@
 type: Mission
 title: The declared driver DSL covers the compiled drivers concisely
 slug: the-declared-driver-dsl-covers-the-compiled-drivers-concisely
-status: active
+status: achieved
 created_at: 2026-07-20T15:12:33+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
@@ -212,3 +212,4 @@ the four downstream missions with their entry conditions.
 - 2026-07-24 — story reported — work-20260722-084646.md
 - 2026-07-24 — concern deferred (stuck) — g1-read-over-post-spelling-required.md
 - 2026-07-24 — concern deferred (stuck) — g7-and-g8-parks-create-scoping.md
+- 2026-07-24 — mission achieved — mission.md

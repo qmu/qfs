@@ -2,7 +2,7 @@
 type: Mission
 title: A file collection is a declared set over any blob source
 slug: a-file-collection-is-a-declared-set-over-any-blob-source
-status: active
+status: achieved
 created_at: 2026-07-20T15:12:30+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
@@ -198,3 +198,4 @@ row-equivalent to the compiled driver, which then retires.
 - 2026-07-23 — ticket archived — 20260722090400-retire-the-compiled-markdown-driver.md
 - 2026-07-24 — story reported — work-20260722-084645.md
 - 2026-07-24 — concern deferred (stuck) — golden-anti-drift-crate-not-exercised.md
+- 2026-07-24 — mission achieved — mission.md
