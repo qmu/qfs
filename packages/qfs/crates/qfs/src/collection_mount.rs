@@ -33,7 +33,8 @@ use std::sync::{Arc, RwLock};
 
 use qfs_core::{
     markdown_relation_schema, Archetype, Capabilities, CfsError, Driver, DriverId, Engine,
-    MarkdownRelation, NodeDesc, Path, PlanApplier, ProcSig, PushdownProfile, RowBatch, Verb,
+    MarkdownRelation, NodeDesc, Path, PlanApplier, ProcSig, PushdownProfile, RequestContext,
+    RowBatch, Verb,
 };
 use qfs_driver_local::{scan_rows_with, Sandbox};
 use qfs_exec::{ReadDriver, ReadRegistry, Statement};
@@ -243,7 +244,7 @@ impl CollectionReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for CollectionReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let invalid = |reason: &'static str| CfsError::InvalidPath {
             path: scan.path.clone(),
             reason,
