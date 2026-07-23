@@ -3,6 +3,7 @@
 ## active
 
 * [a-walk-extends-one-trail-one-column-at-a-time](active/a-walk-extends-one-trail-one-column-at-a-time/mission.md) - A walk extends one trail one column at a time
+* [a-where-predicate-is-honored-or-refused-never-dropped](active/a-where-predicate-is-honored-or-refused-never-dropped/mission.md) - A where predicate is honored or refused, never dropped
 * [claude-code-sessions-are-queryable-and-steerable-as-qfs-paths](active/claude-code-sessions-are-queryable-and-steerable-as-qfs-paths/mission.md) - Claude Code sessions are queryable and steerable as qfs paths
 
 ## archive
