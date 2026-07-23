@@ -4,6 +4,7 @@
 
 * [a-walk-extends-one-trail-one-column-at-a-time](active/a-walk-extends-one-trail-one-column-at-a-time/mission.md) - A walk extends one trail one column at a time
 * [claude-code-sessions-are-queryable-and-steerable-as-qfs-paths](active/claude-code-sessions-are-queryable-and-steerable-as-qfs-paths/mission.md) - Claude Code sessions are queryable and steerable as qfs paths
+* [what-a-principal-can-see-and-do-is-granted-by-policy](active/what-a-principal-can-see-and-do-is-granted-by-policy/mission.md) - What a principal can see and do is granted by policy
 
 ## archive
 
