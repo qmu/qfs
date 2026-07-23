@@ -24,6 +24,7 @@
 
 mod addressing;
 mod codec;
+pub mod collection;
 pub mod declared;
 mod dto;
 mod error;
@@ -32,6 +33,11 @@ mod output;
 mod read;
 pub mod shell;
 
+pub use codec::apply_codecs;
+pub use collection::{
+    collection_root, markdown_relation_describe_schema, read_registered_collection,
+    to_root_relative,
+};
 pub use dto::{PlanPreview, ResultMeta, RowSet};
 pub use error::{ErrorKind, ExecError, ExitCode};
 pub use exec::{

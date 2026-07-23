@@ -548,4 +548,148 @@ mod tests {
             "the declared root scans through the engine"
         );
     }
+
+    /// Read a registered collection VIEW over the fixture: scan `/local/**/*.md` (materialized,
+    /// as the stored body's collect segment does), then run the declared body through the
+    /// definition-layer registration read (`qfs_exec::read_registered_collection`, with the
+    /// `/local` root-relative derivation). The `/local` mount is rooted at the fixture dir, so the
+    /// glob sees exactly the two `.md` files the compiled driver's tree walk does.
+    fn read_registered(dir: &TempDir, relation: &str) -> qfs_core::RowBatch {
+        let sandbox = qfs_driver_local::Sandbox::new(dir.path().to_path_buf());
+        let scanned =
+            qfs_driver_local::scan_rows_with(&sandbox, "/local/**/*.md", None, true).unwrap();
+        let body = qfs_exec::parse(&format!("/local/**/*.md |> decode md.{relation}")).unwrap();
+        qfs_exec::read_registered_collection(scanned, &body).unwrap()
+    }
+
+    /// **The registration-level row-equivalence gate (ticket 20260722090300 Quality Gate).** The
+    /// declared `documents`/`links` VIEWS — a stored `/local/**/*.md |> decode md.<relation>`
+    /// pipeline read through the definition-layer registration, with the `/local` root-relative
+    /// derivation — reproduce the compiled `/markdown` driver's `documents` and `links` rows on the
+    /// shared fixture tree, including `title` derivation, front matter, `target_doc` normalization,
+    /// and the full nested `source_section_path`. This is the twin that must be GREEN before the
+    /// compiled driver may retire (ticket 20260722090400, the §13 twin-and-retire ratchet).
+    #[test]
+    fn registered_views_are_row_equivalent_to_the_compiled_driver() {
+        let dir = fixture_tree();
+        let (engine, reads) = engine_and_reads(&dir);
+
+        // documents: identical schema AND identical rows (path/title/frontmatter), same order.
+        let reg_docs = read_registered(&dir, "documents");
+        let drv_docs = select(&engine, &reads, "/markdown/docs/documents |> LIMIT 100");
+        let names = |s: &qfs_types::Schema| -> Vec<String> {
+            s.columns.iter().map(|c| c.name.to_string()).collect()
+        };
+        assert_eq!(
+            names(&reg_docs.schema),
+            names(&drv_docs.schema),
+            "documents schema matches the compiled driver"
+        );
+        assert_eq!(
+            reg_docs.rows, drv_docs.rows,
+            "documents rows (path/title/frontmatter) match the compiled driver byte-for-byte"
+        );
+
+        // links: the registration additionally carries the `path` provenance join id (== source_doc,
+        // design brief Ruling 3), so compare on the compiled driver's five columns. `source_doc`,
+        // the full nested `source_section_path`, `target`, `target_doc`, and `line` must all match.
+        let reg_links = read_registered(&dir, "links");
+        let drv_links = select(&engine, &reads, "/markdown/docs/links |> LIMIT 100");
+        assert_eq!(
+            reg_links.rows.len(),
+            drv_links.rows.len(),
+            "one registered links row per compiled links row"
+        );
+        // The registration prepends `path`; every other column is the compiled links schema, in order.
+        assert_eq!(reg_links.schema.columns[0].name.as_str(), "path");
+        assert_eq!(
+            names(&reg_links.schema)[1..],
+            names(&drv_links.schema)[..],
+            "links carries [path] + the compiled driver's columns"
+        );
+        // The `path` provenance equals `source_doc` on every row (Ruling 3), and the compiled
+        // columns match value-for-value.
+        for (rl, dl) in reg_links.rows.iter().zip(&drv_links.rows) {
+            assert_eq!(
+                rl.values[0], rl.values[1],
+                "the registered links `path` join id equals `source_doc`"
+            );
+            assert_eq!(
+                &rl.values[1..],
+                &dl.values[..],
+                "links row matches the compiled driver (source_doc/section_path/target/target_doc/line)"
+            );
+        }
+    }
+
+    /// **The registration `DESCRIBE` gate (ticket 20260722090300 Quality Gate).** `DESCRIBE` of the
+    /// registered `documents`/`links` views reports the codec relation schemas — identical to the
+    /// schemas the compiled `/markdown` driver's `DESCRIBE` reported — so the viewer and agents
+    /// discover the declared set's shape generically after the compiled driver retires.
+    #[test]
+    fn registered_view_describe_reports_the_relation_schemas() {
+        use qfs_core::Driver;
+        let d = markdown_driver();
+        let drv_docs = d
+            .describe(&qfs_core::Path::new("/markdown/docs/documents"))
+            .unwrap()
+            .schema;
+        let drv_links = d
+            .describe(&qfs_core::Path::new("/markdown/docs/links"))
+            .unwrap()
+            .schema;
+        assert_eq!(
+            qfs_exec::markdown_relation_describe_schema(qfs_core::MarkdownRelation::Documents),
+            drv_docs,
+            "registered documents DESCRIBE == compiled driver DESCRIBE"
+        );
+        assert_eq!(
+            qfs_exec::markdown_relation_describe_schema(qfs_core::MarkdownRelation::Links),
+            drv_links,
+            "registered links DESCRIBE == compiled driver DESCRIBE"
+        );
+    }
+
+    /// The declared views are stored through the **definition layer with zero new grammar**
+    /// (blueprint §3): `CREATE VIEW <name> AS <collect + decode>` desugars to an `INSERT` into the
+    /// `/server/views` registry, and its canonical stored body rehydrates to the very pipeline the
+    /// registration read executes — closing the loop from `CREATE` to a row-equivalent read.
+    #[test]
+    fn create_view_desugars_to_a_registry_insert_and_rehydrates_to_the_read_body() {
+        use qfs_core::ddl::server::{
+            desugar_to_insert, parse_server_binding_ddl, ServerBindingDdl,
+        };
+        let ddl = parse_server_binding_ddl(
+            "CREATE VIEW documents AS /local/**/*.md |> decode md.documents",
+        )
+        .expect("CREATE VIEW parses with a collect + decode body (no new grammar)");
+        // It is a VIEW binding that desugars to exactly one /server INSERT effect-plan.
+        assert!(matches!(ddl, ServerBindingDdl::View(_)));
+        let plan = desugar_to_insert(&ddl).expect("desugars to a /server/views INSERT");
+        assert_eq!(plan.nodes().len(), 1, "one registry-write node");
+        assert_eq!(
+            plan.nodes()[0].target.path.as_str(),
+            "/server/views",
+            "the registration writes into the /server/views registry path"
+        );
+
+        // The stored canonical body rehydrates (serde, no re-parse) to the read body, and reading it
+        // over the fixture yields the compiled driver's documents rows — CREATE ≡ the registered read.
+        let ServerBindingDdl::View(view) = ddl else {
+            unreachable!("matched View above");
+        };
+        let body = view.query.expect("the view stores its query body");
+        let stmt = body.statement().clone();
+        let dir = fixture_tree();
+        let sandbox = qfs_driver_local::Sandbox::new(dir.path().to_path_buf());
+        let scanned =
+            qfs_driver_local::scan_rows_with(&sandbox, "/local/**/*.md", None, true).unwrap();
+        let reg = qfs_exec::read_registered_collection(scanned, &stmt).unwrap();
+        let (engine, reads) = engine_and_reads(&dir);
+        let drv = select(&engine, &reads, "/markdown/docs/documents |> LIMIT 100");
+        assert_eq!(
+            reg.rows, drv.rows,
+            "the rehydrated stored body reads row-equivalent to the compiled driver"
+        );
+    }
 }

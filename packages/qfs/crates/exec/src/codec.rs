@@ -82,7 +82,7 @@ pub(crate) fn stmt_without_codec_tail(stmt: &Statement) -> Option<Statement> {
 /// # Errors
 /// [`ExecError`] (usage class) if a codec is unknown, a `DECODE` has no blob to read, the bytes
 /// are not valid for the format, or a trailing op cannot be evaluated locally.
-pub(crate) fn apply_codecs(batch: RowBatch, stmt: &Statement) -> Result<RowBatch, ExecError> {
+pub fn apply_codecs(batch: RowBatch, stmt: &Statement) -> Result<RowBatch, ExecError> {
     let Statement::Query(pipeline) = stmt else {
         return Ok(batch);
     };

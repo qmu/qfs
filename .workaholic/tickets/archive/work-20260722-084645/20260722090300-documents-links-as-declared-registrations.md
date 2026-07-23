@@ -98,3 +98,41 @@ Overnight leaf progress (commit `2e23317`, per-crate green):
   schema-passthrough; the live decode is `exec/codec.rs::apply_codecs`. Confirm the declared-view
   body evaluation path (`qfs_exec::declared`) routes decode through `apply_codecs` (relation-aware)
   and NOT the engine fold, or thread `relation` into `PlanSource::Codec` too.
+
+## Drive note (2026-07-23, second leaf) — registration layer DONE; equivalence gate GREEN
+
+The memory-confined tmpfs build wrapper (18G cgroup, `CARGO_TARGET_DIR` on tmpfs) removed the disk
+blocker — the full `qfs` binary now builds off the `/` disk (free space unchanged at 9.0G through
+every build). Remaining registration work implemented and green:
+
+- **The registration read + `/local` root-relative derivation** (`qfs_exec::collection`, new
+  module): `collection_root(&Source)` reads the static (pre-glob) head of a stored body's source
+  (`/local/docs/**/*.md` → `/local/docs`); `to_root_relative(batch, root)` strips that prefix from
+  the scanned listing's `path`; `read_registered_collection(scanned, body)` composes strip →
+  `apply_codecs` codec tail. The strip runs **before** the decode, so the codec normalizes
+  `links.target_doc` against the same root-relative anchor the compiled driver used (Ruling 3), and
+  `documents.path` / `links.source_doc` carry the same join id. Raw `decode md.documents` over a
+  bare `/local` set is unchanged (VFS path) — the strip is the registration layer's, per Ruling 3.
+  `apply_codecs` is now `pub` (re-exported from `qfs_exec`). Per-crate `qfs-exec` green (+4 tests),
+  clippy `-D warnings` clean.
+- **Registration-level equivalence gate — GREEN** (`crates/qfs/src/markdown.rs`,
+  `registered_views_are_row_equivalent_to_the_compiled_driver`): scans the shared `fixture_tree`
+  through the real `/local` facet (`scan_rows_with(..., materialize=true)`), runs the registration
+  read for `documents` + `links`, and asserts row-equivalence to the compiled `/markdown` driver
+  read through the engine — `documents` byte-for-byte (path/title/frontmatter), `links` on the
+  compiled five columns (the registration additionally carries the `path` provenance join id ==
+  `source_doc`, Ruling 3), including `title` derivation, front matter, `target_doc` normalization,
+  and the full nested `source_section_path`.
+- **`DESCRIBE` gate — GREEN** (`registered_view_describe_reports_the_relation_schemas`): the
+  registered views report `qfs_exec::markdown_relation_describe_schema(...)`, identical to the
+  compiled driver's `DESCRIBE` schemas for both relations.
+- **Definition-layer registration — GREEN** (`create_view_desugars_to_a_registry_insert_and_
+  rehydrates_to_the_read_body`): `CREATE VIEW documents AS /local/**/*.md |> decode md.documents`
+  parses with no new grammar, desugars to exactly one `INSERT INTO /server/views`, and its stored
+  canonical body rehydrates (serde, no re-parse) to the pipeline the registration read executes
+  row-equivalent to the compiled driver — the CREATE→registry→read loop closed.
+
+Gates: `qfs-exec` + `qfs` per-crate tests green (416 `qfs` lib tests, incl. the 3 above); clippy
+`-D warnings` clean on both; `cargo fmt` applied; `gen-docs --check` in sync. Builds ran ONLY via
+the tmpfs wrapper — `/` free stayed 9.0G before/after. The compiled `/markdown` driver is retained
+as the equivalence oracle (t4).

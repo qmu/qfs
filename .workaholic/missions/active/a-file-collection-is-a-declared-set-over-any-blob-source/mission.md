@@ -153,7 +153,7 @@ row-equivalent to the compiled driver, which then retires.
       (alias registration; `/markdown` demoted to an instance; zero new grammar via §3), and
       the codec-relation surface (how the link relation is named/reached) is ruled in a
       design brief before implementation.
-- [ ] **`documents`/`links` are declared registrations (#20260722090300-documents-links-as-declared-registrations.md) over the generic path,
+- [x] **`documents`/`links` are declared registrations (#20260722090300-documents-links-as-declared-registrations.md) over the generic path,
       row-equivalent.** On the same fixture trees, the declared views reproduce the compiled
       `/markdown` driver's `documents` and `links` rows — including `title` derivation,
       front matter, `target_doc` normalization, and the full nested `section_path` (JSON
@@ -192,3 +192,4 @@ row-equivalent to the compiled driver, which then retires.
 - 2026-07-22 — ticket archived — 20260722090500-cookbook-collection-recipes-execution-checked.md
 - 2026-07-23 — mission replanned — design points confirmed settled in the brief (root-relative path join id; links keeps source_doc/target_doc), t3 annotated to complete the registration layer without re-escalation — 20260722090300-documents-links-as-declared-registrations.md
 - 2026-07-23 — overnight drive (commit 2e23317): t3 partial — the `decode <fmt>.<relation>` grammar suffix + exec `decode_relation` wiring + provenance `source_path` threading shipped and per-crate green (qfs-parser, qfs-exec); the declared-VIEW registration, DESCRIBE, `/local` root-relative derivation, and the registration-level equivalence/DESCRIBE tests remain, blocked on disk (they need the full qfs-binary build; ~8.7G free vs a 13G-equivalent build on the shared host). t4 (compiled `/markdown` retirement) stays BLOCKED — equivalence gate not green, driver untouched.
+- 2026-07-23 — ticket archived — 20260722090300-documents-links-as-declared-registrations.md
