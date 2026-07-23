@@ -235,3 +235,4 @@ design rulings, not implementation.
 - 2026-07-22 — ticket archived — 20260722122300-rewrite-14c-settled-points-as-rulings.md
 - 2026-07-22 — ticket archived — 20260722122400-record-the-ai-letter-rulings.md
 - 2026-07-22 — ticket archived — 20260722122500-consolidate-14c-open-list-and-hold-non-goals.md
+- 2026-07-23 — story reported — work-20260721-183323.md
