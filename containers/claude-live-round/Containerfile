@@ -1,0 +1,39 @@
+# Live-round container for the Claude-session round (mission:
+# claude-code-sessions-are-queryable-and-steerable-as-qfs-paths, ticket 20260719231005;
+# also the live-fire vehicle for 20260717010500 steering and 20260717010600 launch, and
+# the isolated home for 20260719105527 tmux-teardown's real-server test).
+#
+# WHY A CONTAINER IS MANDATORY: spawning / killing / steering a real `claude` process, or
+# tearing down a real tmux server, on the shared HOST has repeatedly crashed the parent and
+# sibling live sessions. Every such action runs ONLY here, in a fresh $HOME with no host
+# ~/.claude, no host tmux socket, and no host qfs socket ever mounted.
+FROM docker.io/library/rust:1-slim-bookworm
+
+# Build deps for the qfs workspace + tmux (the teardown ticket needs a REAL tmux server,
+# but a container-local one on a dedicated socket — never the developer's).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      git ca-certificates pkg-config libssl-dev curl tmux \
+ && rm -rf /var/lib/apt/lists/*
+
+# Unprivileged agent with its OWN fresh HOME — never the host's.
+RUN useradd -m -u 1000 agent
+USER agent
+ENV HOME=/home/agent
+
+# Install the Claude Code CLI into the agent's HOME. Override CLAUDE_INSTALL if the
+# official script is unreachable; fallback is to `podman cp` the host binary in (see README).
+ARG CLAUDE_INSTALL="curl -fsSL https://claude.com/install.sh | bash"
+RUN sh -c "$CLAUDE_INSTALL" || echo ">> claude install failed at build; copy the host binary in (see README)"
+ENV PATH="/home/agent/.local/bin:${PATH}"
+
+# Isolated scratch: cargo target, TMPDIR, and a DEDICATED tmux tmpdir all live under /work
+# (an auto-removed volume at run time) so nothing touches the host tree, host /tmp, or the
+# host tmux socket.
+ENV CARGO_TARGET_DIR=/work/target \
+    TMPDIR=/work/tmp \
+    TMUX_TMPDIR=/work/tmux \
+    CARGO_TERM_COLOR=never
+
+WORKDIR /work
+ENTRYPOINT ["/bin/sh"]

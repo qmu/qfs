@@ -114,7 +114,7 @@ mod native {
     /// the outcome. `stamp_last_run` carries the new high-water mark the caller persists on success.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct CronRun {
-        /// The job name.
+        /// The job (or agent) name.
         pub job: String,
         /// The instant the sweep fired at (UTC epoch seconds) — the plan's `NOW()` anchor.
         pub scheduled_at: i64,
@@ -123,6 +123,10 @@ mod native {
         /// The `last_run` to persist (`Some(now)` on a committed fire; `None` leaves it unchanged so a
         /// failed fire re-fires next tick).
         pub stamp_last_run: Option<i64>,
+        /// The firing **principal** (blueprint §19 axis B/D), secret-free identity only: `agent:<name>`
+        /// for an agent-cadence fire, `None` for an ordinary `/server/jobs` fire (the operator/daemon).
+        /// The sweeper maps this into the `JobRunRecord.principal` column + the ledger line.
+        pub principal: Option<String>,
     }
 
     /// Fire every job that is due at `now` and is NOT already in flight (`overlap = skip-if-running`),
@@ -172,6 +176,7 @@ mod native {
                         reason: format!("stored JOB body did not rehydrate: {e}"),
                     },
                     stamp_last_run: None,
+                    principal: None,
                 };
             }
         };
@@ -190,6 +195,87 @@ mod native {
             scheduled_at: now,
             outcome,
             stamp_last_run,
+            // An ordinary `/server/jobs` fire has no agent principal.
+            principal: None,
+        }
+    }
+
+    /// Fire every AGENT whose launch cadence is due at `now` and is NOT already in flight, through
+    /// the injected [`Committer`] — the SAME `is_due` decision + gate chain as [`fire_due`], with the
+    /// agent threaded as the firing principal so the committer gates under the agent subject
+    /// (blueprint §19 axis B/D). No new scheduler: agents ride the exact cron sweep jobs do. Pure:
+    /// `now` is injected, no clock, no effects constructed here.
+    #[must_use]
+    pub fn fire_due_agents(
+        agents: &[qfs_server::AgentDef],
+        now: i64,
+        in_flight: &BTreeSet<String>,
+        committer: &dyn Committer,
+    ) -> Vec<CronRun> {
+        let mut runs = Vec::new();
+        for agent in agents {
+            // A launch-less or function-less agent never fires on a timer.
+            if agent.every.is_empty() || agent.plan.as_str().is_empty() {
+                continue;
+            }
+            if in_flight.contains(&agent.name) {
+                continue; // overlap: skip-if-running
+            }
+            if !super::is_due(&agent.every, agent.last_run, now) {
+                continue;
+            }
+            runs.push(fire_one_agent(agent, now, committer));
+        }
+        runs
+    }
+
+    /// Fire a single due agent through the committer under the AGENT subject and map the result to a
+    /// run record carrying the `agent:<name>` principal. The stored function body is the canonical
+    /// serialized `PlanSpec`, rehydrated via serde with no re-parse (like [`fire_one`]).
+    fn fire_one_agent(
+        agent: &qfs_server::AgentDef,
+        now: i64,
+        committer: &dyn Committer,
+    ) -> CronRun {
+        let principal = Some(format!("agent:{}", agent.name));
+        let spec = match qfs_core::PlanSpec::from_canonical(agent.plan.0.as_str()) {
+            Ok(s) => s,
+            Err(e) => {
+                return CronRun {
+                    job: agent.name.clone(),
+                    scheduled_at: now,
+                    outcome: CronOutcome::Failed {
+                        reason: format!("stored AGENT function did not rehydrate: {e}"),
+                    },
+                    stamp_last_run: None,
+                    principal,
+                };
+            }
+        };
+        // The agent NAME is threaded as the firing principal: the committer builds
+        // `DecisionContext::for_agent(name)` and gates the plan under the agent subject — an agent
+        // fire commits by the agent's grants, never an operator's (blueprint §19 axis B).
+        let outcome = match committer.commit_for_principal(
+            &agent.name,
+            spec.statement(),
+            agent.policy.as_deref(),
+            Some(&agent.name),
+        ) {
+            Ok(o) => CronOutcome::Fired {
+                affected: o.affected,
+            },
+            Err(FireError::PolicyDenied { reason, .. }) => CronOutcome::Denied { reason },
+            Err(FireError::IrreversibleBlocked(reason)) => CronOutcome::Blocked { reason },
+            Err(FireError::Build(reason)) => CronOutcome::Failed { reason },
+            Err(FireError::Apply(reason)) => CronOutcome::Failed { reason },
+        };
+        let stamp_last_run = outcome.committed().then_some(now);
+        CronRun {
+            job: agent.name.clone(),
+            scheduled_at: now,
+            outcome,
+            stamp_last_run,
+            principal,
         }
     }
 }
@@ -200,7 +286,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use qfs_parser::Statement;
-    use qfs_server::{JobDef, StatementSource};
+    use qfs_server::{AgentDef, JobDef, StatementSource};
 
     use super::*;
     use crate::commit::{Committer, FireError, FireOutcome};
@@ -265,6 +351,70 @@ mod tests {
             last_run,
             policy: Some("p".into()),
         }
+    }
+
+    fn agent(name: &str, every: &str, last_run: Option<i64>) -> AgentDef {
+        let canonical = qfs_core::PlanSpec::from_statement(
+            qfs_exec::parse("insert into /log/x values ('hi')").unwrap(),
+        )
+        .canonical();
+        AgentDef {
+            name: name.into(),
+            every: every.into(),
+            last_run,
+            plan: StatementSource(canonical),
+            policy: Some("p".into()),
+        }
+    }
+
+    /// blueprint §19 axis D: an agent with a due launch cadence fires through the SAME sweep, and the
+    /// run carries the `agent:<name>` firing principal (so the committer gates under the agent
+    /// subject). A launch-less / function-less / not-yet-due agent does not fire.
+    #[test]
+    fn fire_due_agents_fires_a_due_agent_with_its_principal() {
+        let agents = vec![agent("triage", "1m", None)];
+        let runs = fire_due_agents(&agents, 10_000, &BTreeSet::new(), &allow());
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].job, "triage");
+        assert_eq!(runs[0].outcome, CronOutcome::Fired { affected: 1 });
+        assert_eq!(
+            runs[0].principal.as_deref(),
+            Some("agent:triage"),
+            "the fire carries the agent subject as the firing principal"
+        );
+        assert_eq!(runs[0].stamp_last_run, Some(10_000));
+
+        // A launch-less agent (no cadence) never fires on a timer.
+        let mut launchless = agent("idle", "", None);
+        launchless.every = String::new();
+        assert!(fire_due_agents(&[launchless], 10_000, &BTreeSet::new(), &allow()).is_empty());
+
+        // Not yet due.
+        let soon = agent("later", "1h", Some(9_000));
+        assert!(fire_due_agents(&[soon], 9_500, &BTreeSet::new(), &allow()).is_empty());
+    }
+
+    /// A denied agent fire records a denied run (zero effects, not stamped) — the same visible-denial
+    /// semantics as a job, but under the agent principal.
+    #[test]
+    fn fire_due_agents_denied_records_a_denied_run() {
+        let agents = vec![agent("guarded", "1m", None)];
+        let runs = fire_due_agents(&agents, 10_000, &BTreeSet::new(), &deny());
+        assert_eq!(runs.len(), 1);
+        assert!(matches!(runs[0].outcome, CronOutcome::Denied { .. }));
+        assert_eq!(runs[0].principal.as_deref(), Some("agent:guarded"));
+        assert_eq!(runs[0].stamp_last_run, None, "a denied fire is not stamped");
+    }
+
+    /// The ruled property (blueprint §19): an irreversible plan on an agent cadence is refused,
+    /// fail-closed — recorded as a blocked run, not stamped.
+    #[test]
+    fn fire_due_agents_irreversible_is_blocked() {
+        let agents = vec![agent("destructive", "1m", None)];
+        let runs = fire_due_agents(&agents, 10_000, &BTreeSet::new(), &block());
+        assert_eq!(runs.len(), 1);
+        assert!(matches!(runs[0].outcome, CronOutcome::Blocked { .. }));
+        assert_eq!(runs[0].stamp_last_run, None);
     }
 
     #[test]

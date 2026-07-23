@@ -230,11 +230,14 @@ k | name
 (1 row(s))
 ```
 
-::: warning Codecs are terminal stages
-`DECODE` and `ENCODE` must be the **last** stages of a pipeline — you can't `where`/`select`/`join`
-*after* a `decode` yet (that returns `codec_then_query`). So `decode json |> encode yaml` is fine,
-but `decode json |> where level == 'error' |> encode csv` is not. Reshaping decoded rows mid-pipeline
-is coming soon.
+::: tip Query the decoded rows
+`WHERE`, `SELECT`, `EXTEND`, `ORDER BY`, `LIMIT`, `DISTINCT` and `AGGREGATE` **do** run after a
+`decode` — they evaluate over the decoded relation, so
+`decode md |> where status == 'todo' |> order by created_at desc |> select id, title` returns exactly
+the rows you'd expect. What is not yet supported after a decode is a **cross-source** stage — a
+`JOIN`/`UNION`/`EXCEPT`/`INTERSECT` onto another source (that returns `codec_then_query`) — and
+`ENCODE`, which collapses rows back into bytes, so an `encode` belongs at the very end of a transcode
+(`decode json |> encode yaml`).
 :::
 
 ## Write & copy

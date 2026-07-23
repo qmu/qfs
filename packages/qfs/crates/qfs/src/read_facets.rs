@@ -24,7 +24,9 @@
 
 use std::sync::Arc;
 
-use qfs_core::{CfsError, Column, ColumnType, Name, Path, Row, RowBatch, Schema, Value};
+use qfs_core::{
+    CfsError, Column, ColumnType, Name, Path, RequestContext, Row, RowBatch, Schema, Value,
+};
 use qfs_driver_cf::{artifacts_repos_schema, kv_table_schema, queue_tail_schema, CfDriver, CfNode};
 use qfs_driver_ga::{GaDriver, QuerySpec as GaQuerySpec};
 use qfs_driver_gdrive::GDriveClient;
@@ -93,7 +95,7 @@ impl GitHubReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for GitHubReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         // The ScanNode carries the full addressed VFS path (t28 pushdown threading) + the pushed
         // predicate; the driver's read_rows owns the parse → ReadPlan → list → decode composition.
         let predicate = scan.pushed.filter.as_ref();
@@ -132,7 +134,7 @@ impl SlackReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for SlackReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let predicate = scan.pushed.filter.as_ref();
         read_off_runtime(&scan.path, "slack_read_panicked", || {
             let batch = qfs_driver_slack::read_rows(self.client.as_ref(), &scan.path, predicate)
@@ -213,7 +215,7 @@ impl RestReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for RestReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         // Off the async runtime: the live reqwest transport drives its own `block_on` (t203030).
         read_off_runtime(&scan.path, "rest_read_panicked", || {
             // Recover the mount-relative view path and match it against the declared views, binding
@@ -240,12 +242,18 @@ impl ReadDriver for RestReadDriver {
                 spec.of_columns.as_deref(),
                 spec.of_refinement.as_ref(),
                 &params,
-                |rest_path| {
-                    qfs_driver_http::rest_read_rows(&self.applier, rest_path).map_err(|e| {
-                        CfsError::InvalidPath {
-                            path: rest_path.to_string(),
-                            reason: e.code(),
+                |rest_path, post_body| {
+                    // §13.1 G1: a `Some` post_body is a declared read-over-POST — POST the encoded
+                    // wire body and decode the response; `None` is the ordinary GET read.
+                    let result = match post_body {
+                        Some(body) => {
+                            qfs_driver_http::rest_read_rows_post(&self.applier, rest_path, &body)
                         }
+                        None => qfs_driver_http::rest_read_rows(&self.applier, rest_path),
+                    };
+                    result.map_err(|e| CfsError::InvalidPath {
+                        path: rest_path.to_string(),
+                        reason: e.code(),
                     })
                 },
                 // The §13 FOLLOW second fetch: raw bytes off the delivered URL, no auth, the
@@ -438,7 +446,7 @@ fn obj_scan(
 
 #[async_trait::async_trait]
 impl ReadDriver for ObjReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let path_str = scan.path.clone();
         let filter = scan.pushed.filter.clone();
         let limit = scan.pushed.limit;
@@ -464,7 +472,7 @@ impl ReadDriver for ObjReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for SqlReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let spec = query_spec_from_pushed(&scan.pushed);
         let path = Path::new(&scan.path);
         // `execute_query` returns the rows, the truthful residual, AND the schema the SELECT actually
@@ -619,7 +627,7 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
 
 #[async_trait::async_trait]
 impl ReadDriver for CfReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         read_off_runtime(&scan.path, "cf_read_panicked", || {
             cf_scan(&self.driver, scan)
         })
@@ -653,7 +661,7 @@ impl ConnectAccountReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for ConnectAccountReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         Err(CfsError::InvalidPath {
             path: scan.path.clone(),
             reason: self.reason,
@@ -681,7 +689,7 @@ impl GmailReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for GmailReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let predicate = scan.pushed.filter.as_ref();
         // Off the async runtime: the credentialed GmailClient drives the shared reqwest transport's
         // own `block_on`, which would nest tokio runtimes on the executor thread (t203030).
@@ -720,7 +728,7 @@ impl DriveReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for DriveReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let predicate = scan.pushed.filter.as_ref();
         read_off_runtime(&scan.path, "gdrive_read_panicked", || {
             qfs_driver_gdrive::read_rows(self.client.as_ref(), &scan.path, predicate).map_err(|e| {
@@ -772,7 +780,7 @@ fn ga_query_spec_from_pushed(pushed: &PushedQuery) -> GaQuerySpec {
 
 #[async_trait::async_trait]
 impl ReadDriver for GaReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let spec = ga_query_spec_from_pushed(&scan.pushed);
         // Off the async runtime: the GA client drives the shared reqwest transport's own `block_on`
         // (the GA4 `runReport` call), which would nest tokio runtimes on the executor thread (t203030).
@@ -828,7 +836,7 @@ impl GitReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for GitReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let invalid = |reason: &'static str| CfsError::InvalidPath {
             path: scan.path.clone(),
             reason,
@@ -904,6 +912,7 @@ mod tests {
             path: path.to_string(),
             pushed: PushedQuery::default(),
             schema: Schema::new(Vec::new()),
+            materialize_content: false,
         }
     }
 
@@ -924,7 +933,10 @@ mod tests {
         ]));
         let driver = GitHubReadDriver::new(Arc::new(client));
         let batch = driver
-            .scan(&scan_for("/github/octocat/hello/pulls"))
+            .scan(
+                &scan_for("/github/octocat/hello/pulls"),
+                &RequestContext::anonymous(),
+            )
             .await
             .unwrap();
         assert_eq!(batch.rows.len(), 1);
@@ -951,6 +963,7 @@ mod tests {
                 ..PushedQuery::default()
             },
             schema: Schema::new(Vec::new()),
+            materialize_content: false,
         }
     }
 
@@ -965,7 +978,10 @@ mod tests {
             CmpOp::Eq,
             Literal::Text("U1".to_string()),
         ));
-        let batch = driver.scan(&scan).await.unwrap();
+        let batch = driver
+            .scan(&scan, &RequestContext::anonymous())
+            .await
+            .unwrap();
         assert_eq!(
             batch.rows.len(),
             1,
@@ -984,7 +1000,10 @@ mod tests {
             CmpOp::Eq,
             Literal::Bool(true),
         ));
-        let batch = driver.scan(&scan).await.unwrap();
+        let batch = driver
+            .scan(&scan, &RequestContext::anonymous())
+            .await
+            .unwrap();
         assert_eq!(
             batch.rows.len(),
             1,
@@ -1004,7 +1023,13 @@ mod tests {
         let read = SqlReadDriver::new(Arc::new(driver));
 
         // Bare scan: every row, every column (the catalog-schema derivation path).
-        let all = read.scan(&scan_for("/sql/orders/orders")).await.unwrap();
+        let all = read
+            .scan(
+                &scan_for("/sql/orders/orders"),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .unwrap();
         assert_eq!(all.rows.len(), 3, "all seeded rows");
         assert_eq!(all.schema.columns.len(), 3, "id, customer, total");
 
@@ -1022,8 +1047,12 @@ mod tests {
             path: "/sql/orders/orders".to_string(),
             pushed,
             schema: Schema::new(Vec::new()),
+            materialize_content: false,
         };
-        let filtered = read.scan(&scan).await.unwrap();
+        let filtered = read
+            .scan(&scan, &RequestContext::anonymous())
+            .await
+            .unwrap();
         assert_eq!(filtered.rows.len(), 2, "WHERE total>100 keeps bob + carol");
         let _ = std::fs::remove_file(&path);
     }
@@ -1034,7 +1063,10 @@ mod tests {
         // hint) rather than leaving the source unregistered (the internal-sounding unknown_source).
         let facet =
             ConnectAccountReadDriver::new("connect a Google account to read mail — run signup");
-        let err = facet.scan(&scan_for("/mail/inbox")).await.unwrap_err();
+        let err = facet
+            .scan(&scan_for("/mail/inbox"), &RequestContext::anonymous())
+            .await
+            .unwrap_err();
         match err {
             CfsError::InvalidPath { reason, path } => {
                 assert!(
@@ -1081,7 +1113,10 @@ mod tests {
         let driver = GitDriver::new(resolver, GitApplier::new());
         let read = GitReadDriver::new(Arc::new(driver));
 
-        let commits = read.scan(&scan_for("/git/r/commits")).await.unwrap();
+        let commits = read
+            .scan(&scan_for("/git/r/commits"), &RequestContext::anonymous())
+            .await
+            .unwrap();
         assert_eq!(commits.rows.len(), 1, "one commit on HEAD");
         assert!(commits
             .schema
@@ -1089,7 +1124,10 @@ mod tests {
             .iter()
             .any(|c| c.name.as_str() == "message"));
 
-        let refs = read.scan(&scan_for("/git/r/refs")).await.unwrap();
+        let refs = read
+            .scan(&scan_for("/git/r/refs"), &RequestContext::anonymous())
+            .await
+            .unwrap();
         assert!(
             refs.rows
                 .iter()
@@ -1097,7 +1135,10 @@ mod tests {
             "refs lists the main branch"
         );
 
-        let tree_listing = read.scan(&scan_for("/git/r/")).await.unwrap();
+        let tree_listing = read
+            .scan(&scan_for("/git/r/"), &RequestContext::anonymous())
+            .await
+            .unwrap();
         assert!(
             tree_listing
                 .rows
@@ -1126,14 +1167,20 @@ mod tests {
                 other => panic!("the `content` column must be bytes, got {other:?}"),
             }
         };
-        let file = read.scan(&scan_for("/git/r/a.txt")).await.unwrap();
+        let file = read
+            .scan(&scan_for("/git/r/a.txt"), &RequestContext::anonymous())
+            .await
+            .unwrap();
         assert_eq!(
             blob_content_col(&file),
             b"hello\n",
             "the content column holds the blob's exact bytes"
         );
         // Combined with an explicit `@<ref>` coordinate (`/git/<repo>@<ref>/<file>`).
-        let at_ref = read.scan(&scan_for("/git/r@main/a.txt")).await.unwrap();
+        let at_ref = read
+            .scan(&scan_for("/git/r@main/a.txt"), &RequestContext::anonymous())
+            .await
+            .unwrap();
         assert_eq!(
             blob_content_col(&at_ref),
             b"hello\n",
@@ -1141,7 +1188,9 @@ mod tests {
         );
 
         // A non-existent file path still fails closed with a structured invalid_path (not content).
-        let missing = read.scan(&scan_for("/git/r/nope.txt")).await;
+        let missing = read
+            .scan(&scan_for("/git/r/nope.txt"), &RequestContext::anonymous())
+            .await;
         assert!(
             matches!(missing, Err(CfsError::InvalidPath { .. })),
             "a missing blob path is a structured invalid_path, got {missing:?}"
@@ -1155,7 +1204,10 @@ mod tests {
                           "deleted": false }]
         }));
         let driver = SlackReadDriver::new(Arc::new(client));
-        let batch = driver.scan(&scan_for("/slack/acme/users")).await.unwrap();
+        let batch = driver
+            .scan(&scan_for("/slack/acme/users"), &RequestContext::anonymous())
+            .await
+            .unwrap();
         assert_eq!(batch.rows.len(), 1);
         assert_eq!(batch.rows[0].values[0], Value::Text("U1".to_string()));
     }
@@ -1173,7 +1225,10 @@ mod tests {
         let client = RestGitHubClient::new(Arc::new(NeverCalled), store, cred);
         let driver = GitHubReadDriver::new(Arc::new(client));
         let err = driver
-            .scan(&scan_for("/github/octocat/hello/pulls"))
+            .scan(
+                &scan_for("/github/octocat/hello/pulls"),
+                &RequestContext::anonymous(),
+            )
             .await
             .unwrap_err();
         // The structured CfsError carries the driver's stable auth code as its reason (secret-free).

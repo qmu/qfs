@@ -118,6 +118,13 @@ pub struct JobRunRecord {
     pub detail: String,
     /// Effects applied by a committed fire (0 for denied/blocked/failed — atomic abort).
     pub affected: i64,
+    /// The firing **principal** (blueprint §19 axis B), recorded secret-free as an IDENTITY only —
+    /// `agent:<name>` for an agent-fired plan, or empty/an operator label for an ordinary
+    /// (non-agent) fire. Never credential material. The sweeper (blueprint §19 axis D) threads the
+    /// agent identity into this from the firing `DecisionContext`; a plain `/server/jobs` fire
+    /// leaves it empty. `#[serde(default)]` so a pre-§19 record rehydrates with no principal.
+    #[serde(default)]
+    pub principal: String,
 }
 
 /// A view definition (`CREATE [MATERIALIZED] VIEW name AS <query>`). A materialized view
@@ -172,6 +179,37 @@ pub struct WebhookDef {
     pub secret: String,
 }
 
+/// An agent-principal definition (`CREATE AGENT name [POLICY p]`, blueprint §19). An agent is a
+/// new user principal (a first-class policy subject), NOT a process. This ticket lands the naming +
+/// registry row only: its name (the `Subject::Agent` identity) and its optional attached POLICY
+/// handle (least privilege, axis E). Query functions (axis C) and launch cadence (axis D) build on
+/// this row in later tickets. Credential-free by construction.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AgentDef {
+    /// The agent name (the config row key, and the `Subject::Agent` identity).
+    pub name: String,
+    /// The agent's optional **launch cadence** (blueprint §19 axis D): an `EVERY <interval>` raw
+    /// text (e.g. `5m`), empty for a launch-less agent. When set, the agent's query function enters
+    /// the SAME cron sweep as `/server/jobs` (no new scheduler), gated under the agent subject.
+    #[serde(default)]
+    pub every: String,
+    /// The last successful cadence-fire time (epoch seconds), the persisted high-water mark the
+    /// sweeper records. `None` until the first fire (runtime state, preserved across a reconcile —
+    /// the same posture as [`JobDef::last_run`]).
+    #[serde(default)]
+    pub last_run: Option<i64>,
+    /// The agent's **query function** (blueprint §19 axis C): a named saved plan — the `DO <plan>`
+    /// body shape WITHOUT a cadence — as canonical [`qfs_core::PlanSpec`] source. Empty for a
+    /// function-less agent. Rehydrated (no re-parse) + built + gated under the agent's own subject
+    /// and committed through the shipped preview/commit pipeline by `qfs agent run`.
+    #[serde(default)]
+    pub plan: StatementSource,
+    /// The attached `POLICY <name>` handle the agent's fired plans commit under. `None` = no
+    /// policy attached ⇒ fail-closed default-deny at fire time. A handle, never a credential.
+    #[serde(default)]
+    pub policy: Option<String>,
+}
+
 /// The running server's whole configuration — the source of truth (blueprint §7/§10). Each
 /// collection is a name-keyed [`BTreeMap`] so the serialized snapshot is **deterministic**
 /// (golden-testable) and `UPSERT` is a stable replace-by-name. Owned data only; no vendor
@@ -191,6 +229,15 @@ pub struct ServerState {
     pub policies: BTreeMap<String, PolicyDef>,
     /// `/server/webhooks` — name → webhook.
     pub webhooks: BTreeMap<String, WebhookDef>,
+    /// `/server/agents` — name → agent principal (blueprint §19).
+    #[serde(default)]
+    pub agents: BTreeMap<String, AgentDef>,
+    /// `/server/agents/<name>/runs` — per-agent cadence-fire history (READ-ONLY runtime telemetry,
+    /// blueprint §19 axis D), the agent's own run-history read-back beside `/server/jobs/<name>/runs`.
+    /// Only the daemon sweeper appends (via [`ServerState::record_agent_run`]); removing the agent
+    /// drops it. Capped by [`JOB_RUN_HISTORY_CAP`] so a long-lived daemon stays bounded.
+    #[serde(default)]
+    pub agent_runs: BTreeMap<String, Vec<JobRunRecord>>,
     /// `/server/jobs/<name>/runs` — per-job firing history (READ-ONLY runtime telemetry, not
     /// configuration: only the daemon sweeper appends via [`ServerState::record_job_run`], a
     /// replace-by-name of the job row never touches it, and removing the job drops it). Kept
@@ -222,6 +269,7 @@ impl ServerState {
             + self.views.len()
             + self.policies.len()
             + self.webhooks.len()
+            + self.agents.len()
     }
 
     /// A one-line, secret-free summary (counts per collection) — the audit/log projection
@@ -229,13 +277,14 @@ impl ServerState {
     #[must_use]
     pub fn summary(&self) -> String {
         format!(
-            "endpoints={} triggers={} jobs={} views={} policies={} webhooks={}",
+            "endpoints={} triggers={} jobs={} views={} policies={} webhooks={} agents={}",
             self.endpoints.len(),
             self.triggers.len(),
             self.jobs.len(),
             self.views.len(),
             self.policies.len(),
             self.webhooks.len(),
+            self.agents.len(),
         )
     }
 
@@ -244,6 +293,18 @@ impl ServerState {
     /// (the daemon sweeper calls this under the state's write guard).
     pub fn record_job_run(&mut self, job: &str, record: JobRunRecord) {
         let runs = self.job_runs.entry(job.to_string()).or_default();
+        runs.push(record);
+        if runs.len() > JOB_RUN_HISTORY_CAP {
+            let drop = runs.len() - JOB_RUN_HISTORY_CAP;
+            runs.drain(..drop);
+        }
+    }
+
+    /// Append one run record to an agent's `/server/agents/<name>/runs` history (blueprint §19 axis
+    /// D), newest last, dropping the oldest past [`JOB_RUN_HISTORY_CAP`]. The ONLY writer of
+    /// `agent_runs` (the daemon sweeper calls this under the state's write guard).
+    pub fn record_agent_run(&mut self, agent: &str, record: JobRunRecord) {
+        let runs = self.agent_runs.entry(agent.to_string()).or_default();
         runs.push(record);
         if runs.len() > JOB_RUN_HISTORY_CAP {
             let drop = runs.len() - JOB_RUN_HISTORY_CAP;

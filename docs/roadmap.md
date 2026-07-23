@@ -118,7 +118,7 @@ migration that prints the equivalent `CREATE CONNECTION` lines for you.
 | **SQL/git registry** | ✅ config-file declarations build `/sql/<name>` and `/git/<name>` mounts |
 | **Secret resolution** | ✅ SQL passwords resolve lazily from supported secret references |
 | **Env fallback** | ✅ `QFS_SQL_…` / `QFS_GIT_…` remain as warned deprecated fallbacks with import output |
-| **Cloud account declarations** | 🧭 still proposed; cloud mounts currently use `qfs account add` + `qfs connect` |
+| **Cloud account declarations** | ✅ `CREATE ACCOUNT <provider> '<label>' SECRET '<ref>'` declares a self-contained account whose credential resolves lazily at bind time (no separate `qfs account add`) |
 
 ## AI sessions as paths (`/hosts/<host>/claude`)
 

@@ -1,39 +1,33 @@
-# Live-round container for the Claude-session round (mission:
-# claude-code-sessions-are-queryable-and-steerable-as-qfs-paths, ticket 20260719231005;
-# also the live-fire vehicle for 20260717010500 steering and 20260717010600 launch, and
-# the isolated home for 20260719105527 tmux-teardown's real-server test).
+# Live-round container for the who-am-I round (mission:
+# a-request-resolves-to-a-principal-the-query-path-can-read, ticket 20260719101204).
 #
-# WHY A CONTAINER IS MANDATORY: spawning / killing / steering a real `claude` process, or
-# tearing down a real tmux server, on the shared HOST has repeatedly crashed the parent and
-# sibling live sessions. Every such action runs ONLY here, in a fresh $HOME with no host
-# ~/.claude, no host tmux socket, and no host qfs socket ever mounted.
+# Purpose: build the qfs release binary from THIS branch and exercise the shipped
+# who-am-I path — anonymous /sys/whoami (signed_in=false) and a real session-carrying
+# request (signed_in=true) — inside an isolated container, capturing a verbatim
+# transcript for morning review.
+#
+# Safety: this image carries NO credentials. The round touches only qfs's own LOCAL
+# identity store and LOCAL OAuth sign-in face bound to localhost inside the container.
+# No host ~/.claude, no host sockets, no cloud tokens are ever present.
 FROM docker.io/library/rust:1-slim-bookworm
 
-# Build deps for the qfs workspace + tmux (the teardown ticket needs a REAL tmux server,
-# but a container-local one on a dedicated socket — never the developer's).
+# Build deps for the qfs workspace (SQLite via bundled feature needs a C toolchain) plus
+# curl — the round drives the in-container HTTP query + OAuth sign-in faces over loopback
+# to mint a real qfs_session cookie and read it back.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      git ca-certificates pkg-config libssl-dev curl tmux \
+ && apt-get install -y --no-install-recommends git ca-certificates pkg-config libssl-dev curl \
  && rm -rf /var/lib/apt/lists/*
 
-# Unprivileged agent with its OWN fresh HOME — never the host's.
+# Unprivileged build/run user with its own fresh HOME — never the host's.
 RUN useradd -m -u 1000 agent
 USER agent
-ENV HOME=/home/agent
+WORKDIR /work
 
-# Install the Claude Code CLI into the agent's HOME. Override CLAUDE_INSTALL if the
-# official script is unreachable; fallback is to `podman cp` the host binary in (see README).
-ARG CLAUDE_INSTALL="curl -fsSL https://claude.com/install.sh | bash"
-RUN sh -c "$CLAUDE_INSTALL" || echo ">> claude install failed at build; copy the host binary in (see README)"
-ENV PATH="/home/agent/.local/bin:${PATH}"
-
-# Isolated scratch: cargo target, TMPDIR, and a DEDICATED tmux tmpdir all live under /work
-# (an auto-removed volume at run time) so nothing touches the host tree, host /tmp, or the
-# host tmux socket.
+# Source is bind-mounted read-only at /src at run time (see run.sh); the build writes
+# ONLY under /work (isolated CARGO_TARGET_DIR + TMPDIR) so the host tree and host /tmp
+# are never touched.
 ENV CARGO_TARGET_DIR=/work/target \
     TMPDIR=/work/tmp \
-    TMUX_TMPDIR=/work/tmux \
     CARGO_TERM_COLOR=never
 
-WORKDIR /work
 ENTRYPOINT ["/bin/sh"]

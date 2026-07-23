@@ -15,17 +15,26 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use qfs_core::Engine;
+use qfs_core::{Engine, RequestContext};
 use qfs_exec::{execute_read, ReadRegistry};
 use qfs_server::PolicyDef;
 
 use crate::encode::{encode_rows, negotiate};
 use crate::error::HttpError;
 use crate::params::QueryArgs;
-use crate::policy::assert_read_only;
+use crate::policy::{assert_read_only, decision_for};
 use crate::rewrite::bind_params;
 use crate::route::CompiledRoute;
 use crate::{HttpRequest, HttpResponse};
+
+/// Resolve the acting [`RequestContext`] for a request from its raw parts (the M2 "who am I"
+/// seam). INJECTED by the terminal binary — which OWNS the session store — so `qfs-http` gains NO
+/// `qfs-session`/`qfs-store` dependency (the SAME closure-seam the [`crate::Fallback`] uses for the
+/// watchtower ingest). The binary's implementation reads the `qfs_session` cookie, looks the
+/// session up, and returns the bound `UserId`; an absent/invalid/unknown/expired session resolves
+/// to [`RequestContext::anonymous`] (fail closed). A [`None`] resolver on the [`EndpointCtx`] means
+/// none was wired, so every request is the anonymous actor.
+pub type PrincipalResolver = Arc<dyn Fn(&HttpRequest) -> RequestContext + Send + Sync>;
 
 /// The shared, request-independent context the handler evaluates against: the engine
 /// (mounts + codecs), the read-driver registry, the resolved policies, and the bounded
@@ -42,6 +51,9 @@ pub struct EndpointCtx {
     pub policies: Arc<RwLock<Arc<BTreeMap<String, PolicyDef>>>>,
     /// The bounded in-memory result-row cap (413 beyond it).
     pub max_rows: usize,
+    /// The injected principal resolver (the binary's `qfs_session` cookie → `UserId` seam). `None`
+    /// → every request resolves to the fail-closed anonymous actor.
+    pub resolver: Option<PrincipalResolver>,
 }
 
 impl EndpointCtx {
@@ -58,7 +70,16 @@ impl EndpointCtx {
             reads,
             policies,
             max_rows,
+            resolver: None,
         }
+    }
+
+    /// Attach the injected [`PrincipalResolver`] (builder form). Without it the context resolves
+    /// every request to the fail-closed anonymous actor.
+    #[must_use]
+    pub fn with_principal_resolver(mut self, resolver: PrincipalResolver) -> Self {
+        self.resolver = Some(resolver);
+        self
     }
 
     /// Snapshot the live policies (clones the inner `Arc`; the guard is dropped immediately so
@@ -125,15 +146,23 @@ async fn dispatch_inner(
     let mut bound = route.query.clone();
     bind_params(&mut bound, &args);
 
-    // 3. Defence-in-depth read-only gate on the bound plan (registration already gated it).
-    //    Snapshot the live policies BEFORE the gate; no lock is held across the later `.await`.
+    // 3. Resolve the request's principal ONCE (the M2 "who am I" seam), then thread it to BOTH the
+    //    policy gate and the read executor — one resolution, no per-face divergence. The injected
+    //    resolver (built at serve boot over the session store) reads the `qfs_session` cookie and
+    //    returns the bound user; anonymous is the fail-closed default when no resolver is wired or
+    //    the session is absent/invalid.
+    let req_ctx = resolve_request_principal(req, ctx);
+
+    // 4. Defence-in-depth policy gate on the bound plan, evaluated UNDER THE RESOLVED ACTOR
+    //    (registration already gated it under anonymous). Snapshot the live policies BEFORE the
+    //    gate; no lock is held across the later `.await`.
     let plan = qfs_exec::build_plan(&bound, &ctx.engine).map_err(HttpError::Eval)?;
     let policies = ctx.policies_snapshot();
     let policy = policies.get(&route.name);
-    assert_read_only(&plan, policy).map_err(HttpError::Policy)?;
+    assert_read_only(&plan, policy, &decision_for(&req_ctx)).map_err(HttpError::Policy)?;
 
-    // 4. Evaluate the bound query through the qfs-exec read executor (t29).
-    let rows = execute_read(&bound, &ctx.engine.mounts, &ctx.reads)
+    // 5. Evaluate the bound query through the qfs-exec read executor (t29), under the principal.
+    let rows = execute_read(&bound, &ctx.engine.mounts, &ctx.reads, &req_ctx)
         .await
         .map_err(HttpError::Eval)?;
 
@@ -157,6 +186,19 @@ async fn dispatch_inner(
     );
 
     Ok(HttpResponse::new(200, content.header(), body))
+}
+
+/// Resolve the request's [`RequestContext`] — the M2 "who am I" seam threaded to the gate and the
+/// read executor. Delegates to the [`EndpointCtx`]'s injected [`PrincipalResolver`] (built at serve
+/// boot over the session store); it reads the `qfs_session` cookie, looks the session up, and
+/// returns the bound user. When no resolver is wired — or the cookie is absent/invalid/unknown —
+/// the request resolves to the anonymous (not-signed-in) actor, the fail-closed default. A cookie
+/// that cannot be verified grants nothing.
+fn resolve_request_principal(req: &HttpRequest, ctx: &EndpointCtx) -> RequestContext {
+    match &ctx.resolver {
+        Some(resolve) => resolve(req),
+        None => RequestContext::anonymous(),
+    }
 }
 
 /// Whether a query-string key is a RESERVED negotiation knob (not an endpoint param). `format`

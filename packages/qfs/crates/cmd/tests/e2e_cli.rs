@@ -215,7 +215,11 @@ mod read_path {
 
     #[async_trait::async_trait]
     impl ReadDriver for FakeMail {
-        async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
             // Honestly over-return: hand back ALL rows regardless of pushed WHERE/LIMIT.
             Ok(RowBatch::new(schema(), self.rows.clone()))
         }
@@ -245,7 +249,13 @@ mod read_path {
         // /mail/inbox |> LIMIT 1 — fake returns 4, residual LIMIT must trim to exactly 1.
         let (eng, rd) = (engine(), reads());
         let stmt = parse("/mail/inbox |> LIMIT 1").unwrap();
-        let rows = block_on_read(&stmt, &eng.mounts, &rd).unwrap();
+        let rows = block_on_read(
+            &stmt,
+            &eng.mounts,
+            &rd,
+            &qfs_core::RequestContext::anonymous(),
+        )
+        .unwrap();
         assert_eq!(rows.len(), 1, "LIMIT 1 must trim the over-returned scan");
         assert_eq!(ids(&rows), vec![1]);
         assert_eq!(rows.columns(), vec!["id", "subject"]);
@@ -257,7 +267,13 @@ mod read_path {
         // re-filter to EXACTLY ids [2,3] — not the over-returned [1,2,3,4], not [3,4].
         let (eng, rd) = (engine(), reads());
         let stmt = parse("/mail/inbox |> WHERE id > 1 |> LIMIT 2").unwrap();
-        let rows = block_on_read(&stmt, &eng.mounts, &rd).unwrap();
+        let rows = block_on_read(
+            &stmt,
+            &eng.mounts,
+            &rd,
+            &qfs_core::RequestContext::anonymous(),
+        )
+        .unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(
             ids(&rows),

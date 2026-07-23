@@ -4,10 +4,18 @@ Guidance for Claude Code working in this repository.
 
 ## What this is
 
-A monorepo. Each project lives under `packages/<project>/`. Today there is one project:
+A monorepo. Each project lives under `packages/<project>/`. Today there are two projects:
 
 - **`packages/qfs/`** — `qfs`, a single Rust binary (CLI + server) that exposes every external
   service through one uniform, filesystem-shaped, pipe-SQL query language. This is the product.
+- **`packages/qfs-viewer/`** — `qfs-viewer`, a markdown knowledge browser (SSR HTML + REST API +
+  MCP, run as `npx qfs-viewer` at a repository root) built on the plgg family, with the plggmatic
+  UI engine as a sibling package inside it.
+
+qfs-viewer was imported as a snapshot from the standalone (private) `qmu/qfs-viewer` repository.
+Its live queue merged into the root `.workaholic/` (tickets/todo, missions/active) and its history
+sits unchanged at `packages/qfs-viewer/.workaholic/` — the development base for qfs-related work
+is now this repository (developer decision, 2026-07-18).
 
 The documentation site is at repo-root `docs/` (VitePress; `docker compose up docs` serves it at
 `localhost:5173`). The repo-root `README.md` is the qfs README.
@@ -25,6 +33,12 @@ cargo fmt --all --check
 cargo run -p xtask -- gen-docs --check     # anti-drift: committed docs must match the binary
 cargo run -p xtask -- gen-skills --check   # anti-drift: Agent Skills must match docs/cookbook/*.md
 cargo run -p xtask -- check-migrations     # anti-drift: no shipped migration body edited in place (needs release tags)
+```
+
+The qfs-viewer gate (TypeScript; its own canonical runner):
+
+```sh
+cd packages/qfs-viewer && ./scripts/check-all.sh   # gates + build + npx smoke + full test suite; must exit 0
 ```
 
 Generated reference docs (`docs/{language,drivers,server}.md`) are rendered from the binary by

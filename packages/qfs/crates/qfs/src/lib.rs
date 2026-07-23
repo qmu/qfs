@@ -19,6 +19,7 @@
 //! pure [`catalog`]/[`docs`]/[`version`] surface (no runtime, no creds, no I/O).
 
 pub mod account;
+pub mod agent;
 pub mod apply_facets;
 pub mod audit;
 pub mod billing;
@@ -28,6 +29,7 @@ pub mod cf;
 pub mod claude;
 pub mod clients;
 pub mod cloud_mounts;
+pub mod collection_mount;
 pub mod commit;
 pub mod connection;
 pub mod connections_config;
@@ -49,7 +51,6 @@ pub mod identity;
 pub mod init;
 pub mod invite;
 pub mod job;
-pub mod markdown;
 pub mod mcp;
 pub mod migration_guard;
 pub mod mount_adapter;

@@ -50,10 +50,10 @@ mod tests;
 pub use binding::HttpBinding;
 pub use encode::{negotiate, ContentType, DEFAULT_MAX_ROWS};
 pub use error::{problem_body, HttpError, ProblemBody};
-pub use handler::EndpointCtx;
+pub use handler::{dispatch, EndpointCtx, PrincipalResolver};
 pub use params::{BindError, QueryArgs};
 pub use policy::{assert_read_only, PolicyError};
-pub use route::{compile_endpoint, CompileError, RoutePattern, Router};
+pub use route::{compile_endpoint, CompileError, CompiledRoute, RoutePattern, Router};
 pub use serve::{
     serve, serve_config, serve_config_full, serve_config_shared, serve_config_with, serve_on,
     serve_on_with, Fallback, DEFAULT_BIND_ADDR,
@@ -64,8 +64,8 @@ pub use serve::{
 // facet + the statement-bridge commit routing, but its thin-entrypoint guard forbids a direct
 // `qfs-server` dep — qfs-http (which legitimately consumes qfs-server) is the serve-side door.
 pub use qfs_server::{
-    job_runs_path_job, lower_statement, reconfigure_channel, ReconfigureHandle, ReconfigureRx,
-    Runtime, ServerConfigApplier, ServerDriver,
+    agent_runs_path_agent, job_runs_path_job, lower_statement, reconfigure_channel, EndpointDef,
+    ReconfigureHandle, ReconfigureRx, Runtime, ServerConfigApplier, ServerDriver, StatementSource,
 };
 
 use std::collections::BTreeMap;

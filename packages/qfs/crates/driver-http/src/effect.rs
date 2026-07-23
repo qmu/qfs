@@ -68,7 +68,13 @@ impl HttpEffect {
     /// [`DecodeError`] if the kind is not one the REST driver services (`UPDATE`/`CALL`) — the
     /// out-of-scope PATCH/procedure verbs.
     pub fn from_node(node: &EffectNode) -> Result<Self, DecodeError> {
+        let body = read_body(node);
         let method = match &node.kind {
+            // A declared **read-over-POST** (blueprint §13.1 G1): a READ carrying a wire body
+            // (`__http_body`) is issued as a POST whose response decodes into rows exactly as a
+            // GET's would (`apply_effect`'s non-GET arm sends once and decodes). A bodyless read
+            // stays a GET. The effect kind is READ throughout — the POST is transport only.
+            EffectKind::Read | EffectKind::List if body.is_some() => HttpMethod::Post,
             EffectKind::Read | EffectKind::List => HttpMethod::Get,
             EffectKind::Insert => HttpMethod::Post,
             EffectKind::Upsert => HttpMethod::Put,
@@ -95,7 +101,6 @@ impl HttpEffect {
 
         let override_url = read_url_override(node);
         let override_headers = read_header_overrides(node);
-        let body = read_body(node);
 
         Ok(Self {
             method,

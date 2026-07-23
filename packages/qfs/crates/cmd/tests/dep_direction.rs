@@ -344,15 +344,11 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // driver shape, like the pure introspective half of qfs-driver-sys minus the apply bridge.
         // The binary is the allowlisted leaf that may carry the `qfs-driver-*` edge; qfs-cmd stays off it.
         "qfs-driver-directory",
-        // The markdown collection-path driver (mission markdown-trees-are-queryable-as-documents-
-        // and-links-tables): the binary is the composition root that loads the declared
-        // `/markdown/<name>` roots from `path_binding` and hosts the std::fs tree walk
-        // (src/markdown.rs) behind the qfs-exec read facet. qfs-driver-markdown is READ-ONLY: it
-        // carries a NoopApplier and NO qfs-runtime dep, so it is NOT a runtime consumer (it never
-        // appears in `runtime_consumers_allowed`) — the same lightest driver shape as
-        // qfs-driver-directory. The binary is the allowlisted leaf that may carry the
-        // `qfs-driver-*` edge; qfs-cmd stays off it.
-        "qfs-driver-markdown",
+        // NOTE: the compiled qfs-driver-markdown driver retired on the §13 twin-and-retire ratchet
+        // (mission a-file-collection-is-a-declared-set-over-any-blob-source) — a declared markdown
+        // tree is now an ordinary registered collection view reached by path through the
+        // `/collections/<view>` mount (src/collection_mount.rs, over the codec-layer interpretation),
+        // so the binary carries NO qfs-driver-markdown edge and it is off this allowlist.
         // t39 CO-t39-1: the binary links the embedded agent skill so `qfs skill` ships SKILL.md in
         // the artifact (the NORMAL dep edge that keeps the `include_str!` consts from being
         // dead-stripped). qfs-skill's own `[dependencies]` is EMPTY — it carries no runtime/driver
@@ -413,6 +409,14 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // not yet socket-wired). It is a pure leaf consumed only by this terminal binary (asserted by
         // `tunnel_is_a_pure_protocol_leaf` below), so the edge adds no runtime/driver coupling.
         "qfs-tunnel",
+        // ticket 20260718203326 (declared /cloudflare/d1 twin, §13 self-hosting ratchet): a
+        // TEST-ONLY dev-dependency. The declared D1 conformance test in `crates/qfs/src/cf.rs`
+        // (`declared_d1_read_over_injected_mock_exchange_does_no_network`) injects a socket-free
+        // `qfs_driver_cf::MockExchange` through the read/apply-facet backend builder to prove the
+        // declared read runs with NO network; scripting the mock names the `qfs_http_core::HttpResponse`
+        // DTO. It rides `[dev-dependencies]` ONLY — it is never linked into the shipped binary (the
+        // binary reaches the transport through qfs-driver-cf), so the thin-entrypoint invariant holds.
+        "qfs-http-core",
     ];
     let workspace_prefixed: Vec<&String> =
         bin_deps.iter().filter(|d| d.starts_with("qfs")).collect();

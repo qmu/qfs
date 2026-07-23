@@ -98,6 +98,10 @@ impl EffectKind {
                 (ServerNode::Webhooks, ServerWriteOp::Upsert) => "SERVER_WEBHOOKS_UPSERT",
                 (ServerNode::Webhooks, ServerWriteOp::Update) => "SERVER_WEBHOOKS_UPDATE",
                 (ServerNode::Webhooks, ServerWriteOp::Remove) => "SERVER_WEBHOOKS_REMOVE",
+                (ServerNode::Agents, ServerWriteOp::Insert) => "SERVER_AGENTS_INSERT",
+                (ServerNode::Agents, ServerWriteOp::Upsert) => "SERVER_AGENTS_UPSERT",
+                (ServerNode::Agents, ServerWriteOp::Update) => "SERVER_AGENTS_UPDATE",
+                (ServerNode::Agents, ServerWriteOp::Remove) => "SERVER_AGENTS_REMOVE",
             },
         }
     }

@@ -240,6 +240,9 @@ fn normalize_pipe_op(op: &mut PipeOp) {
         PipeOp::Transform(t) => t.span = ZERO,
         // FOLLOW (blueprint §13): zero the stage span for the same byte-stable canonical form.
         PipeOp::Follow(f) => f.span = ZERO,
+        // POST (blueprint §13.1 G1): zero the read-over-POST stage span for the byte-stable
+        // canonical form (the body expression carries no spans of its own).
+        PipeOp::Post(p) => p.span = ZERO,
         // OF (blueprint §5.6): zero the assertion's stage span for the same byte-stable canonical
         // form (the inline column literal carries no spans of its own).
         PipeOp::Of(o) => o.span = ZERO,

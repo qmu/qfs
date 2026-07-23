@@ -1,0 +1,9 @@
+# Packages exempt from the vendor-boundary gate.
+#
+# One package name per line. An exemption is a debt, not a permission: it says
+# a package leaks a third-party import outside vendors/ + entrypoints/ and has
+# not been fixed yet. The gate also fails on a STALE exemption (a listed
+# package that is actually clean), so this file cannot rot silently.
+#
+# Empty by design: `qfs-viewer` passes unexempted from day one, and a
+# greenfield package has no excuse to start in debt.

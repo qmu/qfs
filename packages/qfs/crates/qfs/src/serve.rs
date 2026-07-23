@@ -32,6 +32,30 @@ pub fn run_serve(config: &Path) -> i32 {
     let mut reads = ReadRegistry::new();
     crate::serve_builtins::register_builtins(&mut engine, &mut reads);
 
+    // Mission `a-request-resolves-to-a-principal` (item 8): register the credential-free,
+    // always-available `/sys` read facet on the serve face, so an ENDPOINT `AS /sys/whoami`
+    // resolves over HTTP exactly as it does in one-shot `qfs run` (before this, `AS /sys/whoami`
+    // was refused at registration with `UnroutedPath` and `GET /whoami` 404'd). The describe/plan
+    // facet (`SysDriver`) is mounted unconditionally; the read facet is the real System-DB backend
+    // when one resolves, else the whoami-only `AnonymousSysBackend` so the not-signed-in answer
+    // stays a first-class row even pre-init. `/sys/whoami` is resolved from the REQUEST PRINCIPAL
+    // (never the backend), so it needs no connected account.
+    if let Err(e) = engine
+        .mounts
+        .register(Arc::new(qfs_driver_sys::SysDriver::new()))
+    {
+        tracing::warn!(target: "qfs::serve", error = %e, "could not register the /sys mount");
+    }
+    let sys_backend: Arc<dyn qfs_driver_sys::SysBackend> =
+        match crate::sys::SystemDbBackend::open_default() {
+            Some(backend) => Arc::new(backend),
+            None => Arc::new(crate::sys::AnonymousSysBackend::new()),
+        };
+    reads.register(
+        qfs_core::DriverId::new("sys"),
+        Arc::new(crate::sys::SysReadDriver::new(sys_backend)),
+    );
+
     // Claude sessions (mission claude-code-sessions-…, live-app gate): the `/claude` facade is a
     // LOCAL, credential-free surface like `/status`, so serve mounts its pure introspective face
     // unconditionally and wires the live read facet only when the operator opted in
@@ -62,6 +86,22 @@ pub fn run_serve(config: &Path) -> i32 {
     let (reconf_handle, reconf_rx) = qfs_http::reconfigure_channel(Arc::clone(&server_state));
     crate::server_face::register_server_face(&mut engine, &mut reads, &server_state);
 
+    // The `/collections/<view>` read-by-path surface (mission
+    // `a-file-collection-is-a-declared-set-over-any-blob-source`): a registered collection view
+    // (`CREATE VIEW <name> AS /local/... |> decode md.<relation>`, a `/server/views` row) is
+    // reachable by path — a live SELECT + DESCRIBE reach the declared `documents`/`links` set the
+    // way the compiled `/markdown` mount did, applying the root-relative strip (Ruling 3). Wired over
+    // the LIVE ServerState (resolved lazily per request, so a view registered by boot replay/reconcile
+    // is reachable with no restart) and the daemon's `/local` working tree.
+    reads = crate::collection_mount::register_collection_mounts(
+        &mut engine,
+        reads,
+        Arc::new(crate::collection_mount::ViewSource::Live(Arc::clone(
+            &server_state,
+        ))),
+        qfs_driver_local::Sandbox::new(crate::collection_mount::serve_local_root()),
+    );
+
     let engine = Arc::new(engine);
     let reads = Arc::new(reads);
 
@@ -91,19 +131,27 @@ pub fn run_serve(config: &Path) -> i32 {
         }
     };
 
-    // t46: open the System-DB session store so the local web/dashboard face CAN issue + validate
-    // sessions (the composition root injecting the store, mirroring how the cron/watchtower bindings
-    // are wired). Best-effort + INERT this milestone: NO endpoint is gated on a session yet
-    // (authorization is M2; refusing unauthenticated requests is t50/t51), so we only prove the store
-    // is ready — the same "wire the System DB without routing a command through it" posture t42 took.
-    match crate::session::open_session_store() {
-        Ok(_store) => {
-            tracing::debug!(target: "qfs::serve", "t46 session store ready (authentication state only; no endpoint gated on it yet)");
-        }
-        Err(e) => {
-            tracing::debug!(target: "qfs::serve", error = %e, "t46 session store unavailable (continuing without sessions)");
-        }
-    }
+    // Mission `a-request-resolves-to-a-principal` (item 8): resolve the request principal from the
+    // `qfs_session` cookie on the serve face. The binary OWNS the System-DB session store, so it
+    // builds the resolver closure here and injects it into the HTTP binding (the SAME closure-seam
+    // the watchtower `Fallback` uses) — `qfs-http` gains no session dependency. Fail closed: when no
+    // session store opens, no resolver is wired and every request stays anonymous; a cookie that
+    // resolves to no LIVE session (absent/malformed/unknown/expired) also stays anonymous. This is
+    // the consumption side of the OAuth mint face that already issues the cookie.
+    let principal_resolver: Option<qfs_http::PrincipalResolver> =
+        match crate::session::open_session_store() {
+            Ok(store) => {
+                let store: Arc<dyn qfs_session::SessionStore> = Arc::new(store);
+                tracing::debug!(target: "qfs::serve", "session store ready; serve resolves the qfs_session cookie to a principal");
+                Some(Arc::new(move |req: &qfs_http::HttpRequest| {
+                    resolve_principal_from_cookie(req, store.as_ref())
+                }))
+            }
+            Err(e) => {
+                tracing::debug!(target: "qfs::serve", error = %e, "session store unavailable; serve resolves every request anonymous");
+                None
+            }
+        };
 
     // The serve composition is async (listener + supervised ctrl_c wait). Build the runtime at
     // this leaf boundary so tokio dead-ends in the binary.
@@ -272,6 +320,7 @@ pub fn run_serve(config: &Path) -> i32 {
             SERVE_MAX_ROWS,
             bindings,
             Some(combined_fallback),
+            principal_resolver,
             qfs_http::Runtime::with_shared(Arc::clone(&server_state), reconf_rx),
         )
         .await;
@@ -334,9 +383,214 @@ fn attach_daemon_host(config: &Path) -> Result<crate::host::TokioHost, String> {
     Ok(host)
 }
 
+/// Resolve the acting principal from a request's `qfs_session` cookie via the injected session
+/// store (mission item 8, the consumption side of the OAuth mint face). Reads the `Cookie` header,
+/// looks the session up ([`qfs_session::authenticate`] — which hashes the token before the lookup),
+/// and returns the bound user as a [`qfs_core::RequestContext`]. An absent/malformed/unknown/expired
+/// session — and any store read error — resolves to the anonymous actor (fail closed): a cookie
+/// that cannot be VERIFIED grants nothing, and "not signed in" stays a first-class answer.
+fn resolve_principal_from_cookie(
+    req: &qfs_http::HttpRequest,
+    store: &dyn qfs_session::SessionStore,
+) -> qfs_core::RequestContext {
+    let cookie = req.headers.get("cookie").map(String::as_str);
+    match qfs_session::authenticate(cookie, store) {
+        Ok(Some(user_id)) => qfs_core::RequestContext::for_user(user_id.to_string()),
+        _ => qfs_core::RequestContext::anonymous(),
+    }
+}
+
 /// Resolve the HTTP bind address: `QFS_HTTP_ADDR` if set, else the loopback default.
 fn resolve_bind_addr() -> Result<std::net::SocketAddr, String> {
     let raw =
         std::env::var("QFS_HTTP_ADDR").unwrap_or_else(|_| qfs_http::DEFAULT_BIND_ADDR.to_string());
     raw.parse().map_err(|e| format!("{raw}: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Hermetic proof of mission `a-request-resolves-to-a-principal` item 8 (no TCP, no network, no
+    //! credentials): the serve face registers the `/sys/whoami` facet and the request principal
+    //! resolves from the `qfs_session` cookie. Mirrors the un-shipped pieces the in-container live
+    //! round (ticket 20260719101204) could not prove: `AS /sys/whoami` was refused at registration
+    //! with `UnroutedPath` and the handler ignored the cookie.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use qfs_session::{SessionStore, UserId};
+    use qfs_store::{MemorySource, SqliteSessionStore, SystemDb};
+
+    /// The serve-side engine + read registry with the credential-free `/sys` facet wired exactly as
+    /// [`run_serve`] wires it (describe/plan `SysDriver` mount + the whoami-only `AnonymousSysBackend`
+    /// read facet — the always-available, no-System-DB path). Codecs are registered so the handler
+    /// can encode the JSON envelope.
+    fn serve_engine_and_reads() -> (Arc<Engine>, Arc<ReadRegistry>) {
+        let mut engine = Engine::new();
+        engine.codecs = CodecRegistry::with_builtins();
+        let mut reads = ReadRegistry::new();
+        crate::serve_builtins::register_builtins(&mut engine, &mut reads);
+        engine
+            .mounts
+            .register(Arc::new(qfs_driver_sys::SysDriver::new()))
+            .unwrap();
+        reads.register(
+            qfs_core::DriverId::new("sys"),
+            Arc::new(crate::sys::SysReadDriver::new(Arc::new(
+                crate::sys::AnonymousSysBackend::new(),
+            ))),
+        );
+        (Arc::new(engine), Arc::new(reads))
+    }
+
+    /// The `GET /whoami AS /sys/whoami` endpoint, stored as the canonical `StatementSpec` exactly as
+    /// the DDL desugar does.
+    fn whoami_endpoint() -> qfs_http::EndpointDef {
+        let stmt = qfs_exec::parse("/sys/whoami").expect("/sys/whoami parses");
+        let spec = qfs_core::StatementSpec::from_statement(stmt);
+        qfs_http::EndpointDef {
+            name: "whoami".to_string(),
+            method: "GET".to_string(),
+            route: "/whoami".to_string(),
+            query: qfs_http::StatementSource::new(spec.canonical()),
+            policy: None,
+        }
+    }
+
+    /// Dispatch a `GET /whoami` through the SHIPPED serve pipeline (compile → router → handler),
+    /// with the given injected resolver and `Cookie` header. Returns the encoded response.
+    fn dispatch_whoami(
+        engine: &Arc<Engine>,
+        reads: &Arc<ReadRegistry>,
+        resolver: Option<qfs_http::PrincipalResolver>,
+        cookie: Option<&str>,
+    ) -> qfs_http::HttpResponse {
+        // The endpoint MUST compile — this is the exact `UnroutedPath` check the live round tripped.
+        let route = qfs_http::compile_endpoint(&whoami_endpoint(), engine, None)
+            .expect("AS /sys/whoami registers over the serve face (no UnroutedPath)");
+        let router = qfs_http::Router::from_routes(vec![route]);
+        let binding = {
+            let b = qfs_http::HttpBinding::new(Arc::clone(engine), Arc::clone(reads), 10_000);
+            match resolver {
+                Some(r) => b.with_principal_resolver(r),
+                None => b,
+            }
+        };
+        let ctx = binding.ctx();
+        let mut req = qfs_http::HttpRequest::new(qfs_http::Method::Get, "/whoami");
+        if let Some(c) = cookie {
+            req = req.with_header("cookie", c);
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            match router.match_request(&req.method, &req.path) {
+                Some((route, path_params)) => {
+                    qfs_http::dispatch(route, path_params, &req, &ctx).await
+                }
+                None => panic!("/whoami must match the compiled route"),
+            }
+        })
+    }
+
+    /// A session store over a fresh in-memory System DB holding one user (a session FKs to `users`),
+    /// plus the issued `Cookie` header value (`qfs_session=<token>`) for that user.
+    fn store_user_and_cookie() -> (Arc<dyn SessionStore>, UserId, String) {
+        let sys = SystemDb::open(&MemorySource).unwrap();
+        let conn = sys.into_db().into_connection();
+        conn.execute("INSERT INTO users (primary_email) VALUES ('a@b.com')", [])
+            .unwrap();
+        let uid = UserId(conn.last_insert_rowid());
+        let store = SqliteSessionStore::new(conn);
+        let (_session, set_cookie) = crate::session::issue_session(&store, uid, false).unwrap();
+        // The browser echoes the `name=value` pair back on the next request.
+        let cookie = set_cookie.split(';').next().unwrap().to_string();
+        (Arc::new(store), uid, cookie)
+    }
+
+    /// Build the production resolver closure over a store (the same one `run_serve` injects).
+    fn resolver_over(store: Arc<dyn SessionStore>) -> qfs_http::PrincipalResolver {
+        Arc::new(move |req: &qfs_http::HttpRequest| {
+            resolve_principal_from_cookie(req, store.as_ref())
+        })
+    }
+
+    // ----- Quality Gate 1: the /sys facet registers + serves whoami over the serve face -----
+
+    #[test]
+    fn serve_registers_sys_whoami_and_returns_the_not_signed_in_row() {
+        let (engine, reads) = serve_engine_and_reads();
+        // Registration proof: the endpoint compiles (no `UnroutedPath`).
+        assert!(
+            qfs_http::compile_endpoint(&whoami_endpoint(), &engine, None).is_ok(),
+            "AS /sys/whoami must register over the serve face (no UnroutedPath)"
+        );
+        // GET with no resolver → the anonymous first-class row, 200 (not 404).
+        let resp = dispatch_whoami(&engine, &reads, None, None);
+        assert_eq!(resp.status, 200, "GET /whoami is 200, not 404");
+        let body = resp.body_text();
+        assert!(body.contains("\"signed_in\":false"), "body: {body}");
+        assert!(body.contains("\"user\":null"), "body: {body}");
+    }
+
+    // ----- Quality Gate 2: the qfs_session cookie resolves to its principal (fail closed) -----
+
+    #[test]
+    fn valid_session_cookie_resolves_to_its_user() {
+        let (store, uid, cookie) = store_user_and_cookie();
+        let req = qfs_http::HttpRequest::new(qfs_http::Method::Get, "/whoami")
+            .with_header("cookie", cookie);
+        let ctx = resolve_principal_from_cookie(&req, store.as_ref());
+        assert_eq!(ctx.user(), Some(uid.to_string().as_str()));
+    }
+
+    #[test]
+    fn absent_or_invalid_session_cookie_resolves_anonymous() {
+        let (store, _uid, _cookie) = store_user_and_cookie();
+        // No cookie at all.
+        let none = qfs_http::HttpRequest::new(qfs_http::Method::Get, "/whoami");
+        assert_eq!(
+            resolve_principal_from_cookie(&none, store.as_ref()).user(),
+            None
+        );
+        // A well-formed cookie whose token was never issued (unknown session).
+        let unknown = qfs_http::HttpRequest::new(qfs_http::Method::Get, "/whoami")
+            .with_header("cookie", "qfs_session=never-issued-token");
+        assert_eq!(
+            resolve_principal_from_cookie(&unknown, store.as_ref()).user(),
+            None
+        );
+        // A malformed cookie header (no qfs_session value).
+        let malformed = qfs_http::HttpRequest::new(qfs_http::Method::Get, "/whoami")
+            .with_header("cookie", "theme=dark");
+        assert_eq!(
+            resolve_principal_from_cookie(&malformed, store.as_ref()).user(),
+            None
+        );
+    }
+
+    #[test]
+    fn whoami_over_serve_reflects_the_session_resolved_principal_end_to_end() {
+        let (engine, reads) = serve_engine_and_reads();
+        let (store, uid, cookie) = store_user_and_cookie();
+        let resolver = resolver_over(Arc::clone(&store));
+
+        // A request CARRYING the valid cookie → signed_in=true, user=<uid>.
+        let signed_in =
+            dispatch_whoami(&engine, &reads, Some(Arc::clone(&resolver)), Some(&cookie));
+        assert_eq!(signed_in.status, 200);
+        let body = signed_in.body_text();
+        assert!(body.contains("\"signed_in\":true"), "body: {body}");
+        assert!(
+            body.contains(&format!("\"user\":\"{uid}\"")),
+            "body: {body} (expected user {uid})"
+        );
+
+        // The SAME wired serve, no cookie → anonymous first-class row (fail closed).
+        let anon = dispatch_whoami(&engine, &reads, Some(resolver), None);
+        let body = anon.body_text();
+        assert!(body.contains("\"signed_in\":false"), "body: {body}");
+        assert!(body.contains("\"user\":null"), "body: {body}");
+    }
 }

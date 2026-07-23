@@ -70,6 +70,15 @@ pub enum SysNode {
     /// SELECTORS + METADATA only (provider/account/subject/scope/created_at) — there is structurally
     /// NO token column; the credential itself is sealed out-of-band in the vault, never here.
     Accounts,
+    /// `/sys/whoami` — the request's resolved principal, surfaced as DATA (the M2 "who am I" seam).
+    /// Unlike every other node, its row is resolved from the **request context** threaded to the
+    /// scan seam (`RequestContext`), NOT from the System DB: `signed_in` (a bool) + `user` (the
+    /// acting user id, NULL when anonymous). The not-signed-in answer is first-class — an explicit
+    /// row, never an error and never a silent fallback to a sole user. SELECT-only, and
+    /// credential-free by construction (there is structurally no token/session column — the
+    /// `/sys/connections` redaction contract): a consumer reads the principal as data through the
+    /// one engine, never a bespoke side-channel API.
+    Whoami,
 }
 
 impl SysNode {
@@ -88,6 +97,7 @@ impl SysNode {
             "billing" => Some(Self::Billing),
             "drivers" => Some(Self::Drivers),
             "accounts" => Some(Self::Accounts),
+            "whoami" => Some(Self::Whoami),
             _ => None,
         }
     }
@@ -107,6 +117,7 @@ impl SysNode {
             Self::Billing => "billing",
             Self::Drivers => "drivers",
             Self::Accounts => "accounts",
+            Self::Whoami => "whoami",
         }
     }
 
@@ -261,7 +272,18 @@ pub fn sys_node_schema(node: SysNode) -> Schema {
             col("subject", ColumnType::Text, true),
             col("scope", ColumnType::Text, true),
             col("app", ColumnType::Text, true),
+            // `secret_ref` is a REFERENCE (`env:`/`vault:`) a self-contained `CREATE ACCOUNT …
+            // SECRET '<ref>'` declared (20260718203325) — a selector projectable on read, resolved
+            // lazily at bind time, NEVER a token.
+            col("secret_ref", ColumnType::Text, true),
             col("created_at", ColumnType::Text, true),
+        ]),
+        // The request principal (the M2 "who am I" seam), resolved from the request context, not
+        // the DB. `signed_in` is the first-class negative; `user` is the acting id (NULL when
+        // anonymous). There is structurally NO token/session column — the redaction contract.
+        SysNode::Whoami => Schema::new(vec![
+            col("signed_in", ColumnType::Bool, false),
+            col("user", ColumnType::Text, true),
         ]),
     }
 }

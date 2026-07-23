@@ -223,7 +223,11 @@ pub fn compile_endpoint(
             detail: e.message,
         }
     })?;
-    assert_read_only(&plan, policy).map_err(CompileError::Policy)?;
+    // Registration-time gate: there is no request principal at compile time, so evaluate under the
+    // anonymous actor (the strictest — a write a rule grants only `FOR <someone>` must not register
+    // as an always-safe route). Request-time re-asserts under the resolved actor (handler.rs).
+    assert_read_only(&plan, policy, &qfs_server::DecisionContext::anonymous())
+        .map_err(CompileError::Policy)?;
 
     // Param-shadow gate (the t32 security fix): a route param whose name collides with a column
     // the query reads would make the typed-AST rewrite replace the WRONG `Expr::Col` node and

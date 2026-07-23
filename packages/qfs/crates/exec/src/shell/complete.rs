@@ -223,7 +223,13 @@ fn bounded_read(
     let stmt = stmt.clone();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let res = block_on_read(&stmt, &mounts, &reads).ok();
+        let res = block_on_read(
+            &stmt,
+            &mounts,
+            &reads,
+            &qfs_core::RequestContext::anonymous(),
+        )
+        .ok();
         // The receiver may already be gone (timeout); ignore the send error.
         let _ = tx.send(res);
     });
@@ -256,7 +262,7 @@ mod tests {
 
     use qfs_core::{
         Archetype, Capabilities, CfsError, Column, ColumnType, Driver, DriverId, NodeDesc, Path,
-        PushdownProfile, Row, RowBatch, Schema, Value,
+        PushdownProfile, RequestContext, Row, RowBatch, Schema, Value,
     };
     use qfs_pushdown::ScanNode;
 
@@ -289,7 +295,11 @@ mod tests {
     }
     #[async_trait::async_trait]
     impl crate::read::ReadDriver for FakeNs {
-        async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &RequestContext,
+        ) -> Result<RowBatch, CfsError> {
             let rows = self
                 .names
                 .iter()

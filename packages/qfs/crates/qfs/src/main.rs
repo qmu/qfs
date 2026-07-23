@@ -12,8 +12,8 @@
 //! [`qfs_cmd::ShellLauncher`]. The shell LOGIC itself lives in `qfs-exec`; this only wires it.
 
 use qfs::{
-    account, commit, connection, describe, dump, hosts, identity, init, invite, job, provision,
-    restore, serve, shell, store, vault, version, view,
+    account, agent, commit, connection, describe, dump, hosts, identity, init, invite, job,
+    provision, restore, serve, shell, store, vault, version, view,
 };
 
 fn main() {
@@ -89,6 +89,11 @@ fn main() {
         // Cloudflare Cron Triggers invoke. The binary owns the boot→rehydrate→build→policy-gate→
         // IrreversibleGuard→real-apply path (qfs-host/qfs-exec/qfs-runtime); qfs-cmd stays off them.
         &job::run_job_request,
+        // blueprint §19 axis C `qfs agent run`: invoke an AGENT's saved query function once, gated
+        // under the AGENT's own subject + policy. The binary owns the
+        // boot→rehydrate→build→agent-subject-gate→apply path (qfs-host/qfs-exec/qfs-runtime); qfs-cmd
+        // stays off them (the JobLauncher pattern).
+        &agent::run_agent_request,
         // `qfs view refresh`: the explicit materialized-view refresh entrypoint. The binary owns
         // the booted server runtime and the read registry that executes the saved query; qfs-cmd
         // carries only selectors/output flags.

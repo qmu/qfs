@@ -1,0 +1,29 @@
+# The development workload — qfs-viewer serving this repository's own
+# corpus on host port 4100 (the mission's gate port).
+#
+#   scripts/serve-development.sh
+#
+# then open http://localhost:4100/api/health
+services:
+  qfs-viewer:
+    build:
+      # Build context is the repo root so the Dockerfile can reach the package
+      # AND the corpus it scans.
+      context: ../..
+      dockerfile: workloads/development/Dockerfile
+    ports:
+      - "4100:4100"
+    volumes:
+      # Mount the repo so the container serves the LIVE tree: edit any markdown
+      # on the host and the container's index hot-reloads within the debounce
+      # window. A container serving a frozen copy would demonstrate the one
+      # thing this product is not.
+      - ../..:/app
+      # Isolate the container's node_modules into an anonymous volume: its
+      # linux/arm binaries must not land on the host tree (and must not be
+      # hidden by the host's, which are built for the host arch).
+      #
+      # One entry, not a graph: this is a standalone repo consuming the plgg
+      # family from the npm registry, so there is no `file:` link chain to
+      # mirror the way the plgg monorepo's workloads must.
+      - /app/packages/qfs-viewer/node_modules

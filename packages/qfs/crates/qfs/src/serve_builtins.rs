@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use qfs_core::{
     Archetype, Capabilities, CfsError, Column, ColumnType, Driver, Engine, NodeDesc, Path,
-    PushdownProfile, Row, RowBatch, Schema, Value,
+    PushdownProfile, RequestContext, Row, RowBatch, Schema, Value,
 };
 use qfs_exec::{ReadDriver, ReadRegistry};
 use qfs_pushdown::ScanNode;
@@ -93,7 +93,7 @@ impl Driver for StatusDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for StatusDriver {
-    async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, _scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         Ok(RowBatch::new(status_schema(), vec![status_row()]))
     }
 }

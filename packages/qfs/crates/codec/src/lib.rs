@@ -35,6 +35,15 @@ pub use codecs::{
     builtin_codecs, CsvCodec, JsonCodec, JsonlCodec, MarkdownFrontmatterCodec, TomlCodec, YamlCodec,
 };
 
+// The markdown tree interpretation (blueprint §13b): the `documents`/`links` named relations of
+// the `md` codec, rehomed from `qfs-driver-markdown` into the codec layer. Public so the codec
+// application can reach the relations and the row-equivalence test can pin them to the driver.
+pub use codecs::{
+    decode_markdown_relation, documents_schema as markdown_documents_schema,
+    links_schema as markdown_links_schema, parse_document as parse_markdown_document,
+    relation_schema as markdown_relation_schema, MarkdownRelation, ParsedDocument, ParsedLink,
+};
+
 // The runtime nested-data operators (blueprint §4): value-level `EXPAND` and `a.b.c` path
 // access over the struct/array model. The type-level twins live in `qfs_types::Schema`.
 pub use nested::{access, access_row, expand};
@@ -60,6 +69,44 @@ pub trait Codec: Send + Sync {
     /// # Errors
     /// Returns [`CfsError`] if the batch cannot be encoded in this format.
     fn encode(&self, rows: &RowBatch) -> Result<Vec<u8>, CfsError>;
+
+    /// The codec's **named relations** (blueprint §13b): a codec may interpret one blob as more
+    /// than one relation of the same format — `decode md.documents`, `decode md.links` — each
+    /// reached by a relation-qualified format token. The default is a single unnamed relation
+    /// (`&[]`): a `decode <fmt>` with no relation qualifier yields [`Codec::decode`], and a
+    /// relation qualifier over such a codec is a usage error. A multi-relation codec (the `md`
+    /// codec) overrides this to declare its relations, primary first.
+    fn relations(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Decode a blob into the rows of one **named relation** (blueprint §13b), given the source's
+    /// root-relative `source_path` provenance (some relations — a link graph's `target_doc` —
+    /// normalize against it). `relation = None` selects the codec's primary/unnamed relation
+    /// ([`Codec::decode`]); `Some(name)` selects a declared relation. The default handles the
+    /// single-relation case; a multi-relation codec overrides it.
+    ///
+    /// # Errors
+    /// [`CfsError`] if the bytes are invalid, or if a relation is named on a single-relation
+    /// codec / is not one this codec declares.
+    fn decode_relation(
+        &self,
+        relation: Option<&str>,
+        bytes: &[u8],
+        source_path: Option<&str>,
+    ) -> Result<RowBatch, CfsError> {
+        let _ = source_path;
+        match relation {
+            None => self.decode(bytes),
+            Some(name) => Err(CfsError::Decode {
+                fmt: "codec",
+                detail: format!(
+                    "the `{}` codec has no relation `{name}` (it yields a single relation)",
+                    self.fmt()
+                ),
+            }),
+        }
+    }
 }
 
 #[cfg(test)]

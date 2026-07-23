@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use qfs_core::ddl::transform::TransformDef;
-use qfs_core::{CfsError, RowBatch};
+use qfs_core::{CfsError, RequestContext, RowBatch};
 use qfs_driver_transform::{
     node_for_path, transform_node_schema, ModelProvider, ModelRequest, TransformBackend,
     TransformError, TransformNode, TRANSFORM_MOUNT,
@@ -313,7 +313,7 @@ impl TransformReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for TransformReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         node_for_path(&scan.path).ok_or_else(|| CfsError::InvalidPath {
             path: scan.path.clone(),
             reason: "not a /transform path",

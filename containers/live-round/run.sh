@@ -1,93 +1,58 @@
 #!/bin/sh -eu
-# Build and enter the Claude-session live-round container (ticket 20260719231005 and the
-# live-fire legs of 20260717010500 / 20260717010600, plus 20260719105527's real tmux test).
+# Build and enter the who-am-I live-round container (ticket 20260719101204).
 #
 # What this does:
-#   1. Builds the rust + Claude-CLI + tmux image (Containerfile in this dir).
-#   2. Generates a MINIMAL credential (only claudeAiOauth — see extract-min-cred.sh) so the
-#      CLI can authenticate WITHOUT the host's connected-service (mcpOAuth) tokens.
-#   3. Runs the box with: this worktree :ro at /src, an auto-removed /work volume, a FRESH
-#      $HOME, and the minimal credential mounted read-only. Nothing host-sensitive is mounted.
+#   1. Builds the rust image (Containerfile in this dir).
+#   2. Runs it with THIS worktree bind-mounted READ-ONLY at /src and an isolated,
+#      auto-removed writable volume at /work (cargo target + TMPDIR live here — never on
+#      the host tree, never on host /tmp).
+#   3. Either drops you into a shell, or runs a round script from this dir if named.
 #
-# ABSOLUTE safety invariants (do not weaken — these prevent crashing host sessions):
-#   - host ~/.claude is NEVER mounted; only the generated minimal credential file is.
-#   - host tmux socket / TMUX env is NEVER passed in; the box has its own TMUX_TMPDIR + a
-#     dedicated -L socket, so a stray kill-server can only ever hit the container's own server.
-#   - the worktree is :ro; no host qfs socket, no host cloud state is present.
-#   - every `claude` spawn / steer / kill and every real tmux teardown happens ONLY in here.
+# Safety invariants (do not weaken):
+#   - The worktree is mounted :ro — the round cannot mutate the branch. Local
+#     identity-store / session writes happen under /work and die with the container.
+#   - NO credentials, NO host ~/.claude, NO host sockets are mounted. This round needs none.
+#   - --network is the engine default: cargo fetches crates, but no cloud credential
+#     exists in this box, so network access reaches no private data.
 #
 # Usage:
-#   sh containers/live-round/run.sh             # interactive shell in the box
-#   sh containers/live-round/run.sh round.sh    # run ./round.sh (a leg script) in the box
+#   sh containers/live-round/run.sh              # interactive shell in the box
+#   sh containers/live-round/run.sh whoami.sh    # run ./whoami.sh (a round script) in the box
 #
-# Fallback if the CLI failed to install at build time: start the box, then from the HOST
-#   podman cp "$(command -v claude)" <container>:/home/agent/.local/bin/claude
-# (host is aarch64; the base image is the matching arch, so the native binary runs.)
+# Inside the box, the ticket's steps are:
+#   cp -r /src/. /work/build && cd /work/build
+#   cargo build --release -p qfs
+#   ./target/release/qfs run -e '/sys/whoami'            # anonymous -> signed_in=false
+#   # then mint a session via the local OAuth sign-in face and re-issue with the cookie
+#   #  -> signed_in=true. Capture every command + verbatim stdout/stderr + raw exit code.
 
 set -eu
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 WORKTREE=$(CDPATH= cd -- "$HERE/../.." && pwd)
-IMAGE="qfs-claude-liveround"
+IMAGE="qfs-whoami-liveround"
 ENGINE="${CONTAINER_ENGINE:-podman}"
-
-# The credential is generated into a private DIRECTORY (not a bare file). We mount that dir at
-# /cred:ro and COPY it into a container-owned ~/.claude at start-up — a direct bind-mount at
-# ~/.claude/.credentials.json makes ~/.claude root-owned under --userns=keep-id, and the real
-# `claude` then fails `EACCES` trying to mkdir ~/.claude/jobs (proven 2026-07-22). The host
-# ~/.claude DIRECTORY is still never mounted; only the extracted claudeAiOauth crosses.
-echo ">> generating minimal credential (claudeAiOauth only; mcpOAuth excluded)"
-CREDDIR=$(mktemp -d)
-sh "$HERE/extract-min-cred.sh" "$CREDDIR/.credentials.json" >/dev/null
-trap 'rm -rf "$CREDDIR"' EXIT INT TERM
-
-# The Containerfile's `curl claude.com/install.sh` currently 404s, so the CLI is usually NOT baked
-# into the image. Mount the host's self-contained `claude` binary read-only instead (proven route:
-# it is a static aarch64 ELF needing only glibc, which the base image has; auth from the minimal
-# credential succeeds). Host is aarch64 and the base image matches, so the native binary runs.
-HOSTCLAUDE=$(readlink -f "$(command -v claude 2>/dev/null || true)" 2>/dev/null || true)
-CLAUDE_MOUNT=""
-if [ -n "$HOSTCLAUDE" ] && [ -x "$HOSTCLAUDE" ]; then
-  echo ">> mounting host claude binary read-only: $HOSTCLAUDE -> /home/agent/.local/bin/claude"
-  CLAUDE_MOUNT="-v $HOSTCLAUDE:/home/agent/.local/bin/claude:ro"
-else
-  echo ">> WARNING: no host claude binary found; relying on the image's own (install.sh may have 404'd)"
-fi
 
 echo ">> building $IMAGE"
 "$ENGINE" build -t "$IMAGE" -f "$HERE/Containerfile" "$HERE"
 
-# Common, safety-checked mount set. The env vars point qfs at the in-container claude + the
-# writable ~/.claude the bootstrap sets up below.
-set_args() {
-  MOUNTS="--rm \
-    --userns=keep-id \
-    -v $WORKTREE:/src:ro \
-    -v $CREDDIR:/cred:ro \
-    $CLAUDE_MOUNT \
-    -e QFS_CLAUDE_BINARY=/home/agent/.local/bin/claude \
-    -e QFS_CLAUDE_SESSIONS=/home/agent/.claude \
-    --mount type=volume,dst=/work \
-    -w /work"
-}
-set_args
-
-# Bootstrap run inside the box before any leg/shell: materialise a WRITABLE ~/.claude from the
-# read-only /cred mount so the real `claude` can create its own jobs/sessions dirs.
-BOOT='mkdir -p "$HOME/.claude" && cp /cred/.credentials.json "$HOME/.claude/.credentials.json" && chmod 600 "$HOME/.claude/.credentials.json"'
-
 ROUND="${1:-}"
 if [ -n "$ROUND" ] && [ -f "$HERE/$ROUND" ]; then
-  echo ">> running leg script $ROUND in the box"
-  # shellcheck disable=SC2086
-  exec "$ENGINE" run -i $MOUNTS -v "$HERE":/round:ro --entrypoint /bin/sh "$IMAGE" \
-    -c "$BOOT && exec sh \"/round/$ROUND\""
+  echo ">> running round script $ROUND in the box"
+  exec "$ENGINE" run --rm -i \
+    --userns=keep-id \
+    -v "$WORKTREE":/src:ro \
+    -v "$HERE":/round:ro \
+    --tmpfs /work:exec,size=13g \
+    --memory=16g --memory-swap=16g \
+    -w /work \
+    "$IMAGE" "/round/$ROUND"
 fi
 
-echo ">> entering container: source /src (ro), scratch /work, HOME /home/agent (fresh)"
-echo "   legs (per the ticket): build release binary; capture the teams-inbox message schema;"
-echo "   wire+test steering; steering live fire on a container-local session; launch live fire"
-echo "   (real 'claude --bg'); composed launch->steer proof. Any leg that cannot run in-container"
-echo "   is recorded 'blocked' with the missing piece — never waits, never escalates overnight."
-# shellcheck disable=SC2086
-exec "$ENGINE" run -it $MOUNTS --entrypoint /bin/sh "$IMAGE" -c "$BOOT && exec sh -i"
+echo ">> entering container: source at /src (ro), scratch at /work"
+exec "$ENGINE" run --rm -it \
+  --userns=keep-id \
+  -v "$WORKTREE":/src:ro \
+  --mount type=volume,dst=/work \
+  -w /work \
+  "$IMAGE"

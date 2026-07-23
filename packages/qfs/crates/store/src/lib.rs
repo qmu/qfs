@@ -457,6 +457,14 @@ pub const SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "system_config_registry",
         sql: include_str!("schema/system_config_registry.sql"),
     },
+    // 20260718203325: CREATE ACCOUNT … SECRET '<ref>'. A NEW forward-only ALTER adds the
+    // `secret_ref` reference column to `connection_consent` — #17 stays frozen. The reference is
+    // resolved lazily at bind time (never a secret value here).
+    Migration {
+        version: 18,
+        name: "system_config_registry_secret_ref",
+        sql: include_str!("schema/system_config_registry_secret_ref.sql"),
+    },
 ];
 
 /// The Project DB's ordered migration set (forward-only; append, never edit a shipped entry).
@@ -591,6 +599,15 @@ pub const PROJECT_MIGRATIONS: &[Migration] = &[
         version: 12,
         name: "project_google_app_labels",
         sql: include_str!("schema/project_google_app_labels.sql"),
+    },
+    // 20260718203325: CREATE ACCOUNT … SECRET '<ref>'. Mirror the System-DB migration #18 on the
+    // project `connection_consent` ledger so the shared consent writer can record the bind-time
+    // `secret_ref` against either DB. A NEW forward-only ALTER adds the nullable selector column —
+    // migrations #1..#12 stay frozen; the reference resolves lazily at bind time, never a value.
+    Migration {
+        version: 13,
+        name: "project_consent_secret_ref",
+        sql: include_str!("schema/project_consent_secret_ref.sql"),
     },
 ];
 
@@ -966,7 +983,12 @@ mod tests {
         // 20260716143641 migration #17: the re-homed declarative config registry.
         assert!(table_exists(sys.db(), "path_binding"));
         assert!(table_exists(sys.db(), "connection_consent"));
-        assert_eq!(applied_migrations(sys.db()).unwrap().len(), 17);
+        // 20260718203325 migration #18: the consent ledger's bind-time `secret_ref` reference.
+        assert!(column_exists(sys.db(), "connection_consent", "secret_ref"));
+        assert_eq!(
+            applied_migrations(sys.db()).unwrap().len(),
+            SYSTEM_MIGRATIONS.len()
+        );
     }
 
     #[test]
@@ -1003,8 +1025,10 @@ mod tests {
         // 20260706175249 migration #12: app labels bind Google account consent and optional mounts.
         assert!(column_exists(proj.db(), "connection_consent", "app"));
         assert!(column_exists(proj.db(), "path_binding", "app"));
-        // All twelve project migrations are recorded (#11 drops `active_account` forward).
-        assert_eq!(applied_migrations(proj.db()).unwrap().len(), 12);
+        // 20260718203325 migration #13: the consent ledger's bind-time `secret_ref` reference.
+        assert!(column_exists(proj.db(), "connection_consent", "secret_ref"));
+        // All thirteen project migrations are recorded (#11 drops `active_account` forward).
+        assert_eq!(applied_migrations(proj.db()).unwrap().len(), 13);
     }
 
     #[test]
@@ -1120,7 +1144,10 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "data persisted across reopen");
-        assert_eq!(applied_migrations(sys2.db()).unwrap().len(), 17);
+        assert_eq!(
+            applied_migrations(sys2.db()).unwrap().len(),
+            SYSTEM_MIGRATIONS.len()
+        );
     }
 
     #[cfg(unix)]
@@ -1245,6 +1272,21 @@ mod tests {
                     || c.contains("nonce")
             }),
             "the DDL event log must not have a first-class secret column, got {cols:?}"
+        );
+    }
+
+    #[test]
+    fn system_config_registry_secret_ref_migration_v18_adds_the_reference_column() {
+        // 20260718203325: migration #18 ALTERs the System-DB `connection_consent` ledger to add the
+        // `secret_ref` reference column, so a self-contained `CREATE ACCOUNT … SECRET '<ref>'`
+        // records WHERE the credential lives — a selector (`env:`/`vault:`), never a secret VALUE.
+        let mut db = Db::open(&MemorySource).unwrap();
+        let applied = migrate(&mut db, SYSTEM_MIGRATIONS).unwrap();
+        assert!(applied.contains(&18), "v18 applied on the first migrate");
+        assert!(migrate(&mut db, SYSTEM_MIGRATIONS).unwrap().is_empty());
+        assert!(
+            column_exists(&db, "connection_consent", "secret_ref"),
+            "the consent ledger gains a `secret_ref` reference column"
         );
     }
 }

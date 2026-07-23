@@ -1,0 +1,6 @@
+{
+  "coverage": {
+    "threshold": 90,
+    "exclude": ["/index.ts", "/testkit/"]
+  }
+}

@@ -16,7 +16,9 @@
 
 use std::sync::{Arc, RwLock};
 
-use qfs_core::{server_node_schema, CfsError, Engine, Row, RowBatch, ServerNode, Value};
+use qfs_core::{
+    server_node_schema, CfsError, Engine, RequestContext, Row, RowBatch, ServerNode, Value,
+};
 use qfs_exec::{ReadDriver, ReadRegistry};
 use qfs_provision::ServerState;
 use qfs_pushdown::ScanNode;
@@ -61,7 +63,7 @@ pub fn register_server_face(
 
 #[async_trait::async_trait]
 impl ReadDriver for ServerReadFacet {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         // The READ-ONLY per-job run history wins over its `/server/jobs` prefix (the same
         // precedence the driver's describe/capabilities apply): project the recorded firings
         // through the canonical `job_runs_schema` column order. An unknown job name is an empty
@@ -71,6 +73,17 @@ impl ReadDriver for ServerReadFacet {
             let rows = snapshot
                 .job_runs
                 .get(job)
+                .map(|runs| runs.iter().map(job_run_row).collect())
+                .unwrap_or_default();
+            return Ok(RowBatch::new(qfs_core::job_runs_schema(), rows));
+        }
+        // blueprint §19 axis D: the per-agent cadence-fire history `/server/agents/<name>/runs` —
+        // the agent's own run-history read-back, sharing the canonical `job_runs_schema`.
+        if let Some(agent) = qfs_http::agent_runs_path_agent(&scan.path) {
+            let snapshot = self.snapshot();
+            let rows = snapshot
+                .agent_runs
+                .get(agent)
                 .map(|runs| runs.iter().map(job_run_row).collect())
                 .unwrap_or_default();
             return Ok(RowBatch::new(qfs_core::job_runs_schema(), rows));
@@ -117,6 +130,9 @@ fn job_run_row(r: &qfs_provision::JobRunRecord) -> Row {
         Value::Text(r.outcome.clone()),
         text_or_null(&r.detail),
         Value::Int(r.affected),
+        // blueprint §19 axis B/D: the firing principal (secret-free identity), Null for a
+        // principal-less ordinary fire.
+        text_or_null(&r.principal),
     ])
 }
 
@@ -194,6 +210,22 @@ fn collection_rows(state: &ServerState, node: ServerNode) -> Vec<Row> {
                     Value::Text(d.name.clone()),
                     text_or_null(&d.route),
                     text_or_null(&d.secret),
+                ])
+            })
+            .collect(),
+        ServerNode::Agents => state
+            .agents
+            .values()
+            // blueprint §19: the agent read-back is credential-free — name + cadence (axis D) +
+            // query-function plan (axis C) + policy handle + last_run, in the
+            // `server_node_schema(Agents)` column order.
+            .map(|d| {
+                Row::new(vec![
+                    Value::Text(d.name.clone()),
+                    text_or_null(&d.every),
+                    text_or_null(d.plan.as_str()),
+                    opt_text(d.policy.as_ref()),
+                    d.last_run.map_or(Value::Null, Value::Timestamp),
                 ])
             })
             .collect(),

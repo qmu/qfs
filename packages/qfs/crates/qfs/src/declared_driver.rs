@@ -75,9 +75,17 @@ pub(crate) struct DeclaredMount {
     pub path: String,
     pub driver: DeclaredDriver,
     pub secret_ref: Option<String>,
+    /// The non-secret `AT '<locator>'` value on the binding (for a declared Cloudflare mount this is
+    /// the Cloudflare account id the D1 twin's [`HttpApiBackend`] routes to). `None` when the
+    /// connect carried no `AT` clause.
+    pub at_locator: Option<String>,
     /// The connection's bound account label (`CONNECT … ACCOUNT '<label>'`) — the account an
     /// `AUTH ACCOUNT '<provider>'` driver resolves its live bearer from (`None` → `default`).
     pub account: Option<String>,
+    /// The OAuth app label bound to this mount (`CONNECT … `, `path_binding.app`) — which provider
+    /// app an OAuth `AUTH ACCOUNT` driver exchanges its stored refresh token through. `None` falls
+    /// back to the consent row's app (`db_get_consent_app`); a static-bearer provider ignores it.
+    pub app: Option<String>,
 }
 
 /// Load every declared driver from the System DB `sys_drivers` table (best-effort, cred-free — a pure
@@ -485,7 +493,9 @@ pub(crate) fn declared_mounts() -> Vec<DeclaredMount> {
                 path: b.path,
                 driver: d,
                 secret_ref: b.secret_ref,
+                at_locator: b.at_locator,
                 account: b.account,
+                app: b.app,
             })
         })
         .collect()
@@ -704,6 +714,260 @@ pub fn conformance(
     }
 }
 
+// ---------------------------------------------------------------------------
+// §13 declared sql-resources — a sqlite-dialect SQL endpoint over a wire query verb
+// (blueprint §13 self-hosting ratchet, ticket 20260718203326)
+// ---------------------------------------------------------------------------
+
+/// A declared **sql-resource**: a sqlite-dialect SQL endpoint served over a wire query verb, its
+/// relation catalog declared INLINE. Loaded from a `kind='sql'` `/sys/drivers` row (the `CREATE SQL
+/// … TABLES (…)` desugar) — the declared twin of a mount-time D1 introspection, so the D1 relational
+/// surface reads from the committed declaration rather than an `introspect_d1` round-trip. The D1
+/// bridge lifts this onto the driver-cf planner: [`Self::catalog`] yields the
+/// `qfs_driver_sql::Catalog` handed to `D1Database::discovered`, and `query_endpoint` names the
+/// `/http/<driver>/…` wire the SQL runs over. Carries no token (credential-free by construction).
+#[derive(Debug, Clone)]
+pub struct DeclaredSqlResource {
+    /// The mount path template (`/cloudflare/d1/{database}`).
+    pub path: String,
+    /// The SQL dialect — `sqlite` is the only served dialect today (the driver-cf planner dialect).
+    pub dialect: String,
+    /// The wire query endpoint the SQL runs over (`/http/<driver>/…/query`).
+    pub query_endpoint: String,
+    /// The declared relation catalog (tables + their columns).
+    pub tables: Vec<DeclaredSqlTable>,
+}
+
+/// One declared relation in a sql-resource's inline catalog: its name and its columns (the
+/// `CREATE TYPE`/`CREATE TABLE` column shape, `qfs_types::DeclaredColumn`).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DeclaredSqlTable {
+    pub name: String,
+    #[serde(default)]
+    pub columns: Vec<qfs_types::DeclaredColumn>,
+}
+
+/// The `body` JSON shape of a `kind='sql'` row, matching the parser's `sql_resource_body_json`.
+#[derive(serde::Deserialize)]
+struct SqlResourceBody {
+    #[serde(default = "default_sqlite_dialect")]
+    dialect: String,
+    query_endpoint: String,
+    #[serde(default)]
+    tables: Vec<DeclaredSqlTable>,
+}
+
+fn default_sqlite_dialect() -> String {
+    "sqlite".to_string()
+}
+
+impl DeclaredSqlResource {
+    /// The `qfs_driver_sql::Catalog` this resource declares — the lift the D1 bridge hands to
+    /// `D1Database::discovered` in place of a mount-time `introspect_d1`. Column SQL types map
+    /// through the sqlite dialect exactly as the compiled introspection did (`cf.rs::introspect_d1`).
+    #[must_use]
+    pub fn catalog(&self) -> qfs_driver_sql::Catalog {
+        use qfs_driver_sql::{Catalog, ColumnDef, Dialect, RelationKind, TableCatalog};
+        let tables = self
+            .tables
+            .iter()
+            .map(|t| {
+                let columns = t
+                    .columns
+                    .iter()
+                    .map(|c| {
+                        ColumnDef::new(
+                            c.name.clone(),
+                            Dialect::Sqlite.map_type(c.ty.as_str()),
+                            c.nullable,
+                            c.primary_key,
+                            c.primary_key,
+                        )
+                    })
+                    .collect();
+                TableCatalog::new(t.name.clone(), RelationKind::Table, columns)
+            })
+            .collect();
+        Catalog::new(tables)
+    }
+
+    /// §13 host confinement: the wire `query_endpoint` may address ONLY this resource's own
+    /// `/http/<driver>` namespace (the driver is the resource path's leading segment). A foreign
+    /// `/http/<x>` is the anti-exfiltration violation — dropped at load (FAIL CLOSED), mirroring the
+    /// declared-driver body confinement.
+    fn confined(&self) -> bool {
+        match leading_segment(&self.path) {
+            Some(driver) => sql_endpoint_confined(driver, &self.query_endpoint),
+            None => false,
+        }
+    }
+}
+
+/// Whether a sql-resource's wire endpoint is confined to `driver_name`'s own `/http/<driver>`
+/// namespace. A non-`/http` endpoint is not a wire foreign-host escape (vacuously confined); an
+/// `/http` endpoint whose second segment is not the driver is rejected.
+fn sql_endpoint_confined(driver_name: &str, endpoint: &str) -> bool {
+    let mut segs = endpoint.trim_start_matches('/').split('/');
+    match (segs.next(), segs.next()) {
+        (Some("http"), Some(second)) => second == driver_name,
+        (Some("http"), None) => false,
+        _ => true,
+    }
+}
+
+/// Load the declared sql-resources (`kind='sql'` rows) from `sys_drivers` — a pure local read, no
+/// network. Newest declaration per path wins (`ORDER BY id DESC`), matching `types_from_conn`.
+/// Foreign-host resources are dropped at load (§13 confinement), mirroring `load_declared_drivers`;
+/// the drop is reported, never silent.
+#[must_use]
+pub fn load_declared_sql_resources() -> Vec<DeclaredSqlResource> {
+    let Ok(Some(sys)) = crate::store::open_system_db() else {
+        return Vec::new();
+    };
+    let conn = sys.into_db().into_connection();
+    let mut resources = sql_resources_from_conn(&conn).unwrap_or_default();
+    resources.retain(|r| {
+        let ok = r.confined();
+        if !ok {
+            tracing::warn!(
+                resource = %r.path,
+                "declared sql-resource dropped: its query endpoint addresses a foreign host (§13 confinement)"
+            );
+        }
+        ok
+    });
+    resources
+}
+
+fn sql_resources_from_conn(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<DeclaredSqlResource>, rusqlite::Error> {
+    let mut stmt =
+        conn.prepare("SELECT name, body FROM sys_drivers WHERE kind = 'sql' ORDER BY id DESC")?;
+    let rows = stmt
+        .query_map([], |r| {
+            let path: String = r.get(0)?;
+            let body: Option<String> = r.get(1)?;
+            Ok((path, body))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    // First-seen (newest) per path wins; a superseded append-era row is skipped.
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (path, body) in rows {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        if let Some(resource) = parse_sql_resource(&path, body.as_deref().unwrap_or("")) {
+            out.push(resource);
+        }
+    }
+    Ok(out)
+}
+
+/// Rehydrate a `kind='sql'` row's `body` JSON into a [`DeclaredSqlResource`]. A malformed body (or one
+/// missing the required `query_endpoint`) is skipped rather than aborting the registry.
+fn parse_sql_resource(path: &str, body_json: &str) -> Option<DeclaredSqlResource> {
+    let body: SqlResourceBody = serde_json::from_str(body_json).ok()?;
+    Some(DeclaredSqlResource {
+        path: path.to_string(),
+        dialect: body.dialect,
+        query_endpoint: body.query_endpoint,
+        tables: body.tables,
+    })
+}
+
+/// A declared **D1 nested mount**: a connected declared driver paired with the `CREATE SQL …`
+/// resource it serves and the fixed mount prefix (`/cloudflare/d1`) the [`qfs_driver_cf::CfDriver`]
+/// twin registers under. The three declared-mount facets (describe/read/apply) each build the twin
+/// from this.
+pub(crate) struct DeclaredSqlMount {
+    pub mount: DeclaredMount,
+    pub resource: DeclaredSqlResource,
+    /// The fixed mount prefix, e.g. `/cloudflare/d1` (the resource path's segments before the first
+    /// `{…}` wildcard).
+    pub prefix: String,
+}
+
+/// The declared D1 nested mounts: each connected declared driver whose name is the leading segment
+/// of a committed sql-resource path, paired with that resource and its mount prefix. Empty when
+/// nothing is connected or no sql-resource is declared (fail-closed, like every mount). A pure local
+/// read (the two loaders it composes touch only `/sys/drivers`) — no network.
+pub(crate) fn declared_sql_mounts() -> Vec<DeclaredSqlMount> {
+    let resources = load_declared_sql_resources();
+    if resources.is_empty() {
+        return Vec::new();
+    }
+    declared_mounts()
+        .into_iter()
+        .filter_map(|mount| {
+            let resource = resources
+                .iter()
+                .find(|r| leading_segment(&r.path) == Some(mount.driver.name.as_str()))?
+                .clone();
+            let prefix = sql_resource_mount_prefix(&resource.path)?;
+            Some(DeclaredSqlMount {
+                mount,
+                resource,
+                prefix,
+            })
+        })
+        .collect()
+}
+
+/// The fixed mount prefix of a declared sql-resource path — the leading segments before the first
+/// `{…}` wildcard (`/cloudflare/d1/{database}` → `/cloudflare/d1`). `None` for a path with no fixed
+/// prefix (a leading wildcard).
+fn sql_resource_mount_prefix(path: &str) -> Option<String> {
+    let mut prefix = String::new();
+    for seg in path.trim_start_matches('/').split('/') {
+        if seg.is_empty() || seg.starts_with('{') {
+            break;
+        }
+        prefix.push('/');
+        prefix.push_str(seg);
+    }
+    (!prefix.is_empty()).then_some(prefix)
+}
+
+/// The mount remap for a declared D1 nested mount: the outer prefix (`/cloudflare/d1`) ⟷ the
+/// [`qfs_driver_cf::CfDriver`]'s own `/cf/d1` namespace (inner id `cf`). The outer id is the
+/// slash-bearing `cloudflare/d1` the plan/read/apply funnels route by — the routing spike
+/// (`exec/tests/oneshot.rs :: nested_mount_id_routing_spike`) proved a slash-bearing `DriverId` flows
+/// cleanly through all three. `None` when the prefix is malformed (fail closed).
+pub(crate) fn declared_d1_remap(mount_prefix: &str) -> Option<crate::mount_adapter::MountRemap> {
+    crate::mount_adapter::MountRemap::new_prefixed(mount_prefix, "/cf/d1", "cf").ok()
+}
+
+/// Resolve the static bearer a declared driver's auth strategy exposes — the raw token the declared
+/// D1 [`qfs_driver_cf::CfBackend`] needs, resolved through the SAME `SecretRef` coordinate the live
+/// `RestDriver` uses: an `AUTH ACCOUNT '<provider>'` resolves `(provider, "default")` (mapped by
+/// [`AccountBearerSecrets`] to the stored provider account bearer); an `AUTH BEARER`/`Header`
+/// resolves `(driver, "default")`. `None` when no credential resolves (fail closed, secret-free).
+pub(crate) fn declared_auth_bearer(mount: &DeclaredMount) -> Option<Secret> {
+    let d = &mount.driver;
+    let key = declared_auth_key(d)?;
+    let secrets = declared_secrets(
+        d,
+        mount.secret_ref.as_deref(),
+        mount.account.as_deref(),
+        mount.app.as_deref(),
+    );
+    secrets.get(&key).ok()
+}
+
+/// The credential coordinate a declared driver's auth strategy resolves its bearer at — the twin of
+/// the `SecretRef` [`DeclaredDriver::auth_strategy`] builds. An `AUTH ACCOUNT '<provider>'` keys the
+/// shared provider (`(provider, "default")`); every other scheme keys the driver's own name.
+fn declared_auth_key(d: &DeclaredDriver) -> Option<CredentialKey> {
+    let connection = qfs_secrets::ConnectionId::new("default").ok()?;
+    let driver_id = account_auth_provider(&d.auth).unwrap_or_else(|| d.name.clone());
+    Some(CredentialKey::new(
+        qfs_secrets::DriverId(driver_id),
+        connection,
+    ))
+}
+
 /// The shared secrets store a live declared driver resolves its auth `SecretRef` through. A
 /// `CONNECT ... SECRET '<ref>'` path binding is lifted into the driver's default auth key, so the
 /// generated `SecretRef(driver, "default")` can resolve `env:<VAR>` / `vault:<driver>/<conn>` at use
@@ -712,6 +976,7 @@ pub(crate) fn declared_secrets(
     d: &DeclaredDriver,
     secret_ref: Option<&str>,
     account: Option<&str>,
+    app: Option<&str>,
 ) -> Arc<dyn qfs_secrets::Secrets> {
     let vault: Arc<dyn Secrets> = match crate::connection::open_store_for_commit() {
         Some(store) => Arc::new(store),
@@ -720,13 +985,24 @@ pub(crate) fn declared_secrets(
     // `AUTH ACCOUNT '<provider>'`: the live bearer comes from the shared provider account, not a
     // per-driver SECRET. Resolve the declared coordinate `(provider, "default")` to the vault's
     // stored bearer at `(provider, <connected account>)` — the account-referenced auth the declared
-    // model previously lacked. (Providers whose stored credential is a static bearer — github,
-    // slack, chatwork, cf — work through this directly.)
+    // model previously lacked.
     if let Some(provider) = account_auth_provider(&d.auth) {
         let account = account
             .filter(|s| !s.is_empty())
             .unwrap_or("default")
             .to_string();
+        // An OAuth provider (google) stores a REFRESH token, not a usable bearer — the raw vault
+        // row cannot authenticate a request. Hand it to the OAuth adapter, which exchanges the
+        // refresh token for a LIVE bearer through the mount's (or consent row's) app. Static-bearer
+        // providers (github, slack, chatwork, cf) return the stored bearer directly, unchanged.
+        if is_oauth_account_provider(&provider) {
+            return Arc::new(OAuthAccountBearerSecrets {
+                provider,
+                account,
+                app: app.filter(|s| !s.is_empty()).map(str::to_string),
+                vault,
+            });
+        }
         return Arc::new(AccountBearerSecrets {
             provider,
             account,
@@ -805,6 +1081,88 @@ impl Secrets for AccountBearerSecrets {
     fn remove(&self, _key: &CredentialKey) -> Result<(), SecretError> {
         Err(SecretError::Backend(
             "AUTH ACCOUNT secrets adapter is read-only".to_string(),
+        ))
+    }
+
+    fn list(
+        &self,
+        driver: Option<&qfs_secrets::DriverId>,
+    ) -> Result<Vec<ConnectionRecord>, SecretError> {
+        if driver.is_some_and(|driver| driver.0 != self.provider) {
+            return Ok(Vec::new());
+        }
+        self.vault.list(driver)
+    }
+}
+
+/// Whether an `AUTH ACCOUNT '<provider>'` provider's stored credential is an OAuth REFRESH token
+/// that must be exchanged for a live bearer before use (ticket 20260718203328). Only `google` today;
+/// every other provider (github, slack, chatwork, cf) hands back a STATIC bearer served directly.
+fn is_oauth_account_provider(provider: &str) -> bool {
+    provider == "google"
+}
+
+/// The [`Secrets`] adapter an OAuth `AUTH ACCOUNT '<provider>'` declared driver resolves its bearer
+/// through. Unlike [`AccountBearerSecrets`] (which returns the stored value verbatim), an OAuth
+/// provider's stored credential is a REFRESH token that cannot authenticate a request; this adapter
+/// exchanges it for a LIVE bearer via the mount's app — falling back to the consent row's recorded
+/// app (`db_get_consent_app`), then the reserved `env` label. The declaration carries only the
+/// provider + app label, never a token. A missing app fails closed with a structured, secret-free
+/// cause naming the app (never a silent unauthenticated call); the adapter stays read-only.
+struct OAuthAccountBearerSecrets {
+    provider: String,
+    account: String,
+    app: Option<String>,
+    vault: Arc<dyn Secrets>,
+}
+
+impl OAuthAccountBearerSecrets {
+    /// The app label to exchange the refresh token through: the mount's `app` first, else the
+    /// consent row's recorded app (`db_get_consent_app`), else the reserved `env` label (client
+    /// id/secret from the environment). Explicit ordering so a mount that omits `app` still resolves
+    /// when the consent row names one.
+    fn resolve_app(&self) -> String {
+        if let Some(app) = self.app.as_deref().filter(|s| !s.is_empty()) {
+            return app.to_string();
+        }
+        if let Ok(Some(sys)) = crate::store::open_system_db() {
+            let conn = sys.into_db().into_connection();
+            if let Some(app) =
+                crate::secret_store::db_get_consent_app(&conn, &self.provider, &self.account)
+            {
+                if !app.is_empty() {
+                    return app;
+                }
+            }
+        }
+        "env".to_string()
+    }
+}
+
+impl Secrets for OAuthAccountBearerSecrets {
+    fn get(&self, key: &CredentialKey) -> Result<Secret, SecretError> {
+        let expected = CredentialKey::new(
+            qfs_secrets::DriverId(self.provider.clone()),
+            qfs_secrets::ConnectionId::new("default")
+                .map_err(|e| SecretError::Backend(e.to_string()))?,
+        );
+        if key != &expected {
+            return Err(SecretError::NotFound(key.clone()));
+        }
+        // google is the only OAuth `AUTH ACCOUNT` provider today (the predicate that routed here).
+        let app = self.resolve_app();
+        crate::google::google_account_bearer(&self.account, &app).map_err(SecretError::Backend)
+    }
+
+    fn put(&self, _key: &CredentialKey, _value: Secret) -> Result<(), SecretError> {
+        Err(SecretError::Backend(
+            "OAuth AUTH ACCOUNT secrets adapter is read-only".to_string(),
+        ))
+    }
+
+    fn remove(&self, _key: &CredentialKey) -> Result<(), SecretError> {
+        Err(SecretError::Backend(
+            "OAuth AUTH ACCOUNT secrets adapter is read-only".to_string(),
         ))
     }
 
@@ -925,6 +1283,126 @@ mod tests {
         }
     }
 
+    fn gdecl_account_driver() -> DeclaredDriver {
+        DeclaredDriver {
+            name: "gdecl".to_string(),
+            base_url: "https://www.googleapis.com".to_string(),
+            auth: r#"{"kind":"account","provider":"google"}"#.to_string(),
+            pagination: None,
+            views: Vec::new(),
+            maps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn oauth_account_driver_uses_the_oauth_adapter_and_fails_closed_naming_the_app() {
+        // ticket 20260718203328: an OAuth provider (google) routes to the OAuth adapter — NOT the
+        // static-bearer one. With no app configured the adapter fails CLOSED with a structured,
+        // secret-free cause naming the app (never a silent unauthenticated call, never the raw
+        // refresh token). A `HomeGuard` isolates XDG so no live account is ever touched.
+        let _home = crate::testenv::HomeGuard::new();
+        std::env::remove_var(crate::google::GOOGLE_CLIENT_ID_ENV);
+        std::env::remove_var(crate::google::GOOGLE_CLIENT_SECRET_ENV);
+        let d = gdecl_account_driver();
+        let secrets = declared_secrets(&d, None, Some("me@example.com"), None);
+        let declared_coord = CredentialKey::new(
+            qfs_secrets::DriverId("google".to_string()),
+            qfs_secrets::ConnectionId::new("default").unwrap(),
+        );
+        match secrets.get(&declared_coord) {
+            Err(SecretError::Backend(msg)) => {
+                assert!(
+                    msg.contains("google") && msg.contains("app") && msg.contains("env"),
+                    "the closed error names the provider + missing app label: {msg}"
+                );
+            }
+            other => panic!("expected a closed structured app error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn oauth_account_adapter_rejects_a_different_auth_key() {
+        // The OAuth adapter only answers its own `(provider, "default")` coordinate; any other key
+        // is a miss (never a cross-provider bearer).
+        let _home = crate::testenv::HomeGuard::new();
+        let d = gdecl_account_driver();
+        let secrets = declared_secrets(&d, None, Some("me@example.com"), None);
+        let other = CredentialKey::new(
+            qfs_secrets::DriverId("slack".to_string()),
+            qfs_secrets::ConnectionId::new("default").unwrap(),
+        );
+        assert_eq!(secrets.get(&other).unwrap_err().code(), "secret_not_found");
+    }
+
+    #[test]
+    fn oauth_adapter_resolve_app_prefers_the_mount_then_falls_back_to_env() {
+        // The app the refresh token is exchanged through: the mount's `app` wins; absent it (and
+        // with no consent-row app in the isolated System DB) the reserved `env` label is the floor.
+        let _home = crate::testenv::HomeGuard::new();
+        let vault: Arc<dyn Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
+        let with_mount_app = OAuthAccountBearerSecrets {
+            provider: "google".to_string(),
+            account: "me@example.com".to_string(),
+            app: Some("qmu".to_string()),
+            vault: vault.clone(),
+        };
+        assert_eq!(with_mount_app.resolve_app(), "qmu", "the mount app wins");
+        let without_app = OAuthAccountBearerSecrets {
+            provider: "google".to_string(),
+            account: "me@example.com".to_string(),
+            app: None,
+            vault,
+        };
+        assert_eq!(
+            without_app.resolve_app(),
+            "env",
+            "no mount/consent app falls back to the reserved env label"
+        );
+    }
+
+    #[test]
+    fn declared_mounts_carries_the_binding_app() {
+        // ticket 20260718203328: `declared_mounts()` must propagate the path_binding `app` onto the
+        // DeclaredMount (previously dropped), so the OAuth adapter can exchange through the mount's
+        // app. Seed a declared driver + a binding naming an app in the isolated System DB.
+        let _home = crate::testenv::HomeGuard::new();
+        {
+            let sys = crate::store::open_system_db()
+                .unwrap()
+                .expect("system db resolves");
+            let conn = sys.into_db().into_connection();
+            conn.execute(
+                "INSERT INTO sys_drivers (kind, name, base_url, auth, verb, body, irreversible) \
+                 VALUES ('driver', 'gdecl', 'https://www.googleapis.com', \
+                         '{\"kind\":\"account\",\"provider\":\"google\"}', NULL, NULL, 0)",
+                [],
+            )
+            .unwrap();
+            crate::path_binding::db_upsert_binding(
+                &conn,
+                "/gdecl",
+                "gdecl",
+                None,
+                None,
+                None,
+                Some("me@example.com"),
+                Some("qmu"),
+            )
+            .unwrap();
+        }
+        let mounts = declared_mounts();
+        let mount = mounts
+            .iter()
+            .find(|m| m.path == "/gdecl")
+            .expect("the declared mount is listed");
+        assert_eq!(
+            mount.app.as_deref(),
+            Some("qmu"),
+            "the binding's app reaches the mount"
+        );
+        assert_eq!(mount.account.as_deref(), Some("me@example.com"));
+    }
+
     #[test]
     fn auth_account_lifts_to_an_account_strategy_at_the_provider_coordinate() {
         // The `{"kind":"account","provider":"github"}` descriptor lifts to `AuthStrategy::Account`
@@ -1001,7 +1479,7 @@ mod tests {
         let d = ghdecl_account_driver();
         // No commit store in the test env → the adapter is built over an in-memory vault; we assert
         // its SHAPE (account resolution + fail-closed), the resolution itself is covered above.
-        let secrets = declared_secrets(&d, None, Some("work"));
+        let secrets = declared_secrets(&d, None, Some("work"), None);
         let declared_coord = CredentialKey::new(
             qfs_secrets::DriverId("github".to_string()),
             qfs_secrets::ConnectionId::new("default").unwrap(),
@@ -1023,7 +1501,7 @@ mod tests {
         let var = "QFS_DECLARED_CHATWORK_TOKEN_TEST";
         std::env::set_var(var, "cw-test-token");
         let d = chatwork_driver();
-        let secrets = declared_secrets(&d, Some(&format!("env:{var}")), None);
+        let secrets = declared_secrets(&d, Some(&format!("env:{var}")), None, None);
         let key = CredentialKey::new(
             qfs_secrets::DriverId("chatwork".to_string()),
             qfs_secrets::ConnectionId::new("default").unwrap(),
@@ -1039,7 +1517,7 @@ mod tests {
         let var = "QFS_DECLARED_CHATWORK_TOKEN_MISMATCH_TEST";
         std::env::set_var(var, "cw-test-token");
         let d = chatwork_driver();
-        let secrets = declared_secrets(&d, Some(&format!("env:{var}")), None);
+        let secrets = declared_secrets(&d, Some(&format!("env:{var}")), None, None);
         let key = CredentialKey::new(
             qfs_secrets::DriverId("slack".to_string()),
             qfs_secrets::ConnectionId::new("default").unwrap(),
@@ -1442,7 +1920,7 @@ mod tests {
             Some(&of),
             None,
             &[],
-            |path| {
+            |path, _post_body| {
                 qfs_driver_http::rest_read_rows(driver.rest_applier(), path).map_err(|e| {
                     qfs_core::CfsError::InvalidPath {
                         path: path.to_string(),
@@ -1494,6 +1972,127 @@ mod tests {
             sorted(&declared),
             sorted(&compiled),
             "the declared twin's rows are row-equivalent to the compiled driver's"
+        );
+    }
+
+    #[test]
+    fn read_over_post_pulls_rows_through_the_real_evaluator() {
+        // Blueprint §13.1 G1 read-over-POST, proven hermetically end-to-end (ticket
+        // 20260722091300): a declared view whose leading `POST { … }` stage makes its wire read a
+        // POST is evaluated through the REAL tier-2 evaluator (`eval_view_body`) over the confined
+        // applier against a WIRE FIXTURE (MockHttpClient — no network, no credential beyond the
+        // seeded bearer). The proof body is the Cloudflare queue-pull surface — the compiled `/cf`
+        // holdout the inventory named as the sharpest read-over-POST wall. Three assertions: (1) the
+        // recorded wire request is a POST, (2) carrying the evaluated `{ visibility_timeout_ms }`
+        // body, (3) whose response decodes + `EXPAND`s + shapes to the `OF` columns into rows.
+        let d = DeclaredDriver {
+            name: "cf".into(),
+            base_url: "https://api.cloudflare.com/client/v4".into(),
+            auth: r#"{"kind":"bearer"}"#.into(),
+            pagination: None,
+            views: vec![DeclaredNode {
+                path: "/cf/pull".into(),
+                of_type: Some("/type/cf/message".into()),
+                body: String::new(),
+            }],
+            maps: vec![],
+        };
+        // The queue-pull view: a POST-to-read. The body is a constant struct literal (a read has no
+        // incoming row); the response is Cloudflare's `{ "result": [ … ] }` envelope, unnested by
+        // `EXPAND result` exactly as the plain-GET list views do.
+        let view_body = serde_json::to_string(
+            &qfs_exec::parse(
+                "/http/cf/accounts/acct/queues/q1/messages/pull \
+                 |> POST { visibility_timeout_ms: 5000 } |> DECODE json |> EXPAND result",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"{"result":[{"id":"m1","body":"hello"},{"id":"m2","body":"world"}],"success":true}"#
+                .to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let secrets = {
+            use qfs_secrets::Secrets as _;
+            let store = qfs_secrets::InMemoryStore::new();
+            store
+                .put(
+                    &qfs_secrets::CredentialKey::new(
+                        qfs_secrets::DriverId::new("cf"),
+                        qfs_secrets::ConnectionId::new("default").unwrap(),
+                    ),
+                    qfs_secrets::Secret::from("cf-test-token"),
+                )
+                .unwrap();
+            Arc::new(store)
+        };
+        let driver = live_rest_driver(&d, client, secrets).expect("live twin");
+
+        let of: Vec<String> = ["id", "body"].iter().map(|s| (*s).to_string()).collect();
+        let batch = qfs_exec::declared::eval_view_body(
+            &view_body,
+            "cf",
+            "/cf/pull",
+            Some(&of),
+            None,
+            &[],
+            // The read facet's own dispatch (mirrors `read_facets`): a `Some` post_body is a
+            // read-over-POST — POST the encoded wire body; `None` would be the ordinary GET.
+            |path, post_body| {
+                let result = match post_body {
+                    Some(body) => {
+                        qfs_driver_http::rest_read_rows_post(driver.rest_applier(), path, &body)
+                    }
+                    None => qfs_driver_http::rest_read_rows(driver.rest_applier(), path),
+                };
+                result.map_err(|e| qfs_core::CfsError::InvalidPath {
+                    path: path.to_string(),
+                    reason: e.code(),
+                })
+            },
+            |_url| panic!("no FOLLOW stage in this body"),
+        )
+        .expect("declared read-over-POST");
+
+        // (1) + (2): the wire saw exactly one POST carrying the evaluated body.
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 1, "one wire exchange (a POST-to-read)");
+        assert_eq!(
+            recorded[0].method,
+            qfs_driver_http::HttpMethod::Post,
+            "a read-over-POST issues a POST, not a GET"
+        );
+        let sent = recorded[0].body.clone().unwrap_or_default();
+        let sent = String::from_utf8_lossy(&sent);
+        assert!(
+            sent.contains("visibility_timeout_ms") && sent.contains("5000"),
+            "the POST carried the evaluated `POST {{ … }}` body: {sent}"
+        );
+
+        // (3): the POST response decoded + EXPANDed + shaped to the OF columns into rows.
+        assert_eq!(batch.rows.len(), 2, "two pulled messages");
+        assert_eq!(
+            batch
+                .schema
+                .columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "body"],
+            "shaped to the declared OF columns"
+        );
+        let first: Vec<String> = batch.rows[0]
+            .values
+            .iter()
+            .map(|v| format!("{v:?}"))
+            .collect();
+        assert!(
+            first.iter().any(|s| s.contains("m1")) && first.iter().any(|s| s.contains("hello")),
+            "the first pulled row carries the fixture's id/body: {first:?}"
         );
     }
 
@@ -1810,10 +2409,12 @@ mod tests {
             path: "/rest/chatwork/rooms/1/files/9/blob".into(),
             pushed: qfs_pushdown::PushedQuery::default(),
             schema: qfs_core::Schema::empty(),
+            materialize_content: false,
         };
-        let batch = qfs_exec::ReadDriver::scan(&facet, &scan)
-            .await
-            .expect("blob view reads");
+        let batch =
+            qfs_exec::ReadDriver::scan(&facet, &scan, &qfs_core::RequestContext::anonymous())
+                .await
+                .expect("blob view reads");
         assert_eq!(batch.schema.columns[0].name, "content");
         assert_eq!(
             batch.rows[0].values[0],
@@ -2002,6 +2603,77 @@ mod tests {
     }
 
     #[test]
+    fn declared_cloudflare_kv_and_queue_rest_resources_expose_get_put_push() {
+        // Stage 3 (ticket 20260718203326): KV get/put and Queues push served as PLAIN declared REST
+        // — a value SELECT (GET), a value UPSERT (PUT), and a message INSERT (POST) — all under the
+        // account-scoped `accounts` leading segment. This holds the config-layer verb aggregation the
+        // shipped `cloudflare.qfs` KV/queue statements desugar to (the statements themselves are
+        // parse-ratcheted in `shipped_cloudflare_script_installs_statement_for_statement`). Pull is a
+        // POST-to-read with no declared primitive, so it is intentionally absent (compiled /cf serves
+        // it) — asserted below.
+        let d = DeclaredDriver {
+            name: "cloudflare".into(),
+            base_url: "https://api.cloudflare.com/client/v4".into(),
+            auth: r#"{"kind":"bearer"}"#.into(),
+            pagination: None,
+            views: vec![
+                DeclaredNode {
+                    path: "/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/keys"
+                        .into(),
+                    of_type: None,
+                    body: String::new(),
+                },
+                DeclaredNode {
+                    path:
+                        "/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key}"
+                            .into(),
+                    of_type: None,
+                    body: String::new(),
+                },
+            ],
+            maps: vec![
+                DeclaredMap {
+                    path:
+                        "/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key}"
+                            .into(),
+                    verb: "UPSERT".into(),
+                    body: String::new(),
+                    irreversible: false,
+                },
+                DeclaredMap {
+                    path: "/cloudflare/accounts/{account}/queues/{queue}/messages".into(),
+                    verb: "INSERT".into(),
+                    body: String::new(),
+                    irreversible: false,
+                },
+            ],
+        };
+
+        let cfg = d.rest_config();
+        // All account-scoped KV/queue nodes collapse under the `accounts` leading segment; the get
+        // (SELECT), put (UPSERT), and push (INSERT) verbs aggregate there.
+        let accounts = cfg
+            .resource_for_segment("accounts")
+            .expect("account-scoped resource");
+        assert!(
+            accounts.supports(RestVerb::Select),
+            "KV value get is a plain declared SELECT (GET)"
+        );
+        assert!(
+            accounts.supports(RestVerb::Upsert),
+            "KV value put is a plain declared UPSERT (PUT)"
+        );
+        assert!(
+            accounts.supports(RestVerb::Insert),
+            "queue push is a plain declared INSERT (POST)"
+        );
+        // Pull has no declared read-over-POST primitive: no REMOVE/other write verb is smuggled in as
+        // a pull, and the get/put/push additions carry no irreversible write.
+        assert!(!accounts.is_irreversible(RestVerb::Insert));
+        assert!(!accounts.is_irreversible(RestVerb::Upsert));
+    }
+
+    #[test]
     fn cloudflare_declared_driver_loads_confined_with_two_source_registry() {
         use qfs_core::{Path, Verb};
         let d = cloudflare_fixture();
@@ -2089,8 +2761,8 @@ mod tests {
 
         assert_eq!(
             stmts.len(),
-            9,
-            "1 driver + 2 types + 5 views + 1 map: {stmts:?}"
+            14,
+            "1 driver + 2 types + 7 views + 3 maps + 1 sql: {stmts:?}"
         );
         for s in &stmts {
             assert!(
@@ -2328,5 +3000,244 @@ mod tests {
             "a map differing only in verb is its own declaration: {map_bodies:?}"
         );
         assert_eq!(d.maps.len(), 2, "one row per map key: {map_bodies:?}");
+    }
+
+    // --- §13 declared sql-resources (ticket 20260718203326) ---------------------------------
+
+    const CF_D1_BODY: &str = r#"{"dialect":"sqlite",
+        "query_endpoint":"/http/cloudflare/accounts/{account}/d1/database/{database}/query",
+        "tables":[
+          {"name":"users","columns":[
+            {"name":"id","type":"text","nullable":false,"primary_key":true,"unique":false},
+            {"name":"email","type":"text","nullable":false,"primary_key":false,"unique":false}]},
+          {"name":"orders","columns":[
+            {"name":"id","type":"text","nullable":false,"primary_key":true,"unique":false}]}
+        ]}"#;
+
+    fn seed_sql_row(path: &str, body: &str) {
+        let sys = crate::store::open_system_db()
+            .unwrap()
+            .expect("system db resolves");
+        let conn = sys.into_db().into_connection();
+        conn.execute(
+            "INSERT INTO sys_drivers (kind, name, body, irreversible) VALUES ('sql', ?1, ?2, 0)",
+            rusqlite::params![path, body],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn load_declared_sql_resources_reads_the_committed_declaration() {
+        // The D1 relational surface comes from the committed `kind='sql'` row (the declared twin of a
+        // mount-time introspection), not from `introspect_d1`: the loader rehydrates the dialect, the
+        // wire query endpoint, and the inline table catalog with zero network.
+        let _home = crate::testenv::HomeGuard::new();
+        seed_sql_row("/cloudflare/d1/{database}", CF_D1_BODY);
+
+        let resources = load_declared_sql_resources();
+        let r = resources
+            .iter()
+            .find(|r| r.path == "/cloudflare/d1/{database}")
+            .expect("the declared sql-resource is loaded");
+        assert_eq!(r.dialect, "sqlite");
+        assert_eq!(
+            r.query_endpoint,
+            "/http/cloudflare/accounts/{account}/d1/database/{database}/query"
+        );
+        assert_eq!(r.tables.len(), 2);
+        let users = r.tables.iter().find(|t| t.name == "users").unwrap();
+        assert_eq!(users.columns.len(), 2);
+        assert!(users
+            .columns
+            .iter()
+            .any(|c| c.name == "id" && c.primary_key));
+        assert!(r.tables.iter().any(|t| t.name == "orders"));
+    }
+
+    #[test]
+    fn declared_sql_resource_catalog_lifts_tables_for_the_d1_planner() {
+        // `catalog()` produces the `qfs_driver_sql::Catalog` the D1 bridge hands to
+        // `D1Database::discovered` — the same shape `cf.rs::introspect_d1` built, but from the
+        // declaration. Built purely (no DB), so DESCRIBE stays network-free.
+        let resource = DeclaredSqlResource {
+            path: "/cloudflare/d1/{database}".to_string(),
+            dialect: "sqlite".to_string(),
+            query_endpoint: "/http/cloudflare/accounts/{account}/d1/database/{database}/query"
+                .to_string(),
+            tables: vec![
+                DeclaredSqlTable {
+                    name: "users".to_string(),
+                    columns: vec![qfs_types::DeclaredColumn {
+                        name: "id".to_string(),
+                        ty: "text".to_string(),
+                        nullable: false,
+                        primary_key: true,
+                        unique: false,
+                    }],
+                },
+                DeclaredSqlTable {
+                    name: "orders".to_string(),
+                    columns: vec![qfs_types::DeclaredColumn {
+                        name: "id".to_string(),
+                        ty: "text".to_string(),
+                        nullable: false,
+                        primary_key: true,
+                        unique: false,
+                    }],
+                },
+            ],
+        };
+        let catalog = resource.catalog();
+        assert!(catalog.table("users").is_some());
+        assert!(catalog.table("orders").is_some());
+        assert!(catalog.table("absent").is_none());
+    }
+
+    #[test]
+    fn load_declared_sql_resources_drops_a_foreign_host_endpoint() {
+        // §13 confinement (FAIL CLOSED): a sql-resource under `/cloudflare` whose query endpoint
+        // addresses a foreign `/http/<x>` host is dropped at load — the anti-exfiltration boundary,
+        // exactly as a declared driver's foreign view/map body is dropped.
+        let _home = crate::testenv::HomeGuard::new();
+        let foreign = r#"{"dialect":"sqlite",
+            "query_endpoint":"/http/evil/steal",
+            "tables":[{"name":"t","columns":[{"name":"id","type":"text"}]}]}"#;
+        seed_sql_row("/cloudflare/d1/{database}", foreign);
+        assert!(
+            load_declared_sql_resources().is_empty(),
+            "a foreign-host sql-resource must be dropped at load"
+        );
+    }
+
+    /// Seed a connected declared `cloudflare` driver (AUTH ACCOUNT 'cf') + its `/cloudflare` binding
+    /// in the isolated System DB — the mount the declared D1 twin nests under.
+    fn seed_cf_declared_driver_and_binding(at_locator: Option<&str>, account: Option<&str>) {
+        let sys = crate::store::open_system_db()
+            .unwrap()
+            .expect("system db resolves");
+        let conn = sys.into_db().into_connection();
+        conn.execute(
+            "INSERT INTO sys_drivers (kind, name, base_url, auth, verb, body, irreversible) \
+             VALUES ('driver', 'cloudflare', 'https://api.cloudflare.com/client/v4', \
+                     '{\"kind\":\"account\",\"provider\":\"cf\"}', NULL, NULL, 0)",
+            [],
+        )
+        .unwrap();
+        crate::path_binding::db_upsert_binding(
+            &conn,
+            "/cloudflare",
+            "cloudflare",
+            at_locator,
+            None,
+            None,
+            account,
+            None,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn sql_resource_mount_prefix_keeps_the_fixed_leading_segments() {
+        assert_eq!(
+            super::sql_resource_mount_prefix("/cloudflare/d1/{database}").as_deref(),
+            Some("/cloudflare/d1")
+        );
+        assert_eq!(
+            super::sql_resource_mount_prefix("/a/b/{x}/{y}").as_deref(),
+            Some("/a/b")
+        );
+        // A leading wildcard has no fixed prefix (nothing to mount under).
+        assert_eq!(
+            super::sql_resource_mount_prefix("/{leading}").as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn declared_d1_remap_maps_the_nested_prefix_onto_the_cf_namespace() {
+        let remap = super::declared_d1_remap("/cloudflare/d1").expect("valid remap");
+        // The outer id is the slash-bearing nested-mount id the funnels route by (spike-proven).
+        assert_eq!(remap.outer_id().as_str(), "cloudflare/d1");
+        // `/cloudflare/d1/<db>/<table>` maps onto the CfDriver's own `/cf/d1/<db>/<table>` namespace.
+        assert_eq!(
+            remap.path_in("/cloudflare/d1/mydb/users"),
+            "/cf/d1/mydb/users"
+        );
+        assert_eq!(
+            remap.path_out("/cf/d1/mydb/users"),
+            "/cloudflare/d1/mydb/users"
+        );
+    }
+
+    #[test]
+    fn declared_sql_mounts_pairs_the_connected_driver_with_its_resource() {
+        let _home = crate::testenv::HomeGuard::new();
+        seed_cf_declared_driver_and_binding(Some("cf-acct-id"), Some("mycf"));
+        seed_sql_row("/cloudflare/d1/{database}", CF_D1_BODY);
+
+        let mounts = declared_sql_mounts();
+        assert_eq!(
+            mounts.len(),
+            1,
+            "one nested D1 mount for the connected driver"
+        );
+        let m = &mounts[0];
+        assert_eq!(m.prefix, "/cloudflare/d1");
+        assert_eq!(m.mount.path, "/cloudflare");
+        assert_eq!(m.mount.at_locator.as_deref(), Some("cf-acct-id"));
+        assert!(m.resource.tables.iter().any(|t| t.name == "users"));
+        // The catalog the D1 bridge lifts comes from the declaration, not a mount-time introspection.
+        assert!(m.resource.catalog().table("users").is_some());
+        assert!(m.resource.catalog().table("orders").is_some());
+    }
+
+    #[test]
+    fn declared_sql_mounts_empty_without_a_declared_resource() {
+        let _home = crate::testenv::HomeGuard::new();
+        seed_cf_declared_driver_and_binding(Some("cf-acct-id"), Some("mycf"));
+        // The driver is connected, but no `CREATE SQL` resource is declared → nothing pairs.
+        assert!(
+            declared_sql_mounts().is_empty(),
+            "no sql-resource declared → no nested D1 mount (fail closed)"
+        );
+    }
+
+    #[test]
+    fn declared_auth_bearer_resolves_the_account_provider_bearer() {
+        // The declared D1 backend's bearer resolves through the SAME `(provider, "default")`
+        // coordinate the live RestDriver uses: `AUTH ACCOUNT 'cf'` maps to the stored `(cf, <account>)`
+        // vault bearer. The declaration carries only the provider; the token stays in the vault.
+        use qfs_identity::IdentityStore as _;
+        use qfs_secrets::{ConnectionId, CredentialKey, DriverId, Secret, Secrets};
+
+        let _home = crate::testenv::HomeGuard::with_passphrase("cf-d1-bearer-test");
+        crate::identity::open_identity_store()
+            .unwrap()
+            .create_user("op@example.com")
+            .unwrap();
+        let conn = crate::connection::open_system_conn().unwrap();
+        crate::secret_store::db_record_consent(&conn, "cf", "mycf", "op@example.com", "").unwrap();
+        drop(conn);
+        seed_cf_declared_driver_and_binding(Some("cf-acct-id"), Some("mycf"));
+
+        let store = crate::connection::open_store().unwrap();
+        store
+            .put(
+                &CredentialKey::new(
+                    DriverId("cf".to_string()),
+                    ConnectionId::new("mycf").unwrap(),
+                ),
+                Secret::from("cf-bearer-token"),
+            )
+            .unwrap();
+
+        let mounts = declared_mounts();
+        let mount = mounts
+            .iter()
+            .find(|m| m.path == "/cloudflare")
+            .expect("the declared cloudflare mount is listed");
+        let bearer =
+            super::declared_auth_bearer(mount).expect("the AUTH ACCOUNT 'cf' bearer resolves");
+        assert_eq!(bearer.expose_str(), Some("cf-bearer-token"));
     }
 }

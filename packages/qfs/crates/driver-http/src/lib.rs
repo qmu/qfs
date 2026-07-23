@@ -237,6 +237,41 @@ pub fn rest_read_rows(
     applier.read(&node)
 }
 
+/// The §13.1 G1 declared **read-over-POST**: read `vfs_path` (a `/rest/<api>/<resource>` path)
+/// by sending a **POST** carrying `body` (a pre-encoded wire body — e.g. the JSON of the view's
+/// `POST { … }` struct) and decoding the response into rows, exactly as [`rest_read_rows`] does
+/// for a GET. The effect is a pure READ (no mutation, no irreversibility gate); the POST is
+/// transport only — `HttpEffect::from_node` routes a body-carrying READ to a POST, and
+/// `apply_effect`'s single-exchange arm decodes the response. Host confinement and auth injection
+/// apply identically (the POST funnels through the same `send_one` chokepoint).
+///
+/// # Errors
+/// The structured [`HttpError`] on a transport / auth / decode / confinement failure.
+pub fn rest_read_rows_post(
+    applier: &RestApplier,
+    vfs_path: &str,
+    body: &Value,
+) -> Result<qfs_codec::RowBatch, HttpError> {
+    // Encode the view's evaluated `POST { … }` struct into the JSON object the applier POSTs
+    // verbatim — the same clean, untagged `value_to_json` the declared-map write path uses
+    // (`http_body_args`), so a read-over-POST body and a write body share one encoding.
+    let bytes = serde_json::to_vec(&value_to_json(body)).unwrap_or_default();
+    let args = RowBatch::new(
+        Schema::new(vec![Column::new(BODY_COL, ColumnType::Bytes, false)]),
+        vec![Row::new(vec![Value::Bytes(bytes)])],
+    );
+    let node = qfs_plan::EffectNode::new(
+        qfs_plan::NodeId(0),
+        qfs_plan::EffectKind::Read,
+        qfs_plan::Target::new(
+            qfs_plan::DriverId::new("rest"),
+            qfs_plan::VfsPath::new(vfs_path),
+        ),
+    )
+    .with_args(args);
+    applier.read(&node)
+}
+
 /// Build the [`RowBatch`] args for the `http.get(url, headers=>{...})` table-valued function:
 /// a single row carrying the absolute URL under [`URL_COL`] and each header under a
 /// `__http_h:<name>` column (see [`effect`]). The evaluator (E1) builds this from the TVF

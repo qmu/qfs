@@ -26,7 +26,9 @@
 //! `qfs` bin / `qfs-cmd` dispatches into it. Nothing in the pure spine depends back onto this
 //! crate, so tokio stays out of the spine's closure.
 
-use qfs_core::{commit, plan_query, preview, CfsError, Engine, MountRegistry, Plan, RowBatch};
+use qfs_core::{
+    commit, plan_query, preview, CfsError, Engine, MountRegistry, Plan, RequestContext, RowBatch,
+};
 use qfs_engine::{CombineEngine, MiniEvaluator, ScanResults};
 use qfs_parser::{parse_statement, Statement};
 
@@ -47,8 +49,9 @@ pub async fn execute_read(
     stmt: &Statement,
     mounts: &MountRegistry,
     reads: &ReadRegistry,
+    ctx: &RequestContext,
 ) -> Result<RowSet, ExecError> {
-    execute_read_with(stmt, mounts, reads, None).await
+    execute_read_with(stmt, mounts, reads, None, ctx).await
 }
 
 /// [`execute_read`] with an optionally injected [`TransformExecutor`] (blueprint §15): the
@@ -62,10 +65,24 @@ pub async fn execute_read_with(
     mounts: &MountRegistry,
     reads: &ReadRegistry,
     transform: Option<std::sync::Arc<dyn qfs_engine::TransformExecutor>>,
+    ctx: &RequestContext,
 ) -> Result<RowSet, ExecError> {
     // 1. Build the PhysicalPlan (pushdown split) from the AST via the live registry. This is
     //    the qfs-core t14 seam: lower_query (from the AST, O-t07-1) -> partition_by_source.
-    let physical = plan_query(stmt, mounts).map_err(map_pushdown_error)?;
+    //    A codec pipeline is planned only up to its first codec stage: the codec tail
+    //    (DECODE/ENCODE + the ops after them) runs locally in `apply_codecs`, not in the plan,
+    //    because a decode produces a data-dependent schema the planner cannot know (blueprint
+    //    §13b). `stmt_without_codec_tail` returns the pre-codec statement to plan.
+    let plan_owned = crate::codec::stmt_without_codec_tail(stmt);
+    let plan_stmt: &Statement = plan_owned.as_ref().unwrap_or(stmt);
+    let mut physical = plan_query(plan_stmt, mounts).map_err(map_pushdown_error)?;
+
+    // 1b. A collection-set DECODE needs each row's blob bytes (blueprint §13b): a glob/directory
+    //     listing over a blob source leaves `content` null to avoid reading every entry, so when
+    //     the statement carries a DECODE we ask each scan leaf to materialize `content` per row.
+    if crate::codec::has_decode_stage(stmt) {
+        physical.request_content_materialization();
+    }
 
     // 2. Execute each native scan through the ReadDriver seam, in plan (left-to-right) order —
     //    the positional order ScanResults/MiniEvaluator consume.
@@ -81,7 +98,7 @@ pub async fn execute_read_with(
             .with_path(scan.source.to_string())
         })?;
         let batch = driver
-            .scan(scan)
+            .scan(scan, ctx)
             .await
             .map_err(|e| ExecError::from_qfs(&e))?;
         batches.push(batch);
@@ -165,8 +182,9 @@ pub fn block_on_read(
     stmt: &Statement,
     mounts: &MountRegistry,
     reads: &ReadRegistry,
+    ctx: &RequestContext,
 ) -> Result<RowSet, ExecError> {
-    block_on_read_with(stmt, mounts, reads, None)
+    block_on_read_with(stmt, mounts, reads, None, ctx)
 }
 
 /// [`block_on_read`] with an optionally injected [`TransformExecutor`] (the COMMIT-boundary
@@ -179,6 +197,7 @@ pub fn block_on_read_with(
     mounts: &MountRegistry,
     reads: &ReadRegistry,
     transform: Option<std::sync::Arc<dyn qfs_engine::TransformExecutor>>,
+    ctx: &RequestContext,
 ) -> Result<RowSet, ExecError> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -190,7 +209,7 @@ pub fn block_on_read_with(
                 format!("failed to start read runtime: {e}"),
             )
         })?;
-    rt.block_on(execute_read_with(stmt, mounts, reads, transform))
+    rt.block_on(execute_read_with(stmt, mounts, reads, transform, ctx))
 }
 
 /// Build the effect [`Plan`] for an effect [`Statement`] via the engine evaluator (resolve +

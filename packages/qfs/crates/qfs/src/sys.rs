@@ -28,7 +28,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use qfs_core::{CfsError, RowBatch};
+use qfs_core::{CfsError, RequestContext, RowBatch};
 use qfs_driver_sys::{node_for_path, sys_node_schema, SysBackend, SysError, SysNode};
 use qfs_exec::ReadDriver;
 use qfs_pushdown::ScanNode;
@@ -262,12 +262,12 @@ impl SysBackend for SystemDbBackend {
             SysNode::Accounts => self.scan_system(
                 "SELECT 'google' AS provider, connection AS account, MIN(subject) AS subject, \
                         group_concat(DISTINCT scope) AS scope, MIN(app) AS app, \
-                        MIN(granted_at) AS created_at \
+                        MIN(secret_ref) AS secret_ref, MIN(granted_at) AS created_at \
                    FROM connection_consent WHERE driver IN ('gmail','gdrive','ga') \
                   GROUP BY connection \
                  UNION ALL \
                  SELECT driver AS provider, connection AS account, subject, scope, \
-                        app, granted_at AS created_at \
+                        app, secret_ref, granted_at AS created_at \
                    FROM connection_consent WHERE driver NOT IN ('gmail','gdrive','ga') \
                  ORDER BY provider, account",
                 |r| {
@@ -278,9 +278,19 @@ impl SysBackend for SystemDbBackend {
                         nullable_text(r, 3)?,
                         nullable_text(r, 4)?,
                         nullable_text(r, 5)?,
+                        nullable_text(r, 6)?,
                     ]))
                 },
             )?,
+            // `/sys/whoami` is resolved from the request principal in the read facet
+            // (`SysReadDriver::scan`), never from the backend — the backend has no request
+            // context. Unreachable here by construction; an honest structured rejection if reached.
+            SysNode::Whoami => {
+                return Err(SysError::MalformedEffect {
+                    reason: "/sys/whoami is resolved from the request principal, not the backend"
+                        .into(),
+                })
+            }
         };
         Ok(RowBatch::new(schema, rows))
     }
@@ -630,7 +640,10 @@ impl SysBackend for SystemDbBackend {
         let provider = required_text(row, "provider")?;
         let account = required_text(row, "account")?;
         let app = optional_text(row, "app");
-        crate::account::declare_account(&provider, &account, app.as_deref())
+        // 20260718203325: an optional `SECRET '<ref>'` reference rides as the `secret_ref` column —
+        // a selector (`env:`/`vault:`) resolved lazily at bind time, never a token in this row.
+        let secret_ref = optional_text(row, "secret_ref");
+        crate::account::declare_account(&provider, &account, app.as_deref(), secret_ref.as_deref())
             .map_err(SysError::Backend)?;
         // The consent write is ledgered INSIDE `declare_account`'s own System-DB transaction
         // (audit + ddl_event; ticket 20260716143641) — nothing to append here.
@@ -1387,15 +1400,100 @@ impl SysReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for SysReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let node = node_for_path(&scan.path).ok_or_else(|| CfsError::InvalidPath {
             path: scan.path.clone(),
             reason: "not a /sys admin path",
         })?;
+        // `/sys/whoami` is resolved from the REQUEST PRINCIPAL, not the backend: the scan seam
+        // carries `ctx` precisely so this face can read *who is asking*. Credential-free
+        // (signed_in + user), and the not-signed-in answer is a first-class row.
+        if matches!(node, SysNode::Whoami) {
+            return Ok(whoami_batch(ctx));
+        }
         self.backend.scan(node).map_err(|e| CfsError::InvalidPath {
             path: scan.path.clone(),
             reason: sys_error_reason(&e),
         })
+    }
+}
+
+/// The `/sys/whoami` row, resolved from the request principal (NOT the backend — it carries no
+/// request context). Credential-free by construction: a `signed_in` flag + the acting user id
+/// (`NULL` when anonymous), matching `sys_node_schema(SysNode::Whoami)`. The not-signed-in answer
+/// is a first-class row, never an error and never a silent fallback to a sole user.
+fn whoami_batch(ctx: &RequestContext) -> RowBatch {
+    let (signed_in, user) = match ctx.user() {
+        Some(id) => (true, Value::Text(id.to_string())),
+        None => (false, Value::Null),
+    };
+    RowBatch::new(
+        sys_node_schema(SysNode::Whoami),
+        vec![Row::new(vec![Value::Bool(signed_in), user])],
+    )
+}
+
+/// A minimal, always-available [`SysBackend`] for the serve face when NO System DB resolves: it
+/// backs the credential-free `/sys/whoami` facet (which [`SysReadDriver::scan`] answers from the
+/// request principal, NEVER the backend) so the not-signed-in answer stays a first-class row even
+/// pre-init. Every backend-touching node — and every write — is fail-closed (`/sys` over serve is
+/// read-only anyway), since without a System DB there is nothing to read or mutate.
+#[derive(Debug, Default)]
+pub struct AnonymousSysBackend;
+
+impl AnonymousSysBackend {
+    /// A fresh whoami-only backend.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+/// The fail-closed error every backend-touching `AnonymousSysBackend` method returns (whoami never
+/// reaches the backend, so this is only hit by a real `/sys/<node>` read or a write over serve).
+fn no_system_db() -> SysError {
+    SysError::Backend("no system database configured".to_string())
+}
+
+impl SysBackend for AnonymousSysBackend {
+    fn scan(&self, _node: SysNode) -> Result<RowBatch, SysError> {
+        Err(no_system_db())
+    }
+    fn insert_policy(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn set_setting(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn set_billing(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn upsert_binding(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn remove_binding(&self, _path: &str) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn update_policy(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn remove_policy(&self, _name: &str) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn remove_setting(&self, _key: &str) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn remove_driver(&self, _name: &str) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn insert_driver(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn record_account(&self, _row: &RowBatch) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
+    fn remove_account(&self, _provider: &str, _account: &str) -> Result<u64, SysError> {
+        Err(no_system_db())
     }
 }
 
@@ -2175,8 +2273,12 @@ mod tests {
             path: "/sys/users".to_string(),
             pushed: PushedQuery::default(),
             schema: sys_node_schema(SysNode::Users),
+            materialize_content: false,
         };
-        let batch = reader.scan(&scan).await.unwrap();
+        let batch = reader
+            .scan(&scan, &RequestContext::anonymous())
+            .await
+            .unwrap();
         assert_eq!(texts(&batch, "primary_email"), vec!["a@qmu.jp"]);
         // An unknown /sys segment is a structured invalid-path error (no panic).
         let bad = ScanNode {
@@ -2184,7 +2286,75 @@ mod tests {
             path: "/sys/nope".to_string(),
             pushed: PushedQuery::default(),
             schema: Schema::new(vec![]),
+            materialize_content: false,
         };
-        assert!(reader.scan(&bad).await.is_err());
+        assert!(reader
+            .scan(&bad, &RequestContext::anonymous())
+            .await
+            .is_err());
+    }
+
+    // ---- /sys/whoami: the "who am I" answer on the scan path (mission acceptance 1/5) ----
+
+    fn whoami_scan() -> ScanNode {
+        ScanNode {
+            source: qfs_pushdown::SourceId::new("sys"),
+            path: "/sys/whoami".to_string(),
+            pushed: PushedQuery::default(),
+            schema: sys_node_schema(SysNode::Whoami),
+            materialize_content: false,
+        }
+    }
+
+    fn bool_at(batch: &RowBatch, col: &str) -> bool {
+        let idx = batch
+            .schema
+            .columns
+            .iter()
+            .position(|c| c.name.as_str() == col)
+            .expect("column present");
+        matches!(batch.rows[0].values[idx], Value::Bool(true))
+    }
+
+    #[test]
+    fn sys_whoami_schema_is_closed_set_and_credential_free() {
+        // The answer is data through the ONE engine on the /sys closed set, and carries NO
+        // credential column — only `signed_in` + `user` (the /sys/connections redaction contract).
+        let schema = sys_node_schema(SysNode::Whoami);
+        let names: Vec<&str> = schema.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["signed_in", "user"]);
+        for banned in ["token", "session", "cookie", "password", "hash", "secret"] {
+            assert!(
+                !names.iter().any(|n| n.contains(banned)),
+                "whoami must expose no credential column, found one containing {banned}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sys_whoami_resolves_the_request_principal_both_ways() {
+        let (_d, backend) = fixture_backend();
+        let reader = SysReadDriver::new(Arc::new(backend));
+
+        // A request carrying a live principal resolves to the named user.
+        let signed = reader
+            .scan(&whoami_scan(), &RequestContext::for_user("7"))
+            .await
+            .unwrap();
+        assert!(bool_at(&signed, "signed_in"));
+        assert_eq!(texts(&signed, "user"), vec!["7"]);
+
+        // A request with no session resolves to an explicit not-signed-in row — a first-class
+        // answer (one row), never an error and never a silent fallback to a sole user.
+        let anon = reader
+            .scan(&whoami_scan(), &RequestContext::anonymous())
+            .await
+            .unwrap();
+        assert_eq!(anon.rows.len(), 1, "not-signed-in is a row, not an absence");
+        assert!(!bool_at(&anon, "signed_in"));
+        assert!(
+            matches!(anon.rows[0].values[1], Value::Null),
+            "anonymous user column is NULL, not the sole user"
+        );
     }
 }

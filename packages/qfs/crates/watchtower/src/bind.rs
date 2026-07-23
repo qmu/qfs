@@ -176,6 +176,7 @@ fn rewrite_pipe_op(op: &mut PipeOp, binds: &NewBindings) {
         | PipeOp::Encode(_)
         | PipeOp::Transform(_)
         | PipeOp::Follow(_)
+        | PipeOp::Post(_)
         | PipeOp::Of(_) => {}
     }
 }

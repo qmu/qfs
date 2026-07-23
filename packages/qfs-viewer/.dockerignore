@@ -1,0 +1,20 @@
+# Build the image from clean source — never copy host build output or installed
+# deps (their native binaries are built for the host arch and would not match
+# the image).
+**/node_modules
+**/dist
+**/coverage
+**/*.log
+outputs
+.git
+
+# NOTE: `.workaholic` is deliberately NOT excluded here, where the plgg
+# monorepo excludes it.
+#
+# In plgg, `.workaholic` is development metadata the image has no use for. In
+# qfs-viewer it is *content*: the product scans `.workaholic/`, `docs/`,
+# and `packages/`, so excluding it would build an image that serves a corpus
+# with its missions, tickets, and terms missing — and the omission would look
+# like a bug in the scanner rather than a line in this file.
+#
+# `.git` stays excluded: the scanner prunes it anyway, and it is large.

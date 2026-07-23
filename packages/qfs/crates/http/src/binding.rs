@@ -25,7 +25,7 @@ use qfs_core::Engine;
 use qfs_exec::ReadRegistry;
 use qfs_server::{Binding, BindingKind, PolicyDef, ServerError, ServerState};
 
-use crate::handler::EndpointCtx;
+use crate::handler::{EndpointCtx, PrincipalResolver};
 use crate::route::{compile_endpoint, Router};
 
 /// The HTTP serving binding. Holds the engine (mounts + codecs), the read-driver registry, the
@@ -39,6 +39,9 @@ pub struct HttpBinding {
     router: Arc<RwLock<Arc<Router>>>,
     /// The resolved policies from the last reconcile (the endpoint policy-handle lookup).
     policies: Arc<RwLock<Arc<BTreeMap<String, PolicyDef>>>>,
+    /// The injected principal resolver (the binary's `qfs_session` cookie → `UserId` seam), cloned
+    /// into every per-request [`EndpointCtx`]. `None` → every request is the anonymous actor.
+    resolver: Option<PrincipalResolver>,
 }
 
 impl HttpBinding {
@@ -52,7 +55,17 @@ impl HttpBinding {
             max_rows,
             router: Arc::new(RwLock::new(Arc::new(Router::new()))),
             policies: Arc::new(RwLock::new(Arc::new(BTreeMap::new()))),
+            resolver: None,
         }
+    }
+
+    /// Attach the injected [`PrincipalResolver`] (builder form): the binary's session-cookie →
+    /// `UserId` seam, cloned into every per-request [`EndpointCtx`]. Without it every request
+    /// resolves to the fail-closed anonymous actor.
+    #[must_use]
+    pub fn with_principal_resolver(mut self, resolver: PrincipalResolver) -> Self {
+        self.resolver = Some(resolver);
+        self
     }
 
     /// A shared handle to the live route table, for the async listener / request dispatch.
@@ -82,12 +95,16 @@ impl HttpBinding {
     /// the LIVE policy handle, so a hot reconcile's policy change is visible to the next request.
     #[must_use]
     pub fn ctx(&self) -> EndpointCtx {
-        EndpointCtx::new(
+        let ctx = EndpointCtx::new(
             Arc::clone(&self.engine),
             Arc::clone(&self.reads),
             Arc::clone(&self.policies),
             self.max_rows,
-        )
+        );
+        match &self.resolver {
+            Some(resolver) => ctx.with_principal_resolver(Arc::clone(resolver)),
+            None => ctx,
+        }
     }
 
     /// The bounded result-row cap.

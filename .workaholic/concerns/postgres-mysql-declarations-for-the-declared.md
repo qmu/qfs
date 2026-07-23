@@ -4,7 +4,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/11
 origin_branch: work-20260629-110121
 origin_commit: 3c6f995
 created_at: 2026-07-02T01:21:00+09:00
-last_seen: 2026-07-16T16:14:56+09:00
+last_seen: 2026-07-24T01:02:01+09:00
 first_seen: 2026-07-02T01:21:00+09:00
 concern_id: postgres-mysql-declarations-for-the-declared
 severity: low

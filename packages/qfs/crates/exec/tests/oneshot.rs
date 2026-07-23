@@ -90,7 +90,11 @@ impl qfs_core::Driver for FakeMail {
 
 #[async_trait::async_trait]
 impl ReadDriver for FakeMail {
-    async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(
+        &self,
+        _scan: &ScanNode,
+        _ctx: &qfs_core::RequestContext,
+    ) -> Result<RowBatch, CfsError> {
         // Honestly over-return: hand back ALL rows regardless of the pushed WHERE/LIMIT (this
         // source pushes nothing). The executor's residual must trim to the real result.
         Ok(RowBatch::new(mail_schema(), self.rows.clone()))
@@ -116,7 +120,13 @@ fn headline_read_returns_rows_through_real_executor() {
     let engine = engine_with_mail();
     let reads = reads_with_mail();
     let stmt = parse("/mail/inbox |> LIMIT 1").unwrap();
-    let rows = block_on_read(&stmt, &engine.mounts, &reads).unwrap();
+    let rows = block_on_read(
+        &stmt,
+        &engine.mounts,
+        &reads,
+        &qfs_core::RequestContext::anonymous(),
+    )
+    .unwrap();
     assert_eq!(
         rows.len(),
         1,
@@ -136,7 +146,13 @@ fn selection_address_reads_exactly_the_selected_row() {
     let engine = engine_with_mail();
     let reads = reads_with_mail();
     let stmt = parse("/mail/inbox/@2").unwrap();
-    let rows = block_on_read(&stmt, &engine.mounts, &reads).unwrap();
+    let rows = block_on_read(
+        &stmt,
+        &engine.mounts,
+        &reads,
+        &qfs_core::RequestContext::anonymous(),
+    )
+    .unwrap();
     assert_eq!(rows.len(), 1, "the address selects exactly one row");
     assert_eq!(rows.rows[0].values[0], Value::Int(2));
     assert_eq!(rows.rows[0].values[1], Value::Text("spam".into()));
@@ -209,7 +225,13 @@ fn residual_where_refilters_over_returned_rows() {
     let engine = engine_with_mail();
     let reads = reads_with_mail();
     let stmt = parse("/mail/inbox |> WHERE id > 1").unwrap();
-    let rows = block_on_read(&stmt, &engine.mounts, &reads).unwrap();
+    let rows = block_on_read(
+        &stmt,
+        &engine.mounts,
+        &reads,
+        &qfs_core::RequestContext::anonymous(),
+    )
+    .unwrap();
     assert_eq!(rows.len(), 2);
     let ids: Vec<i64> = rows
         .rows
@@ -228,7 +250,13 @@ fn headline_json_envelope_is_rows_object() {
     let engine = engine_with_mail();
     let reads = reads_with_mail();
     let stmt = parse("/mail/inbox |> LIMIT 1").unwrap();
-    let rows = block_on_read(&stmt, &engine.mounts, &reads).unwrap();
+    let rows = block_on_read(
+        &stmt,
+        &engine.mounts,
+        &reads,
+        &qfs_core::RequestContext::anonymous(),
+    )
+    .unwrap();
     let json = serde_json::to_value(&rows).unwrap();
     // rows: unchanged top-level object-per-row (agent-native; back-compatible with t29 consumers).
     assert!(json["rows"].is_array());
@@ -1189,7 +1217,11 @@ mod attachment_to_drive {
 
     #[async_trait::async_trait]
     impl ReadDriver for FakeAttachmentMail {
-        async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
             let row = Row::new(vec![
                 Value::Text("invoice.pdf".into()),
                 Value::Text("application/pdf".into()),
@@ -1417,7 +1449,11 @@ mod pdf_extraction_to_drive {
     }
     #[async_trait::async_trait]
     impl ReadDriver for FakePdfLocal {
-        async fn scan(&self, _s: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(
+            &self,
+            _s: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
             // A single-file read: the listing row for report.pdf plus its raw bytes under `content`.
             Ok(RowBatch::new(
                 local_content_schema(),
@@ -1672,7 +1708,11 @@ mod drive_to_gmail_reply {
 
     #[async_trait::async_trait]
     impl ReadDriver for FakeDriveFile {
-        async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
             let row = Row::new(vec![
                 Value::Text("report.pdf".into()),
                 Value::Text("application/pdf".into()),
@@ -2122,6 +2162,235 @@ mod switch_e2e {
         assert!(
             deps.contains(&(qfs_core::NodeId(2), qfs_core::NodeId(4))),
             "urgent write → else write (declaration order) survives the prune: {deps:?}"
+        );
+    }
+}
+
+// ---- SPIKE 2.0: a slash-bearing (nested-mount) DriverId routes through BOTH the read and apply
+//      DriverId-keyed funnels (ticket 20260718203326, owner ruling 2026-07-19). ----
+//
+// This settles the ONE unverified seam that gated the declared `/cf` D1 mount shape (nested mount
+// vs composite facet). The mechanical half was already de-risked by code-read: `DriverId` is an
+// unvalidated `String` (`qfs_types::schema`) and the plan/describe registry routes by longest-prefix
+// path (`core::registry::resolve_service_path`), so the default `id()` = `mount()` minus the leading
+// `/` yields a nested mount `/a/b` the slash-bearing id `"a/b"`, distinct from `"a"`. What no test
+// exercised is whether that slash-bearing id ALSO flows cleanly through the two `DriverId`-keyed
+// runtime funnels — the read funnel (`ReadRegistry.get(id)`, `exec::exec::id_of`) and the apply/write
+// funnel (the effect target's `DriverId`, `runtime::interpreter` `drivers.get(id)`) — given every
+// driver today registers a SINGLE-segment id. These tests register a nested mount at `/a/b` and prove
+// both funnels resolve it correctly, with no single-segment collision. Green ⇒ the declared D1
+// surface can be a plain NESTED mount (id `cloudflare/d1`); no composite facet is needed.
+mod nested_mount_id_routing_spike {
+    use super::*;
+
+    /// A fake source at an arbitrary mount that tags every read row with its OWN mount, so a
+    /// returned row is attributable to exactly one driver. SELECT+INSERT so the apply (effect-plan)
+    /// path also lowers over it.
+    struct TaggedSource {
+        mount: String,
+    }
+
+    fn tag_schema() -> Schema {
+        Schema::new(vec![
+            Column::new("id", ColumnType::Int, false),
+            Column::new("who", ColumnType::Text, true),
+        ])
+    }
+
+    impl TaggedSource {
+        fn new(mount: &str) -> Self {
+            Self {
+                mount: mount.to_string(),
+            }
+        }
+    }
+
+    impl qfs_core::Driver for TaggedSource {
+        fn mount(&self) -> &str {
+            &self.mount
+        }
+        // The default `id()` (mount minus the leading `/`) is deliberately kept: it is exactly the
+        // production derivation under test — `/a/b` → `"a/b"`.
+        fn describe(&self, _p: &Path) -> Result<NodeDesc, CfsError> {
+            Ok(NodeDesc::new(Archetype::RelationalTable, tag_schema()))
+        }
+        fn capabilities(&self, _p: &Path) -> Capabilities {
+            Capabilities::none().select().insert()
+        }
+        fn procedures(&self) -> &[qfs_core::ProcSig] {
+            &[]
+        }
+        fn pushdown(&self) -> &PushdownProfile {
+            &PushdownProfile::None
+        }
+        fn applier(&self) -> &dyn PlanApplier {
+            Box::leak(Box::new(NoopApplier))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ReadDriver for TaggedSource {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
+            Ok(RowBatch::new(
+                tag_schema(),
+                vec![Row::new(vec![
+                    Value::Int(1),
+                    Value::Text(self.mount.as_str().into()),
+                ])],
+            ))
+        }
+    }
+
+    /// An engine with two OVERLAPPING mounts: the top `/a` (id `"a"`) and the NESTED `/a/b`
+    /// (slash-bearing id `"a/b"`).
+    fn engine_ab() -> Engine {
+        let mut engine = Engine::new();
+        engine
+            .mounts
+            .register(Arc::new(TaggedSource::new("/a")))
+            .unwrap();
+        engine
+            .mounts
+            .register(Arc::new(TaggedSource::new("/a/b")))
+            .unwrap();
+        engine
+    }
+
+    fn reads_ab() -> ReadRegistry {
+        ReadRegistry::new()
+            .with(DriverId::new("a"), Arc::new(TaggedSource::new("/a")))
+            .with(DriverId::new("a/b"), Arc::new(TaggedSource::new("/a/b")))
+    }
+
+    /// The `who` (mount tag) of the first returned row — which driver actually served the read.
+    fn who_of(rows: &qfs_exec::RowSet) -> String {
+        match &rows.rows[0].values[1] {
+            Value::Text(s) => s.to_string(),
+            v => panic!("expected a text `who`, got {v:?}"),
+        }
+    }
+
+    #[test]
+    fn read_funnel_routes_the_slash_bearing_nested_mount_id() {
+        // A SELECT of `/a/b/x` must resolve to the NESTED driver through the REAL read funnel:
+        // `plan_query` tags the scan with source `"a/b"` (longest-prefix over the overlapping `/a`),
+        // and `ReadRegistry.get("a/b")` resolves the slash-bearing id. The returned row is tagged by
+        // the driver that served it, so this is attributable end-to-end.
+        let engine = engine_ab();
+        let reads = reads_ab();
+
+        let nested = block_on_read(
+            &parse("/a/b/x |> LIMIT 1").unwrap(),
+            &engine.mounts,
+            &reads,
+            &qfs_core::RequestContext::anonymous(),
+        )
+        .expect("nested read resolves");
+        assert_eq!(nested.len(), 1);
+        assert_eq!(
+            who_of(&nested),
+            "/a/b",
+            "the slash-bearing nested id `a/b` resolves its OWN read driver, not the top `a`"
+        );
+
+        // Control: the top mount still routes to the single-segment id `"a"` (no shadowing).
+        let top = block_on_read(
+            &parse("/a/x |> LIMIT 1").unwrap(),
+            &engine.mounts,
+            &reads,
+            &qfs_core::RequestContext::anonymous(),
+        )
+        .expect("top read resolves");
+        assert_eq!(who_of(&top), "/a", "the top mount still routes to id `a`");
+    }
+
+    #[test]
+    fn apply_funnel_targets_the_slash_bearing_nested_mount_id() {
+        // The full effect lowering (parse → resolve → plan → typeck → build effect plan) must tag
+        // the write's target with the slash-bearing id `"a/b"` — the key the runtime apply funnel
+        // (`interpreter::drivers.get(id)`) resolves. If any lowering / capability-qualification stage
+        // assumed a single-segment id, `build_plan` would misroute or reject here.
+        let engine = engine_ab();
+        let stmt = parse("INSERT INTO /a/b/tbl VALUES (9, 'x')").unwrap();
+        let plan = qfs_exec::build_plan(&stmt, &engine).expect("the nested-mount INSERT plans");
+        let node = &plan.nodes()[0];
+        assert_eq!(
+            node.target.driver,
+            DriverId::new("a/b"),
+            "the effect target keys the apply funnel on the slash-bearing nested id"
+        );
+        assert_eq!(node.target.path.as_str(), "/a/b/tbl");
+    }
+
+    #[test]
+    fn full_commit_path_drives_the_nested_mount_without_choking_on_the_slash() {
+        // End-to-end through the REAL one-shot COMMIT path: the whole apply pipeline (capability
+        // gate + effect dispatch) must drive an INSERT into the nested `/a/b` mount to a clean
+        // commit, applying the write at the nested path. A `world_apply` captures the applied write.
+        use std::cell::RefCell;
+        let engine = engine_ab();
+        let reads = reads_ab();
+        let captured: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        let (code, err) = {
+            let world = |plan: &qfs_core::Plan| -> Result<(), qfs_exec::ExecError> {
+                for node in &plan.nodes {
+                    if !matches!(
+                        node.kind,
+                        qfs_core::EffectKind::Read | qfs_core::EffectKind::List
+                    ) {
+                        captured
+                            .borrow_mut()
+                            .push(node.target.path.as_str().to_string());
+                    }
+                }
+                Ok(())
+            };
+            let ctx = ExecCtx {
+                engine: &engine,
+                reads: &reads,
+                world_apply: Some(&world),
+                safety_mode: qfs_core::SafetyMode::default(),
+                transform: None,
+            };
+            let source = StmtSource::Expr("INSERT INTO /a/b/tbl VALUES (9, 'x')".to_string());
+            let (mut out, mut err): (Vec<u8>, Vec<u8>) = (Vec::new(), Vec::new());
+            let code = {
+                let mut streams = Streams {
+                    out: &mut out,
+                    err: &mut err,
+                };
+                run_oneshot(&source, &ctx, OutputFormat::Json, true, false, &mut streams).code()
+            };
+            (code, String::from_utf8(err).unwrap())
+        };
+        assert_eq!(code, 0, "the nested-mount INSERT commits cleanly: {err}");
+        let applied = captured.into_inner();
+        assert_eq!(
+            applied,
+            vec!["/a/b/tbl".to_string()],
+            "the write applied at the nested path"
+        );
+    }
+
+    #[test]
+    fn both_funnel_registries_resolve_a_slash_bearing_id_with_no_single_segment_collision() {
+        // The routing primitive both funnels share: a `HashMap<DriverId, _>` `.get(id)`. Prove a
+        // slash-bearing id is a DISTINCT key from its leading segment — the read funnel's
+        // `ReadRegistry` here (the apply funnel's `runtime::DriverRegistry` is the identical
+        // `HashMap<DriverId, _>` keying, exercised end-to-end by the commit test above).
+        let reads =
+            ReadRegistry::new().with(DriverId::new("a/b"), Arc::new(TaggedSource::new("/a/b")));
+        assert!(
+            reads.get(&DriverId::new("a/b")).is_some(),
+            "the slash-bearing id resolves"
+        );
+        assert!(
+            reads.get(&DriverId::new("a")).is_none(),
+            "a slash-bearing id does NOT collide with its leading single segment"
         );
     }
 }

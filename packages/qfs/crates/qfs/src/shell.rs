@@ -33,9 +33,9 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use qfs_core::{CfsError, DriverId, Engine, RowBatch};
+use qfs_core::{CfsError, DriverId, Engine, RequestContext, RowBatch};
 use qfs_driver_cf::CfDriver;
-use qfs_driver_local::{scan_rows, LocalError, LocalFsDriver, Sandbox};
+use qfs_driver_local::{scan_rows_with, LocalError, LocalFsDriver, Sandbox};
 use qfs_exec::shell::{Outcome, Session, VfsPath};
 use qfs_exec::{ReadDriver, ReadRegistry};
 use qfs_pushdown::ScanNode;
@@ -61,7 +61,7 @@ impl LocalReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for LocalReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         // The ScanNode now carries the full addressed VFS path (t28 pushdown threading), so the
         // scan navigates to the exact node — `ls /local/sub` lists `sub`, not the mount root.
         // An empty path (a synthetic source) falls back to the mount root.
@@ -71,7 +71,10 @@ impl ReadDriver for LocalReadDriver {
             scan.path.clone()
         };
         let project = scan.pushed.project.as_deref();
-        scan_rows(&self.sandbox, &vfs, project).map_err(|e| local_to_qfs(&e))
+        // A downstream DECODE (blueprint §13b) asks a glob/directory listing to materialize each
+        // file entry's `content` bytes, so a per-row decode over a collected set has bytes to read.
+        scan_rows_with(&self.sandbox, &vfs, project, scan.materialize_content)
+            .map_err(|e| local_to_qfs(&e))
     }
 }
 
@@ -367,14 +370,11 @@ fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> Re
             ))),
         );
     }
-    // Markdown collection paths (hermetic, local): every declared `/markdown/<name>` root
-    // (a `CONNECT /markdown/<name> TO markdown AT '<dir>'` path_binding row — the declared-
-    // drivers convention, no env var) registers BOTH the mount (so the planner resolves) and
-    // the read facet (so the scan executes). Registering both is load-bearing: `/claude` above
-    // shipped read-facet-only and stayed describable but unqueryable (`unknown_source`) — the
-    // claude mission's documented finding. Skipped entirely when nothing is declared
-    // (fail-closed, like every mount).
-    reads = crate::markdown::register_markdown_mounts(engine, reads);
+    // The compiled `/markdown` collection-path driver retired on the §13 twin-and-retire ratchet
+    // (mission a-file-collection-is-a-declared-set-over-any-blob-source): a declared markdown tree is
+    // now an ordinary registered collection view (`CREATE VIEW … AS /local/… |> decode md.<relation>`)
+    // reached by path through the `/collections/<view>` mount ([`crate::collection_mount`]), wired on
+    // the serve read path where `/server/views` lives. Nothing to register on the offline CLI run path.
     // SQL (hermetic, no network): register the live SQLite-backed read facet when a connection is
     // configured, so `FROM /sql/<conn>/<table> |> WHERE … |> SELECT …` executes — the native SELECT
     // pushes the WHERE/ORDER/LIMIT into the database and the residual is re-filtered locally. Skipped
@@ -446,6 +446,7 @@ fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> Re
             &d,
             mount.secret_ref.as_deref(),
             mount.account.as_deref(),
+            mount.app.as_deref(),
         );
         // The view specs (tier 2): reading a declared mount evaluates the matched view's stored body.
         let views = crate::declared_eval::view_specs(&d, &declared_types);
@@ -457,6 +458,39 @@ fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> Re
             d.name.clone(),
             views,
         );
+        reads = reads.with(
+            remap.outer_id(),
+            Arc::new(crate::mount_adapter::MountReadDriver::new(
+                remap,
+                Arc::new(facet),
+            )),
+        );
+    }
+    // §13 declared D1 nested mounts: the LIVE read facet for a `/cloudflare/d1` twin — a
+    // `CfReadDriver` over the declared `CfDriver` (its wildcard-D1 template serves the committed
+    // catalog), backed by an `HttpApiBackend` built from the DECLARED inputs: the Cloudflare account
+    // id from the mount's `AT` locator + the bearer the mount's auth resolves. No `list_*`/
+    // `introspect_d1` at mount time. Fail-closed like every cloud mount: a mount with no account id
+    // or no resolvable bearer registers nothing (a scan then fails `unknown_source`, honest).
+    for m in crate::declared_driver::declared_sql_mounts() {
+        let Some(remap) = crate::declared_driver::declared_d1_remap(&m.prefix) else {
+            continue;
+        };
+        let Some(account_id) = m
+            .mount
+            .at_locator
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let Some(token) = crate::declared_driver::declared_auth_bearer(&m.mount) else {
+            continue;
+        };
+        let backend = crate::cf::declared_d1_backend(account_id, token);
+        let driver = Arc::new(crate::cf::declared_d1_driver(backend, m.resource.catalog()));
+        let facet = crate::read_facets::CfReadDriver::new(driver);
         reads = reads.with(
             remap.outer_id(),
             Arc::new(crate::mount_adapter::MountReadDriver::new(
@@ -529,7 +563,7 @@ impl LazyCloudReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for LazyCloudReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let facet = match self.bound.get() {
             Some(facet) => facet.clone(),
             None => match self.bind() {
@@ -549,7 +583,7 @@ impl ReadDriver for LazyCloudReadDriver {
                 }
             },
         };
-        facet.scan(scan).await
+        facet.scan(scan, ctx).await
     }
 }
 
@@ -864,6 +898,7 @@ mod tests {
     //! gate end-to-end (ticket t28 acceptance). The local mount root is ALWAYS a tempdir — these
     //! tests never touch a system path.
     use super::*;
+    use qfs_core::{Schema, Value};
     use std::io::Cursor;
     use tempfile::TempDir;
 
@@ -876,6 +911,175 @@ mod tests {
         std::fs::write(dir.path().join("sub").join("c.md"), b"gamma").unwrap();
         let (engine, reads) = local_engine_and_reads(dir.path().to_path_buf());
         (dir, engine, reads)
+    }
+
+    /// A temp-dir local mount holding a small tree of front-matter markdown, JSON and YAML files
+    /// (mission `a-file-collection-is-a-declared-set-over-any-blob-source`), plus the engine +
+    /// reads wired to it. The collection-set decode tests read these through the real pipeline.
+    fn collection_fixture() -> (TempDir, Engine, ReadRegistry) {
+        let dir = TempDir::new().expect("tempdir");
+        std::fs::write(
+            dir.path().join("todo1.md"),
+            b"---\nstatus: todo\nowner: a@qmu.jp\n---\n# First\n\nbody one\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("todo2.md"),
+            b"---\nstatus: todo\n---\n# Second\n\nbody two\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("done.md"),
+            b"---\nstatus: done\n---\n# Third\n\nbody three\n",
+        )
+        .unwrap();
+        // A markdown file with NO front-matter `status` key — its `status` must read as null,
+        // not error, under a WHERE (mission acceptance Requirement 3).
+        std::fs::write(dir.path().join("plain.md"), b"# Plain\n\nno frontmatter\n").unwrap();
+        std::fs::write(dir.path().join("data.json"), b"{\"k\":1}").unwrap();
+        std::fs::write(dir.path().join("conf.yaml"), b"k: 2\n").unwrap();
+        let (engine, reads) = local_engine_and_reads(dir.path().to_path_buf());
+        (dir, engine, reads)
+    }
+
+    /// The value of `col` in `row` under `schema`, or `Value::Null` if absent.
+    fn cell<'a>(schema: &Schema, row: &'a qfs_core::Row, col: &str) -> &'a Value {
+        schema
+            .columns
+            .iter()
+            .position(|c| c.name.as_str() == col)
+            .and_then(|i| row.values.get(i))
+            .unwrap_or(&Value::Null)
+    }
+
+    /// Mission acceptance Requirement 1 & 2: a `/local` glob collects Markdown files through the
+    /// mount and the pipeline alone; `DECODE md` decodes **per row** (one row per file) and every
+    /// decoded row carries its `path` provenance.
+    #[test]
+    fn local_glob_decodes_markdown_per_row_through_the_engine() {
+        let (_d, engine, reads) = collection_fixture();
+        let stmt = qfs_exec::parse("/local/*.md |> decode md").expect("parse");
+        let out =
+            qfs_exec::block_on_read(&stmt, &engine.mounts, &reads, &RequestContext::anonymous())
+                .expect("read");
+        assert_eq!(out.rows.len(), 4, "one decoded row per top-level .md file");
+        // Provenance: every decoded row carries a non-null `path`.
+        for row in &out.rows {
+            assert!(
+                matches!(cell(&out.schema, row, "path"), Value::Text(p) if p.contains(".md")),
+                "each decoded row carries its file path"
+            );
+        }
+        // Front-matter keys became columns; `body` is present.
+        assert!(out
+            .schema
+            .columns
+            .iter()
+            .any(|c| c.name.as_str() == "status"));
+        assert!(out.schema.columns.iter().any(|c| c.name.as_str() == "body"));
+    }
+
+    /// Mission acceptance Requirement 3: a `WHERE` over a front-matter key returns exactly the
+    /// matching files' rows, and a file missing the key reads as null (not an error).
+    #[test]
+    fn where_over_frontmatter_key_filters_the_collected_set() {
+        let (_d, engine, reads) = collection_fixture();
+        let stmt =
+            qfs_exec::parse("/local/*.md |> decode md |> where status == 'todo'").expect("parse");
+        let out =
+            qfs_exec::block_on_read(&stmt, &engine.mounts, &reads, &RequestContext::anonymous())
+                .expect("read");
+        assert_eq!(
+            out.rows.len(),
+            2,
+            "todo1.md + todo2.md match; done + plain do not"
+        );
+        let mut paths: Vec<String> = out
+            .rows
+            .iter()
+            .filter_map(|r| match cell(&out.schema, r, "path") {
+                Value::Text(p) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        paths.sort();
+        assert!(paths[0].ends_with("todo1.md") && paths[1].ends_with("todo2.md"));
+    }
+
+    /// **Ticket 20260722090500 — the cookbook collection recipe is execution-checked.** The
+    /// `docs/query-cookbook.md` recipe "Find every workaholic ticket still in todo, newest first"
+    /// (`… *.md |> decode md |> where status == 'todo' |> order by created_at desc |> select …`)
+    /// runs against a hermetic fixture tree and its result shape is asserted — not just parsed.
+    /// Reverting the per-row decode (the single-blob refusal) makes this fail.
+    #[test]
+    fn cookbook_todo_tickets_collection_recipe_executes() {
+        let dir = TempDir::new().expect("tempdir");
+        std::fs::write(
+            dir.path().join("t1.md"),
+            b"---\nid: T1\ntitle: One\nstatus: todo\ncreated_at: 2026-07-01\n---\n# One\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("t2.md"),
+            b"---\nid: T2\ntitle: Two\nstatus: todo\ncreated_at: 2026-07-20\n---\n# Two\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("t3.md"),
+            b"---\nid: T3\ntitle: Three\nstatus: done\ncreated_at: 2026-07-10\n---\n# Three\n",
+        )
+        .unwrap();
+        let (engine, reads) = local_engine_and_reads(dir.path().to_path_buf());
+        let stmt = qfs_exec::parse(
+            "/local/*.md |> decode md |> where status == 'todo' \
+             |> order by created_at desc |> select id, title, created_at",
+        )
+        .expect("parse");
+        let out =
+            qfs_exec::block_on_read(&stmt, &engine.mounts, &reads, &RequestContext::anonymous())
+                .expect("read");
+        // Only the two todo tickets, newest first (T2 then T1), projected to the three columns.
+        assert_eq!(out.rows.len(), 2, "done ticket excluded");
+        assert_eq!(
+            out.schema.columns.len(),
+            3,
+            "projected to id, title, created_at"
+        );
+        let ids: Vec<String> = out
+            .rows
+            .iter()
+            .filter_map(|r| match cell(&out.schema, r, "id") {
+                Value::Text(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["T2", "T1"], "ordered by created_at desc");
+    }
+
+    /// A `*.json` and a `*.yaml` collected set decode the same per-row way — the codec never knew
+    /// the driver, and every decoded row still carries `path`.
+    #[test]
+    fn json_and_yaml_sets_decode_per_row_with_provenance() {
+        let (_d, engine, reads) = collection_fixture();
+        for (glob, key, want) in [
+            ("/local/*.json |> decode json", "k", Value::Int(1)),
+            ("/local/*.yaml |> decode yaml", "k", Value::Int(2)),
+        ] {
+            let stmt = qfs_exec::parse(glob).expect("parse");
+            let out = qfs_exec::block_on_read(
+                &stmt,
+                &engine.mounts,
+                &reads,
+                &RequestContext::anonymous(),
+            )
+            .expect("read");
+            assert_eq!(out.rows.len(), 1, "one row per file for {glob}");
+            assert_eq!(cell(&out.schema, &out.rows[0], key), &want);
+            assert!(
+                matches!(cell(&out.schema, &out.rows[0], "path"), Value::Text(_)),
+                "provenance path present for {glob}"
+            );
+        }
     }
 
     /// Run a scripted session through the REAL commit leg rooted at `root`, returning the
@@ -1254,12 +1458,15 @@ mod tests {
         )
         .unwrap();
 
+        // §13 ratchet (ticket 20260718203326): the compiled `/cf` representative surface is now
+        // queue (PULL) + artifacts only — D1/KV moved to the declared /cloudflare mount — so the
+        // representative planning mount is exercised over `/cf/queue/q`.
         let (engine, reads, _safety) = run_engine_and_reads();
         assert!(
-            engine.mounts.resolve_path("/cf/kv/ns").is_some(),
+            engine.mounts.resolve_path("/cf/queue/q").is_some(),
             "failed live cf binding must retain the representative planning mount"
         );
-        let t = run_script(&engine, &reads, "/cf/kv/ns |> SELECT key\n");
+        let t = run_script(&engine, &reads, "/cf/queue/q |> LIMIT 1\n");
         assert!(
             !t.contains("unknown_source"),
             "connected cf fallback must not produce unknown_source:\n{t}"
@@ -1267,18 +1474,21 @@ mod tests {
 
         let scan = ScanNode {
             source: qfs_pushdown::SourceId::new("cf"),
-            path: "/cf/kv/ns".to_string(),
+            path: "/cf/queue/q".to_string(),
             pushed: qfs_pushdown::PushedQuery::default(),
             schema: qfs_core::Schema::new(Vec::new()),
+            materialize_content: false,
         };
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
         let driver = reads.get(&DriverId::new("cf")).expect("cf read fallback");
-        let err = rt.block_on(driver.scan(&scan)).unwrap_err();
+        let err = rt
+            .block_on(driver.scan(&scan, &RequestContext::anonymous()))
+            .unwrap_err();
         match err {
             CfsError::InvalidPath { reason, path } => {
-                assert_eq!(path, "/cf/kv/ns");
+                assert_eq!(path, "/cf/queue/q");
                 assert!(
                     reason.contains("Cloudflare mount has no usable account token or account id"),
                     "expected Cloudflare connect hint, got: {reason}"
@@ -1323,11 +1533,14 @@ mod tests {
             path: "/mail2/inbox".to_string(),
             pushed: qfs_pushdown::PushedQuery::default(),
             schema: qfs_core::Schema::new(Vec::new()),
+            materialize_content: false,
         };
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        let err = rt.block_on(driver.scan(&scan)).unwrap_err();
+        let err = rt
+            .block_on(driver.scan(&scan, &RequestContext::anonymous()))
+            .unwrap_err();
 
         match prev_xdg {
             Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),

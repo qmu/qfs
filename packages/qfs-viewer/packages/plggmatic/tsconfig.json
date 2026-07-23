@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    /* Compiler Option */
+    "target": "ES2021",
+    /* This package is `"type": "module"` and its source is
+       run directly via Node type-stripping (plgg-test), so
+       it uses ESNext + Bundler resolution: extensionless
+       self-alias specifiers (`plggmatic/...`) resolve while
+       modules stay ESM. */
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "paths": {
+      "plggmatic/*": ["./src/*"]
+    },
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"],
+    /* Type Checking Rules */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowUnusedLabels": false,
+    "allowUnreachableCode": false,
+    "forceConsistentCasingInFileNames": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "allowJs": false,
+    "erasableSyntaxOnly": true
+  },
+  "include": ["src/**/*"]
+}

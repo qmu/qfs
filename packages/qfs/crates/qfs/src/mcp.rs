@@ -170,8 +170,15 @@ impl McpEngine for ServeMcpEngine {
         // uses below.
         let stmt = qfs_exec::parse(statement).map_err(|e| map_exec_err(&e))?;
         let result = std::thread::scope(|s| {
-            s.spawn(|| qfs_exec::block_on_read(&stmt, &self.engine.mounts, &self.reads))
-                .join()
+            s.spawn(|| {
+                qfs_exec::block_on_read(
+                    &stmt,
+                    &self.engine.mounts,
+                    &self.reads,
+                    &qfs_core::RequestContext::anonymous(),
+                )
+            })
+            .join()
         });
         match result {
             Ok(Ok(rows)) => serde_json::to_value(&rows)

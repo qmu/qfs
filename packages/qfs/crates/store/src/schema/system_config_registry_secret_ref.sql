@@ -1,0 +1,12 @@
+-- System DB — migration #18 (ticket 20260718203325 — CREATE ACCOUNT … SECRET '<ref>'):
+-- add a `secret_ref` REFERENCE column to the cloud-connection consent ledger, so a self-contained
+-- `CREATE ACCOUNT <provider> '<label>' SECRET 'env:VAR'` declaration can carry WHERE the credential
+-- lives without a separate `qfs account add`. The reference (`env:VAR` / `vault:driver/connection`)
+-- is resolved LAZILY at bind time, never sealed here — this column holds only the selector, never a
+-- secret VALUE.
+--
+-- APPEND-ONLY: migration #17 (`system_config_registry.sql`) is FROZEN (the checksum guard forbids
+-- editing a shipped migration body). This is a NEW forward-only ALTER that only ADDS a nullable
+-- column — existing `connection_consent` rows read back `secret_ref = NULL` (the pre-declaration
+-- state: the token was sealed out-of-band, so bind-time resolution simply reads the vault as before).
+ALTER TABLE connection_consent ADD COLUMN secret_ref TEXT;

@@ -50,7 +50,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use qfs_core::{CfsError, RowBatch};
+use qfs_core::{CfsError, RequestContext, RowBatch};
 use qfs_driver_claude::{
     claude_node_schema, instruction_session, node_for_path, ClaudeError, ClaudeNode, LaunchSpec,
     SessionLauncher, SessionSource,
@@ -422,7 +422,7 @@ impl ClaudeReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for ClaudeReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let node = node_for_path(&scan.path).ok_or_else(|| CfsError::InvalidPath {
             path: scan.path.clone(),
             reason: "not a /claude session path",

@@ -3,7 +3,6 @@
 //! /server/*` — lives here, in closed core, because the keywords are frozen and shared (not a
 //! driver concern). See [`server`].
 
-pub mod connections;
 pub mod document;
 pub mod server;
 pub mod transform;

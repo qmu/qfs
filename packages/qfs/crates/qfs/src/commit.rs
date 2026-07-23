@@ -21,7 +21,9 @@ use qfs_runtime::{
     ApplyCx, ApplyDriver, CapabilitySet, DriverRegistry, EffectError, EffectInput, EffectOutput,
     Interpreter, LegStatus,
 };
-use qfs_secrets::{ConnectionId, CredentialKey, EnvStore, Secrets};
+use qfs_secrets::{
+    ConnectionId, ConnectionRecord, CredentialKey, EnvStore, Secret, SecretError, Secrets,
+};
 use qfs_types::DriverId;
 
 /// Apply `plan` to the World with `/local` rooted at the **filesystem root**, so a VFS path
@@ -381,6 +383,7 @@ fn live_registry(local_root: &Path) -> DriverRegistry {
         let d = mount.driver;
         let secret_ref = mount.secret_ref;
         let account = mount.account;
+        let app = mount.app;
         let Some(remap) = crate::declared_driver::declared_remap(&path, &d.name) else {
             continue;
         };
@@ -398,6 +401,7 @@ fn live_registry(local_root: &Path) -> DriverRegistry {
                         &d,
                         secret_ref.as_deref(),
                         account.as_deref(),
+                        app.as_deref(),
                     );
                     let driver = crate::declared_driver::live_rest_driver(&d, client, secrets)?;
                     let bridge = qfs_driver_http::rest_apply_driver(&driver);
@@ -410,6 +414,45 @@ fn live_registry(local_root: &Path) -> DriverRegistry {
                     Some(Arc::new(crate::mount_adapter::MountApplyDriver::new(
                         remap,
                         Arc::new(facet),
+                    )) as Arc<dyn ApplyDriver>)
+                },
+                DECLARED_APPLY_HINT,
+            )),
+        );
+    }
+
+    // §13 declared D1 nested mounts: the LIVE apply facet twin of the read facet — a `CfDriver`
+    // apply bridge for a `/cloudflare/d1` nested mount (id `cloudflare/d1`), built from the DECLARED
+    // inputs (account id from the mount `AT` locator + the resolved bearer) with NO `list_*`/
+    // `introspect_d1`. The bind is DEFERRED to first apply (`LazyApplyDriver`) — resolving the bearer
+    // opens the credential store, so an unrelated commit never pays for it. Fail-closed per mount: no
+    // account id / no resolvable bearer / a malformed remap leaves the mount unregistered (a write
+    // then fails with the actionable declared hint), never a half-wired branch.
+    for m in crate::declared_driver::declared_sql_mounts() {
+        let Some(remap) = crate::declared_driver::declared_d1_remap(&m.prefix) else {
+            continue;
+        };
+        let outer = remap.outer_id();
+        let prefix = m.prefix.clone();
+        let catalog = m.resource.catalog();
+        let mount = m.mount.clone();
+        reg = reg.with(
+            outer,
+            Arc::new(LazyApplyDriver::new(
+                move || {
+                    let account_id = mount
+                        .at_locator
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())?;
+                    let token = crate::declared_driver::declared_auth_bearer(&mount)?;
+                    let backend = crate::cf::declared_d1_backend(account_id, token);
+                    let driver = crate::cf::declared_d1_driver(backend, catalog.clone());
+                    let bridge = qfs_driver_cf::cf_apply_driver(&driver);
+                    let remap = crate::declared_driver::declared_d1_remap(&prefix)?;
+                    Some(Arc::new(crate::mount_adapter::MountApplyDriver::new(
+                        remap,
+                        Arc::new(bridge),
                     )) as Arc<dyn ApplyDriver>)
                 },
                 DECLARED_APPLY_HINT,
@@ -816,9 +859,21 @@ pub(crate) fn networked_credential(
     driver: &str,
     connection: &str,
 ) -> Option<(Arc<dyn Secrets>, CredentialKey)> {
-    let store: Arc<dyn Secrets> = match crate::connection::open_store_for_commit() {
+    let base: Arc<dyn Secrets> = match crate::connection::open_store_for_commit() {
         Some(sqlite) => Arc::new(sqlite),
         None => Arc::new(EnvStore::from_process_env()),
+    };
+    // 20260718203325: a self-contained `CREATE ACCOUNT … SECRET '<ref>'` records the reference on
+    // the consent row. Resolve it LAZILY here at request-build time, on a vault MISS — a sealed
+    // credential always wins, but a mount whose account was declared with a SECRET reference (and
+    // never `qfs account add`-ed) resolves its token from `env:`/`vault:` at USE, healing on each
+    // re-read. Absent a reference the store is the plain vault (unchanged).
+    let store: Arc<dyn Secrets> = match consent_secret_ref(driver, connection) {
+        Some(reference) => Arc::new(ConsentSecretRefFallback {
+            inner: base,
+            reference,
+        }),
+        None => base,
     };
     // t81: a project/team-owned connection is gated on the acting operator's actor-policy BEFORE
     // the credential binds — a member with no grant for the connection's scope cannot use it
@@ -843,6 +898,55 @@ pub(crate) fn networked_credential(
         .ok()?;
     let cred = CredentialKey::new(qfs_secrets::DriverId(driver.to_string()), acct);
     Some((store, cred))
+}
+
+/// The bind-time `secret_ref` (`env:`/`vault:`) a `CREATE ACCOUNT … SECRET '<ref>'` recorded for
+/// this `(driver, connection)`, or `None` if none was declared / the System DB is unreadable.
+/// Best-effort + passphrase-free (a reference is a selector, not a secret) — consulted lazily so a
+/// declared account resolves its credential with no `qfs account add`.
+fn consent_secret_ref(driver: &str, connection: &str) -> Option<String> {
+    let sys = crate::store::open_system_db().ok().flatten()?;
+    let conn = sys.into_db().into_connection();
+    crate::secret_store::db_get_consent_secret_ref(&conn, driver, connection)
+}
+
+/// A [`Secrets`] store that falls back to a declared `SECRET '<ref>'` reference when the underlying
+/// vault has NO sealed credential for the requested key (ticket 20260718203325). The reference is
+/// resolved LAZILY here (request-build time), mirroring [`crate::declared_driver`]'s
+/// `DeclaredSecretRefStore`: a sealed credential always wins (the vault hit short-circuits); only on
+/// a miss is the reference resolved, and an unresolvable reference fails closed with a structured,
+/// secret-free cause. Writes/list delegate to the inner store.
+struct ConsentSecretRefFallback {
+    inner: Arc<dyn Secrets>,
+    reference: String,
+}
+
+impl Secrets for ConsentSecretRefFallback {
+    fn get(&self, key: &CredentialKey) -> Result<Secret, SecretError> {
+        match self.inner.get(key) {
+            Ok(secret) => Ok(secret),
+            Err(_miss) => {
+                crate::secret_ref::resolve_secret_ref(&self.reference, self.inner.as_ref()).map_err(
+                    |e| SecretError::Backend(format!("declared account secret reference: {e}")),
+                )
+            }
+        }
+    }
+
+    fn put(&self, key: &CredentialKey, value: Secret) -> Result<(), SecretError> {
+        self.inner.put(key, value)
+    }
+
+    fn remove(&self, key: &CredentialKey) -> Result<(), SecretError> {
+        self.inner.remove(key)
+    }
+
+    fn list(
+        &self,
+        driver: Option<&qfs_secrets::DriverId>,
+    ) -> Result<Vec<ConnectionRecord>, SecretError> {
+        self.inner.list(driver)
+    }
 }
 
 #[cfg(test)]

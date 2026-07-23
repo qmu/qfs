@@ -24,6 +24,7 @@
 
 mod addressing;
 mod codec;
+pub mod collection;
 pub mod declared;
 mod dto;
 mod error;
@@ -32,6 +33,11 @@ mod output;
 mod read;
 pub mod shell;
 
+pub use codec::apply_codecs;
+pub use collection::{
+    collection_relation, collection_root, collection_source_path,
+    markdown_relation_describe_schema, read_registered_collection, to_root_relative,
+};
 pub use dto::{PlanPreview, ResultMeta, RowSet};
 pub use error::{ErrorKind, ExecError, ExitCode};
 pub use exec::{
@@ -47,6 +53,11 @@ pub use qfs_engine::apply_residual;
 // name a declared type's `WHERE` predicate without taking a direct `qfs-parser` edge (it stays off
 // the lower spine — same posture as `parse`/`ViewSpec`).
 pub use qfs_parser::Expr;
+// The parsed-statement type rides through here so the terminal binary can hold a registered
+// collection view's stored body (a `Statement`) without a direct `qfs-parser` edge — the same
+// off-the-lower-spine posture as `parse`/`Expr`. The binary never inspects it; it round-trips the
+// body back to `read_registered_collection` / `collection_relation` / `collection_source_path`.
+pub use qfs_parser::Statement;
 // Re-export the transform-execution seam (blueprint §15) so `qfs-cmd` and the binary composition
 // can supply the injected executor without a direct qfs-engine dep.
 pub use qfs_engine::{TransformCall, TransformExecutor};
@@ -58,7 +69,9 @@ pub use shell::{Builtin, Completer, Outcome, Session, VfsPath};
 use std::io::Write;
 
 use qfs_core::{Engine, Plan};
-use qfs_parser::{PlanWrap, Statement};
+use qfs_parser::PlanWrap;
+// `Statement` is in scope via the `pub use qfs_parser::Statement` re-export above (which also lets
+// the terminal binary name a stored view body without a direct qfs-parser edge).
 
 /// Where the one-shot statement text came from (exactly one source per invocation).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,7 +253,12 @@ fn run_oneshot_inner(
                     );
                 }
             }
-            let rows = block_on_read(inner, &ctx.engine.mounts, ctx.reads)?;
+            let rows = block_on_read(
+                inner,
+                &ctx.engine.mounts,
+                ctx.reads,
+                &qfs_core::RequestContext::anonymous(),
+            )?;
             renderer.rows(&rows, streams.out).map_err(io_err)?;
             Ok(ExitCode::Ok)
         }
@@ -337,8 +355,13 @@ fn preview_or_commit(
         // (non-null signals effects ran), never just a commit summary.
         if transform_read {
             if let Statement::Query(_) = terminal_statement(inner) {
-                let mut rows =
-                    block_on_read_with(inner, &ctx.engine.mounts, ctx.reads, injected.clone())?;
+                let mut rows = block_on_read_with(
+                    inner,
+                    &ctx.engine.mounts,
+                    ctx.reads,
+                    injected.clone(),
+                    &qfs_core::RequestContext::anonymous(),
+                )?;
                 let affected = counting.as_ref().map_or(0, |c| c.produced());
                 let mut to_apply = plan.clone();
                 refine_transform_affected(&mut to_apply, affected);
@@ -425,7 +448,13 @@ pub(crate) fn materialize_pipeline_source(
     // bytes; the engine is already cross-driver). A `|> transform` stage in the source runs through
     // the injected executor here — at the commit boundary, never on a held/refused commit.
     let source_stmt = Statement::Query((**source).clone());
-    let rows = block_on_read_with(&source_stmt, &engine.mounts, reads, transform)?;
+    let rows = block_on_read_with(
+        &source_stmt,
+        &engine.mounts,
+        reads,
+        transform,
+        &qfs_core::RequestContext::anonymous(),
+    )?;
     if rows.len() > MAX_MATERIALIZED_ROWS {
         return Err(ExecError::new(
             ErrorKind::Usage,
@@ -539,7 +568,13 @@ fn commit_switch(
 ) -> Result<ExitCode, ExecError> {
     // 1. Materialize the source once through the read engine (the same channel a
     //    pipeline-sourced write uses), under the same cap.
-    let rows = block_on_read_with(source, &ctx.engine.mounts, ctx.reads, injected)?;
+    let rows = block_on_read_with(
+        source,
+        &ctx.engine.mounts,
+        ctx.reads,
+        injected,
+        &qfs_core::RequestContext::anonymous(),
+    )?;
     if rows.rows.len() > MAX_MATERIALIZED_ROWS {
         return Err(ExecError::new(
             ErrorKind::Usage,
