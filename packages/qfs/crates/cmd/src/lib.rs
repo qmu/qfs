@@ -54,6 +54,15 @@ pub type ServeLauncher<'a> = dyn Fn(&std::path::Path) -> i32 + 'a;
 /// [`JobRequest`], returning the launcher's process exit code.
 pub type JobLauncher<'a> = dyn Fn(&JobRequest) -> i32 + 'a;
 
+/// The injected **agent launcher** (blueprint §19 axis C): the binary supplies `qfs agent run`.
+/// An agent is a new user principal; its query function is a saved named plan built + gated + committed
+/// through the SAME preview/commit pipeline a JOB run uses, but under the AGENT's own
+/// `DecisionContext::for_agent` (axis B), never the operator's. The whole
+/// boot→rehydrate→build→agent-subject-gate→apply path lives in the binary composition root (it owns
+/// `qfs-host`/`qfs-exec`/`qfs-runtime`), NOT in qfs-cmd — the [`JobLauncher`] pattern. qfs-cmd only
+/// parses the verb and forwards the [`AgentRequest`], returning the launcher's process exit code.
+pub type AgentLauncher<'a> = dyn Fn(&AgentRequest) -> i32 + 'a;
+
 /// The injected **view launcher**: the binary supplies `qfs view refresh`, because it owns the
 /// booted server runtime plus the qfs read executor. qfs-cmd only parses selectors and forwards the
 /// request; no driver, credential, or cache state crosses this command layer.
@@ -159,6 +168,39 @@ pub struct JobRequest {
     pub quiet: bool,
 }
 
+/// Which `qfs agent` action the binary launcher performs (blueprint §19 axis C).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentAction {
+    /// `qfs agent run` — invoke an agent's saved query function once, under the agent subject.
+    Run,
+}
+
+/// An owned `qfs agent <verb>` request the binary-injected [`AgentLauncher`] executes. Config path
+/// and agent name are safe metadata; no credential is ever carried here (the commit resolves creds
+/// the same way `qfs run --commit` does — from the env / connection store, never argv).
+#[derive(Debug, Clone)]
+pub struct AgentRequest {
+    /// The action (`run`).
+    pub action: AgentAction,
+    /// The `.qfs` config that defines the AGENT (the saved query-function source).
+    pub config: PathBuf,
+    /// The AGENT name (the `/server/agents` row key) whose function to run — also the
+    /// `Subject::Agent` identity the commit is gated under (blueprint §19 axis B).
+    pub name: String,
+    /// Apply the plan (PREVIEW by default, mirroring `qfs run`).
+    pub commit: bool,
+    /// Acknowledge an irreversible effect in this unattended run — required for a REMOVE /
+    /// declared-irreversible CALL, fail-closed without it (an agent never fires an irreversible
+    /// plan unattended, blueprint §19).
+    pub commit_irreversible: bool,
+    /// Global `--json` flag (output mode).
+    pub json: bool,
+    /// `--format json|table`.
+    pub format: Option<String>,
+    /// `--quiet`: suppress the success receipt; never the error body.
+    pub quiet: bool,
+}
+
 /// Which `qfs view` action the binary launcher performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewAction {
@@ -208,8 +250,8 @@ pub type SkillProvider<'a> = dyn Fn(bool) -> String + 'a;
 /// `qfs vault rekey`). No secret is ever carried here — the `secret_ref` is a REFERENCE.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionAction {
-    /// `connect --import-env` — print the `CREATE CONNECTION` declarations equivalent to the
-    /// current `QFS_SQL_*` / `QFS_GIT_*` env vars (the migration off the deprecated convention).
+    /// `connect --import-env` — print the `CONNECT` statements equivalent to the current
+    /// `QFS_SQL_*` / `QFS_GIT_*` env vars (the migration off the retired env-var convention).
     ImportEnv,
     /// `connect <path> …` — bind a defined PATH to a driver + credential (a full connect), or to
     /// an existing path (an alias). The direct-DB-I/O twin of the `CONNECT` statement (EPIC
@@ -613,8 +655,8 @@ enum Command {
     /// A full connect names a `--driver` (with optional `--at` locator + `--secret` REFERENCE);
     /// an alias names `--alias-of <existing-path>` instead. The secret is a REFERENCE
     /// (`env:VAR` / `vault:driver/connection`), never a value — nothing secret rides in argv.
-    /// `qfs connect --list` lists the defined paths; `--import-env` prints the `CREATE CONNECTION`
-    /// declarations equivalent to the current `QFS_SQL_*` / `QFS_GIT_*` env vars.
+    /// `qfs connect --list` lists the defined paths; `--import-env` prints the `CONNECT`
+    /// statements equivalent to the current `QFS_SQL_*` / `QFS_GIT_*` env vars.
     Connect {
         /// The user-defined path (the mount point), e.g. `/work/orders`. Omitted only with
         /// `--list` / `--import-env`.
@@ -643,8 +685,8 @@ enum Command {
         /// List the defined-path bindings (metadata only — never a secret value).
         #[arg(long = "list", conflicts_with_all = ["driver", "at", "secret", "alias_of", "host", "account", "app", "import_env"])]
         list: bool,
-        /// Print the `CREATE CONNECTION` declarations equivalent to the current `QFS_SQL_*` /
-        /// `QFS_GIT_*` env vars (the migration off the deprecated env-var convention).
+        /// Print the `CONNECT` statements equivalent to the current `QFS_SQL_*` / `QFS_GIT_*` env
+        /// vars (the migration off the retired env-var convention).
         #[arg(long = "import-env", conflicts_with_all = ["driver", "at", "secret", "alias_of", "host", "account", "app"])]
         import_env: bool,
     },
@@ -730,6 +772,14 @@ enum Command {
         #[command(subcommand)]
         verb: JobVerb,
     },
+    /// Run an AGENT's saved query function (blueprint §19). An agent is a new user principal, NOT a
+    /// process: `CREATE AGENT <name> DO <plan>` stores a named saved plan (a function) that
+    /// `qfs agent run` builds, gates under the AGENT's own subject + policy, and commits once —
+    /// PREVIEW by default. An agent never fires an irreversible plan unattended (fail-closed).
+    Agent {
+        #[command(subcommand)]
+        verb: AgentVerb,
+    },
     /// Refresh materialized views defined in a `.qfs` config. A refresh runs the stored query once,
     /// caches the row snapshot in server state, and stamps `/server/views.last_run` on success.
     View {
@@ -779,6 +829,37 @@ enum JobVerb {
         config: PathBuf,
         /// The JOB name (the `/server/jobs` row key).
         name: String,
+    },
+}
+
+/// `qfs agent <verb>` — the agent query-function invocation verbs (blueprint §19 axis C). Maps onto
+/// the injected [`AgentLauncher`] over the booted config's `/server/agents` rows.
+#[derive(Subcommand, Debug)]
+enum AgentVerb {
+    /// Run an agent's saved query function once, under the AGENT's own subject + policy.
+    ///
+    /// Loads the named `/server/agents` function plan from `config`, rehydrates it, and (with
+    /// `--commit`) applies it through the agent-subject policy gate + the IrreversibleGuard. PREVIEW
+    /// by default (no apply). The commit is gated by the AGENT's grants, never the invoking
+    /// operator's — a function touching an ungranted path is denied with the agent named.
+    Run {
+        /// The `.qfs` config that defines the AGENT.
+        config: PathBuf,
+        /// The AGENT name (the `/server/agents` row key).
+        name: String,
+        /// Apply the plan (default is PREVIEW), mirroring `qfs run --commit`.
+        #[arg(long = "commit")]
+        commit: bool,
+        /// Acknowledge applying an irreversible effect (a `REMOVE` / `CALL`) in this unattended run.
+        /// Without it, a `--commit` of an irreversible plan fails closed (blueprint §19).
+        #[arg(long = "commit-irreversible")]
+        commit_irreversible: bool,
+        /// Output format: `json` or `table`. Default: `table` on a TTY, `json` when piped.
+        #[arg(long = "format", value_name = "FORMAT")]
+        format: Option<String>,
+        /// Suppress the success receipt; never suppresses the error body.
+        #[arg(long = "quiet", short = 'q')]
+        quiet: bool,
     },
 }
 
@@ -985,6 +1066,7 @@ pub fn run<I, T>(
     vault: &VaultLauncher,
     invite: &InviteLauncher,
     job: &JobLauncher,
+    agent: &AgentLauncher,
     view: &ViewLauncher,
     dump: &DumpLauncher,
     restore: &RestoreLauncher,
@@ -1200,6 +1282,12 @@ where
         Some(Command::Job { verb }) => {
             tracing::debug!(target: "qfs::cmd", "dispatch job via launcher");
             return job(&job_request(&verb, cli.json));
+        }
+        // `agent run` (blueprint §19 axis C) is dispatched through the injected launcher: the binary
+        // owns the boot→rehydrate→build→agent-subject-gate→apply path; qfs-cmd only parses the verb.
+        Some(Command::Agent { verb }) => {
+            tracing::debug!(target: "qfs::cmd", "dispatch agent via launcher");
+            return agent(&agent_request(&verb, cli.json));
         }
         // `view` is dispatched through the injected launcher (the binary owns the booted server
         // state plus the qfs-exec read path). qfs-cmd only parses selectors/output flags.
@@ -1581,6 +1669,30 @@ fn job_request(verb: &JobVerb, json: bool) -> JobRequest {
     }
 }
 
+/// Map a parsed `qfs agent <verb>` into the owned [`AgentRequest`] the binary launcher executes.
+/// Pure metadata transform — no boot, no I/O (blueprint §19 axis C).
+fn agent_request(verb: &AgentVerb, json: bool) -> AgentRequest {
+    match verb {
+        AgentVerb::Run {
+            config,
+            name,
+            commit,
+            commit_irreversible,
+            format,
+            quiet,
+        } => AgentRequest {
+            action: AgentAction::Run,
+            config: config.clone(),
+            name: name.clone(),
+            commit: *commit,
+            commit_irreversible: *commit_irreversible,
+            json,
+            format: format.clone(),
+            quiet: *quiet,
+        },
+    }
+}
+
 /// Map a parsed `qfs view <verb>` into the owned [`ViewRequest`] the binary launcher executes.
 /// Pure metadata transform — no boot, no I/O.
 fn view_request(verb: &ViewVerb, json: bool) -> ViewRequest {
@@ -1776,6 +1888,9 @@ mod tests {
     fn stub_job(_req: &JobRequest) -> i32 {
         12
     }
+    fn stub_agent(_req: &AgentRequest) -> i32 {
+        12
+    }
 
     fn stub_view(_req: &ViewRequest) -> i32 {
         19
@@ -1843,6 +1958,7 @@ mod tests {
             &stub_vault,
             &stub_invite,
             &stub_job,
+            &stub_agent,
             &stub_view,
             &stub_dump,
             &stub_restore,
@@ -1875,6 +1991,7 @@ mod tests {
             &stub_vault,
             &stub_invite,
             &stub_job,
+            &stub_agent,
             &stub_view,
             &stub_dump,
             &stub_restore,
@@ -1931,6 +2048,7 @@ mod tests {
                 &stub_vault,
                 &stub_invite,
                 &stub_job,
+                &stub_agent,
                 &stub_view,
                 &stub_dump,
                 &stub_restore,
@@ -1989,6 +2107,7 @@ mod tests {
             &launcher,
             &stub_invite,
             &stub_job,
+            &stub_agent,
             &stub_view,
             &stub_dump,
             &stub_restore,
@@ -2041,6 +2160,7 @@ mod tests {
             &stub_vault,
             &stub_invite,
             &launcher,
+            &stub_agent,
             &stub_view,
             &stub_dump,
             &stub_restore,
@@ -2080,6 +2200,7 @@ mod tests {
             &stub_vault,
             &stub_invite,
             &launcher2,
+            &stub_agent,
             &stub_view,
             &stub_dump,
             &stub_restore,
@@ -2092,6 +2213,58 @@ mod tests {
             seen2.borrow().as_ref().expect("cron request").action,
             JobAction::Cron
         );
+    }
+
+    #[test]
+    fn agent_run_dispatches_through_the_injected_launcher() {
+        // blueprint §19 axis C: `qfs agent run <config> <name> --commit` routes to the injected
+        // AgentLauncher (the binary owns the boot→build→agent-subject-gate→apply path). qfs-cmd only
+        // parses the verb + forwards the request.
+        let seen: std::cell::RefCell<Option<AgentRequest>> = std::cell::RefCell::new(None);
+        let launcher = |req: &AgentRequest| {
+            *seen.borrow_mut() = Some(req.clone());
+            9
+        };
+        let code = run(
+            [
+                "qfs",
+                "agent",
+                "run",
+                "/etc/qfs/app.qfs",
+                "triage",
+                "--commit",
+            ],
+            &noop_shell,
+            &|_cfg| 0,
+            &empty_describe,
+            &stub_skill,
+            &stub_connection,
+            &stub_identity,
+            &stub_init,
+            &stub_host,
+            &stub_account,
+            &stub_vault,
+            &stub_invite,
+            &stub_job,
+            &launcher,
+            &stub_view,
+            &stub_dump,
+            &stub_restore,
+            &stub_plan,
+            &stub_apply,
+            &noop_apply,
+            &stub_run_ctx,
+        );
+        assert_eq!(
+            code, 9,
+            "agent dispatches to the launcher and returns its code"
+        );
+        let req = seen.borrow().clone().expect("launcher saw a request");
+        assert_eq!(req.action, AgentAction::Run);
+        assert_eq!(req.name, "triage");
+        assert!(req.commit, "--commit plumbs through");
+        assert!(!req.commit_irreversible);
+        assert!(req.config.ends_with("app.qfs"));
     }
 
     #[test]
@@ -2123,6 +2296,7 @@ mod tests {
             &stub_vault,
             &stub_invite,
             &stub_job,
+            &stub_agent,
             &launcher,
             &stub_dump,
             &stub_restore,
@@ -2160,6 +2334,7 @@ mod tests {
             &stub_vault,
             &stub_invite,
             &stub_job,
+            &stub_agent,
             &stub_view,
             &launcher,
             &stub_restore,
@@ -2200,6 +2375,7 @@ mod tests {
             &stub_vault,
             &stub_invite,
             &stub_job,
+            &stub_agent,
             &stub_view,
             &stub_dump,
             &launcher,
@@ -2257,6 +2433,7 @@ mod tests {
             &stub_vault,
             &stub_invite,
             &stub_job,
+            &stub_agent,
             &stub_view,
             &stub_dump,
             &stub_restore,
@@ -2320,6 +2497,7 @@ mod tests {
             &stub_vault,
             &stub_invite,
             &stub_job,
+            &stub_agent,
             &stub_view,
             &stub_dump,
             &stub_restore,
@@ -2381,6 +2559,7 @@ mod tests {
             &stub_vault,
             &stub_invite,
             &stub_job,
+            &stub_agent,
             &stub_view,
             &stub_dump,
             &stub_restore,
@@ -2531,6 +2710,7 @@ mod tests {
             &stub_vault,
             &stub_invite,
             &stub_job,
+            &stub_agent,
             &stub_view,
             &stub_dump,
             &stub_restore,
@@ -2624,6 +2804,7 @@ mod tests {
                 &stub_vault,
                 &stub_invite,
                 &stub_job,
+                &stub_agent,
                 &stub_view,
                 &stub_dump,
                 &stub_restore,
@@ -2650,6 +2831,7 @@ mod tests {
                 &stub_vault,
                 &stub_invite,
                 &stub_job,
+                &stub_agent,
                 &stub_view,
                 &stub_dump,
                 &stub_restore,

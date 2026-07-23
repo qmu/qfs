@@ -192,6 +192,9 @@ impl ArtifactsHandle {
 #[derive(Clone, Default)]
 pub struct CfRegistry {
     d1: HashMap<String, D1Database>,
+    /// A wildcard D1 handle answering ANY database key not explicitly registered in `d1` — the
+    /// no-introspection model the declared `/cloudflare/d1/{database}` mount needs.
+    d1_template: Option<D1Database>,
     kv: HashMap<String, KvNamespace>,
     queues: HashMap<String, QueueHandle>,
     artifacts: Option<ArtifactsHandle>,
@@ -208,6 +211,21 @@ impl CfRegistry {
     #[must_use]
     pub fn with_d1(mut self, db: impl Into<String>, handle: D1Database) -> Self {
         self.d1.insert(db.into(), handle);
+        self
+    }
+
+    /// Register a **wildcard D1 template**: a single handle (backend + declared catalog, no
+    /// discovered UUID) that answers ANY database key not explicitly registered via
+    /// [`with_d1`](Self::with_d1). This is the no-introspection model the declared
+    /// `/cloudflare/d1/{database}` mount needs — the addressed `{database}` segment is itself used
+    /// as the Cloudflare D1 api id ([`D1Database::api_database_id`] falls back to the path name when
+    /// the uuid is `None`), so a declared mount serves an arbitrary database with **no** mount-time
+    /// `list_d1_databases`/`introspect_d1`. The declared catalog (from the committed
+    /// `CREATE SQL … TABLES(…)` row) supplies the relation schema. An explicit
+    /// [`with_d1`](Self::with_d1) registration still wins over the template.
+    #[must_use]
+    pub fn with_d1_template(mut self, handle: D1Database) -> Self {
+        self.d1_template = Some(handle);
         self
     }
 
@@ -267,27 +285,33 @@ impl CfRegistry {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.d1.is_empty()
+            && self.d1_template.is_none()
             && self.kv.is_empty()
             && self.queues.is_empty()
             && self.artifacts.is_none()
     }
 
-    /// Look up a D1 database handle.
+    /// Look up a D1 database handle: an explicit [`with_d1`](Self::with_d1) registration first, then
+    /// the wildcard [`with_d1_template`](Self::with_d1_template) fallback (which answers any key).
     ///
     /// # Errors
-    /// [`CfError::InvalidPath`] if no D1 database is registered under `db`.
+    /// [`CfError::InvalidPath`] if no D1 database is registered under `db` and no template exists.
     pub fn d1(&self, db: &str) -> Result<&D1Database, CfError> {
-        self.d1.get(db).ok_or(CfError::InvalidPath {
-            path: format!("/cf/d1/{db}"),
-            reason: "no such registered D1 database",
-        })
+        self.d1
+            .get(db)
+            .or(self.d1_template.as_ref())
+            .ok_or(CfError::InvalidPath {
+                path: format!("/cf/d1/{db}"),
+                reason: "no such registered D1 database",
+            })
     }
 
     /// Whether a D1 database is registered (the introspective capability gate uses this without
-    /// borrowing the handle).
+    /// borrowing the handle). A wildcard template answers for **any** key, so its presence makes
+    /// every D1 database key available.
     #[must_use]
     pub fn has_d1(&self, db: &str) -> bool {
-        self.d1.contains_key(db)
+        self.d1.contains_key(db) || self.d1_template.is_some()
     }
 
     /// Look up a KV namespace backend.

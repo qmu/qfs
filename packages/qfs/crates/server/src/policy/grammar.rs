@@ -82,13 +82,15 @@ fn rule_from_ast(ast: &PolicyRuleAst) -> Result<Rule, String> {
 }
 
 /// Convert a parsed `FOR <subject>` clause ([`PolicySubjectAst`]) into a [`Subject`]. The `kind`
-/// token is one of `user`/`role`/`group` (case-insensitive); anything else is a secret-free error.
+/// token is one of `user`/`role`/`group`/`agent` (case-insensitive, `agent` per blueprint §19);
+/// anything else is a secret-free error.
 fn subject_from_ast(ast: &PolicySubjectAst) -> Result<Subject, String> {
     let name = ast.name.clone();
     Ok(match ast.kind.to_ascii_lowercase().as_str() {
         "user" => Subject::User(name),
         "role" => Subject::Role(name),
         "group" => Subject::Group(name),
+        "agent" => Subject::Agent(name),
         other => return Err(format!("unknown policy subject kind `{other}`")),
     })
 }
@@ -326,6 +328,26 @@ mod tests {
             r.condition,
             super::Condition::MemberOf("/directories/google/groups/eng".into())
         );
+    }
+
+    #[test]
+    fn ddl_parses_agent_subject_and_round_trips() {
+        // blueprint §19 axis B: `FOR agent <name>` compiles to a `Subject::Agent` rule and
+        // round-trips through the canonical `/server/policies` rule string as `agent:<name>`.
+        let p = policy_of("CREATE POLICY ag ALLOW INSERT ON mail FOR agent triage AT /me/mail/**");
+        assert_eq!(p.rules.len(), 1);
+        assert_eq!(p.rules[0].subject, super::Subject::Agent("triage".into()));
+        let strings = policy_to_rule_strings(&p);
+        assert_eq!(
+            strings[0], "ALLOW INSERT ON mail FOR agent:triage AT /me/mail/**",
+            "the agent subject round-trips through the canonical rule string"
+        );
+        let def = PolicyDef {
+            name: p.name.clone(),
+            handler: String::new(),
+            allow: strings,
+        };
+        assert_eq!(policy_from_def(&def).rules[0].subject, p.rules[0].subject);
     }
 
     #[test]

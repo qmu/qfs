@@ -1,10 +1,11 @@
 -- cloudflare.qfs — a DECLARED (query-based) Cloudflare driver mounted at /cloudflare.
 --
 -- Blueprint §13 self-hosting: Cloudflare's plain-REST surface expressed as declarative config over
--- the generic /http wire primitive — no compiled Rust. It COEXISTS with the compiled /cf driver:
---   * use /cf        for D1 (the SQL planner: WHERE/JOIN/aggregate pushdown), KV, and Queues;
---   * use /cloudflare for the broad, user-extensible REST surface below (zones, DNS, and the
---     account-scoped listings), and extend it by adding more CREATE VIEW/MAP statements.
+-- the generic /http wire primitive — no compiled Rust. D1's relational surface (the SQL planner:
+-- WHERE/JOIN/aggregate pushdown), KV get/put, and queue push are all served HERE now — the CREATE
+-- SQL D1 arm plus the KV/queue maps below. The compiled /cf driver is a MINIMAL fallback for only
+-- what plain declared REST cannot express: queue PULL (a POST-to-read) and Artifacts (a git-repo
+-- surface). Extend this surface by adding more CREATE VIEW / MAP / SQL statements.
 -- On a name collision the compiled driver wins, so this mounts at the distinct name `/cloudflare`.
 --
 -- INSTALL: preview then commit each statement (they desugar to /sys/drivers rows — an ordinary,
@@ -53,7 +54,7 @@ CREATE MAP INSERT /cloudflare/zones/{zone}/dns_records AS
   INSERT INTO /http/cloudflare/zones/{zone}/dns_records VALUES (row);
 
 -- Account-scoped resources: {account} is the Cloudflare account id (see `qfs connect --list`).
--- KV namespaces, Queues, and D1 database *listings* over plain REST (D1 SQL itself stays on /cf).
+-- KV namespaces, Queues, and D1 database *listings* over plain REST (D1 SQL is declared below).
 CREATE VIEW /cloudflare/accounts/{account}/storage/kv/namespaces AS
   /http/cloudflare/accounts/{account}/storage/kv/namespaces |> DECODE json |> EXPAND result;
 
@@ -62,3 +63,55 @@ CREATE VIEW /cloudflare/accounts/{account}/queues AS
 
 CREATE VIEW /cloudflare/accounts/{account}/d1/database AS
   /http/cloudflare/accounts/{account}/d1/database |> DECODE json |> EXPAND result;
+
+-- ── D1 SQL as a declared sqlite-dialect endpoint ────────────────────────────────────────────────
+-- D1's relational surface is declared HERE as a CREATE SQL resource: a sqlite-dialect SQL endpoint
+-- over the D1 query wire, with the relation catalog declared INLINE — the declared twin of a
+-- mount-time D1 introspection (no compiled discovery). It mounts a nested /cloudflare/d1/{database}
+-- surface served by the SQL planner (WHERE/JOIN/aggregate pushdown), reading the committed catalog
+-- below rather than probing sqlite_master live. {database} is a D1 database id (list them with the
+-- d1/database view above); the addressed segment is used as the Cloudflare D1 api id.
+--
+-- REPLACE the TABLES catalog with YOUR D1 schema: the declared catalog is what this mount serves
+-- for every {database}, so it names the relations your queries address. The bearer is the same
+-- account-layer token the rest of this driver uses (never inlined here).
+CREATE SQL /cloudflare/d1/{database} DIALECT SQLITE
+  OVER /http/cloudflare/accounts/{account}/d1/database/{database}/query
+  TABLES (
+    events ( id integer PRIMARY KEY, name text NOT NULL, created_at text )
+  );
+
+-- ── KV GET / PUT as plain declared REST ─────────────────────────────────────────────────────────
+-- KV values are ordinary REST over the wire, so the served surface is plain declared views/maps
+-- (the compiled /cf KV path still coexists). {namespace} is a KV namespace id (list them with the
+-- namespaces view above); {key} is the value key.
+--
+-- GET — a namespace's keys (paginated listing, wrapped like every Cloudflare list payload) and a
+-- single key's raw value. The value read carries no `DECODE`: KV returns the stored bytes verbatim,
+-- so the wire body IS the value (map SELECT → HTTP GET).
+CREATE VIEW /cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/keys AS
+  /http/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/keys
+  |> DECODE json |> EXPAND result;
+
+CREATE VIEW /cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key} AS
+  /http/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key};
+
+-- PUT — write a value at a key. An idempotent UPSERT (map UPSERT → HTTP PUT); re-putting the same
+-- key overwrites, and the value is reversible (REMOVE deletes it). The token stays in the account
+-- layer. Write shape: UPSERT a row carrying the value bytes.
+CREATE MAP UPSERT /cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key} AS
+  UPSERT INTO /http/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key}
+  VALUES (row);
+
+-- ── Queues PUSH as plain declared REST ──────────────────────────────────────────────────────────
+-- PUSH — send a message to a queue. An ordinary append INSERT (map INSERT → HTTP POST); {queue} is
+-- a queue id (list them with the queues view above). Write shape: INSERT a row carrying the body.
+CREATE MAP INSERT /cloudflare/accounts/{account}/queues/{queue}/messages AS
+  INSERT INTO /http/cloudflare/accounts/{account}/queues/{queue}/messages VALUES (row);
+
+-- PULL is NOT declared here (recorded gap, honest-surfaces). Cloudflare queue pull is a POST-to-read
+-- (POST /http/cloudflare/accounts/{account}/queues/{queue}/messages/pull returning a message batch),
+-- and plain declared REST has no POST-that-reads primitive: a declared VIEW is always a GET and a
+-- declared MAP is a write effect (no rows returned). Consuming a queue therefore stays on the
+-- compiled /cf driver until a declared read-over-POST primitive ships. Everything above needs no
+-- such primitive — get/put/push are GET/PUT/POST in the plain CRUD-over-HTTP shape.

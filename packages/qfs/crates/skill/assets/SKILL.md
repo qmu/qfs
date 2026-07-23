@@ -91,8 +91,8 @@ The four archetypes (RFD §5):
 Every statement below was run against the shipped binary. Two kinds run **from a bare binary with
 no account connected**:
 
-- **Local-family READS** — `/local`, `/sys`, `/sql` (via a `QFS_SQL_<conn>=<path.sqlite>` env), and
-  `/git` (via a `QFS_GIT_<repo>=<path>` env) — return real rows.
+- **Local-family READS** — `/local`, `/sys`, `/sql` (via `qfs connect /sql/<conn> TO sqlite AT
+  '<path.sqlite>'`), and `/git` (via `qfs connect /git/<repo> TO git AT '<path>'`) — return real rows.
 - **Write-plan PREVIEWs** for **any** driver — `insert/update/upsert into /path …` builds the typed
   effect-plan with no credential bind, so the PREVIEW prints (`"committed": false`) cred-free.
 
@@ -191,9 +191,9 @@ relational op after a codec errors `codec_then_query`.
    `update /slack/…` is rejected at resolve time with `unsupported_verb` and a
    `supported: [SELECT, INSERT, REMOVE]` set — pick from it.
 
-### sql — relational_table, pushdown (real read via `QFS_SQL_<conn>`)
+### sql — relational_table, pushdown (real read via `qfs connect /sql/<conn>`)
 
-1. **Configure a connection by env** — `QFS_SQL_ORDERS=/path/to/orders.db` mounts `/sql/orders`.
+1. **Connect a database once** — `qfs connect /sql/orders TO sqlite AT '/path/to/orders.db'` mounts `/sql/orders`.
 2. **Statement (runs now — real rows)** — a filtered, projected, ordered read; the `WHERE`
    predicate pushes **down** into the database:
    ```text
@@ -205,9 +205,9 @@ relational op after a codec errors `codec_then_query`.
    ```
    PREVIEW shows one reversible `UPDATE` node (`committed: false`); `--commit` applies it.
 
-### git — multi-archetype (real read via `QFS_GIT_<repo>`)
+### git — multi-archetype (real read via `qfs connect /git/<repo>`)
 
-1. **Configure a connection by env** — `QFS_GIT_MYREPO=/path/to/repo-or-.git` mounts `/git/myrepo`.
+1. **Connect a repo once** — `qfs connect /git/myrepo TO git AT '/path/to/repo-or-.git'` mounts `/git/myrepo`.
    The commit log is relational/append; a worktree as-of a ref is a versioned blob namespace.
 2. **Statement (runs now — real rows)** — read history, and read a tree as-of a ref (the `@<ref>`
    temporal coordinate is in the **path**):

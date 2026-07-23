@@ -229,8 +229,33 @@ pub struct WebhookDecl {
     pub policy_ref: PolicyRef,
 }
 
-/// The five frozen server-binding DDL forms (blueprint §3). A sum type, one variant per form —
-/// closed; a new backend adds none.
+/// `CREATE AGENT <name> [POLICY <p>]` — an agent-principal binding (blueprint §19). An agent is a
+/// new user principal (a first-class policy subject), NOT a process: this ticket lands the naming +
+/// registry row only. It carries no cadence and no plan body yet — its query functions (blueprint
+/// §19 axis C) and launch cadence (axis D) build on this row in later tickets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentDecl {
+    /// The agent name (the config row key, and the `Subject::Agent` identity).
+    pub name: String,
+    /// The agent's optional **launch cadence** (blueprint §19 axis D): an `EVERY <interval>` clause
+    /// (the same restricted `<n><unit>` grammar a JOB uses). `None` = a launch-less agent (invoked
+    /// only on demand by `qfs agent run`). When set, the agent's query function enters the SAME cron
+    /// sweep as `/server/jobs` — no new scheduler — gated under the agent subject.
+    pub every: Option<Interval>,
+    /// The agent's **query function** — a named saved plan, the `JobDecl` `DO <plan>` body shape
+    /// WITHOUT a cadence (blueprint §19 axis C). Parsed + type-checked NOW, stored as a span-
+    /// normalised [`PlanSpec`]; a gated statement, never a lambda (the §5.9 pure-lambda effects ban
+    /// stands). `None` for a function-less agent (naming only). Invoked by `qfs agent run` through
+    /// the shipped preview/commit pipeline under the agent's own `DecisionContext`.
+    pub plan: Option<PlanSpec>,
+    /// The attached POLICY handle (a `/server/policies` row name) the agent's fired plans commit
+    /// under (least privilege, blueprint §19 axis E). `None` = no policy attached ⇒ fail-closed
+    /// default-deny at fire time. Stored as a handle, never inline credential material.
+    pub policy_ref: PolicyRef,
+}
+
+/// The frozen server-binding DDL forms (blueprint §3, extended by §19's agents). A sum type, one
+/// variant per form — closed; a new backend adds none.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerBindingDdl {
     /// `CREATE ENDPOINT …`
@@ -243,6 +268,8 @@ pub enum ServerBindingDdl {
     View(ViewDecl),
     /// `CREATE WEBHOOK …`
     Webhook(WebhookDecl),
+    /// `CREATE AGENT …` (blueprint §19).
+    Agent(AgentDecl),
 }
 
 impl ServerBindingDdl {
@@ -255,6 +282,7 @@ impl ServerBindingDdl {
             Self::Job(_) => ServerNode::Jobs,
             Self::View(_) => ServerNode::Views,
             Self::Webhook(_) => ServerNode::Webhooks,
+            Self::Agent(_) => ServerNode::Agents,
         }
     }
 
@@ -267,6 +295,7 @@ impl ServerBindingDdl {
             Self::Job(d) => &d.name,
             Self::View(d) => &d.name,
             Self::Webhook(d) => &d.name,
+            Self::Agent(d) => &d.name,
         }
     }
 }
@@ -433,6 +462,16 @@ pub fn from_server_ddl(ddl: &ServerDdl) -> Result<ServerBindingDdl, DdlError> {
                 policy_ref: ddl.policy.clone(),
             }))
         }
+        DdlKind::Agent => Ok(ServerBindingDdl::Agent(AgentDecl {
+            name,
+            // blueprint §19 axis D: the optional launch cadence (the same `EVERY <interval>` grammar
+            // a JOB uses); `None` for a launch-less agent.
+            every: ddl.every.clone().map(Interval),
+            // blueprint §19 axis C: the agent's query function is the `DO <plan>` body — the same
+            // JobDecl body shape, parsed + span-normalised now.
+            plan: ddl.do_plan.as_deref().map(PlanSpec::from_statement_ref),
+            policy_ref: ddl.policy.clone(),
+        })),
         DdlKind::Policy => Err(DdlError::validation(
             "UNSUPPORTED_DDL",
             "CREATE POLICY is deferred to t34 (capability gating); not a t31 binding form",
@@ -628,6 +667,22 @@ pub fn binding_config_row(ddl: &ServerBindingDdl) -> ConfigRow {
         ServerBindingDdl::Webhook(d) => {
             row.set_text("route", d.route.as_str());
         }
+        ServerBindingDdl::Agent(d) => {
+            // blueprint §19: the agent binding is credential-free — it carries its name, its optional
+            // launch cadence (axis D), its query function's canonical `plan` spec (axis C, empty when
+            // function-less), and, when attached, its least-privilege POLICY handle (omitted when
+            // `None` so a policy-less agent row stays byte-identical, the column fills with `Null`).
+            if let Some(every) = d.every.as_ref() {
+                row.set_text("every", every.as_str());
+            }
+            row.set_text(
+                "plan",
+                canonical_or_empty(d.plan.as_ref().map(PlanSpec::canonical)),
+            );
+            if let Some(policy) = d.policy_ref.as_ref() {
+                row.set_text("policy", policy.as_str());
+            }
+        }
     }
     row
 }
@@ -778,6 +833,23 @@ pub fn server_node_schema(node: ServerNode) -> Schema {
             col("handler", ColumnType::Text, true),
             col("allow", ColumnType::Array(Box::new(ColumnType::Text)), true),
         ]),
+        ServerNode::Agents => Schema::new(vec![
+            // blueprint §19 axis A: the agent binding is credential-free. This ticket lands the
+            // naming + registry row only — `name` (the agent identity / `Subject::Agent`) and the
+            // optional attached `policy` handle (axis E). Cadence + query-function columns build on
+            // its query function (axis C), its optional launch cadence (axis D), and its policy.
+            col("name", ColumnType::Text, false),
+            // blueprint §19 axis D: the optional `EVERY <interval>` launch cadence; `Null` for a
+            // launch-less agent.
+            col("every", ColumnType::Text, true),
+            // blueprint §19 axis C: the agent's query function as a canonical PlanSpec (a saved
+            // named plan). `Null`/empty for a function-less agent.
+            col("plan", ColumnType::Text, true),
+            col("policy", ColumnType::Text, true),
+            // blueprint §19 axis D: the last successful cadence-fire time (the persisted `last_run`
+            // high-water mark, runtime state), read the same way a job's is. `Null` until first fire.
+            col("last_run", ColumnType::Timestamp, true),
+        ]),
         ServerNode::Webhooks => Schema::new(vec![
             col("name", ColumnType::Text, false),
             col("route", ColumnType::Text, true),
@@ -808,5 +880,9 @@ pub fn job_runs_schema() -> Schema {
         Column::new("detail", ColumnType::Text, true),
         // Effects applied by a committed fire (0 for denied/blocked/failed — atomic abort).
         Column::new("affected", ColumnType::Int, false),
+        // blueprint §19 axis B/D: the firing principal (identity only, secret-free) — `agent:<name>`
+        // for an agent-fired plan, `Null`/empty for an ordinary job fire. Nullable so a pre-§19 run
+        // reads back with no principal.
+        Column::new("principal", ColumnType::Text, true),
     ])
 }

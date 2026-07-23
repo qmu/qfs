@@ -297,7 +297,14 @@ fn near_miss_axis(
             continue;
         }
         if !ctx.satisfies_subject(&rule.subject) {
-            return Some("actor".to_string());
+            // blueprint §19 axis B: when the acting principal is an AGENT, name it in the failing
+            // axis so a narrowed denial reads as "the agent has no matching grant" (legible,
+            // secret-free) rather than an anonymous default-deny. A non-agent context keeps the
+            // pre-§19 generic `"actor"` axis label (the existing user/role tests are unchanged).
+            return Some(match &ctx.agent {
+                Some(agent) => format!("subject (agent:{agent} has no matching grant)"),
+                None => "actor".to_string(),
+            });
         }
         if let Some(scope) = &rule.scope {
             if !scope.matches_path(path) {
@@ -689,6 +696,99 @@ mod tests {
         // A non-intern skips the DENY (subject mismatch) and hits the later ALLOW ⇒ allow.
         let other = DecisionContext::for_user("o").with_roles(["staff".to_string()], &graph);
         assert!(evaluate_with_context(&policy, &plan, &other).is_allow());
+    }
+
+    // ---- blueprint §19: the agent as a first-class policy subject --------------------------
+
+    /// The mission's literal sentence (blueprint §19 axis B): a path the OPERATOR context reaches is
+    /// DENIED to the AGENT context (default-deny), with a legible `deny_reason` naming the agent
+    /// subject — and the converse, an agent-scoped grant reaches the agent, never the operator.
+    #[test]
+    fn agent_subject_is_first_class_and_default_deny_holds_across_identities() {
+        // A grant to the operator only.
+        let op_only = Policy::new("op").with_rule(
+            Rule::allow(VerbSet::one(Verb::Insert), DriverGlob::new("mail"))
+                .for_subject(Subject::User("op".into())),
+        );
+        let plan = plan_of(vec![write_node(
+            0,
+            EffectKind::Insert,
+            "mail",
+            "/mail/outbox",
+        )]);
+
+        // The operator reaches it; the agent is default-denied on the SAME path.
+        assert!(
+            evaluate_with_context(&op_only, &plan, &DecisionContext::for_user("op")).is_allow()
+        );
+        let denied = evaluate_with_context(&op_only, &plan, &DecisionContext::for_agent("triage"));
+        match &denied {
+            PolicyDecision::Deny { rule, detail, .. } => {
+                assert_eq!(*rule, None, "no rule matches the agent ⇒ default-deny");
+                let d = detail.as_deref().unwrap_or_default();
+                assert!(
+                    d.contains("agent:triage"),
+                    "the failing axis names the agent subject: {d}"
+                );
+            }
+            PolicyDecision::Allow => {
+                panic!("the agent must be default-denied on the operator's path")
+            }
+        }
+        // The full deny_reason is legible + secret-free (names the agent, verb, driver; no token).
+        let reason = denied.deny_reason().unwrap();
+        assert!(reason.contains("agent:triage"));
+        assert!(reason.contains("INSERT") && reason.contains("mail"));
+        assert!(!reason.to_lowercase().contains("token"));
+        assert!(!reason.to_lowercase().contains("secret"));
+
+        // Converse: an agent-scoped grant reaches the agent, never the operator or another agent.
+        let agent_only = Policy::new("ag").with_rule(
+            Rule::allow(VerbSet::one(Verb::Insert), DriverGlob::new("mail"))
+                .for_subject(Subject::Agent("triage".into())),
+        );
+        assert!(
+            evaluate_with_context(&agent_only, &plan, &DecisionContext::for_agent("triage"))
+                .is_allow()
+        );
+        assert!(
+            !evaluate_with_context(&agent_only, &plan, &DecisionContext::for_user("op")).is_allow(),
+            "an operator never inherits the agent's grant"
+        );
+        assert!(
+            !evaluate_with_context(&agent_only, &plan, &DecisionContext::for_agent("other"))
+                .is_allow(),
+            "a different agent is fail-closed"
+        );
+    }
+
+    /// blueprint §19 axis B: `ALLOW … AT <glob> FOR agent` grants narrow path-scoped reach — the
+    /// agent reaches only within its `ScopeGlob`, denied outside it (ScopeGlob/PathScope unchanged).
+    #[test]
+    fn agent_grant_is_path_scoped_by_at() {
+        let policy = Policy::new("scoped").with_rule(
+            Rule::allow(VerbSet::one(Verb::Insert), DriverGlob::any())
+                .for_subject(Subject::Agent("triage".into()))
+                .scoped(ScopeGlob::parse("/me/mail/**").unwrap()),
+        );
+        let agent = DecisionContext::for_agent("triage");
+        let in_scope = plan_of(vec![write_node(
+            0,
+            EffectKind::Insert,
+            "mail",
+            "/me/mail/outbox",
+        )]);
+        assert!(evaluate_with_context(&policy, &in_scope, &agent).is_allow());
+        let out_of_scope = plan_of(vec![write_node(
+            0,
+            EffectKind::Insert,
+            "mail",
+            "/me/other/x",
+        )]);
+        assert!(
+            !evaluate_with_context(&policy, &out_of_scope, &agent).is_allow(),
+            "the agent is denied outside its AT scope"
+        );
     }
 
     /// A pre-t57 (unscoped) policy behaves identically under the anonymous context — the back-compat

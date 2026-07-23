@@ -27,18 +27,24 @@ use qfs_lang::token::{LitType, PathSeg};
 use qfs_lang::{lex, Keyword, Span, Spanned, Token};
 use qfs_types::{canonical_base_column_type, declared_type_path, DeclaredColumn};
 use winnow::combinator::{alt, cut_err, fail, opt, preceded, repeat, separated};
-use winnow::error::{ContextError, ErrMode, ParseError as WinnowParseError};
+use winnow::error::{ContextError, ErrMode, ParseError as WinnowParseError, StrContext};
 use winnow::token::any;
 use winnow::{ModalResult, Parser};
 
 use crate::ast::{
-    ArmWrite, Assignment, CallRef, Codec, ConnectionDeclAst, DdlKind, EffectBody, EffectStmt,
-    EffectVerb, Expr, FnRef, FollowRef, Ident, JoinOp, Literal, NamedArg, OfColumn, OfRef,
-    OfTarget, Op, OrderKey, Param, PathExpr, PathRef, PathSegment, PipeOp, Pipeline, PlanWrap,
-    PolicyRuleAst, PolicySubjectAst, Projection, ServerDdl, Source, Statement, SwitchArm,
-    SwitchStage, TransformRef, TypeAnn, Values,
+    ArmWrite, Assignment, CallRef, Codec, DdlKind, EffectBody, EffectStmt, EffectVerb, Expr, FnRef,
+    FollowRef, Ident, JoinOp, Literal, NamedArg, OfColumn, OfRef, OfTarget, Op, OrderKey, Param,
+    PathExpr, PathRef, PathSegment, PipeOp, Pipeline, PlanWrap, PolicyRuleAst, PolicySubjectAst,
+    PostRef, Projection, ServerDdl, Source, Statement, SwitchArm, SwitchStage, TransformRef,
+    TypeAnn, Values,
 };
 use crate::error::{ParseError, ParseErrorCode};
+
+/// The parse-error message a retired `CREATE CONNECTION` carries — a pointer to the one surviving
+/// declaration statement, `CONNECT` (surfaced by [`map_error`] via [`StrContext::Label`]).
+const CREATE_CONNECTION_RETIRED: &str = "CREATE CONNECTION is retired; declare a connection with \
+     `CONNECT /<family>/<name> TO <driver> AT '<locator>' [SECRET '<ref>']` (e.g. `CONNECT \
+     /sql/shop TO sqlite AT '/data/shop.db'`), or run `qfs connect`";
 
 /// The parser input stream: a slice of spanned tokens (winnow drives this directly).
 type Stream<'a> = &'a [Spanned<Token>];
@@ -98,6 +104,18 @@ fn map_error(
     };
     let span = found_tok.span;
     let (code, message) = classify(&found_tok.node);
+    // A grammar arm may attach a bespoke `StrContext::Label` (e.g. the retired `CREATE CONNECTION`
+    // pointer) — surface it as the human message so the diagnostic steers the author, overriding the
+    // generic token classification. Only `Label` is surfaced; winnow's own `Expected` contexts stay
+    // internal. Secret-free: a label is a fixed `&'static str`, never echoing a literal value.
+    let message = err
+        .inner()
+        .context()
+        .find_map(|c| match c {
+            StrContext::Label(label) => Some((*label).to_string()),
+            _ => None,
+        })
+        .unwrap_or(message);
     ParseError::new(
         span.start as usize,
         span,
@@ -871,6 +889,7 @@ fn pipe_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
         transform_op,
         switch_op,
         follow_op,
+        post_op,
         of_op,
     ))
     .parse_next(input)
@@ -993,13 +1012,21 @@ fn encode_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
     codec(input).map(PipeOp::Encode)
 }
 
-/// A codec format name — the codec registry seam (blueprint §4). A bare identifier (string
-/// name), resolved later.
+/// A codec format name, optionally relation-qualified — the codec registry seam (blueprint
+/// §4/§13b, design brief Ruling 1). A bare identifier (`json`/`md`/…) resolved later, followed by
+/// an OPTIONAL `.<relation>` suffix (`md.documents`, `md.links`) addressing one of the codec's
+/// declared named relations. The suffix is one leaf addition to this single pipe stage — fully
+/// backward-compatible with every existing `decode <fmt>` / `encode <fmt>`; the relation name is
+/// resolved later against the codec's relation set (an unknown relation is a resolve-time usage
+/// error, never a parse error).
 fn codec(input: &mut Stream<'_>) -> ModalResult<Codec> {
     let fmt = ident(input)?;
+    let relation = opt(preceded(punct(Token::Dot), ident)).parse_next(input)?;
+    let end = relation.as_ref().map_or(fmt.span.end, |r| r.span.end);
     Ok(Codec {
         fmt: fmt.node,
-        span: fmt.span,
+        relation: relation.map(|r| r.node),
+        span: Span::new(fmt.span.start, end),
     })
 }
 
@@ -1046,6 +1073,22 @@ fn follow_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
 /// with an `ident`, so a `Token::Path` there fails, and the inline branch requires `(` — so
 /// `of /type/x` matches neither, exactly like `transform /path`. The structural/refinement check
 /// itself is plan-time (blueprint §5.6); the parser validates shape only.
+/// `POST <body-expr>` — the declared-driver read-over-POST stage (blueprint §13.1 G1, ticket
+/// 20260722091300).
+///
+/// `post` is a **contextual identifier** (matched by [`word`], NOT a frozen keyword — the keyword
+/// set stays 39, the `follow`/`transform`/`switch` lesson); `<body-expr>` is a struct-literal
+/// expression (the wire body the fetch POSTs). Shape only here — "only valid as the leading op of
+/// a declared view body" is a structured lowering/eval refusal, not a parse error.
+fn post_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
+    let start = word("post").parse_next(input)?;
+    let body = cut_err(expr).parse_next(input)?;
+    Ok(PipeOp::Post(PostRef {
+        body,
+        span: Span::new(start.start, start.end),
+    }))
+}
+
 fn of_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
     let start = word("of").parse_next(input)?;
     // Inline structural literal `(…)` vs a named target. `word("of")` already committed us to an
@@ -2315,6 +2358,101 @@ fn create_map_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
     Ok(insert_sys_drivers(values, create))
 }
 
+/// One relation in a `CREATE SQL … TABLES (…)` catalog: `<name> ( <col> <type> [constraints], … )`,
+/// reusing the `CREATE TABLE`/`CREATE TYPE` column-list parser (`table_column_def`).
+struct SqlResourceTable {
+    name: String,
+    columns: Vec<TableColumnDef>,
+}
+
+/// Parse one `TABLES (…)` entry: `<name> ( <column-def>, … )`. At least one column.
+fn sql_resource_table(input: &mut Stream<'_>) -> ModalResult<SqlResourceTable> {
+    let name = ident(input)?.node;
+    let _ = cut_err(punct(Token::LParen)).parse_next(input)?;
+    let columns: Vec<TableColumnDef> =
+        cut_err(separated(1.., table_column_def, punct(Token::Comma))).parse_next(input)?;
+    let _ = cut_err(punct(Token::RParen)).parse_next(input)?;
+    Ok(SqlResourceTable { name, columns })
+}
+
+/// `CREATE SQL /<path> [DIALECT SQLITE] OVER /<wire-endpoint> TABLES ( <table>(<cols>), … )` — a
+/// declared **sql-resource** (blueprint §13): a sqlite-dialect SQL endpoint served over a wire query
+/// verb, with the relation catalog declared INLINE (the declared twin of a mount-time D1
+/// introspection — no `introspect_d1` at mount). Desugars to `INSERT INTO /sys/drivers` with
+/// `kind='sql'`; the whole descriptor (dialect, the `/http/<driver>/…` query endpoint, and the table
+/// catalog) is stored as JSON in `body`, reusing the existing 9-column row shape. `SQL`/`DIALECT`/
+/// `OVER`/`TABLES` are contextual UPPERCASE idents — zero new frozen keywords. Carries NO secret (the
+/// token stays in the account layer, like every declared form). Only the `sqlite` dialect is served
+/// today (the D1/driver-cf planner dialect); any other dialect is a crisp parse error.
+fn create_sql_resource_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
+    let create = kw(Keyword::Create).parse_next(input)?;
+    let _ = word("SQL").parse_next(input)?;
+    // Committed after the noun: a malformed CREATE SQL is a crisp error, never a fallthrough.
+    let path = cut_err(path_expr).parse_next(input)?;
+    validate_template_path(&path)?;
+    let dialect = opt(preceded(word("DIALECT"), cut_err(ident)))
+        .parse_next(input)?
+        .map_or_else(|| "sqlite".to_string(), |d| d.node.to_ascii_lowercase());
+    if dialect != "sqlite" {
+        return Err(ErrMode::Cut(ContextError::new()));
+    }
+    let _ = cut_err(word("OVER")).parse_next(input)?;
+    let endpoint = cut_err(path_expr).parse_next(input)?;
+    validate_template_path(&endpoint)?;
+    let _ = cut_err(word("TABLES")).parse_next(input)?;
+    let _ = cut_err(punct(Token::LParen)).parse_next(input)?;
+    let tables: Vec<SqlResourceTable> =
+        cut_err(separated(1.., sql_resource_table, punct(Token::Comma))).parse_next(input)?;
+    let _ = cut_err(punct(Token::RParen)).parse_next(input)?;
+    let body = sql_resource_body_json(&dialect, &canonical_path(&endpoint), &tables);
+    let name = canonical_path(&path);
+    let values = driver_row_values(
+        "sql",
+        &name,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(&body),
+        false,
+    );
+    Ok(insert_sys_drivers(values, create))
+}
+
+/// Render a declared sql-resource's body to `{"dialect":…,"query_endpoint":…,"tables":[…]}`. Each
+/// table is `{"name":…,"columns":[{name,type,nullable,primary_key,unique}]}` — the SAME column shape
+/// `CREATE TYPE`/`CREATE TABLE` lower to, so the driver-cf D1 catalog lift reads one column shape.
+fn sql_resource_body_json(
+    dialect: &str,
+    query_endpoint: &str,
+    tables: &[SqlResourceTable],
+) -> String {
+    let tables_json: Vec<serde_json::Value> = tables
+        .iter()
+        .map(|t| {
+            let columns: Vec<DeclaredColumn> = t
+                .columns
+                .iter()
+                .map(|c| DeclaredColumn {
+                    name: c.name.clone(),
+                    ty: c.ty.clone(),
+                    nullable: c.nullable,
+                    primary_key: c.primary_key,
+                    unique: c.unique,
+                })
+                .collect();
+            serde_json::json!({ "name": t.name, "columns": columns })
+        })
+        .collect();
+    serde_json::json!({
+        "dialect": dialect,
+        "query_endpoint": query_endpoint,
+        "tables": tables_json,
+    })
+    .to_string()
+}
+
 // ---- CREATE ACCOUNT — in-language account declaration (20260703040000) -------
 //
 // `CREATE ACCOUNT <provider> '<account>'` declares a service account (google/github/slack/objstore/
@@ -2326,20 +2464,30 @@ fn create_map_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
 // in the statement text (RFD §10). The `provider`/`account` are selectors, never a secret.
 
 /// The `/sys/accounts` account-registry columns the desugar emits (the sys applier reads by NAME).
-/// Selectors only — there is structurally NO secret column; the token is sealed out-of-band.
-const ACCOUNT_COLUMNS: [&str; 3] = ["provider", "account", "app"];
+/// Selectors only — `secret_ref` is a REFERENCE (`env:`/`vault:`), resolved at USE time, NEVER an
+/// inline secret value; the token itself is sealed out-of-band.
+const ACCOUNT_COLUMNS: [&str; 4] = ["provider", "account", "app", "secret_ref"];
 
-/// Build the single-row `VALUES (provider, account)` the `/sys/accounts` insert carries.
-fn account_values(provider: &str, account: &str, app: Option<&str>) -> Values {
-    let app = app.map_or(Expr::Lit(Literal::Null), |s| {
-        Expr::Lit(Literal::Str(s.to_string()))
-    });
+/// Build the single-row `VALUES (provider, account, app, secret_ref)` the `/sys/accounts` insert
+/// carries. `secret_ref` is a reference selector, never a secret value.
+fn account_values(
+    provider: &str,
+    account: &str,
+    app: Option<&str>,
+    secret_ref: Option<&str>,
+) -> Values {
+    let opt_lit = |v: Option<&str>| {
+        v.map_or(Expr::Lit(Literal::Null), |s| {
+            Expr::Lit(Literal::Str(s.to_string()))
+        })
+    };
     Values {
         columns: Some(ACCOUNT_COLUMNS.iter().map(|c| (*c).to_string()).collect()),
         rows: vec![vec![
             Expr::Lit(Literal::Str(provider.to_string())),
             Expr::Lit(Literal::Str(account.to_string())),
-            app,
+            opt_lit(app),
+            opt_lit(secret_ref),
         ]],
     }
 }
@@ -2369,9 +2517,36 @@ fn create_account_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
     // Committed after the noun: a malformed CREATE ACCOUNT is a crisp error, never a fallthrough.
     let provider = cut_err(ident).parse_next(input)?.node;
     let account = cut_err(string_value).parse_next(input)?;
-    let app = opt(conn_app_clause).parse_next(input)?;
+    // APP / SECRET ride as optional clauses in either order (the sugar-shape clause loop, mirroring
+    // CONNECT). `SECRET '<ref>'` reuses `conn_secret_clause` so the reference grammar is identical
+    // to CONNECT — a reference (`env:`/`vault:`), never an inline secret.
+    let mut app: Option<String> = None;
+    let mut secret_ref: Option<String> = None;
+    loop {
+        if app.is_none() {
+            if let Some(v) = opt(conn_app_clause).parse_next(input)? {
+                app = Some(v);
+                continue;
+            }
+        }
+        if secret_ref.is_none() {
+            if let Some(v) = opt(conn_secret_clause).parse_next(input)? {
+                secret_ref = Some(v);
+                continue;
+            }
+        }
+        break;
+    }
+    // `SECRET` is a REFERENCE (`env:`/`vault:`), NEVER an inline value — an inline non-reference
+    // secret is a parse error (the credential-free-declaration contract; references only). The
+    // scheme list mirrors `conn_secret_clause`'s consumers and `secret_ref.rs::resolve_secret_ref`.
+    if let Some(s) = &secret_ref {
+        if !(s.starts_with("env:") || s.starts_with("vault:")) {
+            return Err(ErrMode::Cut(ContextError::new()));
+        }
+    }
     Ok(insert_sys_accounts(
-        account_values(&provider, &account, app.as_deref()),
+        account_values(&provider, &account, app.as_deref(), secret_ref.as_deref()),
         create,
     ))
 }
@@ -2705,6 +2880,15 @@ fn pipeline_or_effect(input: &mut Stream<'_>) -> ModalResult<Statement> {
 fn server_ddl(input: &mut Stream<'_>) -> ModalResult<ServerDdl> {
     let _ = kw(Keyword::Create).parse_next(input)?;
     let kind = ddl_kind(input)?;
+    // `CREATE CONNECTION` is retired (the "declared drivers are the normal way" mission):
+    // `CONNECT /<family>/<name> TO <driver> …` is the one declaration statement, persisted in the
+    // `path_binding` registry. Reject here with a committed error carrying a `CONNECT` pointer (the
+    // `StrContext::Label` surfaced by `map_error`), so an old `connections.qfs` line fails loudly.
+    if matches!(kind, DdlKind::Connection) {
+        return cut_err(fail::<_, ServerDdl, _>)
+            .context(StrContext::Label(CREATE_CONNECTION_RETIRED))
+            .parse_next(input);
+    }
     let name = ident(input)?;
     // Clause grammar is permissive (sugar shape, not full validation): collect the
     // optional ON / EVERY / AS / DO clauses in any order.
@@ -2715,33 +2899,7 @@ fn server_ddl(input: &mut Stream<'_>) -> ModalResult<ServerDdl> {
     let mut do_plan = None;
     let mut policy_rules: Vec<PolicyRuleAst> = Vec::new();
     let mut policy_attach: Option<String> = None;
-    let mut driver: Option<String> = None;
-    let mut at_locator: Option<String> = None;
-    let mut secret_ref: Option<String> = None;
     loop {
-        // `CREATE CONNECTION <name> DRIVER <driver> [AT '<loc>'] [SECRET '<ref>']` — the
-        // connection-declaration clauses (contextual idents, no frozen keyword). Probed first for
-        // the CONNECTION form so `DRIVER`/`SECRET` are consumed before the generic clause probes.
-        if matches!(kind, DdlKind::Connection) {
-            if driver.is_none() {
-                if let Some(v) = opt(conn_driver_clause).parse_next(input)? {
-                    driver = Some(v);
-                    continue;
-                }
-            }
-            if at_locator.is_none() {
-                if let Some(v) = opt(conn_at_clause).parse_next(input)? {
-                    at_locator = Some(v);
-                    continue;
-                }
-            }
-            if secret_ref.is_none() {
-                if let Some(v) = opt(conn_secret_clause).parse_next(input)? {
-                    secret_ref = Some(v);
-                    continue;
-                }
-            }
-        }
         // The `POLICY <name>` ATTACHMENT clause (t35) on a binding DDL — the policy a fired
         // plan commits under. `POLICY` is a frozen keyword (no new keyword). Only on a
         // non-POLICY DDL (for `CREATE POLICY` the leading POLICY is the kind, not an attach).
@@ -2809,13 +2967,9 @@ fn server_ddl(input: &mut Stream<'_>) -> ModalResult<ServerDdl> {
         on,
         policy_rules,
         policy: policy_attach,
-        connection: (driver.is_some() || at_locator.is_some() || secret_ref.is_some()).then(|| {
-            Box::new(ConnectionDeclAst {
-                driver,
-                at_locator,
-                secret_ref,
-            })
-        }),
+        // `CREATE CONNECTION` is retired (rejected above), so the connection-declaration clauses are
+        // never parsed here — a server-binding DDL never carries one.
+        connection: None,
     })
 }
 
@@ -2878,15 +3032,18 @@ fn policy_rule_clause(input: &mut Stream<'_>) -> ModalResult<PolicyRuleAst> {
     })
 }
 
-/// `FOR (user|role|group) <name>` — the optional t57 actor clause. `FOR` and the kind words are
-/// contextual UPPERCASE idents (matched case-insensitively via [`word`]), so this adds NO frozen
-/// keyword (the t31 `AT` lesson). The name is a bare identifier.
+/// `FOR (user|role|group|agent) <name>` — the optional t57 actor clause (blueprint §19 adds
+/// `agent`). `FOR` and the kind words are contextual UPPERCASE idents (matched case-insensitively
+/// via [`word`]), so this adds NO frozen keyword (the t31 `AT` lesson). The name is a bare identifier.
 fn policy_for_clause(input: &mut Stream<'_>) -> ModalResult<PolicySubjectAst> {
     let _ = word("FOR").parse_next(input)?;
     let kind = alt((
         word("USER").map(|_| "user"),
         word("ROLE").map(|_| "role"),
         word("GROUP").map(|_| "group"),
+        // blueprint §19 axis B: `FOR agent <name>` — `AGENT` is a contextual UPPERCASE ident
+        // (no new frozen keyword), beside user/role/group.
+        word("AGENT").map(|_| "agent"),
     ))
     .parse_next(input)?;
     let name = ident(input)?;
@@ -2972,14 +3129,11 @@ fn ddl_kind(input: &mut Stream<'_>) -> ModalResult<DdlKind> {
         kw(Keyword::Policy).map(|_| DdlKind::Policy),
         // `CONNECTION` is a contextual ident (no frozen keyword), like `materialized`.
         word("CONNECTION").map(|_| DdlKind::Connection),
+        // `AGENT` is a contextual ident (no frozen keyword), like `CONNECTION` — blueprint §19.
+        // The keyword freeze stays intact, so a column named `agent` still parses everywhere.
+        word("AGENT").map(|_| DdlKind::Agent),
     ))
     .parse_next(input)
-}
-
-/// `DRIVER <driver>` — the connection's driver kind (a bare ident). `DRIVER` is a contextual ident.
-fn conn_driver_clause(input: &mut Stream<'_>) -> ModalResult<String> {
-    let _ = word("DRIVER").parse_next(input)?;
-    ident(input).map(|s| s.node)
 }
 
 /// `AT '<locator>'` — the connection's non-secret location, a quoted string (consistent with the
@@ -3044,6 +3198,7 @@ fn ddl_kind_segment(kind: DdlKind) -> &'static str {
         DdlKind::Webhook => "webhooks",
         DdlKind::Policy => "policies",
         DdlKind::Connection => "connections",
+        DdlKind::Agent => "agents",
     }
 }
 
@@ -3126,7 +3281,11 @@ fn inner_statement(input: &mut Stream<'_>) -> ModalResult<Statement> {
             create_driver_stmt,
             create_type_stmt,
             create_declared_view_stmt,
-            create_map_stmt,
+            // `CREATE MAP` and `CREATE SQL` share one nested `alt` so the CREATE-family tuple stays
+            // within winnow's alt arity. `CREATE SQL /<path> … TABLES (…)` is the declared
+            // sql-resource arm — a sqlite-dialect SQL endpoint over a wire query verb (ticket
+            // 20260718203326). Both backtrack cleanly when the noun after `CREATE` doesn't match.
+            alt((create_map_stmt, create_sql_resource_stmt)),
             // `CREATE ACCOUNT <provider> '<label>'` (20260703040000): the in-language account
             // declaration, desugars to `INSERT INTO /sys/accounts`. Backtracks cleanly when the
             // noun after `CREATE` is not `ACCOUNT`.

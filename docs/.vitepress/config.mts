@@ -77,6 +77,7 @@ export default defineConfig({
         text: 'Using qfs',
         items: [
           { text: 'How qfs works', link: '/guide/concepts' },
+          { text: 'The module system', link: '/guide/module-system' },
           { text: 'Current design snapshot', link: '/guide/design-snapshot' },
           { text: 'The account model', link: '/guide/account-model' },
           { text: 'CLI reference', link: '/guide/cli' },

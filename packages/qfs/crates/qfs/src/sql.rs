@@ -16,9 +16,12 @@
 //! on any error).
 //!
 //! ## Config (no credentials in argv/logs)
-//! Each connection is one env var `QFS_SQL_<CONN>=<path-to-.sqlite>`; the `<CONN>` suffix
-//! (lower-cased) is the `/sql/<conn>/...` path segment. A connection whose file cannot be opened or
-//! introspected is skipped, so a `/sql/<conn>` commit for an unconfigured conn fails closed.
+//! A connection is declared with `CONNECT /sql/<conn> TO sqlite|postgres|mysql AT '<loc>' [SECRET
+//! '<ref>']` (or `qfs connect`), persisted in the project-DB `path_binding` registry — the SINGLE
+//! source (the retired `QFS_SQL_*` env var and `connections.qfs` loader are gone; experimental, no
+//! backward compat). The `<conn>` segment after `/sql/` is the `/sql/<conn>/...` path segment. A
+//! connection whose file cannot be opened or introspected is skipped, so a `/sql/<conn>` commit for
+//! an unresolvable conn fails closed.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -28,9 +31,6 @@ use qfs_driver_sql::{
     SqlBackend, SqlDriver, SqlError, TableCatalog,
 };
 use qfs_types::{Row, Value};
-
-/// The env-var prefix naming a SQLite connection: `QFS_SQL_<CONN>=<path>`.
-const SQL_ENV_PREFIX: &str = "QFS_SQL_";
 
 /// A live SQLite backend wrapping a `rusqlite::Connection` behind a `Mutex` (the connection is
 /// `!Sync`; the mutex provides the `Send + Sync` the trait requires). Opens a real database file,
@@ -211,64 +211,15 @@ impl SqlBackend for SqliteBackend {
     }
 }
 
-/// Build the live connection registry from `QFS_SQL_*` env config. Best-effort: a connection that
-/// cannot be opened/introspected is skipped (never panics). Returns an empty registry when nothing
-/// is configured.
+/// Build the live connection registry from the `path_binding` registry — the SINGLE source of a
+/// `/sql/<conn>` mount (a `CONNECT /sql/<conn> TO sqlite|postgres|mysql AT '<loc>' [SECRET '<ref>']`
+/// binding, persisted by `qfs connect`). The retired `QFS_SQL_*` env var and `connections.qfs`
+/// loader are gone. Best-effort: a connection that cannot be opened/introspected is skipped (never
+/// panics). Returns an empty registry when nothing is bound. Run, commit, and describe all read this
+/// ONE source, so they converge.
 #[must_use]
 pub fn conn_registry() -> ConnRegistry {
     let mut reg = ConnRegistry::new();
-    // Declared `CREATE CONNECTION … DRIVER sqlite AT '<path>'` connections (the in-language source
-    // of truth) come FIRST; an equally-named `QFS_SQL_*` env var (the deprecated fallback below)
-    // then takes precedence on a name clash by overwriting it — keeping pre-existing setups working.
-    for decl in crate::connections_config::declared_for("sqlite") {
-        let Some(path) = decl.at_locator.as_deref() else {
-            continue;
-        };
-        if let Some(handle) = open_sqlite_handle(path) {
-            reg = reg.with(decl.name.to_ascii_lowercase(), handle);
-        }
-    }
-    for (key, path) in std::env::vars() {
-        let Some(conn) = key.strip_prefix(SQL_ENV_PREFIX) else {
-            continue;
-        };
-        if conn.is_empty() || path.is_empty() {
-            continue;
-        }
-        let conn = conn.to_ascii_lowercase();
-        if let Some(handle) = open_sqlite_handle(&path) {
-            crate::connections_config::warn_env_var_deprecation_once();
-            reg = reg.with(conn, handle);
-        }
-    }
-    // t-203060: declared Postgres / MySQL connections (`CREATE CONNECTION … DRIVER postgres|mysql
-    // AT '<url>' SECRET '<ref>'`). The password resolves from the `env:`-scheme secret ref (the dev
-    // stack convention) or is carried in the URL; a connection that cannot connect/introspect is
-    // skipped (best-effort, never panics), so an unreachable DB fails closed rather than faking a mount.
-    for decl in crate::connections_config::declared_for("postgres") {
-        let Some(url) = decl.at_locator.as_deref() else {
-            continue;
-        };
-        let pw = resolve_db_password(decl.secret_ref.as_deref());
-        if let Some(handle) = open_pg_handle(url, pw.as_deref()) {
-            reg = reg.with(decl.name.to_ascii_lowercase(), handle);
-        }
-    }
-    for decl in crate::connections_config::declared_for("mysql") {
-        let Some(url) = decl.at_locator.as_deref() else {
-            continue;
-        };
-        let pw = resolve_db_password(decl.secret_ref.as_deref());
-        if let Some(handle) = open_mysql_handle(url, pw.as_deref()) {
-            reg = reg.with(decl.name.to_ascii_lowercase(), handle);
-        }
-    }
-    // `qfs connect` (the `path_binding` DB registry) — the CANONICAL local-connection mechanism
-    // (owner decision 2026-07-05, ticket 20260705000500). A `qfs connect /sql/<conn> TO
-    // sqlite|postgres|mysql AT '<loc>' [SECRET '<ref>']` binding wires the runtime sql driver under
-    // `<conn>` (the segment after `/sql/`), so a persisted connection is no longer invisible to
-    // `qfs run` — run and describe now converge on ONE source (the project DB). Registered LAST so a
-    // persisted binding wins a name clash with the deprecated env-var/`connections.qfs` shims.
     for (conn, driver, at, secret) in path_binding_sql_connections() {
         let pw = || resolve_db_password(secret.as_deref());
         let handle = match driver.as_str() {
@@ -342,26 +293,19 @@ fn open_mysql_handle(url: &str, password: Option<&str>) -> Option<ConnHandle> {
     ConnHandle::new(backend).ok()
 }
 
-/// Open one SQLite file into a [`ConnHandle`] (the shared open path for an env-var or a declared
+/// Open one SQLite file into a [`ConnHandle`] (the shared open path for a `CONNECT`-bound
 /// connection). `None` when the file cannot be opened/introspected — best-effort, never panics.
 fn open_sqlite_handle(path: &str) -> Option<ConnHandle> {
     let backend: Arc<dyn SqlBackend> = Arc::new(SqliteBackend::open(path).ok()?);
     ConnHandle::new(backend).ok()
 }
 
-/// Whether any `/sql` connection is configured (a declared `DRIVER sqlite` connection OR a
-/// `QFS_SQL_*` env var) — the binary only registers the sql mount + apply driver when at least one
-/// resolves (so an unconfigured `/sql` commit fails closed).
+/// Whether any `/sql` connection is bound (a persisted `CONNECT /sql/<conn> …` `path_binding` row —
+/// the single source) — the binary only registers the sql mount + apply driver when at least one
+/// resolves (so an unbound `/sql` commit fails closed).
 #[must_use]
 pub fn has_connections() -> bool {
-    std::env::vars().any(|(k, v)| k.starts_with(SQL_ENV_PREFIX) && !v.is_empty())
-        || ["sqlite", "postgres", "mysql"].iter().any(|driver| {
-            crate::connections_config::declared_for(driver)
-                .iter()
-                .any(|c| c.at_locator.is_some())
-        })
-        // The canonical source: a persisted `qfs connect /sql/<conn> …` binding.
-        || !path_binding_sql_connections().is_empty()
+    !path_binding_sql_connections().is_empty()
 }
 
 /// A fresh [`SqlDriver`] over the live registry — the planning mount AND the source the apply
@@ -432,5 +376,110 @@ mod tests {
             .expect("read");
         assert!(rows.is_empty());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn four_column_types_roundtrip_via_seeded_driver() {
+        // The rich column types NUMERIC / TIMESTAMP / UUID / JSON round-trip write→read through a
+        // real SQLite backend: the declared types map to their canonical `ColumnType` on the read
+        // (introspection) side, and the stored values survive intact. Hermetic end-to-end.
+        use qfs_types::{ColumnType, Value};
+        let (path, driver) = seeded_test_driver(
+            "types",
+            "CREATE TABLE vals (n NUMERIC, ts TIMESTAMP, u UUID, j JSON);\n\
+             INSERT INTO vals (n, ts, u, j) VALUES \
+               (12.34, '2026-07-18T00:00:00Z', '550e8400-e29b-41d4-a716-446655440000', '{\"a\":1}');",
+        );
+        let handle = driver
+            .registry()
+            .get("types")
+            .expect("mounted `types` conn");
+        // Write side: each declared type maps to the canonical qfs `ColumnType`.
+        let cat = handle.catalog();
+        let vals = cat.table("vals").expect("vals catalogued");
+        let ty = |name: &str| vals.column(name).expect("column").ty.clone();
+        assert_eq!(ty("n"), ColumnType::Decimal);
+        assert_eq!(ty("ts"), ColumnType::Timestamp);
+        assert_eq!(ty("u"), ColumnType::Uuid);
+        assert_eq!(ty("j"), ColumnType::Json);
+        // Read side: the stored values come back intact.
+        let rows = handle
+            .backend()
+            .execute_read("SELECT n, ts, u, j FROM vals", &[])
+            .expect("read back");
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.values[0], Value::Float(12.34));
+        assert_eq!(r.values[1], Value::Text("2026-07-18T00:00:00Z".to_string()));
+        assert_eq!(
+            r.values[2],
+            Value::Text("550e8400-e29b-41d4-a716-446655440000".to_string())
+        );
+        assert_eq!(r.values[3], Value::Text("{\"a\":1}".to_string()));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn env_var_and_connections_file_bind_nothing_only_path_binding_binds() {
+        // The single-source guarantee: the retired `QFS_SQL_*` env var and a `connections.qfs`
+        // `CREATE CONNECTION` file bind NOTHING (their loader + fallback are gone — experimental, no
+        // backward compat). Only a persisted `CONNECT /sql/<conn> …` `path_binding` row wires a
+        // mount, so run / commit / describe converge on that ONE registry.
+        let _home = crate::testenv::HomeGuard::with_passphrase("sql-only-path-binding");
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("shop.db");
+        {
+            let c = rusqlite::Connection::open(&db_path).unwrap();
+            c.execute("CREATE TABLE items (id INTEGER, name TEXT)", [])
+                .unwrap();
+        }
+        let db_str = db_path.to_str().unwrap();
+
+        // env-only / file-only configurations resolve to NO working mount.
+        let conns = dir.path().join("connections.qfs");
+        std::fs::write(
+            &conns,
+            format!("CREATE CONNECTION shop DRIVER sqlite AT '{db_str}';"),
+        )
+        .unwrap();
+        std::env::set_var("QFS_SQL_SHOP", db_str);
+        std::env::set_var("QFS_CONNECTIONS", conns.to_str().unwrap());
+        assert!(
+            !has_connections(),
+            "a QFS_SQL_* / connections.qfs config binds no /sql mount"
+        );
+        assert!(
+            conn_registry().get("shop").is_err(),
+            "no `shop` mount from env/file"
+        );
+        std::env::remove_var("QFS_SQL_SHOP");
+        std::env::remove_var("QFS_CONNECTIONS");
+
+        // Only the persisted path_binding row wires the mount.
+        let proj = crate::store::open_system_db()
+            .unwrap()
+            .unwrap()
+            .into_db()
+            .into_connection();
+        crate::path_binding::db_upsert_binding(
+            &proj,
+            "/sql/shop",
+            "sqlite",
+            Some(db_str),
+            None,
+            Some("local"),
+            None,
+            None,
+        )
+        .unwrap();
+        drop(proj);
+        assert!(
+            has_connections(),
+            "the path_binding row wires the /sql mount"
+        );
+        assert!(
+            conn_registry().get("shop").is_ok(),
+            "`shop` resolves from the path_binding registry"
+        );
     }
 }

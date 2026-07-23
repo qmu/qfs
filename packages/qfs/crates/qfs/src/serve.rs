@@ -86,6 +86,22 @@ pub fn run_serve(config: &Path) -> i32 {
     let (reconf_handle, reconf_rx) = qfs_http::reconfigure_channel(Arc::clone(&server_state));
     crate::server_face::register_server_face(&mut engine, &mut reads, &server_state);
 
+    // The `/collections/<view>` read-by-path surface (mission
+    // `a-file-collection-is-a-declared-set-over-any-blob-source`): a registered collection view
+    // (`CREATE VIEW <name> AS /local/... |> decode md.<relation>`, a `/server/views` row) is
+    // reachable by path — a live SELECT + DESCRIBE reach the declared `documents`/`links` set the
+    // way the compiled `/markdown` mount did, applying the root-relative strip (Ruling 3). Wired over
+    // the LIVE ServerState (resolved lazily per request, so a view registered by boot replay/reconcile
+    // is reachable with no restart) and the daemon's `/local` working tree.
+    reads = crate::collection_mount::register_collection_mounts(
+        &mut engine,
+        reads,
+        Arc::new(crate::collection_mount::ViewSource::Live(Arc::clone(
+            &server_state,
+        ))),
+        qfs_driver_local::Sandbox::new(crate::collection_mount::serve_local_root()),
+    );
+
     let engine = Arc::new(engine);
     let reads = Arc::new(reads);
 

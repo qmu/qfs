@@ -680,6 +680,33 @@ mod tests {
     }
 
     #[test]
+    fn my_value_maps_rich_type_columns_to_canonical_text() {
+        // MySQL's text protocol returns DATETIME (TIMESTAMP), CHAR(36) (UUID), and JSON columns as
+        // UTF-8 byte strings, so the value-mapping seam for those three rich types is the
+        // Bytes→Text branch. Each round-trips to `Value::Text` intact (the NUMERIC path is covered
+        // by `pg_numeric_wire_format_renders_canonical_text`; MySQL DECIMAL likewise arrives as text
+        // bytes here).
+        assert_eq!(
+            my_value(&mysql::Value::Bytes(b"2026-07-18 00:00:00".to_vec())),
+            Value::Text("2026-07-18 00:00:00".to_string())
+        );
+        assert_eq!(
+            my_value(&mysql::Value::Bytes(
+                b"550e8400-e29b-41d4-a716-446655440000".to_vec()
+            )),
+            Value::Text("550e8400-e29b-41d4-a716-446655440000".to_string())
+        );
+        assert_eq!(
+            my_value(&mysql::Value::Bytes(b"{\"a\": 1}".to_vec())),
+            Value::Text("{\"a\": 1}".to_string())
+        );
+        assert_eq!(
+            my_value(&mysql::Value::Bytes(b"12345.67".to_vec())),
+            Value::Text("12345.67".to_string())
+        );
+    }
+
+    #[test]
     fn pg_numeric_wire_format_renders_canonical_text() {
         assert_eq!(
             pg_numeric_text(&numeric_wire(1, 0x0000, 2, &[1, 2345, 6700])).unwrap(),

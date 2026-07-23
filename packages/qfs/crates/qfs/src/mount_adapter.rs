@@ -595,6 +595,7 @@ mod tests {
             path: "/mail2/inbox".to_string(),
             pushed: qfs_pushdown::PushedQuery::default(),
             schema: Schema::new(vec![]),
+            materialize_content: false,
         };
         let rows = read
             .scan(&scan, &RequestContext::anonymous())

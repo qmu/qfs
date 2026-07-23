@@ -119,6 +119,31 @@ fn decode_and_encode_codecs() {
         panic!("expected Encode")
     };
     assert_eq!(e.fmt, "yaml");
+    // A bare codec carries no relation suffix (the primary relation).
+    assert_eq!(d.relation, None);
+    assert_eq!(e.relation, None);
+}
+
+#[test]
+fn decode_relation_qualified_token_parses() {
+    // The `.relation` suffix (design brief Ruling 1) addresses a codec's declared named relation:
+    // `decode md.documents` / `decode md.links`. A leaf addition to the codec stage, resolved
+    // later against the codec's relation set — the parser records fmt + relation only.
+    let stmt = parse_ok("/local/docs/*.md |> DECODE md.documents");
+    let Statement::Query(p) = stmt else { panic!() };
+    let PipeOp::Decode(ref d) = p.ops[0] else {
+        panic!("expected Decode")
+    };
+    assert_eq!(d.fmt, "md");
+    assert_eq!(d.relation.as_deref(), Some("documents"));
+
+    let stmt = parse_ok("/local/docs/*.md |> DECODE md.links");
+    let Statement::Query(p) = stmt else { panic!() };
+    let PipeOp::Decode(ref d) = p.ops[0] else {
+        panic!("expected Decode")
+    };
+    assert_eq!(d.fmt, "md");
+    assert_eq!(d.relation.as_deref(), Some("links"));
 }
 
 // ---- transform stage (blueprint §15, decision W) --------------------------
@@ -789,44 +814,22 @@ fn ddl_endpoint_as_query() {
 }
 
 #[test]
-fn ddl_connection_driver_at_and_secret() {
-    // The headline form: a postgres connection pointing at a URL, with a SECRET *reference*.
-    let stmt = parse_ok(
+fn create_connection_is_retired_and_points_at_connect() {
+    // `CREATE CONNECTION` is retired (the "declared drivers are the normal way" mission): the sole
+    // declaration statement is `CONNECT /<family>/<name> TO <driver> …`, persisted in the
+    // `path_binding` registry. Every old form now parse-errors, and the message steers the author to
+    // `CONNECT` so a stale `connections.qfs` line fails loudly with a migration hint.
+    for src in [
         "CREATE CONNECTION analytics DRIVER postgres AT 'postgres://db/analytics' SECRET 'env:PG_PASSWORD'",
-    );
-    let Statement::Ddl(d) = stmt else {
-        panic!("expected Ddl")
-    };
-    assert_eq!(d.kind, DdlKind::Connection);
-    assert_eq!(d.name, "analytics");
-    assert_eq!(d.target, vec!["server", "connections", "analytics"]);
-    let c = d.connection.as_deref().expect("connection clauses");
-    assert_eq!(c.driver.as_deref(), Some("postgres"));
-    assert_eq!(c.at_locator.as_deref(), Some("postgres://db/analytics"));
-    assert_eq!(c.secret_ref.as_deref(), Some("env:PG_PASSWORD"));
-}
-
-#[test]
-fn ddl_connection_local_needs_no_secret() {
-    // A local SQLite file: a locator, no secret.
-    let stmt = parse_ok("CREATE CONNECTION orders DRIVER sqlite AT '/data/orders.db'");
-    let Statement::Ddl(d) = stmt else { panic!() };
-    assert_eq!(d.kind, DdlKind::Connection);
-    let c = d.connection.as_deref().expect("connection clauses");
-    assert_eq!(c.driver.as_deref(), Some("sqlite"));
-    assert_eq!(c.at_locator.as_deref(), Some("/data/orders.db"));
-    assert!(c.secret_ref.is_none());
-}
-
-#[test]
-fn ddl_connection_gmail_needs_no_locator() {
-    // Gmail's locator is implicit: a SECRET reference, no AT.
-    let stmt = parse_ok("CREATE CONNECTION work DRIVER gmail SECRET 'vault:gmail/work'");
-    let Statement::Ddl(d) = stmt else { panic!() };
-    let c = d.connection.as_deref().expect("connection clauses");
-    assert_eq!(c.driver.as_deref(), Some("gmail"));
-    assert!(c.at_locator.is_none());
-    assert_eq!(c.secret_ref.as_deref(), Some("vault:gmail/work"));
+        "CREATE CONNECTION orders DRIVER sqlite AT '/data/orders.db'",
+        "CREATE CONNECTION work DRIVER gmail SECRET 'vault:gmail/work'",
+    ] {
+        let err = parse_err(src);
+        assert!(
+            err.message.contains("CREATE CONNECTION is retired") && err.message.contains("CONNECT"),
+            "expected a retired-CONNECTION pointer for `{src}`, got: {err}"
+        );
+    }
 }
 
 // ---- CONNECT / DISCONNECT — defined-path bindings (EPIC 20260701100000) -----
@@ -988,6 +991,41 @@ fn create_account_needs_provider_and_label() {
     // `account` is NOT a frozen keyword — it is a contextual ident (asserted above), so the verb is
     // additive: `CREATE ACCOUNT …` parses without reserving a new keyword.
     assert!(!KEYWORDS.contains(&"account"));
+}
+
+#[test]
+fn create_account_carries_a_secret_reference() {
+    // 20260718203325: an optional `SECRET '<ref>'` rides as the `secret_ref` selector column of the
+    // desugared `/sys/accounts` row — a reference resolved at USE, never an inline token.
+    let e = effect_of(parse_ok("CREATE ACCOUNT cf 'mycf' SECRET 'env:CF_TOKEN'"));
+    assert_eq!(target_path(&e), "/sys/accounts");
+    assert_eq!(values_cell(&e, "provider").as_deref(), Some("cf"));
+    assert_eq!(values_cell(&e, "account").as_deref(), Some("mycf"));
+    assert_eq!(
+        values_cell(&e, "secret_ref").as_deref(),
+        Some("env:CF_TOKEN")
+    );
+
+    // APP and SECRET are order-independent, mirroring CONNECT's clause loop.
+    let e = effect_of(parse_ok(
+        "CREATE ACCOUNT cf 'mycf' SECRET 'vault:cf/mycf' APP 'client'",
+    ));
+    assert_eq!(
+        values_cell(&e, "secret_ref").as_deref(),
+        Some("vault:cf/mycf")
+    );
+    assert_eq!(values_cell(&e, "app").as_deref(), Some("client"));
+
+    // Absent the clause, `secret_ref` is NULL (the token stays sealed out-of-band).
+    let e = effect_of(parse_ok("CREATE ACCOUNT github 'work'"));
+    assert_eq!(values_cell(&e, "secret_ref"), None);
+}
+
+#[test]
+fn create_account_rejects_an_inline_secret() {
+    // References only (`env:`/`vault:`): an inline non-reference secret is a PARSE error, never
+    // material sealed into the statement text.
+    assert!(parse_statement("CREATE ACCOUNT cf 'mycf' SECRET 'hunter2'").is_err());
 }
 
 // ---- §13 declared drivers — CREATE DRIVER / TYPE / declared VIEW / MAP -------
@@ -1261,6 +1299,53 @@ fn create_map_call_signature_and_irreversible() {
 }
 
 #[test]
+fn create_sql_resource_desugars_with_dialect_endpoint_and_table_catalog() {
+    // ticket 20260718203326: the declared sql-resource arm — a sqlite-dialect SQL endpoint over a
+    // wire query verb, with the relation catalog declared INLINE. Desugars to a `kind='sql'`
+    // /sys/drivers row whose `body` carries the dialect, the `/http/<driver>/…` query endpoint, and
+    // the table catalog (the declared twin of a mount-time D1 introspection).
+    let e = effect_of(parse_ok(
+        "CREATE SQL /cloudflare/d1/{database} \
+         OVER /http/cloudflare/accounts/{account}/d1/database/{database}/query \
+         TABLES ( users ( id text PRIMARY KEY, email text NOT NULL, name text ), \
+                  orders ( id text PRIMARY KEY, total int ) )",
+    ));
+    assert_eq!(target_path(&e), "/sys/drivers");
+    assert_eq!(values_cell(&e, "kind").as_deref(), Some("sql"));
+    assert_eq!(
+        values_cell(&e, "name").as_deref(),
+        Some("/cloudflare/d1/{database}")
+    );
+    let body = values_cell(&e, "body").unwrap();
+    assert!(body.contains("\"dialect\":\"sqlite\""), "body: {body}");
+    assert!(
+        body.contains("/http/cloudflare/accounts/{account}/d1/database/{database}/query"),
+        "body carries the query endpoint: {body}"
+    );
+    assert!(body.contains("users") && body.contains("orders") && body.contains("email"));
+    // No secret and no irreversible flag: a declared sql-resource is credential-free by construction.
+    assert!(!values_bool(&e, "irreversible"));
+}
+
+#[test]
+fn create_sql_resource_defaults_dialect_and_rejects_a_non_sqlite_dialect() {
+    // DIALECT is optional (default sqlite). Only sqlite is served today (the driver-cf planner
+    // dialect); any other dialect is a crisp parse error, never a silent mismatch.
+    assert!(
+        parse_statement("CREATE SQL /cf/d1/{db} OVER /http/cf/query TABLES ( t ( id text ) )")
+            .is_ok()
+    );
+    assert!(parse_statement(
+        "CREATE SQL /cf/d1/{db} DIALECT SQLITE OVER /http/cf/query TABLES ( t ( id text ) )"
+    )
+    .is_ok());
+    assert!(parse_statement(
+        "CREATE SQL /cf/d1/{db} DIALECT postgres OVER /http/cf/query TABLES ( t ( id text ) )"
+    )
+    .is_err());
+}
+
+#[test]
 fn server_binding_view_with_bare_ident_still_parses_as_ddl() {
     // Dispatch regression + PRINCIPLE (§5.5): the two `CREATE VIEW` forms are told apart by what KIND
     // of thing the view's OWN name denotes. A PATH name (`CREATE VIEW /chatwork/rooms`) is a
@@ -1307,6 +1392,10 @@ fn declared_driver_nouns_add_no_frozen_keyword() {
         "next",
         "param",
         "max",
+        "sql",
+        "over",
+        "tables",
+        "dialect",
     ] {
         assert!(
             !KEYWORDS.contains(&w),
@@ -1340,6 +1429,35 @@ fn follow_stage_parses_as_the_follow_pipe_op() {
         [PipeOp::Decode(_), PipeOp::Follow(f)] => assert_eq!(f.field, "download_url"),
         other => panic!("expected DECODE then FOLLOW, got {other:?}"),
     }
+}
+
+#[test]
+fn post_stage_parses_as_the_read_over_post_pipe_op() {
+    // POST (blueprint §13.1 G1, ticket 20260722091300): a contextual-identifier stage carrying the
+    // struct-literal body the declared-view fetch POSTs — the read-over-POST shape (queue pull).
+    // The stored body round-trips through serde (the install → rehydrate path DESCRIBE/plan use).
+    let src = "/http/cf/accounts/a/queues/q/messages/pull \
+               |> POST { visibility_timeout_ms: 5000 } |> DECODE json |> EXPAND result";
+    let Statement::Query(p) = parse_ok(src) else {
+        panic!("expected a query");
+    };
+    match p.ops.as_slice() {
+        [PipeOp::Post(post), PipeOp::Decode(_), PipeOp::Expand(_)] => {
+            assert!(
+                matches!(&post.body, Expr::Struct(_)),
+                "the POST body is a struct literal, got {:?}",
+                post.body
+            );
+        }
+        other => panic!("expected POST then DECODE then EXPAND, got {other:?}"),
+    }
+    // Round-trips through serde exactly as a stored declared-view body does.
+    let json = serde_json::to_string(&Statement::Query(p)).unwrap();
+    let back: Statement = serde_json::from_str(&json).unwrap();
+    let Statement::Query(p2) = back else {
+        panic!("expected a query after round-trip");
+    };
+    assert!(matches!(p2.ops.first(), Some(PipeOp::Post(_))));
 }
 
 #[test]
@@ -1484,6 +1602,29 @@ fn ddl_webhook_and_policy() {
 }
 
 #[test]
+fn ddl_agent_parses_and_adds_no_frozen_keyword() {
+    // blueprint §19: `CREATE AGENT <name>` — `AGENT` is a contextual UPPERCASE ident (like
+    // CONNECTION/MATERIALIZED), so it adds NO frozen keyword.
+    let stmt = parse_ok("CREATE AGENT triage");
+    let Statement::Ddl(d) = stmt else { panic!() };
+    assert_eq!(d.kind, DdlKind::Agent);
+    assert_eq!(d.name, "triage");
+    assert_eq!(d.target, vec!["server", "agents", "triage"]);
+
+    // An attached POLICY handle rides the frozen `POLICY` keyword (the name is a bare ident).
+    let stmt = parse_ok("CREATE AGENT triage POLICY p");
+    let Statement::Ddl(d) = stmt else { panic!() };
+    assert_eq!(d.kind, DdlKind::Agent);
+    assert_eq!(d.policy.as_deref(), Some("p"));
+
+    // `agent` is NOT a frozen keyword — a column named `agent` still parses everywhere (the
+    // 39-keyword freeze lock stays intact).
+    assert!(!KEYWORDS.contains(&"agent"));
+    assert!(parse_statement("/x |> SELECT agent").is_ok());
+    assert!(parse_statement("/x |> WHERE agent > 3").is_ok());
+}
+
+#[test]
 fn ddl_policy_allow_deny_rules() {
     // The blueprint §10 example: `ALLOW SELECT DENY INSERT,UPDATE,REMOVE,CALL`. `ALLOW`/`DENY` are
     // contextual idents (NOT frozen keywords); verbs span keyword (SELECT/UPDATE/REMOVE/CALL)
@@ -1545,6 +1686,16 @@ fn ddl_policy_t57_actor_scope_and_condition_clauses() {
         }
         other => panic!("expected a member_of(...) call, got {other:?}"),
     }
+
+    // blueprint §19 axis B: `FOR agent <name>` parses as a policy subject beside user/role/group,
+    // adding no frozen keyword (`agent` is a contextual ident).
+    let p = parse_ok("CREATE POLICY ag ALLOW INSERT ON mail FOR agent triage AT /me/mail/**");
+    let Statement::Ddl(d) = p else { panic!() };
+    let r = &d.policy_rules[0];
+    let subject = r.subject.as_ref().expect("a FOR agent clause");
+    assert_eq!(subject.kind, "agent");
+    assert_eq!(subject.name, "triage");
+    assert_eq!(r.scope.as_deref(), Some("/me/mail/**"));
 
     // The clauses are optional: a bare ALLOW rule has none of them.
     let p = parse_ok("CREATE POLICY plain ALLOW SELECT");
@@ -1699,10 +1850,12 @@ fn closed_core_variant_counts_are_locked() {
         PipeOp::Expand(vec![]),
         PipeOp::Decode(Codec {
             fmt: String::new(),
+            relation: None,
             span: Span::new(0, 0),
         }),
         PipeOp::Encode(Codec {
             fmt: String::new(),
+            relation: None,
             span: Span::new(0, 0),
         }),
         PipeOp::Call(CallRef {
@@ -1745,13 +1898,24 @@ fn closed_core_variant_counts_are_locked() {
             target: OfTarget::Named(String::new()),
             span: Span::new(0, 0),
         }),
+        // POST (blueprint §13.1 G1, ticket 20260722091300) — the declared-driver read-over-POST
+        // stage, the fifth deliberate, reviewed additive variant (22 → 23). `post` is a CONTEXTUAL
+        // identifier, not a frozen keyword, so the keyword freeze stays at 39; only this variant
+        // set grew. Outside a declared view body (where the evaluator strips a leading POST to
+        // drive the wire fetch as a POST) it is a structured lowering/eval refusal, never an
+        // executable general-pipeline stage.
+        PipeOp::Post(PostRef {
+            body: Expr::Lit(Literal::Null),
+            span: Span::new(0, 0),
+        }),
     ];
     assert_eq!(
         pipe_variants.len(),
-        22,
-        "PipeOp is closed at 22 variants — the §15 TRANSFORM stage (decision W), the §18 \
-         SWITCH stage, the §13 FOLLOW stage, and the §5.6 OF assertion stage are the only \
-         additive growth; still no per-driver/per-action variant (blueprint §3)"
+        23,
+        "PipeOp is closed at 23 variants — the §15 TRANSFORM stage (decision W), the §18 \
+         SWITCH stage, the §13 FOLLOW stage, the §5.6 OF assertion stage, and the §13.1 POST \
+         read-over-POST stage are the only additive growth; still no per-driver/per-action \
+         variant (blueprint §3)"
     );
 }
 

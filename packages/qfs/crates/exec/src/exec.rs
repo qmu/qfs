@@ -69,7 +69,20 @@ pub async fn execute_read_with(
 ) -> Result<RowSet, ExecError> {
     // 1. Build the PhysicalPlan (pushdown split) from the AST via the live registry. This is
     //    the qfs-core t14 seam: lower_query (from the AST, O-t07-1) -> partition_by_source.
-    let physical = plan_query(stmt, mounts).map_err(map_pushdown_error)?;
+    //    A codec pipeline is planned only up to its first codec stage: the codec tail
+    //    (DECODE/ENCODE + the ops after them) runs locally in `apply_codecs`, not in the plan,
+    //    because a decode produces a data-dependent schema the planner cannot know (blueprint
+    //    §13b). `stmt_without_codec_tail` returns the pre-codec statement to plan.
+    let plan_owned = crate::codec::stmt_without_codec_tail(stmt);
+    let plan_stmt: &Statement = plan_owned.as_ref().unwrap_or(stmt);
+    let mut physical = plan_query(plan_stmt, mounts).map_err(map_pushdown_error)?;
+
+    // 1b. A collection-set DECODE needs each row's blob bytes (blueprint §13b): a glob/directory
+    //     listing over a blob source leaves `content` null to avoid reading every entry, so when
+    //     the statement carries a DECODE we ask each scan leaf to materialize `content` per row.
+    if crate::codec::has_decode_stage(stmt) {
+        physical.request_content_materialization();
+    }
 
     // 2. Execute each native scan through the ReadDriver seam, in plan (left-to-right) order —
     //    the positional order ScanResults/MiniEvaluator consume.

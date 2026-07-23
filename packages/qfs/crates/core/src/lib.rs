@@ -39,10 +39,10 @@ mod typeck;
 
 pub use ddl::server::{
     binding_config_row, config_row_batch, desugar_to_insert, from_server_ddl, job_runs_schema,
-    normalize_spans, parse_server_binding_ddl, server_node_schema, server_write_plan, ConfigRow,
-    DdlError as ServerDdlError, DesugarToInsert, EndpointDecl, EventRef, HttpMethod, Interval,
-    JobDecl, PlanSpec, PolicyRef, Route, ServerBindingDdl, StatementSpec, TriggerDecl, ViewDecl,
-    WebhookDecl, CREATE_WRITE_OP,
+    normalize_spans, parse_server_binding_ddl, server_node_schema, server_write_plan, AgentDecl,
+    ConfigRow, DdlError as ServerDdlError, DesugarToInsert, EndpointDecl, EventRef, HttpMethod,
+    Interval, JobDecl, PlanSpec, PolicyRef, Route, ServerBindingDdl, StatementSpec, TriggerDecl,
+    ViewDecl, WebhookDecl, CREATE_WRITE_OP,
 };
 pub use describe::{archetype_hint, split_selection, DescribeReport, PushdownSummary};
 pub use eval::{call_proc_id, effect_kind_for, EvalError, EvalValue, Evaluator, PlanSource};
@@ -78,6 +78,13 @@ pub use qfs_codec::Codec;
 // them via `qfs-core` ONLY — it must not take a direct `qfs-lang` / `qfs-codec` edge (the
 // lower-spine dep-direction guard). qfs-core already depends on both, so this adds no new edge.
 pub use qfs_codec::builtin_codecs;
+// The markdown tree interpretation (blueprint §13b): the `documents`/`links` named relations of
+// the `md` codec, rehomed into the codec layer. Re-exported through qfs-core (which already
+// depends on qfs-codec) so the binary reaches them without a direct qfs-codec edge.
+pub use qfs_codec::{
+    decode_markdown_relation, markdown_documents_schema, markdown_links_schema,
+    markdown_relation_schema, parse_markdown_document, MarkdownRelation,
+};
 pub use qfs_driver::{
     check_capability, navigable_by_default, resolve_proc, AliasFn, Archetype, Capabilities,
     CfsError, Driver, NodeCategory, NodeDesc, Param, Path, ProcSig, PushdownProfile, Verb,

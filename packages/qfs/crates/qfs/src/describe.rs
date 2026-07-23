@@ -43,19 +43,19 @@ use qfs_core::MountRegistry;
 /// impossible here (distinct mounts), but a duplicate would be dropped silently rather than
 /// panicking — the registry stays a best-effort describe surface.
 #[must_use]
-/// A cred-free Cloudflare registry carrying ONE representative D1 database / KV namespace / queue,
-/// so `qfs describe /cf/d1/db` (and the t40 driver catalogue) surface `/cf`'s real verbs over the
-/// public in-memory [`MockCfBackend`](qfs_driver_cf::MockCfBackend) — the same "representative
-/// resource" shape the objstore describe uses for `/s3/bucket`. Never *applied* (describe reads only
-/// the introspective half), so no credential and no I/O ever happens.
+/// A cred-free Cloudflare registry carrying ONE representative queue + artifacts namespace, so
+/// `qfs describe /cf/queue/q` surfaces the compiled `/cf`'s real verbs over the public in-memory
+/// [`MockCfBackend`](qfs_driver_cf::MockCfBackend) — the same "representative resource" shape the
+/// objstore describe uses for `/s3/bucket`. Never *applied* (describe reads only the introspective
+/// half), so no credential and no I/O ever happens.
+///
+/// §13 ratchet (ticket 20260718203326): D1 and KV moved onto the committed `cloudflare.qfs`
+/// declaration (the declared `/cloudflare` mount + the `/cloudflare/d1` twin), so the compiled `/cf`
+/// describe surface carries ONLY the two things plain declared REST cannot express — queue PULL and
+/// Artifacts. It no longer represents a D1 database or a KV namespace.
 pub(crate) fn cred_free_cf_registry() -> qfs_driver_cf::CfRegistry {
-    use qfs_driver_cf::{Catalog, CfRegistry, D1Database, MockCfBackend, NoopArtifactTokenSealer};
+    use qfs_driver_cf::{CfRegistry, MockCfBackend, NoopArtifactTokenSealer};
     CfRegistry::new()
-        .with_d1(
-            "db",
-            D1Database::new(Arc::new(MockCfBackend::new()), Catalog::new(Vec::new())),
-        )
-        .with_kv("ns", Arc::new(MockCfBackend::new()))
         .with_queue("q", Arc::new(MockCfBackend::new()))
         .with_artifacts(
             Arc::new(MockCfBackend::new().with_artifact_namespace("default")),
@@ -186,6 +186,25 @@ pub(crate) fn register_defined_paths_where(
             }
         }
     }
+    // §13 declared D1 nested mounts: a connected declared driver carrying a `CREATE SQL … TABLES(…)`
+    // resource gets a SECOND, nested mount (`/cloudflare/d1`, slash-bearing id `cloudflare/d1`) served
+    // by the declared `CfDriver` twin — the D1 relational surface from the committed catalog, not a
+    // mount-time `introspect_d1`. This is the PLAN/DESCRIBE mount (pure, network-free): the twin is
+    // built over a cred-free `MockCfBackend` + the declared catalog, so `describe`/capabilities/the
+    // pushdown planner all read the declared catalog with zero I/O (the live backend lives only in
+    // the read/apply facets). Registered unconditionally — the nested `/cloudflare/d1` prefix has no
+    // compiled counterpart, so the `include` filter (which only skips already-live compiled `/cf`
+    // mounts) never applies. Fail-closed: nothing declared, nothing registered.
+    for m in crate::declared_driver::declared_sql_mounts() {
+        let Some(remap) = crate::declared_driver::declared_d1_remap(&m.prefix) else {
+            continue;
+        };
+        let backend = Arc::new(qfs_driver_cf::MockCfBackend::new());
+        let driver: Arc<dyn qfs_core::Driver> =
+            Arc::new(crate::cf::declared_d1_driver(backend, m.resource.catalog()));
+        let wrapped = crate::mount_adapter::MountDriver::with_remap(remap, driver);
+        let _ = reg.register(Arc::new(wrapped));
+    }
 }
 
 /// Report (never silently shadow) each declared driver whose name collides with a compiled driver:
@@ -282,14 +301,11 @@ pub fn compiled_describe_registry() -> MountRegistry {
         // surface is `|> transform`, §15). This is what makes `/claude/*` appear in the generated
         // `docs/drivers.md`.
         Arc::new(qfs_driver_claude::ClaudeDriver::new()),
-        // The markdown collection path (マークダウン収集パス, minimal slice): the
-        // `/markdown/<name>/{documents,links}` tables. DESCRIBE is PURE — MarkdownDriver owns
-        // NO root and NO creds (the declared roots feed only the binary's read facet), so it
-        // describes both tables cred-free for any tree name. This is what makes `/markdown`
-        // appear in the generated `docs/drivers.md`. The links schema deliberately carries NO
-        // relation-type column: the closed relation vocabulary is a later, separate mission
-        // layered on `source_section_path`.
-        Arc::new(qfs_driver_markdown::MarkdownDriver::new()),
+        // NOTE: the compiled `/markdown` collection-path driver retired on the §13 twin-and-retire
+        // ratchet (mission a-file-collection-is-a-declared-set-over-any-blob-source). A declared
+        // markdown tree is now an ordinary registered collection view reached by path through the
+        // `/collections/<view>` mount (crate::collection_mount), so `/markdown` is deliberately NOT in
+        // the compiled catalogue and no longer appears in the generated `docs/drivers.md`.
         // §15 transform definitions (decision W): the `/transform` definition registry. DESCRIBE is
         // PURE — TransformDriver owns NO backend and NO creds (its read source + applier are injected
         // from the binary), so it describes `/transform` cred-free, exactly like the other
@@ -598,6 +614,80 @@ mod tests {
         assert!(
             reg.resolve_path("/git/app/commits").is_some(),
             "describe /git/<repo>/commits resolves through the path_binding-wired git mount"
+        );
+    }
+
+    /// §13 declared D1 nested mount (ticket 20260718203326, Stage 2b): a connected declared
+    /// `cloudflare` driver carrying a `CREATE SQL … TABLES(…)` resource registers a SECOND, nested
+    /// describe mount at `/cloudflare/d1` (id `cloudflare/d1`). `describe /cloudflare/d1/<db>/<table>`
+    /// resolves through it and reflects the DECLARED catalog — network-free (the plan/describe twin is
+    /// built over a `MockCfBackend`, so DESCRIBE reads only the committed catalog, never introspection).
+    #[test]
+    fn declared_d1_nested_mount_describes_the_declared_catalog_network_free() {
+        let _home = crate::testenv::HomeGuard::new();
+        const CF_D1_BODY: &str = r#"{"dialect":"sqlite",
+            "query_endpoint":"/http/cloudflare/accounts/{account}/d1/database/{database}/query",
+            "tables":[
+              {"name":"users","columns":[
+                {"name":"id","type":"text","nullable":false,"primary_key":true,"unique":false},
+                {"name":"email","type":"text","nullable":false,"primary_key":false,"unique":false}]}
+            ]}"#;
+        {
+            let sys = crate::store::open_system_db()
+                .unwrap()
+                .expect("system db resolves");
+            let conn = sys.into_db().into_connection();
+            conn.execute(
+                "INSERT INTO sys_drivers (kind, name, base_url, auth, verb, body, irreversible) \
+                 VALUES ('driver', 'cloudflare', 'https://api.cloudflare.com/client/v4', \
+                         '{\"kind\":\"account\",\"provider\":\"cf\"}', NULL, NULL, 0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sys_drivers (kind, name, body, irreversible) \
+                 VALUES ('sql', '/cloudflare/d1/{database}', ?1, 0)",
+                rusqlite::params![CF_D1_BODY],
+            )
+            .unwrap();
+            crate::path_binding::db_upsert_binding(
+                &conn,
+                "/cloudflare",
+                "cloudflare",
+                Some("cf-acct-id"),
+                None,
+                None,
+                Some("mycf"),
+                None,
+            )
+            .unwrap();
+        }
+
+        let reg = describe_registry();
+        // The nested mount is longest-prefix over the plain `/cloudflare` REST mount.
+        let (driver, _rest) = reg
+            .resolve_path("/cloudflare/d1/mydb/users")
+            .expect("the nested D1 describe mount resolves");
+        let report = qfs_core::DescribeReport::from_driver(
+            driver.as_ref(),
+            &qfs_core::Path::new("/cloudflare/d1/mydb/users"),
+        )
+        .expect("describe /cloudflare/d1/mydb/users cred-free");
+        assert_eq!(report.archetype, qfs_core::Archetype::RelationalTable);
+        let cols: Vec<&str> = report.columns.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            cols.contains(&"id") && cols.contains(&"email"),
+            "the DECLARED D1 catalog columns are described: {cols:?}"
+        );
+        // A table absent from the declared catalog is not describable (the surface is exactly the
+        // committed declaration — no hidden introspection fallback).
+        assert!(
+            qfs_core::DescribeReport::from_driver(
+                driver.as_ref(),
+                &qfs_core::Path::new("/cloudflare/d1/mydb/absent"),
+            )
+            .is_err(),
+            "an undeclared D1 table is not describable"
         );
     }
 }

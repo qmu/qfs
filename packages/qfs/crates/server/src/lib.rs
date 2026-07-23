@@ -45,8 +45,8 @@ use qfs_core::CfsError;
 pub use audit::{AuditEntry, AuditSink};
 pub use binding::{Binding, BindingKind, CountingBinding, NullBinding};
 pub use driver::{
-    apply_server_write, job_runs_path_job, server_node_capabilities, server_node_schema,
-    ConfigChange, ServerDriver, SERVER_MOUNT,
+    agent_runs_path_agent, apply_server_write, job_runs_path_job, server_node_capabilities,
+    server_node_schema, ConfigChange, ServerDriver, SERVER_MOUNT,
 };
 pub use error::ServerError;
 pub use lower::lower_statement;
@@ -70,8 +70,8 @@ pub use runtime::{
     ServerConfigApplier,
 };
 pub use state::{
-    EndpointDef, JobDef, JobRunRecord, PolicyDef, ServerState, StatementSource, TriggerDef,
-    ViewDef, WebhookDef, JOB_RUN_HISTORY_CAP,
+    AgentDef, EndpointDef, JobDef, JobRunRecord, PolicyDef, ServerState, StatementSource,
+    TriggerDef, ViewDef, WebhookDef, JOB_RUN_HISTORY_CAP,
 };
 
 /// Boot and run the server from a `.qfs` config file (blueprint §10).

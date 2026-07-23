@@ -233,6 +233,18 @@ pub enum PipeOp {
     /// closed-core set (the third additive stage — a deliberate, reviewed change-control event,
     /// like the two before it).
     Follow(FollowRef),
+    /// `POST <body-expr>` — the declared-driver **read-over-POST** stage (blueprint §13.1 G1,
+    /// ticket 20260722091300): a wire read whose HTTP shape is a POST carrying a body (a queue
+    /// pull, a body-carried search). ONLY meaningful as the FIRST op of a declared view body,
+    /// right before its leading `DECODE`; it makes the view's wire fetch a POST (the body is the
+    /// evaluated struct literal) whose response decodes into rows exactly as a GET's would. The
+    /// effect stays a pure READ (no mutation, no irreversibility gate) despite the POST method —
+    /// the method is transport, the effect kind is read. Every other context refuses it
+    /// structurally at lowering/eval, exactly like `follow`. A **contextual-identifier** stage
+    /// (`post` is *not* a frozen keyword — the keyword set stays 39). The governance test locks
+    /// this variant into the closed-core set (the fifth additive stage after §15 TRANSFORM, §18
+    /// SWITCH, §13 FOLLOW, and §5.6 OF — a deliberate, reviewed change-control event).
+    Post(PostRef),
     /// `OF <name>` or `OF (<col> <type>, …)` — the general, any-position, plan-time-checked type
     /// assertion (blueprint §5.6). A **contextual-identifier** stage (`of` is *not* a frozen keyword —
     /// the keyword set stays 39; `of` is already `word("OF")` in the DDL). Admission criterion (2)
@@ -304,6 +316,23 @@ pub struct FollowRef {
     /// The delivered-row field carrying the follow URL.
     pub field: Ident,
     /// Source span of the `follow <field>` stage.
+    #[serde(
+        serialize_with = "serialize_span",
+        deserialize_with = "deserialize_span"
+    )]
+    pub span: Span,
+}
+
+/// A `POST <body-expr>` read-over-POST reference (blueprint §13.1 G1): the struct-literal
+/// expression evaluated into the wire body the declared-view fetch POSTs. Evaluated by the
+/// declared-view evaluator with the view's `{param}` bindings in scope (a read has no incoming
+/// `row`), then encoded to the wire body; the response decodes into rows as a GET's would. The
+/// POST addresses the driver's own confined `/http/<name>/…` host, so no secret can leave it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PostRef {
+    /// The wire-body expression (a struct literal, or any per-read scalar the engine evaluates).
+    pub body: Expr,
+    /// Source span of the `post <body>` stage.
     #[serde(
         serialize_with = "serialize_span",
         deserialize_with = "deserialize_span"
@@ -595,6 +624,10 @@ pub enum DdlKind {
     /// `CONNECTION` is parsed as a contextual UPPERCASE ident (the `AT` lesson, like `MATERIALIZED`)
     /// so it adds NO frozen keyword.
     Connection,
+    /// `CREATE AGENT` — an agent principal declaration (blueprint §19). `AGENT` is parsed as a
+    /// contextual UPPERCASE ident (the `AT`/`CONNECTION` lesson), so it adds NO frozen keyword — a
+    /// column named `agent` still parses everywhere.
+    Agent,
 }
 
 /// An expression (blueprint §3 operators, frozen). The boolean structure (`AND`/`OR`/
@@ -877,12 +910,23 @@ pub struct FnRef {
     pub span: Span,
 }
 
-/// A `DECODE fmt` / `ENCODE fmt` codec reference — the codec registry seam (blueprint §4).
+/// A `DECODE fmt[.relation]` / `ENCODE fmt` codec reference — the codec registry seam
+/// (blueprint §4/§13b).
+///
+/// The optional `.relation` suffix (design brief Ruling 1) addresses one of a codec's
+/// **declared named relations** by a relation-qualified format token: `decode md` is the codec's
+/// primary relation, `decode md.documents` / `decode md.links` its named relations. `None` means
+/// the primary; a codec that declares only one relation ignores the suffix (a relation-qualified
+/// token over such a codec is a resolve-time usage error). The parser validates shape only — the
+/// relation name is resolved later against the codec's declared relation set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Codec {
     /// The codec format name (`json`/`yaml`/`csv`/…), resolved later.
     pub fmt: Ident,
-    /// Source span of the codec format token.
+    /// The optional relation-qualified suffix (`md.documents` → `Some("documents")`), resolved
+    /// later against the codec's declared relations. `None` is the codec's primary relation.
+    pub relation: Option<Ident>,
+    /// Source span of the codec format token (through the relation suffix, if any).
     #[serde(
         serialize_with = "serialize_span",
         deserialize_with = "deserialize_span"

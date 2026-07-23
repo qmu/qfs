@@ -9,7 +9,7 @@ origin_branch: work-20260704-181053
 origin_commit: 72c8950
 created_at: 2026-07-16T21:18:59+09:00
 first_seen: 2026-07-05T01:25:53+09:00
-last_seen: 2026-07-16T21:18:59+09:00
+last_seen: 2026-07-24T00:48:25+09:00
 severity: moderate
 status: active
 compound: true
@@ -26,3 +26,4 @@ The standing queue of live, owner-attended confirmations that hermetic tests can
 ## How to Fix
 
 Run the rounds in owner-attended sessions, checking items off this backlog as evidence lands on the relevant archived tickets; split a member back out only if one grows its own code work.
+

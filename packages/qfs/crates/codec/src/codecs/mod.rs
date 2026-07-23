@@ -9,6 +9,7 @@ mod csv;
 mod json;
 mod jsonl;
 mod markdown;
+mod markdown_tree;
 mod toml;
 mod yaml;
 
@@ -16,6 +17,10 @@ pub use csv::CsvCodec;
 pub use json::JsonCodec;
 pub use jsonl::JsonlCodec;
 pub use markdown::MarkdownFrontmatterCodec;
+pub use markdown_tree::{
+    decode_relation as decode_markdown_relation, documents_schema, links_schema, parse_document,
+    relation_schema, MarkdownRelation, ParsedDocument, ParsedLink,
+};
 pub use toml::TomlCodec;
 pub use yaml::YamlCodec;
 

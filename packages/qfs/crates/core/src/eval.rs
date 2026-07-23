@@ -311,6 +311,10 @@ pub enum EvalError {
     /// is a declared-driver body stage — the declared evaluator splits it out and performs the
     /// second wire GET; in any other context it has no meaning.
     FollowOutsideDeclaredBody,
+    /// A `POST <body>` read-over-POST stage reached the general query evaluator (blueprint §13.1
+    /// G1). Like `FOLLOW`, it is a declared-driver body stage — the declared evaluator strips the
+    /// leading `POST` and drives the wire fetch as a POST; in any other context it has no meaning.
+    PostOutsideDeclaredBody,
     /// A `SWITCH` arm list is ill-shaped (blueprint §18): no `else` arm, an `else` arm not
     /// written last, or a duplicate label. Carries a machine-facing detail naming the problem.
     SwitchShape {
@@ -388,6 +392,7 @@ impl EvalError {
             EvalError::TransformInputMissing { .. } => "transform_input_missing",
             EvalError::SwitchNotTerminal => "switch_not_terminal",
             EvalError::FollowOutsideDeclaredBody => "follow_outside_declared_body",
+            EvalError::PostOutsideDeclaredBody => "post_outside_declared_body",
             EvalError::SwitchShape { .. } => "switch_shape",
             EvalError::SwitchDiscriminantUnknown { .. } => "switch_discriminant_unknown",
             EvalError::SwitchArmNotEffect { .. } => "switch_arm_not_effect",
@@ -931,6 +936,10 @@ impl<'r> Evaluator<'r> {
             // out of the body before this evaluator ever runs) — reaching it here means a
             // general pipeline used it, where it has no meaning. Structured, never silent.
             PipeOp::Follow(_) => Err(EvalError::FollowOutsideDeclaredBody),
+            // POST (blueprint §13.1 G1) belongs to the declared-view evaluator, which strips the
+            // leading `POST` before this evaluator ever runs — reaching it here means a general
+            // pipeline used it, where it has no meaning. Structured, never silent.
+            PipeOp::Post(_) => Err(EvalError::PostOutsideDeclaredBody),
             // OF (blueprint §5.6): a general, any-position, plan-time type ASSERTION. Schema-identity
             // — it never coerces. It checks the relation's computed schema against the asserted type
             // and, on a structural mismatch, is a plan-time structured error naming the differing
@@ -1286,6 +1295,7 @@ impl<'r> Evaluator<'r> {
                 PipeOp::Transform(_) => Some("transform"),
                 PipeOp::Switch(_) => Some("switch"),
                 PipeOp::Follow(_) => Some("follow"),
+                PipeOp::Post(_) => Some("post"),
                 PipeOp::Call(_) if !terminal => Some("call (non-terminal)"),
                 _ => None,
             };

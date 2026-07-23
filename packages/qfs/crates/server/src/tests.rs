@@ -349,7 +349,8 @@ fn describe_job_runs_returns_the_runs_schema_not_the_jobs_schema() {
         .collect();
     assert_eq!(
         names,
-        vec!["scheduled_at", "outcome", "detail", "affected"],
+        // blueprint §19 axis B/D adds the secret-free firing `principal` column.
+        vec!["scheduled_at", "outcome", "detail", "affected", "principal"],
         "the runs sub-collection must NOT fall through to its /server/jobs prefix"
     );
 }
@@ -389,6 +390,7 @@ fn removing_a_job_drops_its_run_history() {
             outcome: "fired".into(),
             detail: String::new(),
             affected: 1,
+            principal: String::new(),
         },
     );
     assert_eq!(state.job_runs["nightly"].len(), 1);
@@ -423,6 +425,7 @@ fn record_job_run_caps_the_history_newest_kept() {
                 outcome: "denied".into(),
                 detail: "default-deny".into(),
                 affected: 0,
+                principal: String::new(),
             },
         );
     }

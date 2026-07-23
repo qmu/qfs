@@ -29,7 +29,7 @@ use std::sync::{Arc, RwLock};
 use qfs_core::Engine;
 use qfs_host::{AuditLedger, DurableStore, RuntimeHost, StateBytes, StateKey};
 use qfs_provision::{JobRunRecord, ServerState};
-use qfs_watchtower::cron::{fire_due, CronOutcome, CronRun};
+use qfs_watchtower::cron::{fire_due, fire_due_agents, CronOutcome, CronRun};
 use qfs_watchtower::{Committer, FireError, FireOutcome, PolicyTableHandle};
 
 /// The daemon sweep cadence. The `EVERY` grammar bottoms out at minutes (`m`), so a 30s sweep
@@ -63,23 +63,33 @@ impl LiveCronCommitter {
     }
 }
 
-impl Committer for LiveCronCommitter {
-    fn commit(
+impl LiveCronCommitter {
+    /// The shared gate→irreversible→apply chain, evaluated under the firing principal's decision
+    /// context (blueprint §19 axis B/D): `principal = Some(agent)` gates under the AGENT subject
+    /// (`DecisionContext::for_agent`) — an agent fire commits by the agent's grants; `None` is the
+    /// operator/anonymous context (an ordinary `/server/jobs` fire, unchanged). Everything else —
+    /// the IrreversibleGuard (`RunMode::Server`, no ack), the real applier — is identical.
+    fn commit_inner(
         &self,
-        trigger: &str,
         stmt: &qfs_watchtower::Statement,
         policy: Option<&str>,
+        principal: Option<&str>,
     ) -> Result<FireOutcome, FireError> {
-        let _ = trigger;
         let plan = qfs_exec::build_plan(stmt, &self.engine)
             .map_err(|e| FireError::Build(e.to_string()))?;
 
-        // t35 policy gate: resolve the JOB's bound policy against the live table and run the pure
-        // enforcer BEFORE any apply. No policy / a dangling ref ⇒ fail-closed default-deny;
-        // atomic abort on deny (zero effects).
+        // Policy gate: resolve the bound policy against the live table and run the pure enforcer
+        // BEFORE any apply, UNDER THE FIRING PRINCIPAL'S CONTEXT. No policy / a dangling ref ⇒
+        // fail-closed default-deny; atomic abort on deny (zero effects).
         let table = self.policy_snapshot();
         let resolved = qfs_host::resolve_policy(policy, &table);
-        let gate = qfs_host::gate_plan(&resolved, &plan);
+        let gate = match principal {
+            Some(agent) => {
+                let ctx = qfs_host::DecisionContext::for_agent(agent);
+                qfs_host::gate_plan_with_context(&resolved, &plan, &ctx)
+            }
+            None => qfs_host::gate_plan(&resolved, &plan),
+        };
         let effects = gate.effects.clone();
         if let qfs_host::PolicyDecision::Deny {
             verb, driver, rule, ..
@@ -94,9 +104,9 @@ impl Committer for LiveCronCommitter {
             });
         }
 
-        // t37 irreversible gate: a scheduled fire is UNATTENDED (`RunMode::Server`), so an
-        // irreversible REMOVE / declared-irreversible CALL is refused fail-closed (no ack path
-        // exists on a timer — an irreversible plan belongs to `qfs job run --commit-irreversible`).
+        // Irreversible gate: a scheduled fire is UNATTENDED (`RunMode::Server`), so an irreversible
+        // REMOVE / declared-irreversible CALL is refused fail-closed — the ruled property
+        // (blueprint §19): an agent never fires an irreversible plan unattended.
         if let Err(needs) = qfs_core::IrreversibleGuard::require_ack(
             &plan,
             qfs_core::RunMode::Server,
@@ -113,6 +123,29 @@ impl Committer for LiveCronCommitter {
             affected: effects.len() as u64,
             effects,
         })
+    }
+}
+
+impl Committer for LiveCronCommitter {
+    fn commit(
+        &self,
+        trigger: &str,
+        stmt: &qfs_watchtower::Statement,
+        policy: Option<&str>,
+    ) -> Result<FireOutcome, FireError> {
+        let _ = trigger;
+        self.commit_inner(stmt, policy, None)
+    }
+
+    fn commit_for_principal(
+        &self,
+        trigger: &str,
+        stmt: &qfs_watchtower::Statement,
+        policy: Option<&str>,
+        principal: Option<&str>,
+    ) -> Result<FireOutcome, FireError> {
+        let _ = trigger;
+        self.commit_inner(stmt, policy, principal)
     }
 }
 
@@ -180,7 +213,61 @@ pub fn sweep_once(
             let _ = ledger.append(&ledger_line(run));
         }
     }
-    runs
+
+    // 4. The AGENT cadence pass (blueprint §19 axis D): agents with a launch cadence ride the SAME
+    // sweep — no new scheduler. Hydrate each agent's durable `last_run`, run the pure
+    // `fire_due_agents` (which threads the agent as the firing principal so the committer gates under
+    // the agent subject), then persist to the agent's OWN run history + `last_run` + durable mark +
+    // ledger. Returned appended to the job runs so the daemon loop logs both.
+    let mut agents: Vec<qfs_provision::AgentDef> = state
+        .read()
+        .map(|g| g.agents.values().cloned().collect())
+        .unwrap_or_default();
+    let mut agent_hydrated: Vec<(String, i64)> = Vec::new();
+    for agent in &mut agents {
+        if let Some(mark) = read_agent_last_run(durable, &agent.name) {
+            if agent.last_run.is_none_or(|l| l < mark) {
+                agent.last_run = Some(mark);
+                agent_hydrated.push((agent.name.clone(), mark));
+            }
+        }
+    }
+    if !agent_hydrated.is_empty() {
+        if let Ok(mut guard) = state.write() {
+            for (name, mark) in agent_hydrated {
+                if let Some(agent) = guard.agents.get_mut(&name) {
+                    if agent.last_run.is_none_or(|l| l < mark) {
+                        agent.last_run = Some(mark);
+                    }
+                }
+            }
+        }
+    }
+
+    let agent_runs = fire_due_agents(&agents, now, &BTreeSet::new(), committer);
+
+    if let Ok(mut guard) = state.write() {
+        for run in &agent_runs {
+            guard.record_agent_run(&run.job, run_record(run));
+            if let Some(stamp) = run.stamp_last_run {
+                if let Some(agent) = guard.agents.get_mut(&run.job) {
+                    agent.last_run = Some(stamp);
+                }
+            }
+        }
+    }
+    for run in &agent_runs {
+        if let Some(stamp) = run.stamp_last_run {
+            write_agent_last_run(durable, &run.job, stamp);
+        }
+        if let Some(ledger) = ledger {
+            let _ = ledger.append(&ledger_line(run));
+        }
+    }
+
+    let mut all = runs;
+    all.extend(agent_runs);
+    all
 }
 
 /// Spawn the daemon sweep loop: a `tokio::time` interval feeding `SystemTime::now()` into
@@ -253,6 +340,30 @@ fn write_last_run(durable: &dyn DurableStore, job: &str, stamp: i64) {
     }
 }
 
+/// The durable key carrying an AGENT's persisted cadence `last_run` mark (blueprint §19 axis D).
+/// A separate `cron/agent/<name>/` namespace so an agent and a job of the same name never collide.
+fn agent_last_run_key(agent: &str) -> StateKey {
+    StateKey::new(format!("cron/agent/{agent}/last_run"))
+}
+
+/// Read an agent's durable cadence `last_run` mark (epoch seconds), `None` if unset/unreadable.
+fn read_agent_last_run(durable: &dyn DurableStore, agent: &str) -> Option<i64> {
+    let key = agent_last_run_key(agent);
+    let bytes = qfs_host::block_on(durable.get(&key)).ok()??;
+    String::from_utf8(bytes.0).ok()?.trim().parse().ok()
+}
+
+/// Persist an agent's cadence `last_run` mark durably (fsync'd). Non-fatal on failure, like the job
+/// path — the worst restart cost is one early catch-up fire.
+fn write_agent_last_run(durable: &dyn DurableStore, agent: &str, stamp: i64) {
+    let key = agent_last_run_key(agent);
+    if let Err(e) =
+        qfs_host::block_on(durable.put(&key, StateBytes(stamp.to_string().into_bytes())))
+    {
+        tracing::warn!(target: "qfs::cron", agent = %agent, error = %e, "durable agent last_run write failed");
+    }
+}
+
 /// Map one firing to its `/server/jobs/<name>/runs` record (secret-free by construction — the
 /// outcome reasons come from the committer's secret-free errors).
 fn run_record(run: &CronRun) -> JobRunRecord {
@@ -267,14 +378,24 @@ fn run_record(run: &CronRun) -> JobRunRecord {
         outcome: outcome.to_string(),
         detail,
         affected,
+        // blueprint §19 axis B/D: an agent-cadence fire carries `agent:<name>` from the firing
+        // DecisionContext; a plain `/server/jobs` fire has no agent principal (empty).
+        principal: run.principal.clone().unwrap_or_default(),
     }
 }
 
-/// The one-line audit-ledger projection of a firing (secret-free: name + outcome only).
+/// The one-line audit-ledger projection of a firing (secret-free: name + outcome + firing
+/// principal). blueprint §19 axis B/D: an agent-fired plan records `principal=agent:<name>`; a
+/// principal-less ordinary job fire omits the field.
 fn ledger_line(run: &CronRun) -> String {
     let record = run_record(run);
+    let principal = if record.principal.is_empty() {
+        String::new()
+    } else {
+        format!(" principal={}", record.principal)
+    };
     format!(
-        "cron fire job={} outcome={} affected={} at={}",
+        "cron fire job={} outcome={} affected={} at={}{principal}",
         run.job, record.outcome, record.affected, run.scheduled_at
     )
 }
@@ -360,6 +481,24 @@ mod tests {
         let mut s = ServerState::new();
         for j in jobs {
             s.jobs.insert(j.name.clone(), j);
+        }
+        Arc::new(RwLock::new(s))
+    }
+
+    fn agent(name: &str, every: &str, last_run: Option<i64>) -> qfs_provision::AgentDef {
+        qfs_provision::AgentDef {
+            name: name.into(),
+            every: every.into(),
+            last_run,
+            plan: plan_col("upsert into /local/tmp/x values ('hi')"),
+            policy: Some("p".into()),
+        }
+    }
+
+    fn state_with_agents(agents: Vec<qfs_provision::AgentDef>) -> Arc<RwLock<ServerState>> {
+        let mut s = ServerState::new();
+        for a in agents {
+            s.agents.insert(a.name.clone(), a);
         }
         Arc::new(RwLock::new(s))
     }
@@ -474,6 +613,7 @@ mod tests {
                 path: path.to_string(),
                 pushed: qfs_pushdown::PushedQuery::default(),
                 schema: qfs_core::job_runs_schema(),
+                materialize_content: false,
             };
             let rt = tokio::runtime::Builder::new_current_thread()
                 .build()
@@ -610,5 +750,272 @@ mod tests {
             "the real local applier wrote the file"
         );
         assert_eq!(state.read().unwrap().jobs["writer"].last_run, Some(7_000));
+    }
+
+    // ---- blueprint §19 axis D: agent cadence rides the sweep -------------------------------
+
+    /// A due agent cadence fires through the SAME sweep and lands a `JobRunRecord`-shaped row on the
+    /// agent's OWN run history (`/server/agents/<name>/runs`), carrying the `agent:<name>` firing
+    /// principal — and stamps the agent's `last_run` (state + durable).
+    #[test]
+    fn sweep_once_fires_a_due_agent_and_records_to_agent_history() {
+        let (dir, host) = tempdir_host();
+        let state = state_with_agents(vec![agent("triage", "1m", None)]);
+
+        let runs = sweep_once(&state, &allow(), host.durable(), Some(host.ledger()), 5_000);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].principal.as_deref(), Some("agent:triage"));
+
+        let g = state.read().unwrap();
+        assert_eq!(
+            g.agents["triage"].last_run,
+            Some(5_000),
+            "the committed agent fire stamps its last_run"
+        );
+        let history = &g.agent_runs["triage"];
+        assert_eq!(history.len(), 1, "landed on the agent's OWN run history");
+        assert_eq!(history[0].outcome, "fired");
+        assert_eq!(
+            history[0].principal, "agent:triage",
+            "the run record carries the secret-free firing principal"
+        );
+        assert!(
+            !g.job_runs.contains_key("triage"),
+            "an agent fire does NOT pollute the /server/jobs run history"
+        );
+        drop(g);
+
+        assert_eq!(
+            read_agent_last_run(host.durable(), "triage"),
+            Some(5_000),
+            "the durable agent mark survives (restart re-hydrates from it)"
+        );
+        let ledger = std::fs::read_to_string(dir.path().join("audit.log")).expect("ledger");
+        assert!(
+            ledger.contains("cron fire job=triage") && ledger.contains("principal=agent:triage"),
+            "the agent firing is on the audit ledger under its principal: {ledger}"
+        );
+    }
+
+    /// Restart safety for an agent cadence: the durable mark hydrates a config-reset `last_run`, so a
+    /// rebooted daemon does NOT re-fire an agent whose interval has not elapsed.
+    #[test]
+    fn sweep_once_hydrates_agent_last_run_from_the_durable_store() {
+        let (_dir, host) = tempdir_host();
+        write_agent_last_run(host.durable(), "triage", 4_990);
+        let state = state_with_agents(vec![agent("triage", "1m", None)]);
+
+        let runs = sweep_once(&state, &allow(), host.durable(), None, 5_000);
+        assert!(
+            runs.is_empty(),
+            "10s after the durable mark, a 1m agent must NOT re-fire on restart"
+        );
+        assert_eq!(state.read().unwrap().agents["triage"].last_run, Some(4_990));
+
+        // One interval later the agent is due again.
+        let runs = sweep_once(&state, &allow(), host.durable(), None, 5_051);
+        assert_eq!(runs.len(), 1, "due again one interval after the mark");
+    }
+
+    /// The LIVE committer gates an agent fire UNDER THE AGENT SUBJECT: a function on a path the
+    /// agent's policy does NOT grant is denied (a visible denied run on the agent history, zero
+    /// effects) — the mission's over-reach case, on a timer.
+    #[test]
+    fn sweep_once_agent_fire_denied_by_agent_subject_records_denial() {
+        let (_dir, host) = tempdir_host();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let out = dir.path().join("blocked.txt");
+        std::fs::write(&out, b"safe").unwrap();
+
+        // The policy grants UPSERT ON local only to an OPERATOR (FOR user op), NOT the agent — so an
+        // agent-subject gate default-denies it.
+        let mut table = qfs_host::PolicyTable::new();
+        table.insert(
+            "p".into(),
+            qfs_provision::PolicyDef {
+                name: "p".into(),
+                handler: String::new(),
+                allow: vec!["ALLOW UPSERT ON local FOR user:op".into()],
+            },
+        );
+        let policies: PolicyTableHandle = Arc::new(std::sync::RwLock::new(Arc::new(table)));
+        let (engine, _reads, _safety) = crate::shell::run_engine_and_reads();
+        let committer = LiveCronCommitter::new(engine, policies);
+
+        let state = state_with_agents(vec![qfs_provision::AgentDef {
+            name: "triage".into(),
+            every: "1m".into(),
+            last_run: None,
+            plan: plan_col(&format!("upsert into /local{} values ('x')", out.display())),
+            policy: Some("p".into()),
+        }]);
+
+        let runs = sweep_once(
+            &state,
+            &committer,
+            host.durable(),
+            Some(host.ledger()),
+            6_000,
+        );
+        assert_eq!(runs.len(), 1);
+        assert!(
+            matches!(runs[0].outcome, CronOutcome::Denied { .. }),
+            "the agent is default-denied under its own subject: {:?}",
+            runs[0].outcome
+        );
+        assert_eq!(
+            std::fs::read_to_string(&out).unwrap(),
+            "safe",
+            "atomic abort: the denied agent fire applied nothing"
+        );
+        let g = state.read().unwrap();
+        assert_eq!(g.agent_runs["triage"][0].outcome, "denied");
+        assert_eq!(
+            g.agents["triage"].last_run, None,
+            "a denied fire is not stamped"
+        );
+    }
+
+    /// The ruled property (blueprint §19), on a timer through the LIVE committer: an irreversible
+    /// REMOVE on an agent cadence is refused fail-closed (RunMode::Server, Ack::Absent) — a blocked
+    /// run, nothing applied. An agent can NEVER fire an irreversible plan unattended.
+    #[test]
+    fn sweep_once_agent_irreversible_is_blocked_fail_closed() {
+        let (_dir, host) = tempdir_host();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let victim = dir.path().join("keep.txt");
+        std::fs::write(&victim, b"stay").unwrap();
+
+        // The agent's policy even ALLOWS REMOVE — the block is the unattended irreversible guard,
+        // not a policy denial.
+        let mut table = qfs_host::PolicyTable::new();
+        table.insert(
+            "p".into(),
+            qfs_provision::PolicyDef {
+                name: "p".into(),
+                handler: String::new(),
+                allow: vec!["ALLOW REMOVE FOR agent:triage".into()],
+            },
+        );
+        let policies: PolicyTableHandle = Arc::new(std::sync::RwLock::new(Arc::new(table)));
+        let (engine, _reads, _safety) = crate::shell::run_engine_and_reads();
+        let committer = LiveCronCommitter::new(engine, policies);
+
+        let state = state_with_agents(vec![qfs_provision::AgentDef {
+            name: "triage".into(),
+            every: "1m".into(),
+            last_run: None,
+            plan: plan_col(&format!("remove /local{}", victim.display())),
+            policy: Some("p".into()),
+        }]);
+
+        let runs = sweep_once(
+            &state,
+            &committer,
+            host.durable(),
+            Some(host.ledger()),
+            8_000,
+        );
+        assert_eq!(runs.len(), 1);
+        assert!(
+            matches!(runs[0].outcome, CronOutcome::Blocked { .. }),
+            "an irreversible agent fire is blocked unattended: {:?}",
+            runs[0].outcome
+        );
+        assert!(victim.exists(), "fail-closed: the REMOVE never applied");
+        assert_eq!(
+            state.read().unwrap().agents["triage"].last_run,
+            None,
+            "a blocked fire is not stamped"
+        );
+    }
+
+    /// The HERMETIC TWIN of the owner-attended live round (blueprint §19, ticket 203335): a
+    /// narrowly-granted scheduled agent runs a real function AND its over-reach is visibly denied —
+    /// both under the agent subject, on a timer, through the LIVE committer + real applier. The
+    /// owner's live round mirrors exactly this narrative on the real daemon; this rehearses it with
+    /// no network, no creds, so the live fire is the one non-hermetic acceptance item.
+    #[test]
+    fn live_round_rehearsal_narrow_grant_fires_and_overreach_is_denied() {
+        let (_state_dir, host) = tempdir_host();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let granted = dir.path().join("granted.txt");
+        let forbidden = dir.path().join("forbidden.txt");
+        std::fs::write(&forbidden, b"safe").unwrap();
+
+        // ONE narrow grant, scoped to the agent subject: `ALLOW UPSERT ON local FOR agent:triage`.
+        // (The `AT` path-scope axis is exercised in the pure enforcer tests; here the driver scope +
+        // the agent subject are the narrow grant.)
+        let mut table = qfs_host::PolicyTable::new();
+        table.insert(
+            "grant".into(),
+            qfs_provision::PolicyDef {
+                name: "grant".into(),
+                handler: String::new(),
+                allow: vec!["ALLOW UPSERT ON local FOR agent:triage".into()],
+            },
+        );
+        let policies: PolicyTableHandle = Arc::new(std::sync::RwLock::new(Arc::new(table)));
+        let (engine, _reads, _safety) = crate::shell::run_engine_and_reads();
+        let committer = LiveCronCommitter::new(engine, policies);
+
+        // The narrowly-granted agent + a SECOND agent whose function over-reaches the same grant is
+        // scoped to `triage` — `snoop` is a different subject, so it is default-denied.
+        let mut s = ServerState::new();
+        s.agents.insert(
+            "triage".into(),
+            qfs_provision::AgentDef {
+                name: "triage".into(),
+                every: "1m".into(),
+                last_run: None,
+                plan: plan_col(&format!(
+                    "upsert into /local{} values ('live')",
+                    granted.display()
+                )),
+                policy: Some("grant".into()),
+            },
+        );
+        s.agents.insert(
+            "snoop".into(),
+            qfs_provision::AgentDef {
+                name: "snoop".into(),
+                every: "1m".into(),
+                last_run: None,
+                // The SAME grant string is scoped to `agent:triage`, so `snoop` is not granted.
+                plan: plan_col(&format!(
+                    "upsert into /local{} values ('x')",
+                    forbidden.display()
+                )),
+                policy: Some("grant".into()),
+            },
+        );
+        let state = Arc::new(RwLock::new(s));
+
+        let runs = sweep_once(
+            &state,
+            &committer,
+            host.durable(),
+            Some(host.ledger()),
+            6_000,
+        );
+        assert_eq!(runs.len(), 2, "both agents are due");
+
+        let g = state.read().unwrap();
+        // The narrowly-granted agent's function FIRED under agent:triage — the file is written and
+        // the run is recorded on the agent's own history + the ledger.
+        assert_eq!(
+            std::fs::read_to_string(&granted).expect("granted file written"),
+            "live"
+        );
+        assert_eq!(g.agent_runs["triage"][0].outcome, "fired");
+        assert_eq!(g.agent_runs["triage"][0].principal, "agent:triage");
+        // The over-reaching agent is DENIED under its own subject — nothing applied, denial recorded.
+        assert_eq!(g.agent_runs["snoop"][0].outcome, "denied");
+        assert_eq!(g.agent_runs["snoop"][0].principal, "agent:snoop");
+        assert_eq!(
+            std::fs::read_to_string(&forbidden).unwrap(),
+            "safe",
+            "the over-reach applied nothing (atomic abort)"
+        );
     }
 }

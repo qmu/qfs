@@ -9,7 +9,7 @@ origin_branch: work-20260715-205333
 origin_commit: ddb419e
 created_at: 2026-07-16T15:16:32+09:00
 first_seen: 2026-07-16T15:16:32+09:00
-last_seen: 2026-07-16T16:14:56+09:00
+last_seen: 2026-07-24T00:48:25+09:00
 severity: low
 status: active
 resolved_by_pr: 

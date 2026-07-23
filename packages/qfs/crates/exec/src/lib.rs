@@ -24,6 +24,7 @@
 
 mod addressing;
 mod codec;
+pub mod collection;
 pub mod declared;
 mod dto;
 mod error;
@@ -32,6 +33,11 @@ mod output;
 mod read;
 pub mod shell;
 
+pub use codec::apply_codecs;
+pub use collection::{
+    collection_relation, collection_root, collection_source_path,
+    markdown_relation_describe_schema, read_registered_collection, to_root_relative,
+};
 pub use dto::{PlanPreview, ResultMeta, RowSet};
 pub use error::{ErrorKind, ExecError, ExitCode};
 pub use exec::{
@@ -47,6 +53,11 @@ pub use qfs_engine::apply_residual;
 // name a declared type's `WHERE` predicate without taking a direct `qfs-parser` edge (it stays off
 // the lower spine — same posture as `parse`/`ViewSpec`).
 pub use qfs_parser::Expr;
+// The parsed-statement type rides through here so the terminal binary can hold a registered
+// collection view's stored body (a `Statement`) without a direct `qfs-parser` edge — the same
+// off-the-lower-spine posture as `parse`/`Expr`. The binary never inspects it; it round-trips the
+// body back to `read_registered_collection` / `collection_relation` / `collection_source_path`.
+pub use qfs_parser::Statement;
 // Re-export the transform-execution seam (blueprint §15) so `qfs-cmd` and the binary composition
 // can supply the injected executor without a direct qfs-engine dep.
 pub use qfs_engine::{TransformCall, TransformExecutor};
@@ -58,7 +69,9 @@ pub use shell::{Builtin, Completer, Outcome, Session, VfsPath};
 use std::io::Write;
 
 use qfs_core::{Engine, Plan};
-use qfs_parser::{PlanWrap, Statement};
+use qfs_parser::PlanWrap;
+// `Statement` is in scope via the `pub use qfs_parser::Statement` re-export above (which also lets
+// the terminal binary name a stored view body without a direct qfs-parser edge).
 
 /// Where the one-shot statement text came from (exactly one source per invocation).
 #[derive(Debug, Clone, PartialEq, Eq)]
