@@ -61,23 +61,27 @@ BASE="http://127.0.0.1:8787"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$QFS_STATE_DIR" /work/tmp
 
 # =====================================================================================
-echo "## STEP a — copy the read-only worktree into the writable tmpfs and build"
+echo "## STEP a/b — obtain the qfs release binary"
 # =====================================================================================
-run_sh "cp -r /src/. /work/build" "cp -r /src/. /work/build"
-# The Cargo workspace is under packages/qfs (the monorepo root has no Cargo.toml).
-BUILD=/work/build/packages/qfs
-run_sh "ls /work/build (repo root has no Cargo.toml; workspace is packages/qfs)" \
-  "ls -la /work/build && echo '---' && ls /work/build/packages/qfs/Cargo.toml 2>&1 || true"
-
-echo "## STEP b — cargo build --release -p qfs (isolated CARGO_TARGET_DIR=/work/target)"
-run_sh "cd $BUILD && cargo build --release -p qfs" \
-  "cd $BUILD && cargo build --release -p qfs"
-BUILD_RC=$?
-
-QFS=/work/target/release/qfs
+if [ -n "${PREBUILT_QFS:-}" ] && [ -x "${PREBUILT_QFS:-}" ]; then
+  echo "## Using a PRE-BUILT release binary mounted read-only at $PREBUILT_QFS."
+  echo "## Why: a full in-container release build of the qfs binary exceeds this shared"
+  echo "## host's co-tenant-safe RAM budget (the container --memory cap OOM-killed it twice"
+  echo "## at the final link). The binary is instead built ON THE HOST via a memory-capped"
+  echo "## tmpfs cargo wrapper (18G cgroup cap, build in RAM off the / disk) and mounted in."
+  echo "## The round logic below — identity seed, serve, OAuth session mint, whoami — is"
+  echo "## unchanged and still runs entirely inside this isolated --rm container."
+  QFS="$PREBUILT_QFS"
+else
+  run_sh "cp -r /src/. /work/build" "cp -r /src/. /work/build"
+  BUILD=/work/build/packages/qfs
+  run_sh "cd $BUILD && cargo build --release -p qfs" \
+    "cd $BUILD && cargo build --release -p qfs"
+  QFS=/work/target/release/qfs
+fi
 if [ ! -x "$QFS" ]; then
-  echo "!!! release binary not present at $QFS after build (rc=$BUILD_RC) — cannot continue the round."
-  echo "!!! OUTCOME: failed (build). See the build output above."
+  echo "!!! release binary not present at $QFS — cannot continue the round."
+  echo "!!! OUTCOME: failed (build)."
   exit 0
 fi
 run "$QFS" --version
