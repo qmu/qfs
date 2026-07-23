@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use qfs_core::{
     Archetype, Capabilities, CfsError, Column, ColumnType, DriverId, Engine, NodeDesc, Path,
-    PushdownProfile, Row, RowBatch, Schema, StatementSpec, Value,
+    PushdownProfile, RequestContext, Row, RowBatch, Schema, StatementSpec, Value,
 };
 use qfs_exec::{parse, ReadDriver, ReadRegistry};
 use qfs_pushdown::ScanNode;
@@ -83,7 +83,7 @@ impl qfs_core::PlanApplier for NoopApplier {
 
 #[async_trait::async_trait]
 impl ReadDriver for FakeItems {
-    async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, _scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         // Honestly over-return ALL rows; the executor's residual trims to the bound result.
         Ok(RowBatch::new(items_schema(), self.rows.clone()))
     }
@@ -118,9 +118,9 @@ impl qfs_core::Driver for CountingItems {
 
 #[async_trait::async_trait]
 impl ReadDriver for CountingItems {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         self.scans.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.inner.scan(scan).await
+        self.inner.scan(scan, ctx).await
     }
 }
 
@@ -259,6 +259,100 @@ fn write_endpoint_is_allowed_when_a_policy_grants_it() {
     assert!(
         compile_endpoint(&def, &engine, Some(&broad)).is_err(),
         "ALLOW ALL must not silently grant irreversible REMOVE"
+    );
+}
+
+/// The policy gate evaluates the RESOLVED ACTOR, not always `anonymous()` (mission acceptance 3).
+/// A `FOR user:alice` rule bites when Alice is the resolved principal and contributes nothing when
+/// the request is anonymous — proved BOTH directions — and a write with no policy is denied
+/// (fail-closed, acceptance 4). Uses `assert_read_only` directly (the request-time gate).
+#[test]
+fn policy_gate_evaluates_the_resolved_actor_both_directions() {
+    use crate::policy::assert_read_only;
+    use qfs_server::DecisionContext;
+
+    let engine = engine_with_mock();
+    // A write plan (REMOVE is a write effect the gate must adjudicate).
+    let stmt = parse("REMOVE /mock/items WHERE id == 1").expect("parses");
+    let plan = qfs_exec::build_plan(&stmt, &engine).expect("plans");
+
+    // A t57-narrowed grant: REMOVE is allowed only FOR user:alice (explicit ALLOW REMOVE — the
+    // irreversible-strictness rule — narrowed to a subject).
+    let policy = qfs_server::PolicyDef {
+        name: "p".to_string(),
+        handler: String::new(),
+        allow: vec!["ALLOW REMOVE FOR user:alice".to_string()],
+    };
+
+    // Direction 1: the rule BITES for the resolved principal ⇒ the write is permitted.
+    assert!(
+        assert_read_only(&plan, Some(&policy), &DecisionContext::for_user("alice")).is_ok(),
+        "a FOR user:alice rule must grant the write when Alice is the resolved actor"
+    );
+
+    // Direction 2: the SAME rule contributes NOTHING under the anonymous actor ⇒ default-deny.
+    assert!(
+        assert_read_only(&plan, Some(&policy), &DecisionContext::anonymous()).is_err(),
+        "the narrowed rule must contribute nothing without a principal (fail closed)"
+    );
+
+    // The wrong principal is likewise denied — a rule for Alice does not grant Bob.
+    assert!(
+        assert_read_only(&plan, Some(&policy), &DecisionContext::for_user("bob")).is_err(),
+        "a FOR user:alice rule must not grant a different actor"
+    );
+
+    // Fail-closed (acceptance 4): a write with NO attached policy is denied regardless of actor —
+    // threading a principal widens nothing. If the default ever widened, this assertion fails.
+    assert!(
+        assert_read_only(&plan, None, &DecisionContext::for_user("alice")).is_err(),
+        "no policy ⇒ default-deny holds even for a resolved user (the default must never widen)"
+    );
+    assert!(assert_read_only(&plan, None, &DecisionContext::anonymous()).is_err());
+
+    // decision_for maps the request principal onto the actor axis (the single resolution point).
+    assert_eq!(
+        crate::policy::decision_for(&qfs_core::RequestContext::for_user("alice")),
+        DecisionContext::for_user("alice")
+    );
+    assert_eq!(
+        crate::policy::decision_for(&qfs_core::RequestContext::anonymous()),
+        DecisionContext::anonymous()
+    );
+}
+
+/// `identity::Role` is NOT an authorization grant, and this mission did not convert it into one
+/// (mission acceptance 6, the invariant). The request-principal seam carries the USER axis only —
+/// never a membership `Role` label — so a `Role::Admin` member is not privileged by that label:
+/// a role-scoped rule cannot bite on the strength of a membership (identity ≠ authorization, §4.1).
+/// If a later change ever wires `identity::Role` into the principal seam, `roles` becomes non-empty
+/// and the first assertion fails; the role rule would then bite and the second fails — either way
+/// this test catches the accidental conversion.
+#[test]
+fn identity_role_is_not_an_authorization_grant() {
+    use crate::policy::{assert_read_only, decision_for};
+
+    // The seam resolves only a user id — it carries NO role set (no membership label flows in).
+    let actor = decision_for(&qfs_core::RequestContext::for_user("alice"));
+    assert!(
+        actor.roles.is_empty(),
+        "the principal seam must carry no role grant (identity::Role is not authorization)"
+    );
+
+    let engine = engine_with_mock();
+    let stmt = parse("REMOVE /mock/items WHERE id == 1").expect("parses");
+    let plan = qfs_exec::build_plan(&stmt, &engine).expect("plans");
+
+    // A rule granting REMOVE to `role:admin` does NOT bite for a user resolved through the seam —
+    // even one who is an `identity::Role::Admin` member — because the label is not a grant.
+    let role_policy = qfs_server::PolicyDef {
+        name: "r".to_string(),
+        handler: String::new(),
+        allow: vec!["ALLOW REMOVE FOR role:admin".to_string()],
+    };
+    assert!(
+        assert_read_only(&plan, Some(&role_policy), &actor).is_err(),
+        "identity::Role must not be an authorization grant (Role::Admin is still not privileged)"
     );
 }
 

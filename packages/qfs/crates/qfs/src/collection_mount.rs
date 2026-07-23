@@ -33,7 +33,8 @@ use std::sync::{Arc, RwLock};
 
 use qfs_core::{
     markdown_relation_schema, Archetype, Capabilities, CfsError, Driver, DriverId, Engine,
-    MarkdownRelation, NodeDesc, Path, PlanApplier, ProcSig, PushdownProfile, RowBatch, Verb,
+    MarkdownRelation, NodeDesc, Path, PlanApplier, ProcSig, PushdownProfile, RequestContext,
+    RowBatch, Verb,
 };
 use qfs_driver_local::{scan_rows_with, Sandbox};
 use qfs_exec::{ReadDriver, ReadRegistry, Statement};
@@ -243,7 +244,7 @@ impl CollectionReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for CollectionReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let invalid = |reason: &'static str| CfsError::InvalidPath {
             path: scan.path.clone(),
             reason,
@@ -356,7 +357,8 @@ mod tests {
 
     fn select(engine: &Engine, reads: &ReadRegistry, q: &str) -> qfs_exec::RowSet {
         let stmt = qfs_exec::parse(q).expect("parse");
-        qfs_exec::block_on_read(&stmt, &engine.mounts, reads).expect("read through the engine")
+        qfs_exec::block_on_read(&stmt, &engine.mounts, reads, &RequestContext::anonymous())
+            .expect("read through the engine")
     }
 
     fn docs_col(schema: &Schema, name: &str) -> usize {
@@ -530,7 +532,13 @@ mod tests {
         let dir = fixture_tree();
         let (engine, reads) = engine_and_reads(&dir);
         let stmt = qfs_exec::parse("/collections/ghost |> LIMIT 1").expect("parse");
-        assert!(qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).is_err());
+        assert!(qfs_exec::block_on_read(
+            &stmt,
+            &engine.mounts,
+            &reads,
+            &RequestContext::anonymous()
+        )
+        .is_err());
     }
 
     /// The `/server/views` bridge (the definition layer → this surface): a [`ServerState`] carrying a

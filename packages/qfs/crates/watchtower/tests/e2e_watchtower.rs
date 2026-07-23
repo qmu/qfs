@@ -151,7 +151,11 @@ impl qfs_core::Driver for FakeMail {
 
 #[async_trait::async_trait]
 impl ReadDriver for FakeMail {
-    async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(
+        &self,
+        _scan: &ScanNode,
+        _ctx: &qfs_core::RequestContext,
+    ) -> Result<RowBatch, CfsError> {
         let rows = self.rows.lock().map(|g| g.clone()).unwrap_or_default();
         Ok(RowBatch::new(mail_schema(), rows))
     }

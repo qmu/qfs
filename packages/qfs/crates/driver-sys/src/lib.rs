@@ -102,7 +102,9 @@ pub fn sys_node_capabilities(node: SysNode) -> Capabilities {
         | SysNode::Projects
         | SysNode::Audit
         | SysNode::Connections
-        | SysNode::Metrics => Capabilities::from_verbs(&[Verb::Select]),
+        | SysNode::Metrics
+        // /sys/whoami: SELECT-only, resolved from the request principal (never written).
+        | SysNode::Whoami => Capabilities::from_verbs(&[Verb::Select]),
     }
 }
 

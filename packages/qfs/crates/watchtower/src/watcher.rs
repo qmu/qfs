@@ -150,9 +150,14 @@ mod native {
             // Decision R (t73): the source leads — no `FROM`. `self.source` is a `/path` mount.
             let stmt = qfs_exec::parse(&self.source)
                 .map_err(|e| format!("watcher source parse failed: {e}"))?;
-            let rows = qfs_exec::execute_read(&stmt, &engine.mounts, reads)
-                .await
-                .map_err(|e| format!("watcher read failed: {e}"))?;
+            let rows = qfs_exec::execute_read(
+                &stmt,
+                &engine.mounts,
+                reads,
+                &qfs_core::RequestContext::anonymous(),
+            )
+            .await
+            .map_err(|e| format!("watcher read failed: {e}"))?;
 
             let columns: Vec<String> = rows.columns().iter().map(|c| c.to_string()).collect();
             let id_idx = columns.iter().position(|c| c == &self.id_column);

@@ -26,7 +26,9 @@
 //! `qfs` bin / `qfs-cmd` dispatches into it. Nothing in the pure spine depends back onto this
 //! crate, so tokio stays out of the spine's closure.
 
-use qfs_core::{commit, plan_query, preview, CfsError, Engine, MountRegistry, Plan, RowBatch};
+use qfs_core::{
+    commit, plan_query, preview, CfsError, Engine, MountRegistry, Plan, RequestContext, RowBatch,
+};
 use qfs_engine::{CombineEngine, MiniEvaluator, ScanResults};
 use qfs_parser::{parse_statement, Statement};
 
@@ -47,8 +49,9 @@ pub async fn execute_read(
     stmt: &Statement,
     mounts: &MountRegistry,
     reads: &ReadRegistry,
+    ctx: &RequestContext,
 ) -> Result<RowSet, ExecError> {
-    execute_read_with(stmt, mounts, reads, None).await
+    execute_read_with(stmt, mounts, reads, None, ctx).await
 }
 
 /// [`execute_read`] with an optionally injected [`TransformExecutor`] (blueprint §15): the
@@ -62,6 +65,7 @@ pub async fn execute_read_with(
     mounts: &MountRegistry,
     reads: &ReadRegistry,
     transform: Option<std::sync::Arc<dyn qfs_engine::TransformExecutor>>,
+    ctx: &RequestContext,
 ) -> Result<RowSet, ExecError> {
     // 1. Build the PhysicalPlan (pushdown split) from the AST via the live registry. This is
     //    the qfs-core t14 seam: lower_query (from the AST, O-t07-1) -> partition_by_source.
@@ -94,7 +98,7 @@ pub async fn execute_read_with(
             .with_path(scan.source.to_string())
         })?;
         let batch = driver
-            .scan(scan)
+            .scan(scan, ctx)
             .await
             .map_err(|e| ExecError::from_qfs(&e))?;
         batches.push(batch);
@@ -178,8 +182,9 @@ pub fn block_on_read(
     stmt: &Statement,
     mounts: &MountRegistry,
     reads: &ReadRegistry,
+    ctx: &RequestContext,
 ) -> Result<RowSet, ExecError> {
-    block_on_read_with(stmt, mounts, reads, None)
+    block_on_read_with(stmt, mounts, reads, None, ctx)
 }
 
 /// [`block_on_read`] with an optionally injected [`TransformExecutor`] (the COMMIT-boundary
@@ -192,6 +197,7 @@ pub fn block_on_read_with(
     mounts: &MountRegistry,
     reads: &ReadRegistry,
     transform: Option<std::sync::Arc<dyn qfs_engine::TransformExecutor>>,
+    ctx: &RequestContext,
 ) -> Result<RowSet, ExecError> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -203,7 +209,7 @@ pub fn block_on_read_with(
                 format!("failed to start read runtime: {e}"),
             )
         })?;
-    rt.block_on(execute_read_with(stmt, mounts, reads, transform))
+    rt.block_on(execute_read_with(stmt, mounts, reads, transform, ctx))
 }
 
 /// Build the effect [`Plan`] for an effect [`Statement`] via the engine evaluator (resolve +

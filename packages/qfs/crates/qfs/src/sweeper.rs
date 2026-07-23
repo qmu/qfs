@@ -618,7 +618,11 @@ mod tests {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .build()
                 .expect("rt");
-            rt.block_on(qfs_exec::ReadDriver::scan(&facet, &node))
+            rt.block_on(qfs_exec::ReadDriver::scan(
+                &facet,
+                &node,
+                &qfs_core::RequestContext::anonymous(),
+            ))
         };
 
         let batch = scan("/server/jobs/nightly/runs").expect("scan runs");

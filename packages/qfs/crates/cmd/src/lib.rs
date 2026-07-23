@@ -294,18 +294,19 @@ pub enum ConnectionAction {
 pub type ConnectionLauncher<'a> = dyn Fn(&ConnectionAction) -> i32 + 'a;
 
 /// A parsed `qfs identity <verb>` request, handed to the binary-injected [`IdentityLauncher`] (t45).
-/// This is the AUTHENTICATION surface — local sign-up + a session-less `whoami` (decision §4.1:
-/// identity is not authorization). Server-side sessions (t46) have **shipped**, but they serve the
-/// local web / dashboard face: no session rides a CLI invocation, so this surface stays session-less
-/// by design. Like [`ConnectionAction`], the **password is never carried here** (it would leak into
-/// argv / shell history / `ps`); the launcher reads it from stdin. The email is a handle (safe
-/// metadata).
+/// This is the identity **read-back** surface — a session-less `whoami` (decision §4.1: identity is
+/// not authorization). Sign-up is retired (ADR 0008 §2 — `qfs init` replaced the unverified-password
+/// signup). Server-side sessions (t46) have **shipped**, but they serve the web / OAuth face: no
+/// session rides a CLI invocation, so this surface stays session-less by design. Like
+/// [`ConnectionAction`], no password is carried here (the launcher reads it from stdin for the verbs
+/// that set one). The email is a handle (safe metadata).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityAction {
-    /// `identity whoami [email]` — print a user's email + id (NEVER the password hash). With no
-    /// email and no session yet (t46), it resolves the sole user if the deployment has exactly one.
-    /// (Signing up moved to `qfs init` — ADR 0008 §2: no unverified password on the CLI.)
-    Whoami { email: Option<String> },
+    /// `identity whoami [email] [--json]` — print a user's email + id (NEVER the password hash).
+    /// With no email and no session (the CLI carries none), it resolves the sole user if the
+    /// deployment has exactly one. `json` reflects the global `--json` flag: when set, the launcher
+    /// emits a credential-free JSON object instead of prose.
+    Whoami { email: Option<String>, json: bool },
 }
 
 /// The injected **identity launcher** (t45): the binary supplies the System-DB-backed identity store
@@ -741,11 +742,13 @@ enum Command {
         #[arg(long = "lock")]
         lock: bool,
     },
-    /// Manage local identity: sign up (email + password) and look yourself up (t45, roadmap M1).
+    /// Look yourself up on this host: `qfs identity whoami [email] [--json]` (t45, roadmap M1).
     ///
-    /// AUTHENTICATION ONLY (decision §4.1: identity is not authorization). A signed-up user can do
-    /// nothing privileged yet — there is local sign-up, **no session** (sessions land in t46, real
-    /// auth in M2). The password is read from STDIN (never argv); the password hash is never printed.
+    /// READ-BACK ONLY (decision §4.1: identity is not authorization) — a member has no capability
+    /// from identity alone; the ACL (t57 `POLICY`) is the only grant path. Sign-up is retired
+    /// (ADR 0008 — `qfs init` replaced it). Sessions (t46) have shipped and serve the web / OAuth
+    /// face; the CLI carries no session, so `whoami` resolves the sole local user (or the named
+    /// email). The password hash is never printed.
     Identity {
         #[command(subcommand)]
         verb: IdentityVerb,
@@ -988,8 +991,9 @@ enum VaultVerb {
 #[derive(Subcommand, Debug)]
 enum IdentityVerb {
     /// Print a user's email + id (NEVER the password hash). With an `email`, looks that user up;
-    /// with none and exactly one user on this host, prints it (there is no session yet — t46).
-    /// (Signing up moved to `qfs init` — ADR 0008.)
+    /// with none, resolves the sole user on this host (the CLI carries no session). Add the global
+    /// `--json` for a credential-free JSON object. (Sign-up is retired — `qfs init` replaced it,
+    /// ADR 0008.)
     Whoami {
         /// The user to look up. Optional: omit it to resolve the sole user.
         email: Option<String>,
@@ -1224,7 +1228,7 @@ where
         // identity store; qfs-cmd stays off the concrete backend). Returns the exit code directly.
         Some(Command::Identity { verb }) => {
             tracing::debug!(target: "qfs::cmd", "dispatch identity via launcher");
-            return identity(&identity_action(&verb));
+            return identity(&identity_action(&verb, cli.json));
         }
         // `init` (ADR 0008 §2) is dispatched through the injected launcher (the binary owns the
         // identity-store + vault I/O; qfs-cmd stays off the concrete backends). Returns the code.
@@ -1595,10 +1599,11 @@ fn vault_action(verb: &VaultVerb) -> VaultAction {
     }
 }
 
-fn identity_action(verb: &IdentityVerb) -> IdentityAction {
+fn identity_action(verb: &IdentityVerb, json: bool) -> IdentityAction {
     match verb {
         IdentityVerb::Whoami { email } => IdentityAction::Whoami {
             email: email.clone(),
+            json,
         },
     }
 }
@@ -2640,15 +2645,30 @@ mod tests {
     fn identity_verbs_map_to_the_public_action() {
         // The clap verb maps 1:1 to the injected-launcher action (handles only, no password).
         assert_eq!(
-            identity_action(&IdentityVerb::Whoami { email: None }),
-            IdentityAction::Whoami { email: None }
+            identity_action(&IdentityVerb::Whoami { email: None }, false),
+            IdentityAction::Whoami {
+                email: None,
+                json: false
+            }
         );
         assert_eq!(
-            identity_action(&IdentityVerb::Whoami {
-                email: Some("a@b.com".into())
-            }),
+            identity_action(
+                &IdentityVerb::Whoami {
+                    email: Some("a@b.com".into())
+                },
+                false
+            ),
             IdentityAction::Whoami {
-                email: Some("a@b.com".into())
+                email: Some("a@b.com".into()),
+                json: false
+            }
+        );
+        // The global `--json` flag threads into the action (the launcher emits JSON on it).
+        assert_eq!(
+            identity_action(&IdentityVerb::Whoami { email: None }, true),
+            IdentityAction::Whoami {
+                email: None,
+                json: true
             }
         );
     }

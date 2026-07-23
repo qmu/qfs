@@ -33,7 +33,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use qfs_core::{CfsError, DriverId, Engine, RowBatch};
+use qfs_core::{CfsError, DriverId, Engine, RequestContext, RowBatch};
 use qfs_driver_cf::CfDriver;
 use qfs_driver_local::{scan_rows_with, LocalError, LocalFsDriver, Sandbox};
 use qfs_exec::shell::{Outcome, Session, VfsPath};
@@ -61,7 +61,7 @@ impl LocalReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for LocalReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         // The ScanNode now carries the full addressed VFS path (t28 pushdown threading), so the
         // scan navigates to the exact node — `ls /local/sub` lists `sub`, not the mount root.
         // An empty path (a synthetic source) falls back to the mount root.
@@ -563,7 +563,7 @@ impl LazyCloudReadDriver {
 
 #[async_trait::async_trait]
 impl ReadDriver for LazyCloudReadDriver {
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(&self, scan: &ScanNode, ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let facet = match self.bound.get() {
             Some(facet) => facet.clone(),
             None => match self.bind() {
@@ -583,7 +583,7 @@ impl ReadDriver for LazyCloudReadDriver {
                 }
             },
         };
-        facet.scan(scan).await
+        facet.scan(scan, ctx).await
     }
 }
 
@@ -959,7 +959,9 @@ mod tests {
     fn local_glob_decodes_markdown_per_row_through_the_engine() {
         let (_d, engine, reads) = collection_fixture();
         let stmt = qfs_exec::parse("/local/*.md |> decode md").expect("parse");
-        let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+        let out =
+            qfs_exec::block_on_read(&stmt, &engine.mounts, &reads, &RequestContext::anonymous())
+                .expect("read");
         assert_eq!(out.rows.len(), 4, "one decoded row per top-level .md file");
         // Provenance: every decoded row carries a non-null `path`.
         for row in &out.rows {
@@ -984,7 +986,9 @@ mod tests {
         let (_d, engine, reads) = collection_fixture();
         let stmt =
             qfs_exec::parse("/local/*.md |> decode md |> where status == 'todo'").expect("parse");
-        let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+        let out =
+            qfs_exec::block_on_read(&stmt, &engine.mounts, &reads, &RequestContext::anonymous())
+                .expect("read");
         assert_eq!(
             out.rows.len(),
             2,
@@ -1031,7 +1035,9 @@ mod tests {
              |> order by created_at desc |> select id, title, created_at",
         )
         .expect("parse");
-        let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+        let out =
+            qfs_exec::block_on_read(&stmt, &engine.mounts, &reads, &RequestContext::anonymous())
+                .expect("read");
         // Only the two todo tickets, newest first (T2 then T1), projected to the three columns.
         assert_eq!(out.rows.len(), 2, "done ticket excluded");
         assert_eq!(
@@ -1060,7 +1066,13 @@ mod tests {
             ("/local/*.yaml |> decode yaml", "k", Value::Int(2)),
         ] {
             let stmt = qfs_exec::parse(glob).expect("parse");
-            let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+            let out = qfs_exec::block_on_read(
+                &stmt,
+                &engine.mounts,
+                &reads,
+                &RequestContext::anonymous(),
+            )
+            .expect("read");
             assert_eq!(out.rows.len(), 1, "one row per file for {glob}");
             assert_eq!(cell(&out.schema, &out.rows[0], key), &want);
             assert!(
@@ -1471,7 +1483,9 @@ mod tests {
             .build()
             .unwrap();
         let driver = reads.get(&DriverId::new("cf")).expect("cf read fallback");
-        let err = rt.block_on(driver.scan(&scan)).unwrap_err();
+        let err = rt
+            .block_on(driver.scan(&scan, &RequestContext::anonymous()))
+            .unwrap_err();
         match err {
             CfsError::InvalidPath { reason, path } => {
                 assert_eq!(path, "/cf/queue/q");
@@ -1524,7 +1538,9 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        let err = rt.block_on(driver.scan(&scan)).unwrap_err();
+        let err = rt
+            .block_on(driver.scan(&scan, &RequestContext::anonymous()))
+            .unwrap_err();
 
         match prev_xdg {
             Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),

@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use qfs_core::{CfsError, DriverId, RowBatch};
+use qfs_core::{CfsError, DriverId, RequestContext, RowBatch};
 use qfs_pushdown::ScanNode;
 
 /// The async read seam a source implements to execute one native [`ScanNode`] and return
@@ -37,15 +37,18 @@ use qfs_pushdown::ScanNode;
 /// run scans concurrently under tokio.
 #[async_trait::async_trait]
 pub trait ReadDriver: Send + Sync {
-    /// Execute one native scan, returning the owned rows.
+    /// Execute one native scan **under the request's principal** (`ctx`), returning the owned rows.
     ///
     /// The driver runs the work described by `scan.pushed` against `scan.source`/`scan.schema`
     /// and returns at least the rows that work selects (it may return a superset; the executor
-    /// re-applies the residual). Returns a structured [`CfsError`] on an I/O / decode failure.
+    /// re-applies the residual). `ctx` carries *who is asking* (the M2 principal seam) — most
+    /// drivers ignore it, but a principal-aware face (e.g. `/sys/whoami`) reads it back. The seam
+    /// is explicit so fail-closed is a compile-time fact: a driver cannot forget the actor exists.
+    /// Returns a structured [`CfsError`] on an I/O / decode failure.
     ///
     /// # Errors
     /// [`CfsError`] if the scan could not be executed (auth, I/O, decode).
-    async fn scan(&self, scan: &ScanNode) -> Result<RowBatch, CfsError>;
+    async fn scan(&self, scan: &ScanNode, ctx: &RequestContext) -> Result<RowBatch, CfsError>;
 }
 
 /// The read-time driver registry: maps a [`DriverId`] to the [`ReadDriver`] that services its

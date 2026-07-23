@@ -120,7 +120,11 @@ impl qfs_core::Driver for FakeItems {
 
 #[async_trait::async_trait]
 impl ReadDriver for FakeItems {
-    async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(
+        &self,
+        _scan: &ScanNode,
+        _ctx: &qfs_core::RequestContext,
+    ) -> Result<RowBatch, CfsError> {
         self.scans.fetch_add(1, Ordering::SeqCst);
         Ok(RowBatch::new(items_schema(), self.rows.clone()))
     }
@@ -924,7 +928,11 @@ async fn s9_error_bodies_never_leak_a_held_credential() {
     }
     #[async_trait::async_trait]
     impl ReadDriver for CredHoldingDriver {
-        async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
             // A SECRET-FREE structured error (blueprint §6): names only a non-sensitive mount label.
             // A conformant driver NEVER embeds its held credential in the error text.
             Err(CfsError::UnknownMount("/mock/items".to_string()))

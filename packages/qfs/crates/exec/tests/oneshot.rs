@@ -90,7 +90,11 @@ impl qfs_core::Driver for FakeMail {
 
 #[async_trait::async_trait]
 impl ReadDriver for FakeMail {
-    async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+    async fn scan(
+        &self,
+        _scan: &ScanNode,
+        _ctx: &qfs_core::RequestContext,
+    ) -> Result<RowBatch, CfsError> {
         // Honestly over-return: hand back ALL rows regardless of the pushed WHERE/LIMIT (this
         // source pushes nothing). The executor's residual must trim to the real result.
         Ok(RowBatch::new(mail_schema(), self.rows.clone()))
@@ -116,7 +120,13 @@ fn headline_read_returns_rows_through_real_executor() {
     let engine = engine_with_mail();
     let reads = reads_with_mail();
     let stmt = parse("/mail/inbox |> LIMIT 1").unwrap();
-    let rows = block_on_read(&stmt, &engine.mounts, &reads).unwrap();
+    let rows = block_on_read(
+        &stmt,
+        &engine.mounts,
+        &reads,
+        &qfs_core::RequestContext::anonymous(),
+    )
+    .unwrap();
     assert_eq!(
         rows.len(),
         1,
@@ -136,7 +146,13 @@ fn selection_address_reads_exactly_the_selected_row() {
     let engine = engine_with_mail();
     let reads = reads_with_mail();
     let stmt = parse("/mail/inbox/@2").unwrap();
-    let rows = block_on_read(&stmt, &engine.mounts, &reads).unwrap();
+    let rows = block_on_read(
+        &stmt,
+        &engine.mounts,
+        &reads,
+        &qfs_core::RequestContext::anonymous(),
+    )
+    .unwrap();
     assert_eq!(rows.len(), 1, "the address selects exactly one row");
     assert_eq!(rows.rows[0].values[0], Value::Int(2));
     assert_eq!(rows.rows[0].values[1], Value::Text("spam".into()));
@@ -209,7 +225,13 @@ fn residual_where_refilters_over_returned_rows() {
     let engine = engine_with_mail();
     let reads = reads_with_mail();
     let stmt = parse("/mail/inbox |> WHERE id > 1").unwrap();
-    let rows = block_on_read(&stmt, &engine.mounts, &reads).unwrap();
+    let rows = block_on_read(
+        &stmt,
+        &engine.mounts,
+        &reads,
+        &qfs_core::RequestContext::anonymous(),
+    )
+    .unwrap();
     assert_eq!(rows.len(), 2);
     let ids: Vec<i64> = rows
         .rows
@@ -228,7 +250,13 @@ fn headline_json_envelope_is_rows_object() {
     let engine = engine_with_mail();
     let reads = reads_with_mail();
     let stmt = parse("/mail/inbox |> LIMIT 1").unwrap();
-    let rows = block_on_read(&stmt, &engine.mounts, &reads).unwrap();
+    let rows = block_on_read(
+        &stmt,
+        &engine.mounts,
+        &reads,
+        &qfs_core::RequestContext::anonymous(),
+    )
+    .unwrap();
     let json = serde_json::to_value(&rows).unwrap();
     // rows: unchanged top-level object-per-row (agent-native; back-compatible with t29 consumers).
     assert!(json["rows"].is_array());
@@ -1189,7 +1217,11 @@ mod attachment_to_drive {
 
     #[async_trait::async_trait]
     impl ReadDriver for FakeAttachmentMail {
-        async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
             let row = Row::new(vec![
                 Value::Text("invoice.pdf".into()),
                 Value::Text("application/pdf".into()),
@@ -1417,7 +1449,11 @@ mod pdf_extraction_to_drive {
     }
     #[async_trait::async_trait]
     impl ReadDriver for FakePdfLocal {
-        async fn scan(&self, _s: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(
+            &self,
+            _s: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
             // A single-file read: the listing row for report.pdf plus its raw bytes under `content`.
             Ok(RowBatch::new(
                 local_content_schema(),
@@ -1672,7 +1708,11 @@ mod drive_to_gmail_reply {
 
     #[async_trait::async_trait]
     impl ReadDriver for FakeDriveFile {
-        async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
             let row = Row::new(vec![
                 Value::Text("report.pdf".into()),
                 Value::Text("application/pdf".into()),
@@ -2190,7 +2230,11 @@ mod nested_mount_id_routing_spike {
 
     #[async_trait::async_trait]
     impl ReadDriver for TaggedSource {
-        async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
             Ok(RowBatch::new(
                 tag_schema(),
                 vec![Row::new(vec![
@@ -2239,8 +2283,13 @@ mod nested_mount_id_routing_spike {
         let engine = engine_ab();
         let reads = reads_ab();
 
-        let nested = block_on_read(&parse("/a/b/x |> LIMIT 1").unwrap(), &engine.mounts, &reads)
-            .expect("nested read resolves");
+        let nested = block_on_read(
+            &parse("/a/b/x |> LIMIT 1").unwrap(),
+            &engine.mounts,
+            &reads,
+            &qfs_core::RequestContext::anonymous(),
+        )
+        .expect("nested read resolves");
         assert_eq!(nested.len(), 1);
         assert_eq!(
             who_of(&nested),
@@ -2249,8 +2298,13 @@ mod nested_mount_id_routing_spike {
         );
 
         // Control: the top mount still routes to the single-segment id `"a"` (no shadowing).
-        let top = block_on_read(&parse("/a/x |> LIMIT 1").unwrap(), &engine.mounts, &reads)
-            .expect("top read resolves");
+        let top = block_on_read(
+            &parse("/a/x |> LIMIT 1").unwrap(),
+            &engine.mounts,
+            &reads,
+            &qfs_core::RequestContext::anonymous(),
+        )
+        .expect("top read resolves");
         assert_eq!(who_of(&top), "/a", "the top mount still routes to id `a`");
     }
 
