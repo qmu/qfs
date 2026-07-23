@@ -209,3 +209,4 @@ the four downstream missions with their entry conditions.
 - 2026-07-22 — ticket archived — 20260722091300-ship-read-over-post-hermetically.md
 - 2026-07-22 — ticket archived — 20260722091400-conciseness-bar-stated-and-measured.md
 - 2026-07-22 — ticket archived — 20260722091500-conversion-playbook-and-honest-tiering.md
+- 2026-07-24 — story reported — work-20260722-084646.md
