@@ -2302,6 +2302,7 @@ mod tests {
             path: "/sys/whoami".to_string(),
             pushed: PushedQuery::default(),
             schema: sys_node_schema(SysNode::Whoami),
+            materialize_content: false,
         }
     }
 

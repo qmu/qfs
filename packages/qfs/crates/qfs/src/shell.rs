@@ -959,7 +959,9 @@ mod tests {
     fn local_glob_decodes_markdown_per_row_through_the_engine() {
         let (_d, engine, reads) = collection_fixture();
         let stmt = qfs_exec::parse("/local/*.md |> decode md").expect("parse");
-        let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+        let out =
+            qfs_exec::block_on_read(&stmt, &engine.mounts, &reads, &RequestContext::anonymous())
+                .expect("read");
         assert_eq!(out.rows.len(), 4, "one decoded row per top-level .md file");
         // Provenance: every decoded row carries a non-null `path`.
         for row in &out.rows {
@@ -984,7 +986,9 @@ mod tests {
         let (_d, engine, reads) = collection_fixture();
         let stmt =
             qfs_exec::parse("/local/*.md |> decode md |> where status == 'todo'").expect("parse");
-        let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+        let out =
+            qfs_exec::block_on_read(&stmt, &engine.mounts, &reads, &RequestContext::anonymous())
+                .expect("read");
         assert_eq!(
             out.rows.len(),
             2,
@@ -1031,7 +1035,9 @@ mod tests {
              |> order by created_at desc |> select id, title, created_at",
         )
         .expect("parse");
-        let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+        let out =
+            qfs_exec::block_on_read(&stmt, &engine.mounts, &reads, &RequestContext::anonymous())
+                .expect("read");
         // Only the two todo tickets, newest first (T2 then T1), projected to the three columns.
         assert_eq!(out.rows.len(), 2, "done ticket excluded");
         assert_eq!(
@@ -1060,7 +1066,13 @@ mod tests {
             ("/local/*.yaml |> decode yaml", "k", Value::Int(2)),
         ] {
             let stmt = qfs_exec::parse(glob).expect("parse");
-            let out = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).expect("read");
+            let out = qfs_exec::block_on_read(
+                &stmt,
+                &engine.mounts,
+                &reads,
+                &RequestContext::anonymous(),
+            )
+            .expect("read");
             assert_eq!(out.rows.len(), 1, "one row per file for {glob}");
             assert_eq!(cell(&out.schema, &out.rows[0], key), &want);
             assert!(

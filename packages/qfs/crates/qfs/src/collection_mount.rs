@@ -357,7 +357,8 @@ mod tests {
 
     fn select(engine: &Engine, reads: &ReadRegistry, q: &str) -> qfs_exec::RowSet {
         let stmt = qfs_exec::parse(q).expect("parse");
-        qfs_exec::block_on_read(&stmt, &engine.mounts, reads).expect("read through the engine")
+        qfs_exec::block_on_read(&stmt, &engine.mounts, reads, &RequestContext::anonymous())
+            .expect("read through the engine")
     }
 
     fn docs_col(schema: &Schema, name: &str) -> usize {
@@ -531,7 +532,13 @@ mod tests {
         let dir = fixture_tree();
         let (engine, reads) = engine_and_reads(&dir);
         let stmt = qfs_exec::parse("/collections/ghost |> LIMIT 1").expect("parse");
-        assert!(qfs_exec::block_on_read(&stmt, &engine.mounts, &reads).is_err());
+        assert!(qfs_exec::block_on_read(
+            &stmt,
+            &engine.mounts,
+            &reads,
+            &RequestContext::anonymous()
+        )
+        .is_err());
     }
 
     /// The `/server/views` bridge (the definition layer → this surface): a [`ServerState`] carrying a

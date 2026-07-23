@@ -2230,7 +2230,11 @@ mod nested_mount_id_routing_spike {
 
     #[async_trait::async_trait]
     impl ReadDriver for TaggedSource {
-        async fn scan(&self, _scan: &ScanNode) -> Result<RowBatch, CfsError> {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
             Ok(RowBatch::new(
                 tag_schema(),
                 vec![Row::new(vec![
@@ -2279,8 +2283,13 @@ mod nested_mount_id_routing_spike {
         let engine = engine_ab();
         let reads = reads_ab();
 
-        let nested = block_on_read(&parse("/a/b/x |> LIMIT 1").unwrap(), &engine.mounts, &reads)
-            .expect("nested read resolves");
+        let nested = block_on_read(
+            &parse("/a/b/x |> LIMIT 1").unwrap(),
+            &engine.mounts,
+            &reads,
+            &qfs_core::RequestContext::anonymous(),
+        )
+        .expect("nested read resolves");
         assert_eq!(nested.len(), 1);
         assert_eq!(
             who_of(&nested),
@@ -2289,8 +2298,13 @@ mod nested_mount_id_routing_spike {
         );
 
         // Control: the top mount still routes to the single-segment id `"a"` (no shadowing).
-        let top = block_on_read(&parse("/a/x |> LIMIT 1").unwrap(), &engine.mounts, &reads)
-            .expect("top read resolves");
+        let top = block_on_read(
+            &parse("/a/x |> LIMIT 1").unwrap(),
+            &engine.mounts,
+            &reads,
+            &qfs_core::RequestContext::anonymous(),
+        )
+        .expect("top read resolves");
         assert_eq!(who_of(&top), "/a", "the top mount still routes to id `a`");
     }
 
