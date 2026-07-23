@@ -29,6 +29,7 @@ pub mod cf;
 pub mod claude;
 pub mod clients;
 pub mod cloud_mounts;
+pub mod collection_mount;
 pub mod commit;
 pub mod connection;
 pub mod connections_config;

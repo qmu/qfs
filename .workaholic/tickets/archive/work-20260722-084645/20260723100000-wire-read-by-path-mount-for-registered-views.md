@@ -5,7 +5,7 @@ type: enhancement
 layer: [Domain]
 effort:
 commit_hash:
-category: Added
+category: Changed
 depends_on: [20260722090300-documents-links-as-declared-registrations.md]
 mission: a-file-collection-is-a-declared-set-over-any-blob-source
 ---

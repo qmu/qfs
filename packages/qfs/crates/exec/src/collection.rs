@@ -23,14 +23,57 @@
 //! decode's provenance is unchanged (Ruling 3 fixes the strip to the registration layer, not the
 //! codec application).
 
-use qfs_core::{Row, RowBatch, Schema, Value};
-use qfs_parser::{Source, Statement};
+use qfs_core::{MarkdownRelation, Row, RowBatch, Schema, Value};
+use qfs_parser::{PipeOp, Source, Statement};
 
 use crate::codec::apply_codecs;
 use crate::error::ExecError;
 
 /// The provenance/join-id column every decoded collection row carries (the source's address).
 pub const PATH_COL: &str = "path";
+
+/// The **markdown relation** a stored collection body decodes to — the `md.<relation>` suffix of its
+/// `DECODE md.<relation>` tail (design brief Ruling 3, the only codec that declares named relations
+/// today). Returns `None` when the body is not a read query, carries no `DECODE md.<relation>` stage,
+/// or names a relation the markdown codec does not declare — i.e. the body is not a markdown
+/// collection view. The FIRST decode stage governs (a collection body is a single collect + decode).
+#[must_use]
+pub fn collection_relation(body: &Statement) -> Option<MarkdownRelation> {
+    let Statement::Query(pipeline) = body else {
+        return None;
+    };
+    pipeline.ops.iter().find_map(|op| match op {
+        PipeOp::Decode(codec) if codec.fmt == "md" => {
+            MarkdownRelation::from_label(codec.relation.as_deref()?)
+        }
+        _ => None,
+    })
+}
+
+/// The **VFS source path** a stored collection body collects over — the rendered form of its
+/// pre-decode path source (`/local/docs/**/*.md`), reconstructed from the parsed segments (glob text
+/// included). This is the path the binary's `/local` read facet scans (materialized) before the
+/// registration read applies the root-relative strip. Returns `None` for a non-path source (a
+/// collection is declared over a blob path).
+#[must_use]
+pub fn collection_source_path(body: &Statement) -> Option<String> {
+    let Statement::Query(pipeline) = body else {
+        return None;
+    };
+    let Source::Path(path) = &pipeline.source else {
+        return None;
+    };
+    let mut out = String::new();
+    for seg in &path.segments {
+        out.push('/');
+        out.push_str(&seg.name);
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
 
 /// The **collection root** a registered set is declared over: the static (pre-glob) head of a
 /// pipeline source path. `/local/docs/**/*.md` → `/local/docs`; `/local/*.md` → `/local`. Returns
