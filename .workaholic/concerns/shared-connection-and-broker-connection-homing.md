@@ -9,7 +9,7 @@ origin_branch: work-20260716-152000
 origin_commit: 974c72d
 created_at: 2026-07-16T16:14:56+09:00
 first_seen: 2026-07-16T16:14:56+09:00
-last_seen: 2026-07-16T16:14:56+09:00
+last_seen: 2026-07-24T00:40:59+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -25,3 +25,4 @@ The team-ownership registries (`shared_connection`, `broker_connection`) still l
 ## How to Fix
 
 Decide their homing when the Managed Team work returns to them; the same migration + one-shot copy + reader-repoint pattern applies
+

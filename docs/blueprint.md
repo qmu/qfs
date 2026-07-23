@@ -1000,6 +1000,301 @@ CREATE MAP INSERT /chatwork/rooms/{room}/messages AS
   per-service Rust crates as the growth path (the compiled set shrinks toward primitives:
   wire, codecs, secrets, OAuth).
 
+### 13.1 Ruled semantics — closing the declared-driver expressiveness gaps *(ruled 2026-07-22, mission `the-declared-driver-dsl-covers-the-compiled-drivers-concisely`; owner pre-authorized autonomous recording)*
+
+*(These rulings dispose every gap the coverage inventory
+(`.workaholic/missions/active/…/inventory-compiled-driver-surfaces.md`, gaps **G1–G8**) marked
+"needs a ruled semantic" for the compiled slack/github/gdrive/gmail surfaces. Each is a
+**redefinition** — hard breaks are sanctioned, no migration or deprecation framing (experimental
+policy). Each carries a **declaration-cost note**: a device that makes a declaration longer than
+the compiled driver's docs is the wrong device (§13.1's conciseness invariant, measured in the
+inventory). The declared spelling of G1 (read-over-POST) ships and is proven hermetically in
+ticket 20260722091300; the rest are ruled here and implemented as their conversions demand.)*
+
+**G1 — read-over-POST is a wire source with a body.** A read whose wire shape is a POST (a queue
+pull, a body-carried search, a GraphQL query) is a **VIEW whose leading `/http/<drv>/…` source
+carries a leading `|> POST <body>` pipe stage** (the tier-2 "quirks are ordinary pipe ops"
+principle, not a bespoke source clause — the same shape as `EXPAND`/`DECODE`/`FOLLOW`). The body is
+a struct-literal expression (`{…}`, closed over the view's `{param}` bindings — never over `row`, a
+read has no incoming row); the declared evaluator strips the leading `POST`, the wire applier issues
+the POST carrying the evaluated body, and the **response decodes into rows through the rest of the
+pipeline exactly as a GET's would** (`|> DECODE json |> EXPAND …`). The redefinition: *a wire read is
+no longer GET-only.* This generalizes the already-shipped POST-to-read of the `CREATE SQL … OVER
+…/query` arm (a declared SQL query is a POST that returns rows) from the SQL dialect to any declared
+VIEW. Semantics: a read-over-POST is a **READ effect** (pure, no mutation, no irreversibility gate)
+even though its method is POST — the method is transport, the effect kind is read; the applier
+returns a `RowBatch`, not an affected-count (`HttpEffect::from_node` routes a body-carrying READ to a
+POST, `apply_effect`'s single-exchange arm decodes the response). Host confinement is unchanged: the
+source is still `/http/<drv>/…`, confined at load time and plan time; a `POST` in any position other
+than the leading stage of a declared view body is a structured lowering/eval refusal
+(`post_outside_declared_body`), exactly like `FOLLOW`. Spelling:
+
+```sql
+CREATE VIEW /cfd/accounts/{account}/queues/{queue}/pull OF cfd/message AS
+  /http/cfd/accounts/{account}/queues/{queue}/messages/pull
+  |> POST { visibility_timeout_ms: 5000 } |> DECODE json |> EXPAND result
+```
+
+*Declaration-cost:* **+1 stage** (`|> POST { … }`) on the one view that reads over POST — a
+queue-pull view is ~3 lines, well under the compiled `/cf` queue-pull's Rust. Reads that are plain
+GET are untouched (no stage). *(Shipped and proven hermetically end-to-end, ticket 20260722091300:
+`PipeOp::Post` is the 23rd closed-core pipe variant; the `read_over_post_pulls_rows_through_the_real_evaluator`
+test drives a declared queue-pull twin through the real tier-2 evaluator over a wire fixture and
+asserts the wire saw a POST carrying the evaluated body. Refined from a bare `<source> POST <body>`
+source clause to the `|> POST` pipe stage during implementation — same semantics, and the pipe-op
+form is the tier-2 idiom; recorded in the mission changelog.)*
+
+**G2 — declared pushdown is a per-column param map with residual honesty.** Which predicates push
+to the wire is declared, not compiled, by a **`PUSHDOWN ( <col> <op> => '<param>' [EXACT | PREFILTER], … )`**
+clause (on a VIEW, or driver-level as a default with per-view override — the same
+default-with-override shape pagination already has). Each entry maps a typed column/operator to a
+wire query (or POST-body) parameter and is tagged **EXACT** (the param means *exactly* the
+predicate, so the conjunct is pushed and dropped from the residual) or **PREFILTER** (the param is
+looser, so it is pushed *and* the exact predicate is kept as the local residual — over-fetch then
+filter, never wrong rows). This is the compiled pushdown modules' own discipline
+(`driver-slack/pushdown.rs`, `driver-github/pushdown.rs`, `driver-gmail/query.rs`,
+`driver-gdrive/query.rs`) lifted to declaration data: the evaluator lowers a `WHERE` predicate
+through the declared map identically. The redefinition: *residual truthfulness is a declared
+property the planner enforces, not a per-driver Rust routine.* Spelling:
+
+```sql
+CREATE VIEW /slackd/{channel}/messages OF slackd/message AS
+  /http/slackd/conversations.history?channel={channel} |> DECODE json |> EXPAND messages
+  PUSHDOWN ( ts >= => 'oldest' EXACT, ts <= => 'latest' EXACT, ts > => 'oldest' PREFILTER,
+             ts < => 'latest' PREFILTER, LIMIT => 'limit' )
+```
+
+*Declaration-cost:* **+1 line per pushed column** (a driver-level default collapses repeats). A view
+with no `PUSHDOWN` clause is honest-but-chatty (everything residual), so the clause is opt-in
+optimization, never a correctness prerequisite — a twin ships correct first, fast by declaration
+later.
+
+**G3 — MIME/body assembly is the `message` codec (a primitive).** Gmail send/draft's RFC 5322 +
+base64url `raw` field is assembled by a new **`|> ENCODE message`** codec — the compiled
+`driver-gmail/mime.rs::build_mime` (CRLF, RFC 2047 subject, `multipart/mixed` attachments,
+base64url) lifted to a named codec in `qfs-codec`. This is sanctioned by §13's rejected-alternatives
+("the compiled set shrinks toward primitives: wire, codecs, secrets, OAuth"): a codec is a
+primitive, not per-service Rust. The encode consumes a row shaped `{to, subject, body, attachments:
+Array(Struct{filename, mime, bytes})}` and emits the base64url message string the wire body wraps
+(`{message:{raw: …}}`). **Consumes, does not fork, the sibling mission
+`a-file-collection-is-a-declared-set-over-any-blob-source`'s per-row codec-application rule**: the
+`message` codec is applied per row by that mission's shared rule, exactly like `DECODE`/`ENCODE
+multipart`. Spelling:
+
+```sql
+CREATE MAP CALL maild.send /maild/drafts AS
+  INSERT INTO /http/maild/users/me/messages/send |> ENCODE message VALUES (row) IRREVERSIBLE
+```
+
+*Declaration-cost:* **+0 clauses, one word** (`message` in the existing `ENCODE` slot). Attachment
+assembly is inside the codec, not the declaration.
+
+**G4 — batch/subrequest fan-out generalizes `FOLLOW` from bytes to rows.** The list→detail
+hydration (`messages.list` returns id stubs; each needs a detail GET), the DM `conversations.open`,
+and the Drive path→id parent walk are all **per-row fan-out**. `|> FOLLOW <field>` is redefined:
+its shipped form (a second GET off a delivered URL field → raw bytes) is the **bytes case of a
+general per-row fan-out** `|> FOLLOW <id-field> INTO /http/<drv>/<detail-template>`, which for each
+input row issues the templated detail request (substituting the id field) and splices the decoded
+detail back into the row. The bytes-download form is the no-template shorthand (unchanged spelling).
+The redefinition: *`FOLLOW` is a per-row join-to-wire, of which blob download is one instance.*
+Batch endpoints (Gmail `batch`) are a **named park** as a *transport optimization* the evaluator MAY
+coalesce into when a driver declares one — the ruled correctness baseline is honest N+1 fan-out.
+Spelling:
+
+```sql
+CREATE VIEW /maild/{label} OF maild/message AS
+  /http/maild/users/me/messages?labelIds={label} |> DECODE json |> EXPAND messages
+  |> FOLLOW id INTO /http/maild/users/me/messages/{id}
+```
+
+*Declaration-cost:* **+1 stage** (`FOLLOW … INTO …`) per hydration; the twin declares it once per
+list node. It is chatty by construction (this is honest, not a defect — the compiled driver is too);
+batch is the later fast path.
+
+**G5 — a declared `CALL` grows a typed signature.** `CREATE MAP CALL <drv>.<action>` is redefined to
+take an **optional typed parameter list** — `CREATE MAP CALL <drv>.<action> ( <param> <type>, … )
+/<node> AS <effect> [IRREVERSIBLE]` — so the declared CALL reports the same typed signature the
+compiled describe registry does (`react(channel: Text, ts: Text, emoji: Text)`), and the params bind
+into the effect body as `row.<param>`. Without the list the CALL is untyped (today's behavior),
+preserved as the no-signature shorthand. The redefinition: *a declared procedure's contract is
+declarable, not just its effect.* Spelling:
+
+```sql
+CREATE MAP CALL slackd.react ( channel text, ts text, emoji text ) /slackd/{channel}/messages AS
+  INSERT INTO /http/slackd/reactions.add VALUES (row)
+```
+
+*Declaration-cost:* **+1 clause** (the param list), the same length as the compiled proc's own
+signature — parity, not inflation.
+
+**G6 — prelude aliases are declared.** A bare-verb prelude shorthand (compiled `POST → slack.post`,
+`SEND → mail.send`) is declared by **`CREATE ALIAS <WORD> FOR <drv>.<action>`**. The redefinition:
+*the prelude table is registry data, not a compiled constant.* This is a terseness device: it is
+adopted for a twin only if it measurably shortens the common call without hiding the contract (ticket
+20260722091400 measures; a device that saves nothing measurable is rejected in writing). Spelling:
+`CREATE ALIAS SEND FOR maild.send`. *Declaration-cost:* **+1 line per alias.**
+
+**G7 — the blob-namespace archetype ergonomics are a named park for declared drivers.** A declared
+driver is relational/effect-shaped (VIEWs + MAPs); the compiled BlobNamespace archetype's filesystem
+**shell builtins** (`cp`/`ls`/`mv`/`rm`) are ergonomics over the compiled blob primitives
+(`/local`, `/s3`), themselves honest structural exceptions. The Drive raw operations (list, download,
+export, upload, metadata update, trash, move, copy) are each expressible as declared views/maps
+(inventory: all *expressible today*); only the `cp file file` **shell sugar** is not what a
+declaration produces. **Ruling: park the archetype ergonomics with a reason** — a declared twin
+reaches every Drive effect through `SELECT`/`UPSERT`/`REMOVE`/`CALL`; reproducing the shell-builtin
+archetype is not required for coverage and would import the blob-primitive exception into the
+declared shape. If a future need forces it, an `ARCHETYPE blob_namespace` driver tag reopens it as a
+scoped addition. *Declaration-cost:* n/a (parked); the raw ops cost is measured under Drive in the
+inventory.
+
+**G8 — the non-REST arm does NOT grow; the park stands (this closes the declared-drivers mission's
+reopen clause).** The declared shape stays **wire-only**: every declared body addresses
+`/http/<drv>/…`, and the whole confinement + credential-free story is built on that wire mount.
+Non-wire sources — `/git` (a local repo, no base URL/auth), `/claude` (an on-disk session store),
+the `/local`/`/s3`-class blob primitives, and the `/sql` engines — have no HTTP shape for the
+declared DSL to confine or authenticate, so absorbing them buys nothing and dilutes the invariant
+that a declared driver is *structurally* unable to read one host and write another. **Ruling: the
+declared shape does not grow a non-REST arm; these stay compiled structural exceptions** (restated
+with reasons by the playbook, ticket 20260722091500). This answers the mission
+`declared-drivers-are-the-normal-way-to-add-a-service`'s "reopens if the shape grows one": it does
+not. *Declaration-cost:* n/a (parked).
+
+**The conciseness invariant these rulings are measured against** is stated with its calibration point
+in §13.2 (ticket 20260722091400): a tier-1/tier-2 REST service ≈ one screen of statements, with
+`chatwork.qfs` (~30 statement lines for a full tier-1 service including file transfer) as the
+calibration. Every G-ruling above states its declaration-cost so the property is measured, not
+asserted.
+
+### 13.2 The conciseness bar — a measured property, not a vibe *(stated 2026-07-22, ticket 20260722091400)*
+
+Conciseness is what makes a declared driver the *normal* way to add a service rather than a
+grudging fallback, so it is stated as a measurable bar and every §13.1 ruling is priced against it.
+
+**The bar.** A tier-1/tier-2 REST service's full declaration is **≈ one screen of statements** —
+concretely **≤ ~40 statement-lines** (non-comment, non-blank), with the shipped **`chatwork.qfs` as
+the calibration point: 32 statement-lines / 15 statements for a *complete* tier-1 service including
+file transfer** (driver + 3 types + 3 read views + a post map + a FOLLOW-download view + an
+`ENCODE multipart` upload map). A device or ruling that makes a declaration **longer than the
+compiled driver's own docs** is the wrong device — reject it, do not tune it (mission policy).
+
+**Calibration measurements** (statement-lines / statements, measured on the shipped examples):
+
+| Declared driver | statement-lines | statements | what it covers |
+|-----------------|-----------------|------------|----------------|
+| `github_account.qfs` | 18 | 11 | read-only `/ghdecl` slice (proves `AUTH ACCOUNT`) |
+| `chatwork.qfs` | **32** | 15 | **full tier-1 service + file transfer — the calibration point** |
+| `cloudflare.qfs` | 41 | 22 | zones + DNS + KV get/put + queue push + D1 SQL arm |
+
+The per-family measurements of the inventory's *expressible today* dispositions — and the projected
+full-twin statement-line counts for slack/github/drive/mail — live **next to the dispositions** in
+`inventory-compiled-driver-surfaces.md` (mission dir) so a later conversion mission reads bar and
+evidence in one place. Every projected twin lands **under ~40 statement-lines**, i.e. under the bar.
+
+**Terseness devices — adopted (with before/after), future (with expected saving), or rejected (in
+writing).** A device is adopted only where its ruling landed and its *after* is measurably shorter
+**without hiding the contract**.
+
+- **Driver-level default with per-view override — ADOPTED (shipped, pagination).** The `PAGINATE`
+  descriptor lives once on `CREATE DRIVER`, not on every view. *Before* (per-view, 5 views): 5
+  duplicated `PAGINATE CURSOR (…)` clauses. *After* (`chatwork.qfs`/`cloudflare.qfs`, real): one
+  driver-level clause. **Saving: N−1 lines** for an N-view driver (Slack: 4 lines). §13.1 **G2**
+  extends the *same* shape to `PUSHDOWN` (driver-level default, per-view override) — adopted in the
+  ruling, implemented when the slack/github twins land (its ruling records the shape).
+- **`ENCODE`-slot codec for body shapes — ADOPTED (shipped `multipart`; ruled `message`, §13.1 G3).**
+  *Before*: a bespoke per-service upload/MIME descriptor. *After* (`chatwork.qfs`, real):
+  `INSERT INTO /http/chatwork/rooms/{room}/files |> ENCODE multipart VALUES (row)` — **one word** in
+  the existing slot. G3's `ENCODE message` reuses the identical slot for Gmail (**+0 clauses**), so
+  the sharpest Gmail wall costs one word, not a descriptor block.
+- **Read-over-POST as a `|> POST` stage — ADOPTED (shipped, §13.1 G1).** *Before*: a compiled driver
+  for the whole service (the `/cf` queue-pull holdout). *After*: **+1 pipe stage** on one view.
+- **Declared prelude alias `CREATE ALIAS` — FUTURE (ruled G6), adopted for *caller* ergonomics only.**
+  Honest measurement: it **adds one line to the declaration** (`CREATE ALIAS SEND FOR maild.send`)
+  while shortening every *caller* (`SEND …` vs `CALL mail.send(…)`). By the *declaration-length* bar
+  it is neutral-to-negative, so it is **not adopted to shorten a declaration** — only where the
+  caller-side ergonomics of a hot verb (Slack `POST`, Gmail `SEND`) justify the one line. Recorded as
+  such, not silently counted as terseness.
+- **`OF`-type inline shorthand / inference — FUTURE (rides §5.6 `of (…)`), expected saving 3–5 lines
+  per one-shot type.** *Before*: a separate `CREATE TYPE x (…)` (3–5 lines) + `OF x` for a type used
+  by exactly one view. *After* (available today): drop `OF` entirely (untyped view — the tier-2
+  evaluator still shapes by the delivered rows) or inline `|> of (col text, …)` at the view. Adopt
+  per-view where the type is not reused; keep `CREATE TYPE` where the contract is shared (github
+  `pull`/`issue` share columns — a named type is not ceremony there). Expected saving measured in the
+  inventory per driver.
+- **Shared pipeline fragments (§5.9 pipeline-valued lambdas) — FUTURE (blueprint §5.9, not shipped),
+  expected saving 1 line × repeated fragments.** Every list view repeats `|> DECODE json |> EXPAND
+  result`; a bound fragment would factor it. Expected saving is modest (one short stage per view) and
+  the ruling is not landed, so it is **recorded as future work with its expected saving**, not
+  implemented here.
+- **REJECTED — a per-driver "response envelope" descriptor.** A `CREATE DRIVER … ENVELOPE 'result'`
+  style descriptor saves **nothing measurable**: envelope unwrapping is already the one-word
+  `|> EXPAND result` (an ordinary engine op, blueprint §13 tier-2), so a descriptor would add a
+  driver clause *and* keep the per-view op for the non-uniform cases. It makes declarations longer,
+  not shorter — rejected, not tuned.
+- **REJECTED — an OpenAPI/manifest import as the terseness path.** Already rejected in §13
+  (rejected-alternatives): a manifest is *input the LLM reads while authoring*, never what qfs
+  evaluates; importing one trades a readable one-screen declaration for an opaque generated blob —
+  longer to review, not shorter to write.
+
+### 13.3 The conversion playbook — the four downstream twin missions *(stated 2026-07-22, ticket 20260722091500)*
+
+This mission is the **gate**. The four per-driver twin conversions are **named and ordered here, not
+created here** — each becomes its own mission only after this mission's §13.1 rulings land (they
+have, in this repository). A fresh session starting the slack conversion reads this section plus
+§13.1/§13.2 and needs to re-derive **nothing**.
+
+**None of the four starts before the rulings land.** They exist so four missions do not each
+rediscover the same wall; the wall got one answer in §13.1. Order is **ascending service-quirk
+difficulty**: `slack` → `github` → `drive` → `mail` (Gmail last because its MIME/batch rulings —
+G3/G4 — must exist first, which they now do).
+
+Each twin follows the §13 **twin-and-retire ratchet**: the compiled driver stays until its declared
+twin is **row-equivalent on shared fixtures**, then the compiled driver is deleted. The shared
+retirement steps (per every twin, done only after equivalence holds):
+
+1. **Delete the compiled driver crate** and its registration in `qfs::describe::compiled_describe_registry`.
+2. **Regenerate the reference docs** — `cargo run -p xtask -- gen-docs` (the driver drops out of
+   `docs/drivers.md`) and **`gen-skills`** (any cookbook recipe naming the compiled path is retired).
+   Never hand-edit the generated files.
+3. **Bump the plugin version** in all four fields (`plugins/qfs/.claude-plugin/plugin.json`,
+   `.codex-plugin/plugin.json`, both `version` fields in `.claude-plugin/marketplace.json`) per
+   CLAUDE.md — **minor**, because deleting a compiled path is a taught-surface break — so installed
+   skill caches stop teaching the retired mount.
+4. **Bump the binary patch** (`crates/qfs/Cargo.toml`) per the every-shipped-PR rule.
+
+| # | Mission (to be created later) | Entry condition — §13.1 rulings it needs landed | Row-equivalence bar |
+|---|-------------------------------|--------------------------------------------------|---------------------|
+| 1 | **slack twin** | **G1** (read-over-POST — DM `conversations.open`), **G2** (pushdown `oldest`/`latest`/`limit`), **G5** (typed CALL sigs for react/pin/unpin/update/delete). All ruled; G1 shipped. | declared reads row-equivalent to `driver-slack` on the shared message/thread/reaction/file/user fixtures; the 5 CALL maps + post map effect-equivalent. |
+| 2 | **github twin** | **G2** (pushdown `state`/`labels`/`assignee`/`per_page`), **G5** (merge/dispatch/review sigs). (No G1 — GitHub REST is GET-shaped; GraphQL stays a park.) | declared reads row-equivalent to `driver-github` on the 8-namespace + object + sub-collection fixtures; merge/dispatch/review effect-equivalent (merge stays `IRREVERSIBLE`). |
+| 3 | **drive twin** | **G2** (Drive `q=` translation), **G4** (path→id parent-pointer resolution), **G5** (`copy` sig). **G7** (blob-namespace ergonomics) is **parked** — the twin exposes the ops as views/maps, not the `cp`/`ls`/`mv`/`rm` shell archetype. | declared reads row-equivalent to `driver-gdrive` on the folder/file/id/export fixtures; upload/update/trash/move/copy effect-equivalent. |
+| 4 | **mail twin** | **G3** (`ENCODE message` MIME for send/draft), **G4** (list→detail hydration), **G2** (Gmail `q=`), **G5** (send/reply sigs), **G6** (`SEND` alias, optional). Gmail last precisely because G3/G4 must exist — they do. | declared reads row-equivalent to `driver-gmail` on the label/message/thread/attachment fixtures; draft/send/reply effect-equivalent (send stays `IRREVERSIBLE`); `batch` and push/`watch` remain parks. |
+
+**Honest tiering — the structural exceptions, restated with reasons (not eroded).** "Declared is the
+normal way" keeps its honest boundary: these stay **compiled**, each for a stated reason, so no
+silent exception rides the conversions. Re-verified against the compiled driver registry at HEAD
+(the four conversions above are the only planned deletions; everything below stays):
+
+- **`/git`** — a *local repository*, not a wire: no base URL, no HTTP auth, no `/http/<drv>` host to
+  confine. Ruled a **park** by §13.1 **G8** (the declared shape stays wire-only). Compiled.
+- **`/claude`** — a *local on-disk session store* (a path façade over session metadata + an
+  append-log; NOT qfs calling an LLM — that is §15 `transform`). No base URL/auth. G8 park. Compiled.
+- **`/cf` queue pull** — a read-over-POST. The **declared spelling now exists** (§13.1 G1, shipped
+  this mission), so the *wall is gone*; but the compiled queue-pull is **still present at HEAD** —
+  its retirement (declare the twin, prove row-equivalence, delete the compiled queue-pull) is a
+  **mechanical follow-up**, deliberately not widened into the G1 ship ticket. Recorded here as the
+  one exception whose reason is "not yet done", not "cannot be done".
+- **`/cf` Artifacts** — a **git-repo surface** (a Git remote hosted on Cloudflare), so it is a git
+  shape, not plain REST; it rides the same G8 reasoning as `/git`. Compiled.
+- **`/local` / `/fs` / `/s3` / `/r2` blob primitives** — the BlobNamespace **primitives** the
+  compiled set shrinks *toward* (wire, codecs, secrets, objstore), not services to convert. Their
+  filesystem-shell ergonomics are §13.1 **G7** (parked for declared drivers). Compiled.
+- **`/sql` engines** (SQLite / Postgres / MySQL dialects) — a SQL **engine is a primitive**, not a
+  REST service. The declared surface already *connects to* one (the `CREATE SQL … OVER …` D1 arm),
+  but the dialect engine itself stays compiled. Compiled.
+- **Out of conversion scope (not exceptions, just not these four):** `/google-analytics` is REST-shaped
+  and convertible in principle but is not one of the four coverage-bar service drivers; `/sys`,
+  `/type`, `/transform`, `/markdown` are internal/local qfs surfaces, not external services. None is
+  a hidden exception — they are simply outside the slack/github/drive/mail conversion set.
+
 ## 13b. The markdown collection path — *implemented (documents/links tables, full section context); relation-vocabulary typing blueprint*
 
 *(Mission `markdown-trees-are-queryable-as-documents-and-links-tables`.)* A markdown tree is a
@@ -1178,7 +1473,9 @@ node's key columns, and effect positions refuse an unlowered selection (a red te
 "one containment path segment = one column." The owner reconsiders: the column axis is closer to
 the semantics as **the stages of a complete query pipeline, `where` included** — a column is a
 pipeline stage, not merely a path segment. Concrete anchor: in the plggmatic reference exhibit,
-the Clients / Projects **search-condition form is a `where` stage** rendered as a column.
+the Clients / Projects **search-condition form is a `where` stage** rendered as a column. The full
+design space this opened — linear-vs-structure, the intension/extension weld, actors vs viewports,
+and the split primitive — is mapped in §14c *(open; nothing settled)*.
 
 This is a generalisation of the shipped seam, not a rebuild — `@` already lowers to `where`, so
 the lowering target is unchanged. What widens is the segment's expressive range: from "select one
@@ -1224,6 +1521,27 @@ cycle is a valid trail. **Open**: the deterministic naming rule for derived reve
 (`~projects`); whether a type-agnostic edge (`linked`/`~linked`) is admitted at all (only as a union
 view over typed edges, never a rehabilitation of untyped links); and the `/resolve` name itself.
 
+**trail and walk, defined — *domain terms (2026-07-21)*.** The two words name a noun and a verb
+over the same substance, and the viewer's design (§14c) rests on the pair.
+
+- A **trail** is a NOUN — STATIC, a RESULT: **one written path within the path concept**. It is the
+  canonical containment backbone (the containment-only *address*) plus the segments beyond bare
+  containment — selection (`@A`), declared-relation (`/client`), derived reverse-edge (`~projects`).
+  A trail is *where you have walked, recorded* — the trace, held still. The containment chain is a
+  strict inclusion: **address/path (the canonical backbone) ⊆ trail (backbone + relation segments)**;
+  a containment-only spelling is the degenerate trail.
+- A **walk** is a VERB — DYNAMIC, an ACT: **extending a trail one step — one column — at a time.**
+  **The walk produces the trail** — the trail is the walk's trace. A walk is **always linear**: it
+  traverses exactly ONE trail, never a graph; the non-linearity of a DAG never appears in a walk
+  (where a graph's structure is needed it lives *inside* a column, not across the walk — §14c). A
+  walk = the act that builds and traverses a trail.
+- **The sharpened, operational definition covers reads and writes in one sentence:** a walk is
+  *"choose one of the steps the current trail admits, and extend."* For a **read**, the admitted
+  steps are `describe`'s declared relations and keys (the next column drills rightward through a
+  declared edge). For a **write**, the admitted step is the next input type, dependent on the values
+  bound so far (filling a struct field-by-field is a walk whose effect fires only at the terminal
+  column — §14c). One definition, both directions: extend the trail one column at a time.
+
 **Resolve runs as the caller's principal.** Because many trails reach one resource,
 `/resolve/<trail>` evaluates under the **caller's principal**, and RBAC binds the underlying paths
 and relations, never the trail spelling — no chain of relation segments reads what the canonical
@@ -1252,6 +1570,179 @@ repository. The remaining qfs-design sections — the closure/key/relation model
 markdown collection path (§13b), and the subject model (§8) — are now migrated here; the plan book
 keeps pointers plus the qmu.app-level product vision: the managed service, on-demand UI generation,
 and plggmatic's rendering engine.)*
+
+## 14c. The viewer, reconsidered — the design space *(rulings settled 2026-07-21; open items named below)*
+
+§14b describes the *shipped* address strip, flags its column model as under reconsideration, and
+**defines the domain terms *trail* and *walk*** — a trail is one recorded path (the canonical
+address plus its relation segments); a walk is the act of extending a trail one column at a time.
+This section reconsiders how the viewer renders a **walk over trails**, and uses those §14b terms
+rather than paraphrasing them. The long design conversation of 2026-07-21 converged: the tensions
+this map first posed as open are now **rulings**, recorded below, and only the genuinely-open items
+remain on the consolidated list at the end, each naming the downstream mission that owns it.
+
+**The rulings (settled 2026-07-21).** The long reconsideration converged. Four rulings fix the
+viewer's shape; the tensions this map first posed as a choice are now dissolved, not chosen.
+
+1. **The column-oriented layout is a display pattern for post-execution semantics — kept simple.**
+   The strip does exactly one thing: *display the semantics after a query is exercised, in columns.*
+   It is **not** an isomorphic re-encoding of qfs's query structure, and it must **not** be
+   over-abstracted into a higher-abstracted container or a design-pattern abstraction — that framing
+   was explicitly retracted by the owner. Column `i` remains the resolution of the trail's prefix `i`
+   (§14b); the columns show the walk's trace, no more.
+
+2. **Linear-vs-graph is dissolved by placement, not by choosing one.** The earlier tension — a linear
+   strip cannot show a query's DAG (joins and unions fan *in*; one source can fan *out*) — does not
+   force a choice between a strip and a graph view. The strip stays **linear across columns** (a walk
+   is always linear — §14b); a DAG, the non-linear define-time structure (e.g. a React-Flow-like
+   pipeline editor), lives **inside a single column**, not across columns. Non-linearity is confined
+   to a column's interior while the column sequence stays a one-way linear walk. One row can hold a
+   stored-procedure menu (enumerate) → a DAG-editor column (define; non-linear; wide) → a preview
+   column → a result column (extension): getting into the query semantics and out to the exercised
+   result, in the same single row.
+
+3. **Definition (intension) and application (extension) are welded by `path = query = set`.** Unlike
+   a filesystem path (a static address a *separate* query takes as an argument), a qfs path is a
+   set-valued *expression* whose segments are operators: containment is select-from, `@A` lowers to
+   `where <key> == A`, a relation segment is a join, `|>` stages are explicit operators. A path is
+   therefore simultaneously a **query** (intension — `describe` gives schema, keys, relations) and
+   **resolves to a set** (extension — `read` gives rows), and every prefix carries **both aspects of
+   ONE object**, not two artifacts. A graph view foregrounds intension and a strip foregrounds
+   extension, but both render one object at two aspects — the weld that lets the viewer be one
+   substance rather than two paradigms. *Caveat (retained as open):* the unity is cleanest for reads;
+   writes/effects reintroduce a distinct preview/commit aspect (§7), so the seam is not seamless at
+   the write edge — where the intension/extension unity ends is on the open list below.
+
+4. **100% parity between what the query language expresses and what the viewer configures is
+   deliberately given up.** The viewer does not aim to configure everything the language can express.
+   It is a **faithful representation of the subset it covers**, not a lossy projection of the whole;
+   fidelity is the **content's** responsibility (e.g. the DAG inside a column — ruling 2), not the
+   container's.
+
+**Still open — the clean split primitive.** Merge exists everywhere as "a stage that takes another
+stream as an argument" (join / union / zip). Fan-out — one flow feeding several downstream — has *no*
+well-designed pipe syntax; `tee` and variable-binding are the crude substitutes. In a path/set
+language both may reduce to **a named node plus references**: a merge references several named nodes
+as inputs; a split is several nodes referencing one named node, so wires are the *rendering* of
+references, not a new language primitive — consistent with "everything is a path." The clean
+**split** primitive and its in-column DAG editor stay unsettled (see the open list below).
+
+**Actors and viewports are two separate axes** (they were being mixed):
+- *Who drives the surface.* A human via touch/mouse, or a browser-side realtime-API **AI agent that
+  tool-calls** (WebMCP) to build the pipeline while the viewer co-renders pipeline *and* result. The
+  AI is a co-operator of the same surface, not a separate modality; this implies **one operation
+  vocabulary** exercised by both — the tools the agent calls are the primitives the columns expose —
+  and it enables live human/AI handoff over one pipeline object (watch it build, take it over, hand
+  it back). An open sub-question: is the human/AI relation *co-edit* of one live object, or
+  *produce-then-review* (the agent yields a pipeline the human inspects before commit)? That choice
+  sets how live and how shared the viewer state must be.
+- *Which viewport renders.* A 420×640 phone vs a desktop — different *layouts* of the same graph.
+  Voice is inherently sequential (an utterance the agent turns into tool calls); a phone favors
+  focused, card-at-a-time navigation; only the desktop can show wires/lanes at once. Hence **one
+  canonical graph, several projections**, echoing qfs's existing "one resource, many faces."
+
+**The AI-letter — rulings 5–8 (settled 2026-07-21).** The AI-letter concept rides the **same column
+UI** as the rest of the viewer; it introduces no new surface and no new mechanism. Its qfs mapping is
+ruled:
+
+5. **A letter is an envelope carrying context and its own interactivity.** The envelope encloses both
+   the bounded context data and the interactivity that operates on it, and it rides the same column
+   strip as any other trail — a letter is a walk over enclosed context, not a separate app.
+
+6. **Inward confinement is the same principle as declared-driver host-confinement.** A letter's reach
+   is confined *inward*: the recipient can reference and manipulate **only** the enclosed context,
+   never reach back into the sender's live world. This is named explicitly as the **same confinement
+   principle a declared driver applies to its host** (§ the declared-driver model) — applied here to
+   the letter's data scope, not a new sandboxing mechanism.
+
+7. **The only way out is a single typed egress.** A reply is a **typed `INSERT` into the sender's
+   inbox** — one egress, typed, with no side channel. The letter's kind fixes the target reply type;
+   nothing else leaves the envelope.
+
+8. **Interactivity is derived from the type; form-filling is a walk.** The interactivity is derived
+   from the type, not authored as a second attribute: an enum type → choice buttons, a struct type →
+   a form, free text → conversation. The input **modality** is free (tap / form / voice / free
+   conversation) but must land on the **fixed target type** — free input is distilled to the typed
+   target and confirmed before egress ("enter freely, confirm typed, exit"). **Filling a form is a
+   walk**: a struct input is a trail of per-field input columns, a partially-filled struct is a valid
+   intermediate value (the prefix-closure analogue), and the **effect fires only at the terminal
+   column** — no I/O until COMMIT. A **condition-split** — the next step depends on the value bound so
+   far (reject ⇒ a reason column grows; approve ⇒ it does not) — branches the *path*, not the
+   data-flow; it is a **declared, checkable** rule (not existential search), so it keeps every walk
+   linear (this is the ruling that sharpens walk's operational definition — §14b). And **"who drives
+   is not the design axis":** a human ultimately instructs either way, so the **same surface serves
+   human and agent**, and the UI must stand on its own without AI.
+
+**Developer acceptance.** Developers may not love linear pipes intrinsically; linear dominates
+because good split+merge semantics are missing and text forces a linearization (CTEs and variables
+are the workaround). The likely real acceptance driver is **round-trip fidelity to the query text** —
+a developer trusts a visual pipe surface when it is a lossless projection of the query they could
+have typed, droppable back to text at any moment. That same property serves the AI actor (which
+writes text) and the human (who reads/edits columns) with a *single* artifact, which is itself an
+argument for the one-substance reading.
+
+**Multi-channel rendering candidates** (all open, none chosen): lanes/tracks (a timeline of
+horizontal channels that combine at explicit merge columns); named-channel references (one strip
+visible, other channels collapsed to expandable source chips — the "tree of named linear pipes");
+nesting/fractal (a column that contains a sub-strip); parallel-lens (channels as simultaneous
+renderings — rows / aggregate / chart / diff-over-`@ref` — of one prefix); focus+context. Each keeps
+the single-channel case identical to today's strip and reveals structure only when a genuine second
+input exists. The governing rule a ruling must set: **when is a second input an in-strip relation
+segment (a declared relation) vs a new channel (an independent source)?** That boundary is the
+simplicity governor.
+
+**The delivery seam.** Whatever the viewer becomes must be renderable by the column-oriented UI
+engine (plggmatic), which depends only on the `(declaration, rows)` protocol and is supplier-blind;
+its parts (the strip container, the typed-table renderer, the preview/commit dialog, the connection
+manager) are reusable components. So the qfs-side deliverable is fixed regardless of which UI reading
+wins: **every path/trail must answer `describe` (schema, keys, relations), `enumerate` (child
+addresses), `read` (rows), and `preview`/`commit`**, all through the one typed envelope (§14
+contract 1). Driver configuration is anticipated to be authored through the *same* surface —
+building `CREATE DRIVER`/`VIEW`/`MAP` as columns, previewed and committed into `/sys/drivers` — which
+additionally requires qfs to **describe the addable-provider / declared-driver surface** (an
+enumerate contract that does not yet exist).
+
+**What this makes of the current missions.** The two active foundation missions are not features
+but the qfs-side substrate the viewer consumes. The file-collection-as-a-declared-set mission
+produces `(declaration, rows)` over collected file sets (the strip's content for local knowledge);
+the declared-driver-DSL mission defines the authorable, describable vocabulary the visual surface
+manipulates. The reconsideration surfaces further foundation items **not yet missioned**: the
+enumerate-root plumbing (§14b), the request-principal seam that would let the *first column* derive
+from the caller (the "empty home" root — a fresh, initially-empty personal namespace that fills as
+one connects/declares, rather than the union-of-all-drivers root), a first-class **split** primitive,
+and a **one-language** spelling in which a column action *is* a qfs statement, so authoring in the
+viewer is authoring qfs itself.
+
+**Consolidated open list — each item names the downstream mission that owns it.** The rulings above
+settle the viewer's shape; what remains genuinely open is listed here, and **each open item names a
+downstream mission that is named but deliberately NOT created by this recording mission** (creating
+one would violate this mission's non-goals):
+
+- **The ASK-grammar / predicate- and merge-column spellings** — how a rich `where` or a `join` is
+  written as one address segment, and how a human-supplied value is inserted through a type-derived
+  UI. These are **candidate spellings, explicitly unsettled**. → *the ASK-type-INTO-path grammar
+  mission* (the predicate/merge-column spelling rides the same mission).
+- **The `split` primitive + the in-column DAG editor** — the clean fan-out primitive (a named node
+  plus references, wires as its rendering) and the non-linear define surface it lives inside (ruling
+  2). → *the split-primitive-and-in-column-DAG-editor mission*.
+- **The request-principal seam / "empty home" root** — the seam that lets the *first column* derive
+  from the caller: a fresh, initially-empty personal namespace that fills as one connects/declares,
+  rather than the union-of-all-drivers root. → *the request-principal-seam / empty-home-root mission*.
+- **The enumerate-root plumbing** (§14b's own named follow-up) — the qfs-core seam that lets a walk
+  drill rightward from the root. → *the enumerate-root-plumbing mission*.
+- **The per-viewport projections** — one canonical graph rendered several ways (voice / phone /
+  desktop), plus the still-open co-edit-vs-produce-then-review shape of the human/AI relation. → *the
+  qfs-viewer minimal-walk implementation mission (scope "(い)")*.
+- **The intension/extension write edge** — the caveat retained from ruling 3: the path = query = set
+  unity is cleanest for reads, and writes/effects reintroduce a distinct preview/commit aspect (§7),
+  so where the unity ends is not yet ruled. → *the qfs-viewer minimal-walk implementation mission
+  (scope "(い)")*, where the write-edge preview/commit surface is realized.
+
+Two further boundary questions stay open under the same downstream owners: the **in-strip-relation
+vs new-channel boundary** (when a second input is a declared relation segment vs an independent
+channel — the simplicity governor) and the **addable-provider `enumerate` contract** (describing the
+declared-driver surface so driver configuration is authored through the same columns). None of the
+named downstream missions is created here; this recording mission only maps them.
 
 ## 15. `transform` — the model-calling pipe stage — *implemented (grammar, execution, whole-tree routing, consent gate, three live providers); live-provider run owner-attended*
 

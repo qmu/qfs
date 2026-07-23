@@ -1920,7 +1920,7 @@ mod tests {
             Some(&of),
             None,
             &[],
-            |path| {
+            |path, _post_body| {
                 qfs_driver_http::rest_read_rows(driver.rest_applier(), path).map_err(|e| {
                     qfs_core::CfsError::InvalidPath {
                         path: path.to_string(),
@@ -1972,6 +1972,127 @@ mod tests {
             sorted(&declared),
             sorted(&compiled),
             "the declared twin's rows are row-equivalent to the compiled driver's"
+        );
+    }
+
+    #[test]
+    fn read_over_post_pulls_rows_through_the_real_evaluator() {
+        // Blueprint §13.1 G1 read-over-POST, proven hermetically end-to-end (ticket
+        // 20260722091300): a declared view whose leading `POST { … }` stage makes its wire read a
+        // POST is evaluated through the REAL tier-2 evaluator (`eval_view_body`) over the confined
+        // applier against a WIRE FIXTURE (MockHttpClient — no network, no credential beyond the
+        // seeded bearer). The proof body is the Cloudflare queue-pull surface — the compiled `/cf`
+        // holdout the inventory named as the sharpest read-over-POST wall. Three assertions: (1) the
+        // recorded wire request is a POST, (2) carrying the evaluated `{ visibility_timeout_ms }`
+        // body, (3) whose response decodes + `EXPAND`s + shapes to the `OF` columns into rows.
+        let d = DeclaredDriver {
+            name: "cf".into(),
+            base_url: "https://api.cloudflare.com/client/v4".into(),
+            auth: r#"{"kind":"bearer"}"#.into(),
+            pagination: None,
+            views: vec![DeclaredNode {
+                path: "/cf/pull".into(),
+                of_type: Some("/type/cf/message".into()),
+                body: String::new(),
+            }],
+            maps: vec![],
+        };
+        // The queue-pull view: a POST-to-read. The body is a constant struct literal (a read has no
+        // incoming row); the response is Cloudflare's `{ "result": [ … ] }` envelope, unnested by
+        // `EXPAND result` exactly as the plain-GET list views do.
+        let view_body = serde_json::to_string(
+            &qfs_exec::parse(
+                "/http/cf/accounts/acct/queues/q1/messages/pull \
+                 |> POST { visibility_timeout_ms: 5000 } |> DECODE json |> EXPAND result",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"{"result":[{"id":"m1","body":"hello"},{"id":"m2","body":"world"}],"success":true}"#
+                .to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let secrets = {
+            use qfs_secrets::Secrets as _;
+            let store = qfs_secrets::InMemoryStore::new();
+            store
+                .put(
+                    &qfs_secrets::CredentialKey::new(
+                        qfs_secrets::DriverId::new("cf"),
+                        qfs_secrets::ConnectionId::new("default").unwrap(),
+                    ),
+                    qfs_secrets::Secret::from("cf-test-token"),
+                )
+                .unwrap();
+            Arc::new(store)
+        };
+        let driver = live_rest_driver(&d, client, secrets).expect("live twin");
+
+        let of: Vec<String> = ["id", "body"].iter().map(|s| (*s).to_string()).collect();
+        let batch = qfs_exec::declared::eval_view_body(
+            &view_body,
+            "cf",
+            "/cf/pull",
+            Some(&of),
+            None,
+            &[],
+            // The read facet's own dispatch (mirrors `read_facets`): a `Some` post_body is a
+            // read-over-POST — POST the encoded wire body; `None` would be the ordinary GET.
+            |path, post_body| {
+                let result = match post_body {
+                    Some(body) => {
+                        qfs_driver_http::rest_read_rows_post(driver.rest_applier(), path, &body)
+                    }
+                    None => qfs_driver_http::rest_read_rows(driver.rest_applier(), path),
+                };
+                result.map_err(|e| qfs_core::CfsError::InvalidPath {
+                    path: path.to_string(),
+                    reason: e.code(),
+                })
+            },
+            |_url| panic!("no FOLLOW stage in this body"),
+        )
+        .expect("declared read-over-POST");
+
+        // (1) + (2): the wire saw exactly one POST carrying the evaluated body.
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 1, "one wire exchange (a POST-to-read)");
+        assert_eq!(
+            recorded[0].method,
+            qfs_driver_http::HttpMethod::Post,
+            "a read-over-POST issues a POST, not a GET"
+        );
+        let sent = recorded[0].body.clone().unwrap_or_default();
+        let sent = String::from_utf8_lossy(&sent);
+        assert!(
+            sent.contains("visibility_timeout_ms") && sent.contains("5000"),
+            "the POST carried the evaluated `POST {{ … }}` body: {sent}"
+        );
+
+        // (3): the POST response decoded + EXPANDed + shaped to the OF columns into rows.
+        assert_eq!(batch.rows.len(), 2, "two pulled messages");
+        assert_eq!(
+            batch
+                .schema
+                .columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "body"],
+            "shaped to the declared OF columns"
+        );
+        let first: Vec<String> = batch.rows[0]
+            .values
+            .iter()
+            .map(|v| format!("{v:?}"))
+            .collect();
+        assert!(
+            first.iter().any(|s| s.contains("m1")) && first.iter().any(|s| s.contains("hello")),
+            "the first pulled row carries the fixture's id/body: {first:?}"
         );
     }
 

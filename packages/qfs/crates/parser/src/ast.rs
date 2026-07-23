@@ -233,6 +233,18 @@ pub enum PipeOp {
     /// closed-core set (the third additive stage — a deliberate, reviewed change-control event,
     /// like the two before it).
     Follow(FollowRef),
+    /// `POST <body-expr>` — the declared-driver **read-over-POST** stage (blueprint §13.1 G1,
+    /// ticket 20260722091300): a wire read whose HTTP shape is a POST carrying a body (a queue
+    /// pull, a body-carried search). ONLY meaningful as the FIRST op of a declared view body,
+    /// right before its leading `DECODE`; it makes the view's wire fetch a POST (the body is the
+    /// evaluated struct literal) whose response decodes into rows exactly as a GET's would. The
+    /// effect stays a pure READ (no mutation, no irreversibility gate) despite the POST method —
+    /// the method is transport, the effect kind is read. Every other context refuses it
+    /// structurally at lowering/eval, exactly like `follow`. A **contextual-identifier** stage
+    /// (`post` is *not* a frozen keyword — the keyword set stays 39). The governance test locks
+    /// this variant into the closed-core set (the fifth additive stage after §15 TRANSFORM, §18
+    /// SWITCH, §13 FOLLOW, and §5.6 OF — a deliberate, reviewed change-control event).
+    Post(PostRef),
     /// `OF <name>` or `OF (<col> <type>, …)` — the general, any-position, plan-time-checked type
     /// assertion (blueprint §5.6). A **contextual-identifier** stage (`of` is *not* a frozen keyword —
     /// the keyword set stays 39; `of` is already `word("OF")` in the DDL). Admission criterion (2)
@@ -304,6 +316,23 @@ pub struct FollowRef {
     /// The delivered-row field carrying the follow URL.
     pub field: Ident,
     /// Source span of the `follow <field>` stage.
+    #[serde(
+        serialize_with = "serialize_span",
+        deserialize_with = "deserialize_span"
+    )]
+    pub span: Span,
+}
+
+/// A `POST <body-expr>` read-over-POST reference (blueprint §13.1 G1): the struct-literal
+/// expression evaluated into the wire body the declared-view fetch POSTs. Evaluated by the
+/// declared-view evaluator with the view's `{param}` bindings in scope (a read has no incoming
+/// `row`), then encoded to the wire body; the response decodes into rows as a GET's would. The
+/// POST addresses the driver's own confined `/http/<name>/…` host, so no secret can leave it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PostRef {
+    /// The wire-body expression (a struct literal, or any per-read scalar the engine evaluates).
+    pub body: Expr,
+    /// Source span of the `post <body>` stage.
     #[serde(
         serialize_with = "serialize_span",
         deserialize_with = "deserialize_span"

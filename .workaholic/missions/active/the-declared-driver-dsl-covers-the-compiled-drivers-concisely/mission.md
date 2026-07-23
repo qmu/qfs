@@ -6,7 +6,8 @@ status: active
 created_at: 2026-07-20T15:12:33+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
-drive_authorized:
+strategy: integrations-are-declared-not-compiled
+drive_authorized: true
 tickets: []
 stories: []
 concerns: []
@@ -144,31 +145,31 @@ the four downstream missions with their entry conditions.
 
 ## Acceptance
 
-- [ ] **The coverage inventory exists and is verified.** Every node, verb, and `CALL`
+- [x] **The coverage inventory exists and is verified.** (#20260722091100-coverage-inventory-of-compiled-driver-surfaces.md) Every node, verb, and `CALL`
       procedure the compiled slack/github/gdrive/gmail drivers expose is enumerated from the
       compiled describe registry (the `gen-docs` source, not prose) and disposed as
       *expressible today* / *needs a ruled semantic* / *named park* — each disposition with
       evidence (a working declaration snippet, or the concrete missing primitive).
-- [ ] **Every "needs a ruled semantic" gap has a recorded ruling in blueprint §13** —
+- [x] **Every "needs a ruled semantic" gap has a recorded ruling in blueprint §13** (#20260722091200-rule-the-semantic-gaps-in-blueprint-13.md) —
       grammar/evaluator redesigns stated as redefinitions (hard breaks sanctioned, no
       migration framing), each with its declaration-cost note; read-over-POST and declared
       pushdown are ruled explicitly (they gate the slack/github conversions and full `/cf`
       retirement); the non-REST-arm question is ruled or parked with a reason.
-- [ ] **At least one ruled semantic ships and is proven hermetically end-to-end**: a declared
+- [x] **At least one ruled semantic ships and is proven hermetically end-to-end** (#20260722091300-ship-read-over-post-hermetically.md): a declared
       driver using the new semantic installs, describes, plans, and reads/writes against
       hermetic wire fixtures through the real tier-2 evaluator — the proof pattern
       `cloudflare.qfs`'s SQL arm set — so the rulings are demonstrated, not speculative.
-- [ ] **The conciseness bar is stated and measured.** The blueprint records the target (a
+- [x] **The conciseness bar is stated and measured.** (#20260722091400-conciseness-bar-stated-and-measured.md) The blueprint records the target (a
       tier-1/tier-2 REST service ≈ one screen of statements, chatwork as the calibration
       point) and the inventory's *expressible today* dispositions are measured against it;
       terseness devices adopted (defaults, shared fragments, prelude aliases, type shorthand)
       each show a before/after on a real declaration.
-- [ ] **The conversion playbook exists and names the downstream missions**: `slack` →
+- [x] **The conversion playbook exists and names the downstream missions** (#20260722091500-conversion-playbook-and-honest-tiering.md): `slack` →
       `github` → `drive` → `mail`, each with its entry condition (which rulings it needs
       landed), its fixture/row-equivalence bar, and its retirement steps (compiled deletion,
       gen-docs/gen-skills regeneration, plugin version bump per CLAUDE.md). The playbook
       states plainly that none of the four starts before this mission's rulings land.
-- [ ] **Honest tiering is restated, not eroded**: `/git`, `/claude`, queue-pull/Artifacts (as
+- [x] **Honest tiering is restated, not eroded** (#20260722091500-conversion-playbook-and-honest-tiering.md): `/git`, `/claude`, queue-pull/Artifacts (as
       far as still compiled), blob primitives, and `/sql` engines are recorded as named
       structural exceptions with reasons, so "declared is the normal way" keeps its honest
       boundary and no silent exception rides the conversions.
@@ -187,3 +188,27 @@ the four downstream missions with their entry conditions.
   gate. Rulings 1-5 in ## Goal are the design session's judgment, recorded for the driving
   session to execute or overturn with cause. No tickets cut yet; `drive_authorized`
   deliberately left empty (no per-ticket interrogation has happened).
+- 2026-07-22 — ticket added — 20260722091100-coverage-inventory-of-compiled-driver-surfaces.md
+- 2026-07-22 — ticket added — 20260722091200-rule-the-semantic-gaps-in-blueprint-13.md
+- 2026-07-22 — ticket added — 20260722091300-ship-read-over-post-hermetically.md
+- 2026-07-22 — ticket added — 20260722091400-conciseness-bar-stated-and-measured.md
+- 2026-07-22 — ticket added — 20260722091500-conversion-playbook-and-honest-tiering.md
+- 2026-07-22 — mission replanned for the overnight run - five tickets cut, interrogation answered the open judgment calls (proof target fixed to read-over-POST; autonomous section-13 rulings authorized by the owner); drive_authorized stamped — mission.md
+- 2026-07-22 — strategy created and linked — integrations-are-declared-not-compiled
+- 2026-07-22 — G1 read-over-POST shipped (ticket 091300) and proven hermetically. During
+  implementation the §13.1 G1 spelling was refined with cause: from a bare `<source> POST <body>`
+  source clause to a leading `|> POST { … }` **pipe stage** (`PipeOp::Post`, the 23rd closed-core
+  pipe variant) — same semantics, and the pipe-op form is the tier-2 "quirks are ordinary pipe
+  ops" idiom (consistent with `EXPAND`/`FOLLOW`); it minimised the closed-core AST disruption. The
+  §13.1 text was corrected in the same change. Proof: `read_over_post_pulls_rows_through_the_real_evaluator`
+  drives a declared Cloudflare queue-pull twin through the real tier-2 evaluator over a wire
+  fixture (POST asserted on the recorded request, rows decoded + shaped to the OF type). Full `/cf`
+  queue-pull retirement was NOT done here (a follow-up); the declared spelling now exists for it.
+- 2026-07-22 — ticket archived — 20260722091100-coverage-inventory-of-compiled-driver-surfaces.md
+- 2026-07-22 — ticket archived — 20260722091200-rule-the-semantic-gaps-in-blueprint-13.md
+- 2026-07-22 — ticket archived — 20260722091300-ship-read-over-post-hermetically.md
+- 2026-07-22 — ticket archived — 20260722091400-conciseness-bar-stated-and-measured.md
+- 2026-07-22 — ticket archived — 20260722091500-conversion-playbook-and-honest-tiering.md
+- 2026-07-24 — story reported — work-20260722-084646.md
+- 2026-07-24 — concern deferred (stuck) — g1-read-over-post-spelling-required.md
+- 2026-07-24 — concern deferred (stuck) — g7-and-g8-parks-create-scoping.md
