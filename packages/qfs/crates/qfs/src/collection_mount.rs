@@ -11,7 +11,7 @@
 //! `/collections/<view>` query (and `DESCRIBE`) reaches the declared view the way the compiled
 //! `/markdown/<name>` mount does today.
 //!
-//! ## The two facets, the same split as `/markdown` ([`crate::markdown`])
+//! ## The two facets, the same split the retired compiled `/markdown` driver used
 //! [`CollectionsDriver`] is the **pure** introspective half: `describe`/`capabilities` resolve a
 //! `/collections/<view>` node to the registered view's markdown-relation schema, owning NO root and
 //! NO creds (the `/sys` / `/claude` / `/markdown` `NoopApplier` pattern — READ-ONLY). The impure
@@ -267,7 +267,7 @@ impl ReadDriver for CollectionReadDriver {
 }
 
 /// Register the `/collections` read-by-path surface into BOTH registries over a shared view source
-/// and the `/local` sandbox its bodies scan (the `/markdown` `register_markdown_mounts` twin).
+/// and the `/local` sandbox its bodies scan (the compiled `/markdown` mount's two-registry twin).
 /// Registering both is load-bearing: the pushdown planner resolves against the MOUNT registry, and
 /// the read executor dispatches the scan through the READ registry — the same two-registry shape the
 /// `/markdown` mount uses. Returns the augmented read registry.
@@ -305,10 +305,10 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    /// The SHARED fixture tree (identical to [`crate::markdown`]'s): nested headings + links, a
-    /// pre-heading link, frontmatter, a non-md file, a dot-directory. Hermetic: a tempdir, no
-    /// bindings. The compiled `/markdown` driver and the `/collections` view read the SAME files, so
-    /// their rows must match.
+    /// The shared fixture tree: nested headings + links, a pre-heading link, frontmatter, a non-md
+    /// file, a dot-directory. Hermetic: a tempdir, no bindings. The expected documents/links values
+    /// are pinned as literals below — the surface's row shape is proven self-contained, with no
+    /// dependency on the (retired) compiled `/markdown` driver.
     fn fixture_tree() -> TempDir {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
@@ -331,7 +331,7 @@ mod tests {
 
     /// The two registered collection views over the fixture's `/local` mount: `docs_documents` and
     /// `docs_links`, each a `/local/**/*.md |> decode md.<relation>` body. Their `/local` root is the
-    /// fixture dir, so the glob sees exactly the two `.md` files the compiled driver walks.
+    /// fixture dir, so the glob sees exactly the two `.md` files under it.
     fn fixture_views() -> Vec<CollectionView> {
         vec![
             CollectionView::from_source("docs_documents", "/local/**/*.md |> decode md.documents")
@@ -340,27 +340,14 @@ mod tests {
         ]
     }
 
-    /// Build `(engine, reads)` with BOTH the compiled `/markdown/docs/...` mount (the oracle) and the
-    /// `/collections/<view>` read-by-path mount registered over the SAME fixture tree.
+    /// Build `(engine, reads)` with the `/collections/<view>` read-by-path mount registered over the
+    /// fixture tree — the surface under test, self-contained (no compiled-driver oracle).
     fn engine_and_reads(dir: &TempDir) -> (Engine, ReadRegistry) {
         let mut engine = Engine::new();
-        // The compiled /markdown oracle.
-        engine
-            .mounts
-            .register(Arc::new(crate::markdown::markdown_driver()))
-            .expect("mount /markdown");
-        let mut reads = ReadRegistry::new().with(
-            qfs_core::DriverId::new("markdown"),
-            Arc::new(crate::markdown::MarkdownReadDriver::with_roots([(
-                "docs".to_string(),
-                dir.path().to_path_buf(),
-            )])),
-        );
-        // The /collections read-by-path surface under test.
         let source = Arc::new(ViewSource::Static(fixture_views()));
-        reads = register_collection_mounts(
+        let reads = register_collection_mounts(
             &mut engine,
-            reads,
+            ReadRegistry::new(),
             source,
             Sandbox::new(dir.path().to_path_buf()),
         );
@@ -372,92 +359,6 @@ mod tests {
         qfs_exec::block_on_read(&stmt, &engine.mounts, reads).expect("read through the engine")
     }
 
-    fn names(s: &Schema) -> Vec<String> {
-        s.columns.iter().map(|c| c.name.to_string()).collect()
-    }
-
-    /// **The ticket's live by-path row-equivalence gate.** A live `/collections/docs_documents`
-    /// query — parse → resolve (the `/collections` mount) → plan → scan (the read facet runs
-    /// `read_registered_collection` over the `/local` body) — returns rows row-equivalent to the
-    /// compiled `/markdown/docs/documents` mount, schema and values, in order. This is the LIVE
-    /// surface (not the helper): `title` derivation, front matter, and the root-relative `path` join
-    /// id all match byte-for-byte.
-    #[test]
-    fn live_by_path_documents_row_equivalent_to_compiled_driver() {
-        let dir = fixture_tree();
-        let (engine, reads) = engine_and_reads(&dir);
-        let coll = select(&engine, &reads, "/collections/docs_documents |> LIMIT 100");
-        let drv = select(&engine, &reads, "/markdown/docs/documents |> LIMIT 100");
-        assert_eq!(
-            names(&coll.schema),
-            names(&drv.schema),
-            "documents schema matches the compiled driver"
-        );
-        assert_eq!(
-            coll.rows, drv.rows,
-            "documents rows (path/title/frontmatter) match the compiled driver byte-for-byte"
-        );
-    }
-
-    /// **The ticket's live by-path `links` gate (+ self-join).** A live `/collections/docs_links`
-    /// query matches the compiled `/markdown/docs/links` mount on the compiled driver's five columns
-    /// (`source_doc`, the full nested `source_section_path`, `target`, `target_doc`, `line`); the
-    /// registration additionally prepends the `path` provenance join id (== `source_doc`, Ruling 3).
-    /// Every in-tree `target_doc` self-joins against a `documents.path` — the viewer's link graph.
-    #[test]
-    fn live_by_path_links_row_equivalent_and_self_joins_documents_path() {
-        let dir = fixture_tree();
-        let (engine, reads) = engine_and_reads(&dir);
-        let coll = select(&engine, &reads, "/collections/docs_links |> LIMIT 100");
-        let drv = select(&engine, &reads, "/markdown/docs/links |> LIMIT 100");
-
-        assert_eq!(
-            coll.rows.len(),
-            drv.rows.len(),
-            "one registered links row per compiled links row"
-        );
-        // The registration prepends `path`; every other column is the compiled links schema, in order.
-        assert_eq!(coll.schema.columns[0].name.as_str(), "path");
-        assert_eq!(
-            names(&coll.schema)[1..],
-            names(&drv.schema)[..],
-            "links carries [path] + the compiled driver's columns"
-        );
-        for (cl, dl) in coll.rows.iter().zip(&drv.rows) {
-            assert_eq!(
-                cl.values[0], cl.values[1],
-                "the registered links `path` join id equals `source_doc` (Ruling 3)"
-            );
-            assert_eq!(
-                &cl.values[1..],
-                &dl.values[..],
-                "links row matches the compiled driver (source_doc/section_path/target/target_doc/line)"
-            );
-        }
-
-        // Self-join (item 3): every in-tree target_doc equals some documents.path — through the
-        // /collections surface alone (both sides read by path).
-        let docs = select(&engine, &reads, "/collections/docs_documents |> LIMIT 100");
-        let tdoc = docs_col(&coll.schema, "target_doc");
-        let path_col = docs_col(&docs.schema, "path");
-        let doc_paths: Vec<&str> = docs
-            .rows
-            .iter()
-            .filter_map(|r| match &r.values[path_col] {
-                Value::Text(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .collect();
-        for row in &coll.rows {
-            if let Value::Text(td) = &row.values[tdoc] {
-                assert!(
-                    doc_paths.contains(&td.as_str()),
-                    "links.target_doc `{td}` must self-join /collections documents.path"
-                );
-            }
-        }
-    }
-
     fn docs_col(schema: &Schema, name: &str) -> usize {
         schema
             .columns
@@ -466,40 +367,164 @@ mod tests {
             .unwrap_or_else(|| panic!("column {name} present"))
     }
 
-    /// **The ticket's `DESCRIBE`-by-path gate.** `DESCRIBE /collections/<view>` reports the SAME
-    /// schema the compiled `/markdown` driver's `DESCRIBE` reports for the matching relation — so an
-    /// agent/viewer discovers the declared set's shape generically after the compiled driver retires.
+    fn texts(rows: &qfs_exec::RowSet, col: &str) -> Vec<String> {
+        let idx = docs_col(&rows.schema, col);
+        rows.rows
+            .iter()
+            .filter_map(|r| match &r.values[idx] {
+                Value::Text(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// **The ticket's live by-path row-equivalence gate (documents).** A live
+    /// `/collections/docs_documents` query — parse → resolve (the `/collections` mount) → plan → scan
+    /// (the read facet runs `read_registered_collection` over the `/local` body) — delivers, THROUGH
+    /// the engine, the exact documents rows the retired compiled `/markdown` driver did: one row per
+    /// `.md` file with the root-relative `path` join id, the derived `title`, and the parsed
+    /// `frontmatter` (NULL when absent). The values are pinned as literals (self-contained oracle).
     #[test]
-    fn describe_by_path_reports_the_compiled_driver_schemas() {
+    fn live_by_path_documents_pins_path_title_and_frontmatter() {
+        let dir = fixture_tree();
+        let (engine, reads) = engine_and_reads(&dir);
+        let docs = select(&engine, &reads, "/collections/docs_documents |> LIMIT 100");
+
+        // One row per .md file, root-relative `path`, deterministic order (csv + dot-dir ignored).
+        assert_eq!(texts(&docs, "path"), vec!["notes/first.md", "plan.md"]);
+        // `title`: notes/first.md from its first ATX heading; plan.md from its frontmatter `title`.
+        assert_eq!(texts(&docs, "title"), vec!["First note", "The Plan"]);
+        // Front matter: notes/first.md has none (NULL); plan.md carries the parsed map.
+        let fm = docs_col(&docs.schema, "frontmatter");
+        assert!(matches!(&docs.rows[0].values[fm], Value::Null));
+        match &docs.rows[1].values[fm] {
+            Value::Json(v) => assert_eq!(v.get("status").and_then(|s| s.as_str()), Some("active")),
+            other => panic!("plan.md frontmatter should be Json, got {other:?}"),
+        }
+    }
+
+    /// **The ticket's live by-path `links` gate (+ self-join).** A live `/collections/docs_links`
+    /// query delivers, THROUGH the engine, the same links the retired compiled `/markdown` driver did:
+    /// `source_doc`, the full nested `source_section_path` (array, in order; `[]` pre-heading),
+    /// `target`/`target_doc` (root-relative normalization; NULL for external), and the 1-based `line`.
+    /// The registration additionally prepends the `path` provenance join id (== `source_doc`, Ruling
+    /// 3). Every in-tree `target_doc` self-joins against a `documents.path`. Values pinned as literals.
+    #[test]
+    fn live_by_path_links_pins_sections_targets_and_self_joins_documents_path() {
+        let dir = fixture_tree();
+        let (engine, reads) = engine_and_reads(&dir);
+        let links = select(&engine, &reads, "/collections/docs_links |> LIMIT 100");
+
+        // The registration prepends `path`, and it equals `source_doc` on every row (Ruling 3).
+        assert_eq!(links.schema.columns[0].name.as_str(), "path");
+        let src = docs_col(&links.schema, "source_doc");
+        let sec = docs_col(&links.schema, "source_section_path");
+        let tgt = docs_col(&links.schema, "target");
+        let tdoc = docs_col(&links.schema, "target_doc");
+        for row in &links.rows {
+            assert_eq!(
+                row.values[0], row.values[src],
+                "the registered links `path` join id equals `source_doc`"
+            );
+        }
+        let section = |row: &qfs_types::Row| -> Vec<String> {
+            match &row.values[sec] {
+                Value::Array(items) => items
+                    .iter()
+                    .map(|v| match v {
+                        Value::Text(s) => s.clone(),
+                        other => panic!("section segment should be Text, got {other:?}"),
+                    })
+                    .collect(),
+                other => panic!("source_section_path should be Array, got {other:?}"),
+            }
+        };
+
+        // notes/first.md sorts first: its single link sits under the top-level heading.
+        let first: Vec<&qfs_types::Row> = links
+            .rows
+            .iter()
+            .filter(|r| matches!(&r.values[src], Value::Text(s) if s == "notes/first.md"))
+            .collect();
+        assert_eq!(first.len(), 1);
+        assert_eq!(section(first[0]), vec!["First note"]);
+        assert!(matches!(&first[0].values[tdoc], Value::Text(s) if s == "plan.md"));
+
+        // plan.md carries three links, in document order.
+        let plan: Vec<&qfs_types::Row> = links
+            .rows
+            .iter()
+            .filter(|r| matches!(&r.values[src], Value::Text(s) if s == "plan.md"))
+            .collect();
+        assert_eq!(plan.len(), 3);
+        // The pre-heading link carries the EMPTY section path (never NULL, never guessed).
+        assert_eq!(section(plan[0]), Vec::<String>::new());
+        // The link under 「懸念」 inside 「全体の振り返り」 carries BOTH levels, in order.
+        assert_eq!(section(plan[1]), vec!["全体の振り返り", "懸念"]);
+        assert!(matches!(&plan[1].values[tdoc], Value::Text(s) if s == "notes/first.md"));
+        // The external link keeps its target as written and is not joinable (NULL target_doc).
+        assert!(matches!(&plan[2].values[tgt], Value::Text(s) if s == "https://example.com/x"));
+        assert!(matches!(&plan[2].values[tdoc], Value::Null));
+
+        // Self-join (item 3): every in-tree target_doc equals some documents.path — through the
+        // /collections surface alone (both sides read by path).
+        let docs = select(&engine, &reads, "/collections/docs_documents |> LIMIT 100");
+        let doc_paths = texts(&docs, "path");
+        for row in &links.rows {
+            if let Value::Text(td) = &row.values[tdoc] {
+                assert!(
+                    doc_paths.contains(td),
+                    "links.target_doc `{td}` must self-join /collections documents.path"
+                );
+            }
+        }
+    }
+
+    /// **The ticket's `DESCRIBE`-by-path gate.** `DESCRIBE /collections/<view>` reports the canonical
+    /// markdown-relation schema — the SAME `qfs_exec::markdown_relation_describe_schema` the retired
+    /// compiled `/markdown` driver's `DESCRIBE` reported — so an agent/viewer discovers the declared
+    /// set's shape generically. `documents` additionally declares the `@path` child address.
+    #[test]
+    fn describe_by_path_reports_the_relation_schemas() {
         let source = Arc::new(ViewSource::Static(fixture_views()));
         let driver = CollectionsDriver::new(source);
-        let md = crate::markdown::markdown_driver();
+
+        // Reference descs built via the same public NodeDesc API (avoids naming the ChildAddress type,
+        // which the binary does not import): documents declares the `@path` child key; links declares
+        // no child (the default).
+        let docs_schema = qfs_exec::markdown_relation_describe_schema(MarkdownRelation::Documents);
+        let links_schema = qfs_exec::markdown_relation_describe_schema(MarkdownRelation::Links);
+        let want_docs =
+            NodeDesc::new(Archetype::RelationalTable, docs_schema.clone()).child_key(["path"]);
+        let want_links = NodeDesc::new(Archetype::RelationalTable, links_schema.clone());
 
         let coll_docs = driver
             .describe(&Path::new("/collections/docs_documents"))
             .unwrap();
-        let drv_docs = md.describe(&Path::new("/markdown/docs/documents")).unwrap();
         assert_eq!(
-            coll_docs.schema, drv_docs.schema,
-            "DESCRIBE /collections/docs_documents == compiled documents DESCRIBE"
+            coll_docs.schema, docs_schema,
+            "DESCRIBE /collections/docs_documents == the canonical documents schema"
         );
         assert_eq!(
-            coll_docs.child_address, drv_docs.child_address,
-            "documents declares the same `@path` child address"
+            coll_docs.child_address, want_docs.child_address,
+            "documents declares the `@path` child address"
         );
 
         let coll_links = driver
             .describe(&Path::new("/collections/docs_links"))
             .unwrap();
-        let drv_links = md.describe(&Path::new("/markdown/docs/links")).unwrap();
         assert_eq!(
-            coll_links.schema, drv_links.schema,
-            "DESCRIBE /collections/docs_links == compiled links DESCRIBE"
+            coll_links.schema, links_schema,
+            "DESCRIBE /collections/docs_links == the canonical links schema"
+        );
+        assert_eq!(
+            coll_links.child_address, want_links.child_address,
+            "a links row is an edge and declares no child"
         );
     }
 
     /// An unregistered `/collections/<view>` fails closed — a structured error, never silent empty
-    /// rows pretending the view exists (the same fail-closed posture as an undeclared /markdown tree).
+    /// rows pretending the view exists.
     #[test]
     fn unregistered_view_fails_closed() {
         let dir = fixture_tree();
@@ -565,21 +590,9 @@ mod tests {
         let state = Arc::new(RwLock::new(ServerState::new()));
         let source = Arc::new(ViewSource::Live(Arc::clone(&state)));
         let mut engine = Engine::new();
-        // Also mount the compiled oracle for the equivalence assertion.
-        engine
-            .mounts
-            .register(Arc::new(crate::markdown::markdown_driver()))
-            .expect("mount /markdown");
-        let reads = ReadRegistry::new().with(
-            qfs_core::DriverId::new("markdown"),
-            Arc::new(crate::markdown::MarkdownReadDriver::with_roots([(
-                "docs".to_string(),
-                dir.path().to_path_buf(),
-            )])),
-        );
         let reads = register_collection_mounts(
             &mut engine,
-            reads,
+            ReadRegistry::new(),
             source,
             Sandbox::new(dir.path().to_path_buf()),
         );
@@ -597,10 +610,10 @@ mod tests {
         );
 
         let coll = select(&engine, &reads, "/collections/docs_documents |> LIMIT 100");
-        let drv = select(&engine, &reads, "/markdown/docs/documents |> LIMIT 100");
         assert_eq!(
-            coll.rows, drv.rows,
-            "the lazily-resolved live view reads row-equivalent"
+            texts(&coll, "path"),
+            vec!["notes/first.md", "plan.md"],
+            "the lazily-resolved live view reads the fixture's documents by path"
         );
     }
 

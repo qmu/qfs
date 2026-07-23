@@ -88,10 +88,6 @@ fn representative_path(mount: &str) -> String {
         // `/claude` path is a façade over session metadata, never an LLM call (qfs's model-calling
         // surface is `|> transform`, §15, not this façade).
         "/claude" => "/claude/sessions".to_string(),
-        // The markdown collection path: a representative `documents` table under a declared
-        // tree name. Describe is pure and name-generic (the schema is static for any `<name>`),
-        // so the `/markdown` mount folds into the generated driver catalog deterministically.
-        "/markdown" => "/markdown/tree/documents".to_string(),
         // §15 transform definitions: the `/transform` registry describes cred-free (the read source
         // + applier are injected; describe is pure), so the mount folds into the generated driver
         // catalog like any other introspective facet.

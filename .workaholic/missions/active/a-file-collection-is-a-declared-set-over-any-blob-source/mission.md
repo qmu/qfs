@@ -159,7 +159,7 @@ row-equivalent to the compiled driver, which then retires.
       front matter, `target_doc` normalization, and the full nested `section_path` (JSON
       array, pre-heading `[]`) — proven by a hermetic equivalence test; `DESCRIBE` reports
       both schemas.
-- [ ] **The compiled `/markdown` driver retires on the ratchet.** (#20260722090400-retire-the-compiled-markdown-driver.md) Once the equivalence test is
+- [x] **The compiled `/markdown` driver retires on the ratchet.** (#20260722090400-retire-the-compiled-markdown-driver.md) Once the equivalence test is
       green, `crates/driver-markdown`'s driver surface is deleted (its pure parser survives
       wherever the codec layer homes it), `CONNECT … TO markdown` maps onto the registered-set
       shape or is retired with it, and docs/skills regenerate (plugin version bump per
@@ -195,3 +195,4 @@ row-equivalent to the compiled driver, which then retires.
 - 2026-07-23 — ticket archived — 20260722090300-documents-links-as-declared-registrations.md
 - 2026-07-23 — ticket added — wire read-by-path mount for registered views (the wired-production surface t4's retirement needs; t3 proved equivalence at the helper level only) — 20260723100000-wire-read-by-path-mount-for-registered-views.md
 - 2026-07-23 — ticket archived — 20260723100000-wire-read-by-path-mount-for-registered-views.md
+- 2026-07-23 — ticket archived — 20260722090400-retire-the-compiled-markdown-driver.md
