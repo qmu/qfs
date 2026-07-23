@@ -27,4 +27,5 @@
 * [Sample output in the Cloudflare cookbook is now a neutral example](work-20260715-163500.md)
 * [Unify the qfs statement splitter onto the lexer etc](work-20260715-205333.md)
 * [Re-home the declarative tables into the System DB etc](work-20260716-152000.md)
+* [Establish trail and walk as viewer domain terms etc](work-20260721-183323.md)
 <!-- okf:generated:end -->
