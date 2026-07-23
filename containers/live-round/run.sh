@@ -43,7 +43,8 @@ if [ -n "$ROUND" ] && [ -f "$HERE/$ROUND" ]; then
     --userns=keep-id \
     -v "$WORKTREE":/src:ro \
     -v "$HERE":/round:ro \
-    --mount type=volume,dst=/work \
+    --tmpfs /work:exec,size=13g \
+    --memory=16g --memory-swap=16g \
     -w /work \
     "$IMAGE" "/round/$ROUND"
 fi

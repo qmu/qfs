@@ -11,9 +11,11 @@
 # No host ~/.claude, no host sockets, no cloud tokens are ever present.
 FROM docker.io/library/rust:1-slim-bookworm
 
-# Build deps for the qfs workspace (SQLite via bundled feature needs a C toolchain).
+# Build deps for the qfs workspace (SQLite via bundled feature needs a C toolchain) plus
+# curl — the round drives the in-container HTTP query + OAuth sign-in faces over loopback
+# to mint a real qfs_session cookie and read it back.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates pkg-config libssl-dev \
+ && apt-get install -y --no-install-recommends git ca-certificates pkg-config libssl-dev curl \
  && rm -rf /var/lib/apt/lists/*
 
 # Unprivileged build/run user with its own fresh HOME — never the host's.
