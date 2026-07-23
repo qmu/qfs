@@ -28,5 +28,6 @@
 * [Unify the qfs statement splitter onto the lexer etc](work-20260715-205333.md)
 * [Re-home the declarative tables into the System DB etc](work-20260716-152000.md)
 * [Establish trail and walk as viewer domain terms etc](work-20260721-183323.md)
+* [Per-row decode over collected sets and retire the markdown driver etc](work-20260722-084645.md)
 * [Rule the declared-driver gaps and ship read-over-POST etc](work-20260722-084646.md)
 <!-- okf:generated:end -->

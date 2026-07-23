@@ -41,6 +41,23 @@ pub fn scan_rows(
     vfs: &str,
     project: Option<&[Name]>,
 ) -> Result<RowBatch, LocalError> {
+    scan_rows_with(sandbox, vfs, project, false)
+}
+
+/// [`scan_rows`], with plan-driven blob materialization (blueprint §13b, the collection-set
+/// decode). When `materialize_content` is true, a directory / glob listing reads **each file
+/// entry's bytes** into the `content` column (directories keep a null `content`), so a per-row
+/// `DECODE` over a collected set has bytes to decode. When false, a listing keeps `content` null
+/// — a plain listing does not pay to read every entry's bytes.
+///
+/// # Errors
+/// [`LocalError`] on a sandbox escape or an I/O failure; a missing path yields an empty batch.
+pub fn scan_rows_with(
+    sandbox: &Sandbox,
+    vfs: &str,
+    project: Option<&[Name]>,
+    materialize_content: bool,
+) -> Result<RowBatch, LocalError> {
     // A single existing file reads its *content*: the listing row plus a `content` (Bytes)
     // column, so a downstream codec (`DECODE`/`ENCODE`, ticket T2) can transform the bytes.
     // Directory and glob listings fall through and are unchanged (no content column).
@@ -48,14 +65,25 @@ pub fn scan_rows(
         return Ok(apply_project(batch, project));
     }
     // A directory / glob listing carries the SAME schema as the single-file read and describe()
-    // ([`LocalRow::content_schema`]) so plan-time and runtime agree, but its `content` is null: a
-    // listing does not materialise each entry's bytes (read the single file path to get them).
+    // ([`LocalRow::content_schema`]) so plan-time and runtime agree. Its `content` is null by
+    // default; when a downstream DECODE requested materialization, each file entry's bytes are
+    // read into `content` (a directory entry stays null — it has no bytes).
     let local_rows = scan_local_rows(sandbox, vfs)?;
     let rows: Vec<Row> = local_rows
         .iter()
         .map(|lr| {
             let mut values = lr.to_row().values;
-            values.push(Value::Null);
+            let content = if materialize_content && !lr.is_dir {
+                match fs_core::read_blob(sandbox, &lr.path) {
+                    Ok(bytes) => Value::Bytes(bytes),
+                    // A vanished/unreadable entry between listing and read degrades to null,
+                    // never fails the whole collection scan (robust, like the missing-path case).
+                    Err(_) => Value::Null,
+                }
+            } else {
+                Value::Null
+            };
+            values.push(content);
             Row::new(values)
         })
         .collect();
@@ -215,6 +243,46 @@ mod tests {
             Value::Bytes(b) => assert_eq!(b, b"alpha", "the file's raw bytes"),
             other => panic!("expected content bytes, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn glob_materializes_each_file_content_when_requested() {
+        let (_d, sandbox) = fixture();
+        // Plan-driven materialization (blueprint §13b): a downstream DECODE asks the glob to read
+        // each entry's bytes into `content`, so a per-row decode over the collected set works.
+        let batch = scan_rows_with(&sandbox, "/local/*.md", None, true).unwrap();
+        assert_eq!(batch.rows.len(), 1, "only top-level a.md matches *.md");
+        let content = batch.rows[0].values.last().expect("content value");
+        match content {
+            Value::Bytes(b) => assert_eq!(b, b"alpha", "a.md's bytes materialized"),
+            other => panic!("expected materialized content bytes, got {other:?}"),
+        }
+        // Without the flag the same glob keeps a null content — a plain listing pays nothing.
+        let plain = scan_rows_with(&sandbox, "/local/*.md", None, false).unwrap();
+        assert!(matches!(plain.rows[0].values.last(), Some(Value::Null)));
+    }
+
+    #[test]
+    fn directory_materialization_leaves_directories_null() {
+        let (_d, sandbox) = fixture();
+        // The whole directory: files get bytes, the `sub` directory entry stays null (no bytes).
+        let batch = scan_rows_with(&sandbox, "/local", None, true).unwrap();
+        let by_name: std::collections::HashMap<String, &Value> = batch
+            .rows
+            .iter()
+            .map(|r| {
+                let name = match &r.values[0] {
+                    Value::Text(s) => s.clone(),
+                    _ => String::new(),
+                };
+                (name, r.values.last().unwrap())
+            })
+            .collect();
+        assert!(matches!(by_name["a.md"], Value::Bytes(_)), "file has bytes");
+        assert!(
+            matches!(by_name["sub"], Value::Null),
+            "directory stays null"
+        );
     }
 
     #[test]

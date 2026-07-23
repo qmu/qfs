@@ -105,6 +105,13 @@ pub struct ScanNode {
     pub pushed: PushedQuery,
     /// The scan's output schema (after the pushed projection/aggregate).
     pub schema: Schema,
+    /// Whether a downstream `DECODE` needs each row's blob bytes materialized (blueprint §13b,
+    /// the collection-set decode). A blob source (`/local`, `/s3`, `/drive`) may leave a
+    /// glob/directory listing's `content` column null to avoid reading every entry's bytes; the
+    /// read executor sets this when the statement carries a `DECODE` stage, and the source's
+    /// read facet then materializes `content` per row. Default `false` — a plain listing pays
+    /// nothing.
+    pub materialize_content: bool,
 }
 
 /// A local residual combine operator — the work the engine runs **after** the native
@@ -236,6 +243,21 @@ impl PhysicalPlan {
             PhysicalPlan::Combine { inputs, .. } => {
                 for i in inputs {
                     i.collect_scans(out);
+                }
+            }
+        }
+    }
+
+    /// Mark every scan leaf so its source materializes each row's blob `content` (blueprint
+    /// §13b, the collection-set decode). The read executor calls this when the statement carries
+    /// a `DECODE` stage, so a glob/directory listing feeding a per-row decode reads each entry's
+    /// bytes instead of returning a null `content` column.
+    pub fn request_content_materialization(&mut self) {
+        match self {
+            PhysicalPlan::Scan(s) => s.materialize_content = true,
+            PhysicalPlan::Combine { inputs, .. } => {
+                for i in inputs {
+                    i.request_content_materialization();
                 }
             }
         }

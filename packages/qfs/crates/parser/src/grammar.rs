@@ -1012,13 +1012,21 @@ fn encode_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
     codec(input).map(PipeOp::Encode)
 }
 
-/// A codec format name — the codec registry seam (blueprint §4). A bare identifier (string
-/// name), resolved later.
+/// A codec format name, optionally relation-qualified — the codec registry seam (blueprint
+/// §4/§13b, design brief Ruling 1). A bare identifier (`json`/`md`/…) resolved later, followed by
+/// an OPTIONAL `.<relation>` suffix (`md.documents`, `md.links`) addressing one of the codec's
+/// declared named relations. The suffix is one leaf addition to this single pipe stage — fully
+/// backward-compatible with every existing `decode <fmt>` / `encode <fmt>`; the relation name is
+/// resolved later against the codec's relation set (an unknown relation is a resolve-time usage
+/// error, never a parse error).
 fn codec(input: &mut Stream<'_>) -> ModalResult<Codec> {
     let fmt = ident(input)?;
+    let relation = opt(preceded(punct(Token::Dot), ident)).parse_next(input)?;
+    let end = relation.as_ref().map_or(fmt.span.end, |r| r.span.end);
     Ok(Codec {
         fmt: fmt.node,
-        span: fmt.span,
+        relation: relation.map(|r| r.node),
+        span: Span::new(fmt.span.start, end),
     })
 }
 

@@ -2179,6 +2179,7 @@ mod tests {
             path: "/sys/users".to_string(),
             pushed: PushedQuery::default(),
             schema: sys_node_schema(SysNode::Users),
+            materialize_content: false,
         };
         let batch = reader.scan(&scan).await.unwrap();
         assert_eq!(texts(&batch, "primary_email"), vec!["a@qmu.jp"]);
@@ -2188,6 +2189,7 @@ mod tests {
             path: "/sys/nope".to_string(),
             pushed: PushedQuery::default(),
             schema: Schema::new(vec![]),
+            materialize_content: false,
         };
         assert!(reader.scan(&bad).await.is_err());
     }

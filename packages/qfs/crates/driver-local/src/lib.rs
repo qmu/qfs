@@ -52,7 +52,7 @@ pub use applier::{blob_write_args, copy_move_args, LocalApplier};
 pub use effect::{LocalEffect, CONTENT_COL, SRC_COL};
 pub use error::LocalError;
 pub use fs_core::Sandbox;
-pub use read::scan_rows;
+pub use read::{scan_rows, scan_rows_with};
 pub use row::LocalRow;
 
 /// The local-filesystem driver (blueprint §6). Owns the sandbox `root` (the least-privilege

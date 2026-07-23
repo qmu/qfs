@@ -2409,6 +2409,7 @@ mod tests {
             path: "/rest/chatwork/rooms/1/files/9/blob".into(),
             pushed: qfs_pushdown::PushedQuery::default(),
             schema: qfs_core::Schema::empty(),
+            materialize_content: false,
         };
         let batch = qfs_exec::ReadDriver::scan(&facet, &scan)
             .await

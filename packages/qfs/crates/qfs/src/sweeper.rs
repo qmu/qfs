@@ -613,6 +613,7 @@ mod tests {
                 path: path.to_string(),
                 pushed: qfs_pushdown::PushedQuery::default(),
                 schema: qfs_core::job_runs_schema(),
+                materialize_content: false,
             };
             let rt = tokio::runtime::Builder::new_current_thread()
                 .build()

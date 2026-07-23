@@ -1329,22 +1329,30 @@ JOINs all reach one relation table, and editing a document rides the same DESCRI
 COMMIT gate. The retired InsightBrowser indexer (heading = field, a declared relation vocabulary, a
 frontmatter index) is subsumed here; its name is retired.
 
-**Open — builtin driver, or one alias-registered set.** The collection ships as a **builtin
-driver** with its collection condition and `documents`/`links` interpretation compiled in. The
-alternative is a general **alias-registration** semantics — register any set over other paths
-(`/local`, `/s3`, `/drive`, a `union`) as a named resource — of which `/markdown` would be one
-instance; the same shape would then fall out for other file kinds (a photo's EXIF, CSV, PDF). No new
-syntax is needed: the DDL already desugars a `CREATE <noun>` to an `INSERT` into a registry path
-(§3), so a set definition is a pipeline, not a grammar addition. If alias registration lands,
-`/markdown` is demoted from builtin to one example. The running mission assumes the builtin (and
-`/markdown/<name>/{documents,links}` already reaches the engine); this question reopens the
-assumption without blocking it. **Also open**: what the closed relation set contains
-(`parent`/`concerns`/`references`/`supersedes` …) — it determines the UI that emerges — and how far
-the *interpretation* is expressible in qfs-query itself: whether `decode markdown` yields the two
-`documents`/`links` relations or one flat relation (the cross-document `links` edge appearing as a
-stage output is the crux), whether the codec's `bytes↔rows` contract runs per row of a collected
-set, and where the grammar (`decode md`, `expand`, `transform`) meets the registered codecs versus
-where interpretation stays the driver's work.
+**Ruled — alias registration wins; `/markdown` demoted to one instance** *(mission
+`a-file-collection-is-a-declared-set-over-any-blob-source`, 2026-07-22).* A collection is **not**
+a builtin driver: it is a **declared, named set registered over other paths** (`/local`, `/s3`,
+`/drive`, `/git`, a `union`) — a stored view created through the existing definition layer, with
+**zero new grammar** (the DDL already desugars a `CREATE <noun>` to an `INSERT` into a registry
+path, §3; a set definition is a pipeline, not a grammar addition). `/markdown` is demoted from a
+builtin to **one instance** of this general shape; the same shape falls out for other file kinds
+(a photo's EXIF, CSV, PDF) without a new compiled driver each. The specialized compiled
+`markdown` driver retires once the declared `documents`/`links` views are proven **row-equivalent**
+to it on shared fixture trees (the §13 twin-and-retire ratchet aimed inward).
+
+The interpretation *is* expressible in qfs-query itself, and the crux ("`decode markdown` yields
+the two relations or one flat relation") is answered: **both relations exist, each named, neither
+inferred.** The codec's `bytes↔rows` contract **runs per row** of a collected set (the per-file
+relations union, schema-widening a missing column to null; the single-file case is the one-row
+instance and the old `decode_needs_single_blob` refusal retires), and the decode application —
+not each codec — carries the root-relative `path` provenance column through as the canonical join
+id. The two relations are reached by a **relation-qualified format token**: `decode md` (the flat
+per-document relation, unchanged), `decode md.documents`, `decode md.links` — a codec declares its
+named relations and a decode stage addresses one, one optional `.suffix` on the codec stage, not a
+new grammar. (Design brief: the mission directory's
+`design-brief-codec-relation-surface.md`.) **Still open** (the later relation-vocabulary mission,
+not this one): what the closed relation set contains (`parent`/`concerns`/`references`/`supersedes`
+…) — it determines the UI that emerges — layered on the preserved `section_path`.
 
 ## 14. The console face: one screen, loaded not embedded — *blueprint*
 
