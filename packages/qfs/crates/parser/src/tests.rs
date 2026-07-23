@@ -1407,6 +1407,35 @@ fn follow_stage_parses_as_the_follow_pipe_op() {
 }
 
 #[test]
+fn post_stage_parses_as_the_read_over_post_pipe_op() {
+    // POST (blueprint §13.1 G1, ticket 20260722091300): a contextual-identifier stage carrying the
+    // struct-literal body the declared-view fetch POSTs — the read-over-POST shape (queue pull).
+    // The stored body round-trips through serde (the install → rehydrate path DESCRIBE/plan use).
+    let src = "/http/cf/accounts/a/queues/q/messages/pull \
+               |> POST { visibility_timeout_ms: 5000 } |> DECODE json |> EXPAND result";
+    let Statement::Query(p) = parse_ok(src) else {
+        panic!("expected a query");
+    };
+    match p.ops.as_slice() {
+        [PipeOp::Post(post), PipeOp::Decode(_), PipeOp::Expand(_)] => {
+            assert!(
+                matches!(&post.body, Expr::Struct(_)),
+                "the POST body is a struct literal, got {:?}",
+                post.body
+            );
+        }
+        other => panic!("expected POST then DECODE then EXPAND, got {other:?}"),
+    }
+    // Round-trips through serde exactly as a stored declared-view body does.
+    let json = serde_json::to_string(&Statement::Query(p)).unwrap();
+    let back: Statement = serde_json::from_str(&json).unwrap();
+    let Statement::Query(p2) = back else {
+        panic!("expected a query after round-trip");
+    };
+    assert!(matches!(p2.ops.first(), Some(PipeOp::Post(_))));
+}
+
+#[test]
 fn insert_with_encode_stage_desugars_to_a_values_pipeline_body() {
     // ENCODE-between-target-and-VALUES (the §13 declared upload shape, ticket 20260711121526)
     // desugars onto the EXISTING EffectBody::Pipeline shape — a VALUES source with exactly one
@@ -1842,13 +1871,24 @@ fn closed_core_variant_counts_are_locked() {
             target: OfTarget::Named(String::new()),
             span: Span::new(0, 0),
         }),
+        // POST (blueprint §13.1 G1, ticket 20260722091300) — the declared-driver read-over-POST
+        // stage, the fifth deliberate, reviewed additive variant (22 → 23). `post` is a CONTEXTUAL
+        // identifier, not a frozen keyword, so the keyword freeze stays at 39; only this variant
+        // set grew. Outside a declared view body (where the evaluator strips a leading POST to
+        // drive the wire fetch as a POST) it is a structured lowering/eval refusal, never an
+        // executable general-pipeline stage.
+        PipeOp::Post(PostRef {
+            body: Expr::Lit(Literal::Null),
+            span: Span::new(0, 0),
+        }),
     ];
     assert_eq!(
         pipe_variants.len(),
-        22,
-        "PipeOp is closed at 22 variants — the §15 TRANSFORM stage (decision W), the §18 \
-         SWITCH stage, the §13 FOLLOW stage, and the §5.6 OF assertion stage are the only \
-         additive growth; still no per-driver/per-action variant (blueprint §3)"
+        23,
+        "PipeOp is closed at 23 variants — the §15 TRANSFORM stage (decision W), the §18 \
+         SWITCH stage, the §13 FOLLOW stage, the §5.6 OF assertion stage, and the §13.1 POST \
+         read-over-POST stage are the only additive growth; still no per-driver/per-action \
+         variant (blueprint §3)"
     );
 }
 

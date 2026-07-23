@@ -35,8 +35,8 @@ use crate::ast::{
     ArmWrite, Assignment, CallRef, Codec, DdlKind, EffectBody, EffectStmt, EffectVerb, Expr, FnRef,
     FollowRef, Ident, JoinOp, Literal, NamedArg, OfColumn, OfRef, OfTarget, Op, OrderKey, Param,
     PathExpr, PathRef, PathSegment, PipeOp, Pipeline, PlanWrap, PolicyRuleAst, PolicySubjectAst,
-    Projection, ServerDdl, Source, Statement, SwitchArm, SwitchStage, TransformRef, TypeAnn,
-    Values,
+    PostRef, Projection, ServerDdl, Source, Statement, SwitchArm, SwitchStage, TransformRef,
+    TypeAnn, Values,
 };
 use crate::error::{ParseError, ParseErrorCode};
 
@@ -889,6 +889,7 @@ fn pipe_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
         transform_op,
         switch_op,
         follow_op,
+        post_op,
         of_op,
     ))
     .parse_next(input)
@@ -1064,6 +1065,22 @@ fn follow_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
 /// with an `ident`, so a `Token::Path` there fails, and the inline branch requires `(` — so
 /// `of /type/x` matches neither, exactly like `transform /path`. The structural/refinement check
 /// itself is plan-time (blueprint §5.6); the parser validates shape only.
+/// `POST <body-expr>` — the declared-driver read-over-POST stage (blueprint §13.1 G1, ticket
+/// 20260722091300).
+///
+/// `post` is a **contextual identifier** (matched by [`word`], NOT a frozen keyword — the keyword
+/// set stays 39, the `follow`/`transform`/`switch` lesson); `<body-expr>` is a struct-literal
+/// expression (the wire body the fetch POSTs). Shape only here — "only valid as the leading op of
+/// a declared view body" is a structured lowering/eval refusal, not a parse error.
+fn post_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
+    let start = word("post").parse_next(input)?;
+    let body = cut_err(expr).parse_next(input)?;
+    Ok(PipeOp::Post(PostRef {
+        body,
+        span: Span::new(start.start, start.end),
+    }))
+}
+
 fn of_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
     let start = word("of").parse_next(input)?;
     // Inline structural literal `(…)` vs a named target. `word("of")` already committed us to an

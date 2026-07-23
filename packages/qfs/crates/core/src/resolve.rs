@@ -429,6 +429,7 @@ impl<'r> Resolver<'r> {
             | PipeOp::Encode(_)
             | PipeOp::Transform(_)
             | PipeOp::Follow(_)
+            | PipeOp::Post(_)
             | PipeOp::Of(_) => Ok(()),
         }
     }
