@@ -51,6 +51,37 @@ previous ticket — do not delete against a red or skipped oracle") and the over
 NOTHING here was done: `crates/driver-markdown` is untouched, no docs/skills regenerated, no
 plugin version bumped. Unblock only once t3's registration-level equivalence test is GREEN.
 
+## Drive note (2026-07-23, second leaf) — STILL BLOCKED, but for a DIFFERENT reason: no wired production replacement
+
+t3's registration-level **equivalence gate is now GREEN** (commit `c6d834d`): the declared
+`documents`/`links` views read row-equivalent to the compiled driver through the registration read
++ `/local` root-relative derivation, `DESCRIBE` matches, and `CREATE VIEW … AS /local/**/*.md |>
+decode md.<relation>` desugars to a `/server/views` INSERT that rehydrates to the read body. So the
+disk-blocked reason from the first leaf is resolved (builds now run in the tmpfs memory-cap wrapper).
+
+**Deletion is still NOT done — deliberately, and it is the safe call.** t3's equivalence was proven
+at the **registration-read helper** level (`qfs_exec::read_registered_collection`, exercised by the
+hermetic tests over a real `/local` scan). It is the NECESSARY oracle-green precondition, but it is
+NOT a wired production surface: **nothing in the binary resolves a registered collection view BY
+PATH yet.** Critically, the `/local` **root-relative strip lives only in the registration helper**,
+NOT in the generic `decode md.<relation>` query path — which, per design-brief Ruling 3, deliberately
+keeps the raw decode VFS-anchored. A viewer/agent running the bare pipeline `/local/docs/**/*.md |>
+decode md.links` therefore gets VFS-anchored `source_doc` (`/local/…`) and `target_doc` (`local/…`,
+no leading slash) that do **not** self-join — so the raw generic path is NOT a drop-in replacement,
+and the materialized-view refresh path (`view.rs` → `block_on_read`) does not apply the strip either.
+
+Retiring the compiled `/markdown` driver now would remove the ONLY wired documents/links-by-path
+surface the viewer depends on, with no wired replacement — a regression this ticket's own guard and
+the mission policy ("Nothing the viewer could do before is lost") forbid. So: `crates/driver-markdown`
+is UNTOUCHED, no docs/skills regenerated, no plugin version bumped.
+
+**To unblock (follow-up):** wire the registered collection view for **read-by-path** in the binary
+(a `/collections/<name>` or `/markdown/<name>`-shaped mount whose read facet runs
+`read_registered_collection` over the declared body's `/local` scan, applying the root-relative
+strip), so a live query and `DESCRIBE` reach the declared views the way the compiled driver's
+mount does today. Once that live surface is proven equivalent (not just the helper), the deletion +
+`CONNECT … TO markdown` remap/retire + docs/skills regen + plugin MINOR bump are safe to land.
+
 ## Quality Gate
 
 - `crates/driver-markdown` no longer registers a driver; the workspace builds without it.
