@@ -6,7 +6,7 @@ layer: [Domain]
 effort:
 commit_hash:
 category: Removed
-depends_on: [20260722090300-documents-links-as-declared-registrations.md]
+depends_on: [20260723100000-wire-read-by-path-mount-for-registered-views.md]
 mission: a-file-collection-is-a-declared-set-over-any-blob-source
 ---
 
