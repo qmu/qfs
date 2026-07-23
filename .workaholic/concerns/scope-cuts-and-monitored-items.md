@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/33
 origin_branch: work-20260711-121525
 origin_commit: f1a3d21
 created_at: 2026-07-12T01:52:23+09:00
-last_seen: 2026-07-23T23:59:51+09:00
+last_seen: 2026-07-24T00:40:59+09:00
 first_seen: 2026-07-12T01:52:23+09:00
 concern_id: scope-cuts-and-monitored-items
 severity: low

@@ -7,6 +7,8 @@
 * [Console bundle pin unset; live serve + release stamp pending the plgg bundle](console-bundle-pin-unset-live-serve.md)
 * [CREATE ACCOUNT's SECRET reference form is unimplemented (no bind-time account credential resolution)](create-account-ships-the-core-two.md)
 * [Declared-model and scheduling follow-ups](declared-model-and-scheduling-follow-ups.md)
+* [G1 read-over-POST spelling required refinement during implementation](g1-read-over-post-spelling-required.md)
+* [G7 and G8 parks create scoping risk for downstream conversions](g7-and-g8-parks-create-scoping.md)
 * [/local write materialization is narrow](local-write-materialization-is-narrow.md)
 * [Owner-attended live verification backlog](owner-attended-live-verification-backlog.md)
 * [Policy-less or denied job re-fires every sweep](policy-less-or-denied-job-re.md)
