@@ -4,6 +4,7 @@
 
 * [a-walk-extends-one-trail-one-column-at-a-time](active/a-walk-extends-one-trail-one-column-at-a-time/mission.md) - A walk extends one trail one column at a time
 * [claude-code-sessions-are-queryable-and-steerable-as-qfs-paths](active/claude-code-sessions-are-queryable-and-steerable-as-qfs-paths/mission.md) - Claude Code sessions are queryable and steerable as qfs paths
+* [the-declared-slack-twin-retires-the-compiled-driver](active/the-declared-slack-twin-retires-the-compiled-driver/mission.md) - The declared slack twin retires the compiled driver
 
 ## archive
 
