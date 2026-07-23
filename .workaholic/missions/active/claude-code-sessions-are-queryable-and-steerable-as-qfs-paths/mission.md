@@ -382,3 +382,4 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-07-22 — ticket archived — 20260719105527-tmux-session-teardown-must-not-kill-server.md
 - 2026-07-23 — 3 tickets moved to icebox (steering rewire, session launch, live round) — the steering live-drain needs an attended multi-agent Agent Team run, so they are set aside from the unattended queue by developer approval; the launcher-id bug remains drive-ready for tonight — claude-steering-and-live-round-tickets
 - 2026-07-23 — ticket archived — 20260722213000-claude-launcher-id-capture-mismatch.md
+- 2026-07-24 — story reported — work-20260718-201117.md
