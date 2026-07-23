@@ -5,6 +5,7 @@
         {
           "Decode": {
             "fmt": "json",
+            "relation": null,
             "span": [
               19,
               23
