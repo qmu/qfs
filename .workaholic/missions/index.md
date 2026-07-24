@@ -2,13 +2,13 @@
 
 ## active
 
-* [a-walk-extends-one-trail-one-column-at-a-time](active/a-walk-extends-one-trail-one-column-at-a-time/mission.md) - A walk extends one trail one column at a time
 * [claude-code-sessions-are-queryable-and-steerable-as-qfs-paths](active/claude-code-sessions-are-queryable-and-steerable-as-qfs-paths/mission.md) - Claude Code sessions are queryable and steerable as qfs paths
 
 ## archive
 
 * [a-file-collection-is-a-declared-set-over-any-blob-source](archive/a-file-collection-is-a-declared-set-over-any-blob-source/mission.md) - A file collection is a declared set over any blob source
 * [a-request-resolves-to-a-principal-the-query-path-can-read](archive/a-request-resolves-to-a-principal-the-query-path-can-read/mission.md) - A request resolves to a principal the query path can read
+* [a-walk-extends-one-trail-one-column-at-a-time](archive/a-walk-extends-one-trail-one-column-at-a-time/mission.md) - A walk extends one trail one column at a time
 * [declared-drivers-are-the-normal-way-to-add-a-service](archive/declared-drivers-are-the-normal-way-to-add-a-service/mission.md) - Declared drivers are the normal way to add a service
 * [language-design-review-layering-principles-and-semantic-gaps](archive/language-design-review-layering-principles-and-semantic-gaps/mission.md) - Language design review: layering principles and semantic gaps
 * [markdown-trees-are-queryable-as-documents-and-links-tables](archive/markdown-trees-are-queryable-as-documents-and-links-tables/mission.md) - Markdown trees are queryable as documents and links tables
