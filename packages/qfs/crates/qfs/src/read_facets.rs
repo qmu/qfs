@@ -27,7 +27,7 @@ use std::sync::Arc;
 use qfs_core::{
     CfsError, Column, ColumnType, Name, Path, RequestContext, Row, RowBatch, Schema, Value,
 };
-use qfs_driver_cf::{artifacts_repos_schema, kv_table_schema, queue_tail_schema, CfDriver, CfNode};
+use qfs_driver_cf::{artifacts_repos_schema, kv_table_schema, CfDriver, CfNode};
 use qfs_driver_ga::{GaDriver, QuerySpec as GaQuerySpec};
 use qfs_driver_gdrive::GDriveClient;
 use qfs_driver_git::{blobfs, relational, GitDriver, GitNode, GitPath};
@@ -567,24 +567,14 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
             }
             Ok(batch)
         }
-        CfNode::Queue { name } => {
-            let max = scan
-                .pushed
-                .limit
-                .and_then(|n| u32::try_from(n).ok())
-                .unwrap_or(100);
-            let rows = driver
-                .queue_tail(&name, max)
-                .map_err(|e| invalid(e.code()))?
-                .into_iter()
-                .map(|msg| msg.to_queue_row())
-                .collect();
-            let mut batch = RowBatch::new(queue_tail_schema(), rows);
-            if let Some(project) = &scan.pushed.project {
-                batch = project_batch(&batch, project);
-            }
-            Ok(batch)
-        }
+        // Consumer PULL retired to the DECLARED `cloudflare.qfs` read-over-POST view (blueprint
+        // §13.1 G1 / §13.3 — the honest-tiering exception closed). The compiled `/cf` queue is
+        // append-only now, so a read is a structured refusal that names where the surface moved,
+        // never an empty batch. (`capabilities` already denies SELECT; this is defense in depth.)
+        CfNode::Queue { .. } => Err(invalid(
+            "the compiled /cf queue is append-only; read a queue through the declared \
+             /cloudflare/accounts/<account>/queues/<queue>/messages/pull view",
+        )),
         CfNode::Artifacts => {
             let rows = driver
                 .artifact_repos()

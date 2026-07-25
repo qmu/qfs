@@ -1,6 +1,6 @@
 ---
 skill_name: qfs-cloudflare
-skill_description: Use when a task needs Cloudflare through qfs — installing and querying the DECLARED /cloudflare driver (zones, DNS records, account-scoped KV/Queues/D1 listings, plus D1 SQL, KV get/put, and queue push) written in the query language itself. Covers installing the cloudflare.qfs declaration, connecting it to the stored Cloudflare token, reading, and the declared D1 SQL surface. For queue consumption (pull) and Artifacts Git repositories use the compiled /cf driver instead.
+skill_description: Use when a task needs Cloudflare through qfs — installing and querying the DECLARED /cloudflare driver (zones, DNS records, account-scoped KV/Queues/D1 listings, plus D1 SQL, KV get/put, queue push and queue pull) written in the query language itself. Covers installing the cloudflare.qfs declaration, connecting it to the stored Cloudflare token, reading, consuming a queue with the read-over-POST pull view, and the declared D1 SQL surface. For Artifacts Git repositories use the compiled /cf driver instead.
 ---
 
 # Cloudflare (declared driver)
@@ -8,17 +8,17 @@ skill_description: Use when a task needs Cloudflare through qfs — installing a
 `/cloudflare` is a **declared driver**: an integration written in qfs's own query language
 (`CREATE DRIVER … CREATE VIEW … CREATE SQL …`) rather than compiled Rust. Installing it is an
 ordinary preview/commit; connecting it evaluates it. It turns Cloudflare's surface — zones, DNS
-records, account-scoped listings, KV get/put, queue push, and D1's relational SQL — into
+records, account-scoped listings, KV get/put, queue push and pull, and D1's relational SQL — into
 filesystem-shaped paths you read with the same pipe-SQL you use everywhere else.
 
 ::: tip `/cloudflare` (declared) vs `/cf` (compiled)
 The declared **`/cloudflare`** is now the normal way to reach Cloudflare: D1 SQL (its planner —
-`WHERE`/`JOIN`/aggregate pushdown, from the `CREATE SQL` arm), KV get/put, queue push, zones, DNS,
-and the account-scoped listings — all as reviewable, user-extensible declaration rows you grow with
-more `CREATE VIEW`/`MAP`/`SQL` statements. The compiled **`/cf`** is now a minimal fallback for only
-what plain declared REST cannot express: **queue consumption (pull)** — a POST-to-read with no
-declared primitive — and **Artifacts Git repositories**. On a name collision the compiled driver
-wins, which is why this mounts at `/cloudflare`.
+`WHERE`/`JOIN`/aggregate pushdown, from the `CREATE SQL` arm), KV get/put, queue push **and queue
+pull**, zones, DNS, and the account-scoped listings — all as reviewable, user-extensible declaration
+rows you grow with more `CREATE VIEW`/`MAP`/`SQL` statements. The compiled **`/cf`** is now a minimal
+fallback for the one surface plain declared REST cannot express: **Artifacts Git repositories** (a
+git-repo surface, not a REST resource). On a name collision the compiled driver wins, which is why
+this mounts at `/cloudflare`.
 :::
 
 ## Example
@@ -105,6 +105,7 @@ token. No token value ever appears in the declaration, in `/sys/drivers`, in `qf
 | a KV value (get/put) | `/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/values/{key}` | account-scoped |
 | Queues | `/cloudflare/accounts/{account}/queues` | account-scoped |
 | a queue message (push) | `/cloudflare/accounts/{account}/queues/{queue}/messages` | account-scoped |
+| a queue batch (pull) | `/cloudflare/accounts/{account}/queues/{queue}/messages/pull` | account-scoped |
 | D1 databases (listing) | `/cloudflare/accounts/{account}/d1/database` | account-scoped |
 | a D1 table (SQL) | `/cloudflare/d1/{database}/{table}` | account-scoped |
 
@@ -140,6 +141,16 @@ Run `qfs describe /cloudflare/zones` for the node's archetype and verbs.
 /cloudflare/accounts/<account>/queues                |> limit 20
 ```
 
+**Consume a queue** — the pull view is a *read whose wire method is POST*, which the declaration
+spells as a leading `|> POST { … }` stage. It is still an ordinary read: rows come back, no
+irreversibility gate fires. Substitute the concrete account and queue ids:
+
+```text
+/cloudflare/accounts/<account>/queues/<queue>/messages/pull
+|> select id, body, attempts
+|> limit 10
+```
+
 ## D1 SQL (the declared relational surface)
 
 D1's relational surface is declared with a `CREATE SQL` resource: a sqlite-dialect SQL endpoint over
@@ -168,9 +179,9 @@ Once installed and connected, a D1 table is a relational path the SQL planner pu
 
 The `{database}` segment is the D1 database id (list them with the `d1/database` listing above); the
 addressed segment is used as the Cloudflare D1 api id. The bearer is the same account-layer token the
-rest of the driver uses — never inlined in the declaration. **Queue consumption (pull)** and
-**Artifacts Git repositories** are the only Cloudflare surfaces still reached through the compiled
-`/cf` driver; everything else — D1 SQL, KV get/put, queue push — is declared here.
+rest of the driver uses — never inlined in the declaration. **Artifacts Git repositories** are the
+only Cloudflare surface still reached through the compiled `/cf` driver; everything else — D1 SQL,
+KV get/put, queue push and pull — is declared here.
 
 ## Extend it
 

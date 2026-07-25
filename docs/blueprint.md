@@ -1271,17 +1271,23 @@ retirement steps (per every twin, done only after equivalence holds):
 **Honest tiering — the structural exceptions, restated with reasons (not eroded).** "Declared is the
 normal way" keeps its honest boundary: these stay **compiled**, each for a stated reason, so no
 silent exception rides the conversions. Re-verified against the compiled driver registry at HEAD
-(the four conversions above are the only planned deletions; everything below stays):
+(the four conversions above are the only planned deletions; everything below stays — except the
+`/cf` queue pull, whose "not yet done" reason was retired and is recorded closed):
 
 - **`/git`** — a *local repository*, not a wire: no base URL, no HTTP auth, no `/http/<drv>` host to
   confine. Ruled a **park** by §13.1 **G8** (the declared shape stays wire-only). Compiled.
 - **`/claude`** — a *local on-disk session store* (a path façade over session metadata + an
   append-log; NOT qfs calling an LLM — that is §15 `transform`). No base URL/auth. G8 park. Compiled.
-- **`/cf` queue pull** — a read-over-POST. The **declared spelling now exists** (§13.1 G1, shipped
-  this mission), so the *wall is gone*; but the compiled queue-pull is **still present at HEAD** —
-  its retirement (declare the twin, prove row-equivalence, delete the compiled queue-pull) is a
-  **mechanical follow-up**, deliberately not widened into the G1 ship ticket. Recorded here as the
-  one exception whose reason is "not yet done", not "cannot be done".
+- **`/cf` queue pull** — **CLOSED** (ticket 20260724014300). This was the one exception whose reason
+  was "not yet done", not "cannot be done". The declared spelling shipped with §13.1 G1; the twin
+  then followed the full ratchet: `cloudflare.qfs` declares
+  `/cloudflare/accounts/{account}/queues/{queue}/messages/pull` as a `|> POST { batch_size: 100 }`
+  read-over-POST view, that view was proven **row-equivalent** to the compiled `queue_pull` over a
+  shared hermetic wire fixture, and the compiled pull was then **deleted** (`CfBackend::queue_pull`,
+  `HttpApiBackend::queue_pull`, `CfDriver::queue_tail`, `QueueMsg`, `RecordedCall::QueuePull`, the
+  `/cf` queue read facet). The compiled `/cf` queue handle is now **append-only** — its capability
+  set advertises `INSERT` and nothing else, so no phantom read survives the retirement. **No
+  exception with a "not yet done" reason remains in this table.**
 - **`/cf` Artifacts** — a **git-repo surface** (a Git remote hosted on Cloudflare), so it is a git
   shape, not plain REST; it rides the same G8 reasoning as `/git`. Compiled.
 - **`/local` / `/fs` / `/s3` / `/r2` blob primitives** — the BlobNamespace **primitives** the

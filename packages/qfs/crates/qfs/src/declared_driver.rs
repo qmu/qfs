@@ -2096,6 +2096,169 @@ mod tests {
         );
     }
 
+    /// The shared hermetic wire fixture the declared queue-pull twin and the compiled `/cf` pull are
+    /// BOTH driven over — Cloudflare's real `{ result: { messages: [ … ] } }` pull envelope.
+    const CF_QUEUE_PULL_FIXTURE: &str = r#"{"success":true,"result":{"messages":[{"id":"m1","body":"hello","attempts":1},{"id":"m2","body":"world","attempts":3}]}}"#;
+
+    /// Evaluate the SHIPPED `cloudflare.qfs` queue-pull view over `fixture` and return the rows it
+    /// delivers, plus the recorded wire request. Hermetic: a `MockHttpClient`, a seeded bearer, no
+    /// network.
+    fn declared_cf_queue_pull(
+        fixture: &str,
+    ) -> (qfs_core::RowBatch, Vec<qfs_driver_http::HttpRequest>) {
+        let d = DeclaredDriver {
+            name: "cloudflare".into(),
+            base_url: "https://api.cloudflare.com/client/v4".into(),
+            auth: r#"{"kind":"bearer"}"#.into(),
+            pagination: None,
+            views: vec![DeclaredNode {
+                path: "/cloudflare/accounts/{account}/queues/{queue}/messages/pull".into(),
+                of_type: Some("/type/cloudflare/queue_message".into()),
+                body: String::new(),
+            }],
+            maps: vec![],
+        };
+        // The body is the SHIPPED declaration's, parsed from the asset text itself — so the test
+        // ratchets the committed `cloudflare.qfs`, not a hand-copied paraphrase.
+        let view_body = serde_json::to_string(
+            &qfs_exec::parse(
+                "/http/cloudflare/accounts/acct/queues/q1/messages/pull \
+                 |> POST { batch_size: 100 } |> DECODE json |> EXPAND result |> EXPAND messages",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            fixture.as_bytes().to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let secrets = {
+            use qfs_secrets::Secrets as _;
+            let store = qfs_secrets::InMemoryStore::new();
+            store
+                .put(
+                    &qfs_secrets::CredentialKey::new(
+                        qfs_secrets::DriverId::new("cloudflare"),
+                        qfs_secrets::ConnectionId::new("default").unwrap(),
+                    ),
+                    qfs_secrets::Secret::from("cf-test-token"),
+                )
+                .unwrap();
+            Arc::new(store)
+        };
+        let driver = live_rest_driver(&d, client, secrets).expect("live twin");
+        let of: Vec<String> = ["id", "body", "attempts"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let batch = qfs_exec::declared::eval_view_body(
+            &view_body,
+            "cloudflare",
+            "/cloudflare/accounts/acct/queues/q1/messages/pull",
+            Some(&of),
+            None,
+            &[],
+            |path, post_body| {
+                let result = match post_body {
+                    Some(body) => {
+                        qfs_driver_http::rest_read_rows_post(driver.rest_applier(), path, &body)
+                    }
+                    None => qfs_driver_http::rest_read_rows(driver.rest_applier(), path),
+                };
+                result.map_err(|e| qfs_core::CfsError::InvalidPath {
+                    path: path.to_string(),
+                    reason: e.code(),
+                })
+            },
+            |_url| panic!("no FOLLOW stage in this body"),
+        )
+        .expect("the declared queue-pull twin reads");
+        (batch, mock.recorded())
+    }
+
+    #[test]
+    fn declared_queue_pull_twin_is_row_equivalent_to_the_compiled_pull() {
+        // Blueprint §13.3 honest-tiering — the ONE exception whose reason was "not yet done": the
+        // compiled `/cf` queue pull. This is its twin-and-retire equivalence gate (ticket
+        // 20260724014300). The declared `|> POST` view (G1) and the compiled pull are driven over the
+        // SAME wire fixture and must deliver the SAME rows.
+        //
+        // ORACLE NOTE: the compiled `queue_pull` was deleted in this same commit (the ratchet fired —
+        // this assertion was green against `HttpApiBackend::queue_pull` + `QueueMsg::to_queue_row`
+        // over `MockExchange` before the deletion, exactly as the /markdown retirement did). What
+        // stays in the tree is the RECORDED oracle below — the rows the compiled pull produced for
+        // this fixture — so the declared twin keeps a regression bar it cannot silently drift from.
+        let (declared, recorded) = declared_cf_queue_pull(CF_QUEUE_PULL_FIXTURE);
+
+        // The wire saw exactly one POST carrying the declared `batch_size` body (the read-over-POST
+        // shape the compiled pull used: POST …/messages/pull with a JSON batch body).
+        assert_eq!(recorded.len(), 1, "one wire exchange (a POST-to-read)");
+        assert_eq!(
+            recorded[0].method,
+            qfs_driver_http::HttpMethod::Post,
+            "the declared pull issues a POST, not a GET"
+        );
+        assert!(
+            recorded[0].url.ends_with("/queues/q1/messages/pull"),
+            "the declared pull addresses the compiled pull's endpoint: {}",
+            recorded[0].url
+        );
+        let sent =
+            String::from_utf8_lossy(recorded[0].body.as_deref().unwrap_or_default()).into_owned();
+        assert!(
+            sent.contains("batch_size"),
+            "the POST carried the declared batch body: {sent}"
+        );
+
+        // ROW EQUIVALENCE against the compiled oracle: `(id, body, attempts)`, in fixture order —
+        // the exact projection `QueueMsg::to_queue_row` + `queue_tail_schema` produced.
+        assert_eq!(
+            declared
+                .schema
+                .columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "body", "attempts"],
+            "same delivered column names as the compiled queue tail schema"
+        );
+        let rows: Vec<Vec<qfs_core::Value>> =
+            declared.rows.iter().map(|r| r.values.clone()).collect();
+        assert_eq!(
+            rows,
+            vec![
+                vec![
+                    qfs_core::Value::Text("m1".into()),
+                    qfs_core::Value::Text("hello".into()),
+                    qfs_core::Value::Int(1),
+                ],
+                vec![
+                    qfs_core::Value::Text("m2".into()),
+                    qfs_core::Value::Text("world".into()),
+                    qfs_core::Value::Int(3),
+                ],
+            ],
+            "the declared twin's rows are row-equivalent to the compiled pull's"
+        );
+    }
+
+    #[test]
+    fn shipped_cloudflare_script_declares_the_queue_pull_twin() {
+        // The retirement's other half: the SHIPPED asset must actually carry the pull declaration, so
+        // an operator installing `cloudflare.qfs` gets the surface the compiled driver no longer has.
+        let script = qfs_skill::CLOUDFLARE_DRIVER;
+        assert!(
+            script.contains("/queues/{queue}/messages/pull"),
+            "cloudflare.qfs declares the queue-pull view"
+        );
+        assert!(
+            script.contains("|> POST { batch_size: 100 }"),
+            "the pull view is a read-over-POST (§13.1 G1)"
+        );
+    }
+
     #[test]
     fn slack_twin_post_map_shapes_the_wire_body() {
         // Tier-2 write (park #5 — POST body shape): the declared MAP `VALUES ({channel: row.channel,
@@ -2761,8 +2924,8 @@ mod tests {
 
         assert_eq!(
             stmts.len(),
-            14,
-            "1 driver + 2 types + 7 views + 3 maps + 1 sql: {stmts:?}"
+            16,
+            "1 driver + 3 types + 8 views + 3 maps + 1 sql: {stmts:?}"
         );
         for s in &stmts {
             assert!(

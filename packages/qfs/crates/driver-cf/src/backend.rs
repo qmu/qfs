@@ -415,44 +415,6 @@ impl MsgId {
     }
 }
 
-/// One pulled queue message — the owned DTO a `queue_pull` (tail) yields. Owned, vendor-free.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub struct QueueMsg {
-    /// The Cloudflare-assigned message id.
-    pub id: String,
-    /// The message body bytes.
-    pub body: Vec<u8>,
-    /// How many delivery attempts this message has had (at-least-once delivery — blueprint §7).
-    pub attempts: u32,
-}
-
-impl QueueMsg {
-    /// Construct a queue message.
-    #[must_use]
-    pub fn new(id: impl Into<String>, body: Vec<u8>, attempts: u32) -> Self {
-        Self {
-            id: id.into(),
-            body,
-            attempts,
-        }
-    }
-
-    /// Project this message onto the queue tail row `(id, body, attempts)`.
-    #[must_use]
-    pub fn to_queue_row(&self) -> Row {
-        let body = match String::from_utf8(self.body.clone()) {
-            Ok(text) => Value::Text(text),
-            Err(_) => Value::Bytes(self.body.clone()),
-        };
-        Row::new(vec![
-            Value::Text(self.id.clone()),
-            body,
-            Value::Int(i64::from(self.attempts)),
-        ])
-    }
-}
-
 /// The Cloudflare transport seam every backend implements (blueprint §11). The driver's D1 SQL
 /// compile/emit (reused from t17), the KV blob verbs, and the queue append/tail are written once
 /// against this trait; the REST [`HttpApiBackend`] and the parked wasm binding backend are
@@ -579,14 +541,6 @@ pub trait CfBackend: Send + Sync {
     /// [`CfError`] on a non-2xx status or a transport failure.
     fn queue_send(&self, queue: &str, body: &[u8], idempotency_key: &str)
         -> Result<MsgId, CfError>;
-
-    /// Pull (tail) up to `max` recent messages from a queue (consumer pull). Bounded-tail only —
-    /// Queues is not random-access, so there is no WHERE/offset (capabilities advertise exactly
-    /// that).
-    ///
-    /// # Errors
-    /// [`CfError`] on a non-2xx status or a transport failure.
-    fn queue_pull(&self, queue: &str, max: u32) -> Result<Vec<QueueMsg>, CfError>;
 }
 
 /// The Cloudflare REST API base. Real account routing (`/accounts/<id>/...`) is config the
@@ -1267,47 +1221,6 @@ impl CfBackend for HttpApiBackend {
             .unwrap_or_else(|| idempotency_key.to_string());
         Ok(MsgId::new(id))
     }
-
-    fn queue_pull(&self, queue: &str, max: u32) -> Result<Vec<QueueMsg>, CfError> {
-        let op = "queue.pull";
-        let payload = serde_json::json!({ "batch_size": max });
-        let bytes = serde_json::to_vec(&payload).map_err(|_| CfError::Decode {
-            op,
-            reason: "could not encode the queue pull body".to_string(),
-        })?;
-        let req = self
-            .authed(HttpMethod::Post, self.queue_path(queue, "/messages/pull"))
-            .with_body(bytes);
-        let resp = self.send(op, &req)?;
-        let json = Self::parse_json(op, &resp)?;
-        Ok(json
-            .get("result")
-            .and_then(|r| r.get("messages"))
-            .and_then(|m| m.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .map(|m| {
-                        let id = m
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        let body = m
-                            .get("body")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .as_bytes()
-                            .to_vec();
-                        let attempts = m
-                            .get("attempts")
-                            .and_then(serde_json::Value::as_u64)
-                            .unwrap_or(1) as u32;
-                        QueueMsg::new(id, body, attempts)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default())
-    }
 }
 
 /// One recorded Cloudflare backend call (the op + its salient owned arguments) — what a test
@@ -1408,13 +1321,6 @@ pub enum RecordedCall {
         /// The idempotency key.
         idempotency_key: String,
     },
-    /// `queue.pull` (tail, capped at `max`).
-    QueuePull {
-        /// The queue.
-        queue: String,
-        /// The tail cap.
-        max: u32,
-    },
 }
 
 /// An in-memory mock Cloudflare backend (tests / CI / wasm): answers from pre-seeded fixtures and
@@ -1434,7 +1340,6 @@ pub struct MockCfBackend {
     d1_affected: Mutex<u64>,
     kv_entries: Mutex<Vec<KvEntry>>,
     kv_keys: Mutex<Vec<String>>,
-    queue_msgs: Mutex<Vec<QueueMsg>>,
     recorded: Mutex<Vec<RecordedCall>>,
 }
 
@@ -1550,15 +1455,6 @@ impl MockCfBackend {
     pub fn with_kv_keys(self, keys: Vec<String>) -> Self {
         if let Ok(mut k) = self.kv_keys.lock() {
             *k = keys;
-        }
-        self
-    }
-
-    /// Seed a queue message `queue_pull` returns.
-    #[must_use]
-    pub fn with_queue_msg(self, msg: QueueMsg) -> Self {
-        if let Ok(mut m) = self.queue_msgs.lock() {
-            m.push(msg);
         }
         self
     }
@@ -1778,18 +1674,5 @@ impl CfBackend for MockCfBackend {
             idempotency_key: idempotency_key.to_string(),
         });
         Ok(MsgId::new(format!("msg-{idempotency_key}")))
-    }
-
-    fn queue_pull(&self, queue: &str, max: u32) -> Result<Vec<QueueMsg>, CfError> {
-        self.record(RecordedCall::QueuePull {
-            queue: queue.to_string(),
-            max,
-        });
-        let msgs = self
-            .queue_msgs
-            .lock()
-            .map(|m| m.clone())
-            .unwrap_or_default();
-        Ok(msgs.into_iter().take(max as usize).collect())
     }
 }

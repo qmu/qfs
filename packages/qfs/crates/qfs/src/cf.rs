@@ -10,11 +10,14 @@
 //! no longer *discovers* or serves them (ticket 20260718203326, blueprint §13). What stays compiled
 //! is only what plain declared REST cannot express:
 //!
-//! - **Queue PULL** — Cloudflare pull is a POST-to-read; a declared VIEW is always a GET and a
-//!   declared MAP is a write effect, so there is no declared read-over-POST primitive to consume a
-//!   queue. It rides the compiled queue handle (which also serves push, on the `/cf` path).
 //! - **Artifacts** — Cloudflare Artifacts is a git-repo surface, not a REST resource the declared
-//!   view/map shape covers, so it too stays on the compiled driver.
+//!   view/map shape covers, so it stays on the compiled driver (blueprint §13.1 G8).
+//!
+//! Queue PULL used to be the other holdout ("a POST-to-read with no declared primitive"). §13.1 G1
+//! shipped the `|> POST` read stage and ticket 20260724014300 retired the compiled pull: the
+//! declared `cloudflare.qfs` view serves it now, and the compiled queue handle is APPEND-ONLY (push
+//! still rides it on the `/cf` path, though the declared `/cloudflare` mount is the reviewable way
+//! push is reached).
 //!
 //! Everything the declared twin covers is GONE from compiled discovery: no `list_d1_databases`, no
 //! `introspect_d1`, no `list_kv_namespaces` at mount time.
@@ -163,13 +166,13 @@ pub(crate) fn driver_from_backend(backend: Arc<dyn CfBackend>) -> Option<CfDrive
     )
 }
 
-/// Build the MINIMAL compiled `/cf` driver — the §13-ratchet fallback for the two surfaces plain
-/// declared REST cannot express: **queue PULL** (a POST-to-read the declared view/map shape has no
-/// primitive for) and **Artifacts** (a git-repo surface, not a REST resource). D1, KV, and queue
-/// *push* moved onto the committed `cloudflare.qfs` declaration, so this NO LONGER discovers them:
-/// there is no `list_d1_databases`/`introspect_d1`/`list_kv_namespaces` here. The queue handle it
-/// registers also serves push over the `/cf` path (one handle serves both directions), but the
-/// declared `/cloudflare` mount is the reviewable way push is reached.
+/// Build the MINIMAL compiled `/cf` driver — the §13-ratchet fallback for the ONE surface plain
+/// declared REST cannot express: **Artifacts** (a git-repo surface, not a REST resource). D1, KV,
+/// queue *push* and queue *pull* all moved onto the committed `cloudflare.qfs` declaration, so this
+/// NO LONGER discovers or reads them: there is no
+/// `list_d1_databases`/`introspect_d1`/`list_kv_namespaces` here, and no `queue_pull`. The queue
+/// handle it registers is APPEND-ONLY (push over the `/cf` path), but the declared `/cloudflare`
+/// mount is the reviewable way push is reached.
 pub(crate) fn driver_from_backend_with_artifact_sealer(
     backend: Arc<dyn CfBackend>,
     artifact_sealer: Arc<dyn ArtifactTokenSealer>,
@@ -336,13 +339,12 @@ mod tests {
     use super::driver_from_backend;
 
     #[test]
-    fn minimal_compiled_fallback_registers_only_queue_pull_and_artifacts() {
-        // §13 ratchet (ticket 20260718203326): D1, KV, and queue *push* moved onto the committed
-        // `cloudflare.qfs` declaration, so the compiled `/cf` no longer DISCOVERS or serves them.
-        // What stays compiled is only what plain declared REST cannot express — queue PULL (a
-        // POST-to-read) and Artifacts (a git-repo surface). So compiled discovery issues NO
-        // `list_d1_databases`/`list_kv_namespaces`, registers no D1/KV, and builds only the
-        // queue + artifacts surface.
+    fn minimal_compiled_fallback_registers_only_queue_push_and_artifacts() {
+        // §13 ratchet (tickets 20260718203326 + 20260724014300): D1, KV, queue *push* AND queue
+        // *pull* are all served by the committed `cloudflare.qfs` declaration, so the compiled `/cf`
+        // no longer DISCOVERS or reads them. What stays compiled is Artifacts (a git-repo surface,
+        // §13.1 G8) plus the append-only queue handle push rides. So compiled discovery issues NO
+        // `list_d1_databases`/`list_kv_namespaces`, registers no D1/KV, and performs NO pull.
         let backend = Arc::new(
             MockCfBackend::new()
                 .with_d1_database("prod", qfs_driver_cf::D1DatabaseUuid::new("d1-uuid"))
@@ -354,13 +356,13 @@ mod tests {
         // D1 and KV are NO LONGER served by the compiled driver (they are declared on /cloudflare).
         assert!(!driver.registry().has_d1("prod"));
         assert!(!driver.registry().has_kv("cache"));
-        // Queue (for PULL) and Artifacts are the minimal compiled fallback.
+        // The append-only queue handle (push) and Artifacts are the minimal compiled fallback.
         assert!(driver.registry().has_queue("events"));
         assert!(driver.registry().has_artifacts());
-        driver.queue_tail("events", 5).unwrap();
 
-        // The recorded calls prove ZERO D1/KV discovery: only queue + artifacts discovery, then the
-        // queue pull. No `D1Discovery`, no `KvDiscovery`, no `introspect_d1` column pragmas.
+        // The recorded calls prove ZERO D1/KV discovery AND zero reads: only queue + artifacts
+        // discovery. No `D1Discovery`, no `KvDiscovery`, no `introspect_d1` column pragmas, and no
+        // pull — the compiled pull is retired (the declared `/cloudflare` view serves it).
         let calls = backend.recorded();
         assert!(
             !calls
@@ -368,9 +370,9 @@ mod tests {
                 .any(|c| matches!(c, RecordedCall::D1Discovery | RecordedCall::KvDiscovery)),
             "compiled discovery must not probe D1 or KV: {calls:?}"
         );
+        assert_eq!(calls.len(), 2, "discovery only, no read: {calls:?}");
         assert!(matches!(calls[0], RecordedCall::QueueDiscovery));
         assert!(matches!(calls[1], RecordedCall::ArtifactNamespaceDiscovery));
-        assert!(matches!(calls[2], RecordedCall::QueuePull { ref queue, .. } if queue == "events"));
     }
 
     #[test]
