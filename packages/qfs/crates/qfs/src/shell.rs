@@ -585,6 +585,16 @@ impl ReadDriver for LazyCloudReadDriver {
         };
         facet.scan(scan, ctx).await
     }
+
+    /// Delegate the pushed-`WHERE` declaration to the bound facet. The executor asks this only
+    /// AFTER a successful `scan`, which is what binds `self.bound` — an unbound facet returned an
+    /// error and has no batch to filter — so the fallback answers `false` (the safe default: the
+    /// executor re-filters) rather than forcing a blocking bind on an introspective call.
+    fn honors_pushed_filter(&self) -> bool {
+        self.bound
+            .get()
+            .is_some_and(|facet| facet.honors_pushed_filter())
+    }
 }
 
 /// Build the live read facet for one cloud mount, bound to the mount's account — or `None`

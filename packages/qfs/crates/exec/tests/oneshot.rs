@@ -2394,3 +2394,142 @@ mod nested_mount_id_routing_spike {
         );
     }
 }
+
+/// The read executor's **pushed-`WHERE` enforcement** (the gdrive silent-drop defect,
+/// `20260723020055`): a source that declares `where_: true` is offered the predicate, and if its
+/// read facet does nothing with it the executor re-applies it — so a `where` can never come back as
+/// the complete unfiltered listing at exit 0.
+mod pushed_filter_enforcement {
+    use super::*;
+
+    fn listing_schema() -> Schema {
+        Schema::new(vec![
+            Column::new("id", ColumnType::Text, false),
+            Column::new("name", ColumnType::Text, false),
+        ])
+    }
+
+    fn listing_rows() -> Vec<Row> {
+        ["a", "b", "c"]
+            .into_iter()
+            .map(|id| {
+                Row::new(vec![
+                    Value::Text(id.into()),
+                    Value::Text(format!("{id}.pdf").into()),
+                ])
+            })
+            .collect()
+    }
+
+    /// A folder-listing source shaped exactly like `/drive`: it DECLARES `where_: true` (it really
+    /// can narrow some shapes natively) but its read facet returns the whole listing regardless of
+    /// the pushed predicate — the honest "over-return" the seam permits.
+    struct UnfilteredListing {
+        /// `true` reproduces a facet that (wrongly) claims it enforced the predicate itself.
+        claims_to_honor: bool,
+    }
+
+    impl qfs_core::Driver for UnfilteredListing {
+        fn mount(&self) -> &str {
+            "/listing"
+        }
+        fn describe(&self, _p: &Path) -> Result<NodeDesc, CfsError> {
+            Ok(NodeDesc::new(Archetype::RelationalTable, listing_schema()))
+        }
+        fn capabilities(&self, _p: &Path) -> Capabilities {
+            Capabilities::none().select()
+        }
+        fn procedures(&self) -> &[qfs_core::ProcSig] {
+            &[]
+        }
+        fn pushdown(&self) -> &PushdownProfile {
+            &PushdownProfile::Partial {
+                where_: true,
+                project: false,
+                limit: false,
+                order: false,
+                join: false,
+                aggregate: false,
+                distinct: false,
+                group_by: false,
+            }
+        }
+        fn applier(&self) -> &dyn PlanApplier {
+            Box::leak(Box::new(NoopApplier))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ReadDriver for UnfilteredListing {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
+            // The defect under test: the pushed predicate is ignored outright.
+            Ok(RowBatch::new(listing_schema(), listing_rows()))
+        }
+
+        fn honors_pushed_filter(&self) -> bool {
+            self.claims_to_honor
+        }
+    }
+
+    fn read(query: &str, claims_to_honor: bool) -> qfs_exec::RowSet {
+        let mut engine = Engine::new();
+        engine
+            .mounts
+            .register(Arc::new(UnfilteredListing { claims_to_honor }))
+            .unwrap();
+        let reads = ReadRegistry::new().with(
+            DriverId::new("listing"),
+            Arc::new(UnfilteredListing { claims_to_honor }),
+        );
+        block_on_read(
+            &parse(query).unwrap(),
+            &engine.mounts,
+            &reads,
+            &qfs_core::RequestContext::anonymous(),
+        )
+        .expect("the read executes")
+    }
+
+    #[test]
+    fn an_ignored_pushed_predicate_is_re_applied_by_the_executor() {
+        // BEFORE this seam existed, the whole 3-row listing came back at exit 0 — the reported
+        // `/drive/<folder> |> where id == '<fileId>'` defect, in miniature. The predicate matches
+        // NO row, so the honest answer is an empty relation.
+        let absent = read("/listing/folder |> where id == 'zzz'", false);
+        assert_eq!(
+            absent.len(),
+            0,
+            "an unhonored pushed `where` filters locally — never the unfiltered listing"
+        );
+
+        // The other direction: a predicate that DOES match returns exactly its rows, so the
+        // enforcement narrows rather than empties.
+        let present = read("/listing/folder |> where id == 'b'", false);
+        assert_eq!(present.len(), 1, "a matching predicate keeps its row");
+        assert_eq!(present.rows[0].values[0], Value::Text("b".into()));
+    }
+
+    #[test]
+    fn a_facet_that_declares_it_honors_the_filter_is_not_re_filtered() {
+        // The opt-out is what `/sql`, `/cf`, `/ga`, `/mail` and `/drive` use (they narrow to a
+        // pushed projection, or accept backend pseudo-columns), so it must genuinely skip the
+        // executor's re-filter. Pinning it here means the `false` default above is doing the work,
+        // not an unconditional filter that would double-apply over a narrowed batch.
+        let rows = read("/listing/folder |> where id == 'zzz'", true);
+        assert_eq!(
+            rows.len(),
+            3,
+            "a facet declaring `honors_pushed_filter` owns the predicate; the executor stands back"
+        );
+    }
+
+    #[test]
+    fn a_read_with_no_predicate_is_untouched() {
+        let rows = read("/listing/folder", false);
+        assert_eq!(rows.len(), 3, "no `where` means no filtering");
+    }
+}

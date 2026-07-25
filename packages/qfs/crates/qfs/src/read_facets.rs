@@ -63,13 +63,28 @@ where
     })
 }
 
-/// Enforce the pushed `WHERE` over a cloud facet's returned rows (t20 over-fetch-then-filter). A
-/// backend that cannot express a predicate as a query param over-returns the whole collection;
-/// re-applying the predicate locally guarantees every returned row satisfies the `WHERE`, so a
-/// filter can never silently return the unfiltered set (the round-3 Slack `/users` defect: the
-/// `users.list` API has no filter param, so `|> where id == …` returned all workspace users). It is
-/// idempotent where the backend already narrowed (the pushed rows already satisfy the predicate). A
-/// `None` predicate leaves the batch untouched.
+/// Apply a driver-computed **truthful residual** — the part of the pushed `WHERE` the backend could
+/// not express exactly — over a facet's returned rows (t20 over-fetch-then-filter). A `None`
+/// residual means the backend's own query already means exactly the predicate, so the batch is
+/// left untouched.
+///
+/// This is what a facet declaring [`qfs_exec::ReadDriver::honors_pushed_filter`] owes: it opts out
+/// of the executor's blanket re-filter (because it narrows the row shape to a pushed projection, or
+/// accepts backend search pseudo-columns the described schema does not carry), so it must enforce
+/// the predicate itself. Facets that do NOT declare it need nothing here — the executor re-applies
+/// the whole pushed predicate for them.
+fn apply_driver_residual(batch: RowBatch, residual: Option<qfs_types::Predicate>) -> RowBatch {
+    match residual {
+        Some(p) => qfs_exec::apply_residual(batch, &p),
+        None => batch,
+    }
+}
+
+/// Apply the WHOLE pushed `WHERE` over a facet's returned rows — the eager form for a backend that
+/// expresses no part of it and whose every predicate column is a real, described column (`/github`,
+/// `/slack`). The read executor applies the same predicate again for these facets (they do not
+/// declare [`qfs_exec::ReadDriver::honors_pushed_filter`]), so this narrows at the seam that knows
+/// the fetch while the executor remains the guarantee. Idempotent; a `None` predicate is a no-op.
 fn apply_pushed_filter(batch: RowBatch, predicate: Option<&qfs_types::Predicate>) -> RowBatch {
     match predicate {
         Some(p) => qfs_exec::apply_residual(batch, p),
@@ -111,8 +126,11 @@ impl ReadDriver for GitHubReadDriver {
                 }
             })?;
             // GitHub's list APIs express only a few filters as query params; an arbitrary `WHERE`
-            // (e.g. `number == 5`) has none, so the driver over-returns. Enforce the pushed `WHERE`
-            // at the seam (t20 over-fetch-then-filter) — same fix as the Slack facet.
+            // (e.g. `number == 5`) has none, so the driver over-returns. Every predicate column
+            // here is a real, described column, so applying the WHOLE pushed predicate is exact.
+            // The read executor re-applies it too (this facet does not declare
+            // `honors_pushed_filter`) — that is the backstop for every facet that forgets; this
+            // call narrows eagerly, at the seam that knows the fetch.
             Ok(apply_pushed_filter(batch, predicate))
         })
     }
@@ -144,9 +162,10 @@ impl ReadDriver for SlackReadDriver {
                 })?;
             // The Slack backend filters only the message log (`oldest`/`latest`); `users`, `files`
             // and the rest have no query-param filter, so the driver over-returns the whole
-            // collection. Enforce the pushed `WHERE` at the seam (t20 over-fetch-then-filter): every
-            // returned row must satisfy the predicate, else a `where` silently returned ALL rows
-            // (the round-3 `/users` defect). Idempotent where the backend already narrowed.
+            // collection. Every predicate column is a real, described column, so applying the WHOLE
+            // pushed predicate here is exact (the round-3 `/users` defect: a `where` that returned
+            // ALL workspace users). The read executor re-applies it too — this facet does not
+            // declare `honors_pushed_filter` — so the guarantee no longer rests on this call alone.
             Ok(apply_pushed_filter(batch, predicate))
         })
     }
@@ -468,6 +487,12 @@ impl ReadDriver for ObjReadDriver {
             }),
         }
     }
+
+    /// `obj_scan` applies the driver's truthful `plan_ls` residual over the listed objects, so the
+    /// returned rows already satisfy the pushed `WHERE` exactly.
+    fn honors_pushed_filter(&self) -> bool {
+        true
+    }
 }
 
 #[async_trait::async_trait]
@@ -488,8 +513,9 @@ impl ReadDriver for SqlReadDriver {
                 })?;
         let batch = RowBatch::new(out_schema, rows);
         // The driver applied the faithfully-renderable part natively; re-filter the residual locally
-        // so the rows are exactly the pushed query's result (over-returning on the pushed predicate
-        // is NOT corrected by the engine — the pushed work is the driver's responsibility).
+        // so the rows are exactly the pushed query's result. This facet OWNS that enforcement
+        // (`honors_pushed_filter` below): it narrows the batch to the pushed projection, so the
+        // executor's blanket re-filter could not see the predicate's columns to re-check them.
         let mut batch = match residual {
             Some(predicate) => qfs_exec::apply_residual(batch, &predicate),
             None => batch,
@@ -510,6 +536,14 @@ impl ReadDriver for SqlReadDriver {
             batch = project_batch(&batch, project);
         }
         Ok(batch)
+    }
+
+    /// The native `SELECT` runs the faithfully-renderable part of the `WHERE` and `scan` re-filters
+    /// the compiler's truthful residual above — before narrowing to the pushed projection, which is
+    /// exactly why the executor cannot re-check this facet from outside (a `where` on a column the
+    /// `SELECT` does not return would find no column to compare).
+    fn honors_pushed_filter(&self) -> bool {
+        true
     }
 }
 
@@ -550,6 +584,12 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
                 .map(|key| Row::new(vec![Value::Text(key), Value::Null]))
                 .collect();
             let mut batch = RowBatch::new(kv_table_schema(), rows);
+            // `kv_list_keys` takes no predicate, so the WHOLE pushed `WHERE` is unpushed here.
+            // Apply it before the projection narrows the columns away — this facet declares
+            // `honors_pushed_filter`, so the executor will not do it for us.
+            if let Some(predicate) = &scan.pushed.filter {
+                batch = qfs_exec::apply_residual(batch, predicate);
+            }
             if let Some(project) = &scan.pushed.project {
                 batch = project_batch(&batch, project);
             }
@@ -562,6 +602,9 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
                 .map(|entry| vec![entry.to_kv_row()])
                 .unwrap_or_default();
             let mut batch = RowBatch::new(kv_table_schema(), rows);
+            if let Some(predicate) = &scan.pushed.filter {
+                batch = qfs_exec::apply_residual(batch, predicate);
+            }
             if let Some(project) = &scan.pushed.project {
                 batch = project_batch(&batch, project);
             }
@@ -580,6 +623,10 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
                 .map(|msg| msg.to_queue_row())
                 .collect();
             let mut batch = RowBatch::new(queue_tail_schema(), rows);
+            // `queue_tail` takes only a count cap, so the pushed `WHERE` is wholly unpushed here.
+            if let Some(predicate) = &scan.pushed.filter {
+                batch = qfs_exec::apply_residual(batch, predicate);
+            }
             if let Some(project) = &scan.pushed.project {
                 batch = project_batch(&batch, project);
             }
@@ -631,6 +678,14 @@ impl ReadDriver for CfReadDriver {
         read_off_runtime(&scan.path, "cf_read_panicked", || {
             cf_scan(&self.driver, scan)
         })
+    }
+
+    /// Every `cf_scan` branch enforces the pushed `WHERE` itself — the D1 branch via the SQL
+    /// compiler's truthful residual, the KV / queue / artifact branches by applying the whole
+    /// predicate — and each does so BEFORE narrowing to the pushed projection, which is why the
+    /// executor cannot re-check this facet from outside.
+    fn honors_pushed_filter(&self) -> bool {
+        true
     }
 }
 
@@ -694,7 +749,7 @@ impl ReadDriver for GmailReadDriver {
         // Off the async runtime: the credentialed GmailClient drives the shared reqwest transport's
         // own `block_on`, which would nest tokio runtimes on the executor thread (t203030).
         read_off_runtime(&scan.path, "gmail_read_panicked", || {
-            qfs_driver_gmail::read_rows(
+            let batch = qfs_driver_gmail::read_rows(
                 self.client.as_ref(),
                 &scan.path,
                 predicate,
@@ -703,8 +758,25 @@ impl ReadDriver for GmailReadDriver {
             .map_err(|e| CfsError::InvalidPath {
                 path: scan.path.clone(),
                 reason: e.code(),
-            })
+            })?;
+            // Gmail's `q=` renders only part of a `WHERE` exactly (`label:`/`is:unread`); `from:`,
+            // `subject:`, `after:`/`before:` are LOOSER substring/date-granular matches, and the
+            // driver reports precisely that lossy part as its residual. Apply it here so the rows
+            // are exactly the predicate's result — before, the residual was computed and thrown
+            // away, and a lossy match returned rows the `WHERE` did not select.
+            Ok(apply_driver_residual(
+                batch,
+                qfs_driver_gmail::query::unpushed_residual(predicate),
+            ))
         })
+    }
+
+    /// The facet applies Gmail's own truthful residual (above). The executor cannot re-check this
+    /// one from outside: a Gmail `WHERE` may name **search pseudo-columns** the message schema does
+    /// not carry (`label`, `is_unread`), and a `date` bound is compared against the driver's
+    /// **coerced** epoch-ms literal rather than the date string the caller wrote.
+    fn honors_pushed_filter(&self) -> bool {
+        true
     }
 }
 
@@ -731,13 +803,29 @@ impl ReadDriver for DriveReadDriver {
     async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         let predicate = scan.pushed.filter.as_ref();
         read_off_runtime(&scan.path, "gdrive_read_panicked", || {
-            qfs_driver_gdrive::read_rows(self.client.as_ref(), &scan.path, predicate).map_err(|e| {
-                CfsError::InvalidPath {
-                    path: scan.path.clone(),
-                    reason: e.code(),
-                }
-            })
+            let batch = qfs_driver_gdrive::read_rows(self.client.as_ref(), &scan.path, predicate)
+                .map_err(|e| CfsError::InvalidPath {
+                path: scan.path.clone(),
+                reason: e.code(),
+            })?;
+            // Drive's `q` renders `name =`, `mimeType =`, `trashed =` and a parent scope exactly;
+            // EVERY other predicate — `id ==` above all, plus `LIKE`/`OR`/`IN`/`BETWEEN` and the
+            // second-granular `modifiedTime` bound — is unpushed or lossy, and the driver reports
+            // it as the residual. Applying it here is the fix for the reported defect: a
+            // `/drive/<folder> |> where id == '<absent>'` used to return the COMPLETE unfiltered
+            // listing at exit 0, because the residual was computed and then discarded.
+            Ok(apply_driver_residual(
+                batch,
+                qfs_driver_gdrive::query::unpushed_residual(predicate),
+            ))
         })
+    }
+
+    /// The facet applies Drive's own truthful residual (above). The executor cannot re-check this
+    /// one from outside: a Drive `WHERE` may name **search pseudo-columns** the file schema does
+    /// not carry (`text`/`full_text` → `fullText contains`, `parent` → `'<id>' in parents`).
+    fn honors_pushed_filter(&self) -> bool {
+        true
     }
 }
 
@@ -807,6 +895,14 @@ impl ReadDriver for GaReadDriver {
             }
             Ok(batch)
         })
+    }
+
+    /// `scan` re-filters GA's truthful residual above. The executor cannot re-check this facet from
+    /// outside: a GA4 `runReport` returns exactly the requested dimensions/metrics, so the rows are
+    /// already narrowed to the pushed projection and a filtered-on dimension may not be among them
+    /// — and adding one would change the report's aggregation granularity, not just its columns.
+    fn honors_pushed_filter(&self) -> bool {
+        true
     }
 }
 
@@ -1236,5 +1332,121 @@ mod tests {
             CfsError::InvalidPath { reason, .. } => assert_eq!(reason, "github_auth"),
             other => panic!("expected a structured auth path error, got {other:?}"),
         }
+    }
+
+    /// A `ScanNode` over `path` carrying a pushed `WHERE` — the shape the planner hands a facet
+    /// whose driver declares `where_: true`.
+    fn scan_with_filter(path: &str, predicate: qfs_types::Predicate) -> ScanNode {
+        let mut scan = scan_for(path);
+        scan.pushed.filter = Some(predicate);
+        scan
+    }
+
+    /// `<col> == '<value>'` as the planner's typed predicate.
+    fn col_eq(col: &str, value: &str) -> qfs_types::Predicate {
+        qfs_types::Predicate::Cmp(
+            qfs_types::ColRef::col(col),
+            qfs_types::CmpOp::Eq,
+            qfs_types::Literal::Text(value.to_string()),
+        )
+    }
+
+    /// A two-file My Drive listing behind the mock client.
+    fn drive_listing() -> qfs_driver_gdrive::MockDriveClient {
+        qfs_driver_gdrive::MockDriveClient::new().with_list_page(qfs_driver_gdrive::FilePage {
+            files: vec![
+                qfs_driver_gdrive::FileMeta::for_test("f1", "alpha.pdf", "application/pdf", vec![]),
+                qfs_driver_gdrive::FileMeta::for_test("f2", "beta.pdf", "application/pdf", vec![]),
+            ],
+            next_page_token: None,
+        })
+    }
+
+    /// The `id` column of each returned row.
+    fn ids_of(batch: &RowBatch) -> Vec<String> {
+        batch
+            .rows
+            .iter()
+            .map(|r| match &r.values[0] {
+                Value::Text(s) => s.to_string(),
+                v => panic!("expected a text id, got {v:?}"),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn drive_where_on_an_absent_id_returns_no_rows_not_the_unfiltered_listing() {
+        // The reported defect (ticket 20260723020055): Drive's `q` cannot express `id == …` at all,
+        // so `files.list` returns the WHOLE folder listing. Before the facet applied the driver's
+        // truthful residual, those rows were delivered verbatim — a filtered query answering with
+        // the complete unfiltered listing at exit 0.
+        let absent = DriveReadDriver::new(Arc::new(drive_listing()))
+            .scan(
+                &scan_with_filter("/drive/my", col_eq("id", "no-such-file-id")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            absent.rows.is_empty(),
+            "an absent id matches nothing — got {:?}",
+            ids_of(&absent)
+        );
+
+        // The other direction: a present id returns exactly its one row, so the residual narrows
+        // rather than empties. (A fresh client per read: the mock hands out each seeded list page
+        // once.)
+        let present = DriveReadDriver::new(Arc::new(drive_listing()))
+            .scan(
+                &scan_with_filter("/drive/my", col_eq("id", "f2")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ids_of(&present), vec!["f2".to_string()]);
+
+        // And with no predicate the listing is untouched.
+        let all = DriveReadDriver::new(Arc::new(drive_listing()))
+            .scan(&scan_for("/drive/my"), &RequestContext::anonymous())
+            .await
+            .unwrap();
+        assert_eq!(ids_of(&all), vec!["f1".to_string(), "f2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn drive_pushes_the_exact_name_term_and_keeps_the_rows_it_returns() {
+        // `name = 'x'` IS exact in Drive's query language, so it pushes with NO residual: the facet
+        // must not re-filter rows the backend already selected (proving the residual is truthful,
+        // not a blanket re-filter that would fight the pushdown).
+        let mock = Arc::new(drive_listing());
+        let driver = DriveReadDriver::new(mock.clone());
+        let batch = driver
+            .scan(
+                &scan_with_filter("/drive/my", col_eq("name", "alpha.pdf")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .unwrap();
+        // The mock returns both files regardless; the point is that the facet KEEPS them, because
+        // the exact `name =` term was Drive's to enforce.
+        assert_eq!(
+            batch.rows.len(),
+            2,
+            "an exactly-pushed term leaves no residual"
+        );
+        let pushed = mock.recorded().into_iter().any(|c| {
+            matches!(&c, qfs_driver_gdrive::RecordedCall::ListFiles { query, .. }
+                if query.contains("name = 'alpha.pdf'"))
+        });
+        assert!(pushed, "the exact term reached Drive's `q`");
+    }
+
+    #[test]
+    fn the_drive_facet_declares_it_enforces_the_pushed_filter_itself() {
+        // The declaration is what tells the executor to stand back; it is only honest because the
+        // facet applies the driver's residual above. Drive needs it: a `WHERE` may name the
+        // `text`/`full_text` search pseudo-columns the file schema does not carry, which a blanket
+        // executor-side re-filter would resolve to nothing and drop every row.
+        assert!(DriveReadDriver::new(Arc::new(drive_listing())).honors_pushed_filter());
     }
 }

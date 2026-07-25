@@ -79,6 +79,19 @@ pub fn build_query(label: Option<&str>, predicate: Option<&Predicate>) -> Pushdo
     }
 }
 
+/// The part of `predicate` Gmail's `q=` cannot express **exactly** — the predicate the caller must
+/// re-apply locally over the fetched rows so a `WHERE` is never silently dropped (the read facet
+/// applies this; see `ReadDriver::honors_pushed_filter`). A `date` bound comes back **coerced** to
+/// epoch-ms, so the local re-check orders a `Timestamp` against an `Int` rather than a date string.
+///
+/// Identical to [`build_query`]'s `residual` and independent of the label scope: a `/mail/<label>`
+/// scope only ever contributes an exact `label:<id>` term, never a residual. Exposed separately so
+/// the facet can enforce the predicate without re-deriving the path's label.
+#[must_use]
+pub fn unpushed_residual(predicate: Option<&Predicate>) -> Option<Predicate> {
+    build_query(None, predicate).residual
+}
+
 /// The outcome of lowering one comparison/`LIKE` into a Gmail search term.
 enum Lowered {
     /// The Gmail term means *exactly* the SQL predicate — push it and drop the predicate from

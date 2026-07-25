@@ -101,6 +101,20 @@ pub async fn execute_read_with(
             .scan(scan, ctx)
             .await
             .map_err(|e| ExecError::from_qfs(&e))?;
+        // 2b. Enforce the pushed `WHERE` over what the facet returned. The pushed predicate is a
+        //     narrowing HINT the driver may honor natively, partially, or not at all — it is never
+        //     a delegation of correctness. Re-applying it here is idempotent where the backend
+        //     already narrowed, and it is what makes "a predicate is honored or refused, never
+        //     dropped" structural: a facet that ignores it over-returns instead of answering the
+        //     unfiltered relation at exit 0. Skipped only for the facets that declare they enforce
+        //     it themselves (`honors_pushed_filter` — those that narrow to a pushed projection or
+        //     accept backend search pseudo-columns, and apply their own truthful residual).
+        let batch = match &scan.pushed.filter {
+            Some(predicate) if !driver.honors_pushed_filter() => {
+                qfs_engine::apply_residual(batch, predicate)
+            }
+            _ => batch,
+        };
         batches.push(batch);
     }
 

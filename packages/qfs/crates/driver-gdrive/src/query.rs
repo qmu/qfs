@@ -67,6 +67,18 @@ pub fn build_query(parent: Option<&str>, predicate: Option<&Predicate>) -> Pushd
     }
 }
 
+/// The part of `predicate` Drive's `q` cannot express **exactly** — the predicate the caller must
+/// re-apply locally over the fetched rows so a `WHERE` is never silently dropped (the read facet
+/// applies this; see `ReadDriver::honors_pushed_filter`).
+///
+/// Identical to [`build_query`]'s `residual` and independent of the parent scope: a parent id only
+/// ever contributes an exact `'<id>' in parents` term, never a residual. Exposed separately so the
+/// facet can enforce the predicate without threading the resolved folder id back out of the read.
+#[must_use]
+pub fn unpushed_residual(predicate: Option<&Predicate>) -> Option<Predicate> {
+    build_query(None, predicate).residual
+}
+
 /// The outcome of lowering one comparison/`LIKE` into a Drive query term.
 enum Lowered {
     /// The Drive term means *exactly* the SQL predicate — push it and drop the predicate from

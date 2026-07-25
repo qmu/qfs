@@ -23,6 +23,16 @@
 //! the [`MiniEvaluator`](qfs_engine::MiniEvaluator). The seam therefore only promises the
 //! driver returns a superset of the rows the pushed query selects; correctness is restored
 //! by the engine's residual re-filter over the over-returned rows.
+//!
+//! ## The pushed `WHERE` is enforced, never delegated on trust
+//! That promise is now **structural**: [`crate::execute_read`] re-applies `scan.pushed.filter`
+//! over every batch a facet returns, unless the facet declares
+//! [`ReadDriver::honors_pushed_filter`]. A facet that ignores the pushed predicate therefore
+//! over-returns (allowed) instead of answering an unfiltered relation as if it had matched
+//! (a wrong answer at exit 0). The declaration exists only for the facets that CANNOT be
+//! re-checked from outside — those that narrow the row shape to a pushed projection, or that
+//! accept backend search pseudo-columns the described schema does not carry — and each of
+//! those applies its own truthful residual inside the facet.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,6 +59,30 @@ pub trait ReadDriver: Send + Sync {
     /// # Errors
     /// [`CfsError`] if the scan could not be executed (auth, I/O, decode).
     async fn scan(&self, scan: &ScanNode, ctx: &RequestContext) -> Result<RowBatch, CfsError>;
+
+    /// Whether the rows this facet returns **already satisfy** `scan.pushed.filter` exactly, so
+    /// the executor must not re-apply it.
+    ///
+    /// The default is `false`: the executor re-filters, and a facet that ignores the pushed
+    /// predicate merely over-returns instead of silently answering the unfiltered relation. That
+    /// default is the guarantee — a `WHERE` is honored or refused, never dropped — and it holds
+    /// for every facet that never states otherwise, including future and declared drivers.
+    ///
+    /// Override with `true` ONLY when the facet cannot be re-checked from outside, and then only
+    /// because it enforces the predicate itself:
+    ///
+    /// - it narrows the batch to a pushed **projection**, so the predicate's columns may no longer
+    ///   be present to re-check (`/sql`, `/cf` D1, `/ga`), or
+    /// - it accepts backend **search pseudo-columns** the described schema does not carry
+    ///   (`label:` / `is:unread` for `/mail`, `fullText contains` for `/drive`), or literals it
+    ///   coerces before comparing.
+    ///
+    /// Every such facet applies its own driver-computed **truthful residual** — the part the
+    /// backend could not express exactly — over the fetched rows. Returning `true` without doing
+    /// that reintroduces the silent-drop defect this seam exists to prevent.
+    fn honors_pushed_filter(&self) -> bool {
+        false
+    }
 }
 
 /// The read-time driver registry: maps a [`DriverId`] to the [`ReadDriver`] that services its

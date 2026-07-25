@@ -557,6 +557,15 @@ impl ProcSig {
 /// What a source can execute **natively** (blueprint §7) — the planner uses this to decide
 /// what to push down vs. run locally. Here a driver only *declares* its ability;
 /// pushdown *planning/collapse* is E2/E3 runtime. Owned data only.
+///
+/// ## A declaration is an optimization, never a delegation of correctness
+/// `where_: true` says "offer me the predicate, I can narrow on it natively" — it does **not**
+/// promise the driver honors every predicate shape, and `describe` reporting it is truthful even
+/// for a driver that can push only some shapes. The engine keeps the result correct either way:
+/// the read executor re-applies the pushed `WHERE` over whatever a facet returns unless the facet
+/// declares it enforces the predicate itself (`ReadDriver::honors_pushed_filter`, whose few
+/// implementors apply their own driver-computed truthful residual). So no flag can advertise a
+/// pushdown the engine then silently works around, and no unpushed predicate is ever dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
