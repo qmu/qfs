@@ -29,8 +29,7 @@ CREATE DRIVER slack
   AT 'https://slack.com/api'
   AUTH BEARER
   PAGINATE CURSOR (next 'response_metadata.next_cursor' param 'cursor' MAX 50)
-  PUSHDOWN ( ts >= => 'oldest' EXACT, ts <= => 'latest' EXACT,
-             ts > => 'oldest' PREFILTER, ts < => 'latest' PREFILTER, LIMIT => 'limit' );
+  PUSHDOWN ( ts >= => 'oldest' EXACT, ts <= => 'latest' EXACT, ts > => 'oldest' PREFILTER, ts < => 'latest' PREFILTER, LIMIT => 'limit' );
 
 -- Stable outward row shapes (the `OF` contract) — the SAME columns the compiled driver's DTOs
 -- deliver, which is what makes the reads row-equivalent rather than merely similar.
@@ -77,3 +76,22 @@ CREATE VIEW /slack/{ws}/users OF slack/user AS
 -- is the exact `{channel, text}` `chat.postMessage` expects, built from the incoming row.
 CREATE MAP INSERT /slack/{ws}/{channel}/messages AS
   INSERT INTO /http/slack/chat.postMessage VALUES ({channel: row.channel, text: row.text});
+
+-- The five CALL procedures (§13.1 G5 — a declared CALL carries a TYPED signature, so DESCRIBE
+-- reports `react(channel: Text, ts: Text, emoji: Text)` exactly as the compiled registry did, and a
+-- wrong-shaped argument is a typecheck error rather than a wire error). Each maps onto its POST
+-- method; `pin` and `delete` are IRREVERSIBLE, so they ride the standard gate.
+CREATE MAP CALL slack.react ( channel text, ts text, emoji text ) /slack/{ws}/{channel}/messages AS
+  INSERT INTO /http/slack/reactions.add VALUES ({channel: row.channel, timestamp: row.ts, name: row.emoji});
+
+CREATE MAP CALL slack.pin ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
+  INSERT INTO /http/slack/pins.add VALUES ({channel: row.channel, timestamp: row.ts}) IRREVERSIBLE;
+
+CREATE MAP CALL slack.unpin ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
+  INSERT INTO /http/slack/pins.remove VALUES ({channel: row.channel, timestamp: row.ts});
+
+CREATE MAP CALL slack.update ( channel text, ts text, text text ) /slack/{ws}/{channel}/messages AS
+  INSERT INTO /http/slack/chat.update VALUES ({channel: row.channel, ts: row.ts, text: row.text});
+
+CREATE MAP CALL slack.delete ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
+  INSERT INTO /http/slack/chat.delete VALUES ({channel: row.channel, ts: row.ts}) IRREVERSIBLE;

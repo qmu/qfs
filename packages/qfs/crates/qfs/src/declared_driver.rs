@@ -309,6 +309,15 @@ impl DeclaredDriver {
         config.with_header("User-Agent", format!("qfs/{}", crate::version::VERSION))
     }
 
+    /// The typed procedures this driver's `CREATE MAP CALL` declarations declare (§13.1 G5), in
+    /// declaration order. A map whose verb is a universal verb contributes none.
+    fn procedures(&self) -> Vec<qfs_core::ProcSig> {
+        self.maps
+            .iter()
+            .filter_map(|m| declared_proc_sig(&m.verb, m.irreversible))
+            .collect()
+    }
+
     fn auth_strategy(&self) -> AuthStrategy {
         let secret_ref = SecretRef::new(self.name.clone(), "default");
         parse_auth(&self.auth, secret_ref)
@@ -551,12 +560,17 @@ pub(crate) fn declared_describe_mount(
     let json = qfs_core::CodecRegistry::with_builtins()
         .resolve("json")
         .ok()?;
-    let driver: Arc<dyn qfs_core::Driver> = Arc::new(RestDriver::new(
-        d.rest_config(),
-        json,
-        Arc::new(qfs_driver_http::MockHttpClient::new()),
-        Arc::new(qfs_secrets::InMemoryStore::new()),
-    ));
+    let driver: Arc<dyn qfs_core::Driver> = Arc::new(
+        RestDriver::new(
+            d.rest_config(),
+            json,
+            Arc::new(qfs_driver_http::MockHttpClient::new()),
+            Arc::new(qfs_secrets::InMemoryStore::new()),
+        )
+        // §13.1 G5: DESCRIBE reports the declared typed CALL signatures cred-free, exactly as a
+        // compiled driver's registry does.
+        .with_procs(d.procedures()),
+    );
     let remap = declared_remap(binding_path, &d.name)?;
     Some(crate::mount_adapter::MountDriver::with_remap(remap, driver))
 }
@@ -1259,7 +1273,55 @@ pub(crate) fn live_rest_driver(
     let json = qfs_core::CodecRegistry::with_builtins()
         .resolve("json")
         .ok()?;
-    Some(RestDriver::new(d.rest_config(), json, client, secrets))
+    Some(RestDriver::new(d.rest_config(), json, client, secrets).with_procs(d.procedures()))
+}
+
+/// Parse a stored declared-map verb label into a typed [`ProcSig`] (blueprint §13.1 **G5**). The
+/// label is `CALL <driver>.<action>` (untyped — the no-signature shorthand) or
+/// `CALL <driver>.<action>(<param> <type>, …)`. Anything else (a universal verb) is not a procedure.
+/// `irreversible` rides from the map's own `IRREVERSIBLE` flag, so a declared CALL gates exactly
+/// like a compiled one.
+fn declared_proc_sig(verb: &str, irreversible: bool) -> Option<qfs_core::ProcSig> {
+    let rest = verb.strip_prefix("CALL ")?;
+    let (head, params) = match rest.split_once('(') {
+        Some((head, tail)) => (head, tail.strip_suffix(')')?),
+        None => (rest, ""),
+    };
+    let action = head.trim().split_once('.')?.1.trim().to_string();
+    if action.is_empty() {
+        return None;
+    }
+    let params: Vec<qfs_core::Param> = params
+        .split(',')
+        .filter_map(|p| {
+            let mut it = p.split_whitespace();
+            let name = it.next()?.to_string();
+            // The declared type token is the canonical scalar vocabulary every declaration speaks;
+            // an unrecognized token stays `Unknown` rather thanlosing the whole signature.
+            let ty = it
+                .next()
+                .map_or(qfs_core::ColumnType::Unknown, declared_param_type);
+            Some(qfs_core::Param::new(name, ty))
+        })
+        .collect();
+    Some(
+        qfs_core::ProcSig::new(action)
+            .with_params(params)
+            .irreversible(irreversible),
+    )
+}
+
+/// Map a declared signature's type token onto the canonical [`ColumnType`](qfs_core::ColumnType).
+fn declared_param_type(token: &str) -> qfs_core::ColumnType {
+    match token.to_ascii_lowercase().as_str() {
+        "text" | "string" => qfs_core::ColumnType::Text,
+        "int" | "integer" => qfs_core::ColumnType::Int,
+        "float" | "real" => qfs_core::ColumnType::Float,
+        "bool" | "boolean" => qfs_core::ColumnType::Bool,
+        "bytes" => qfs_core::ColumnType::Bytes,
+        "timestamp" => qfs_core::ColumnType::Timestamp,
+        _ => qfs_core::ColumnType::Unknown,
+    }
 }
 
 #[cfg(test)]
@@ -2434,8 +2496,8 @@ mod tests {
         }
         assert_eq!(
             stmts.len(),
-            16,
-            "1 driver + 5 types + 9 views + 1 map: {stmts:?}"
+            21,
+            "1 driver + 5 types + 9 views + 1 post map + 5 typed CALL maps: {stmts:?}"
         );
         for s in &stmts {
             assert!(
@@ -2464,6 +2526,108 @@ mod tests {
         );
         // Credential-free by construction.
         assert!(!script.contains("xoxb-") && !script.contains("Bearer "));
+    }
+
+    #[test]
+    fn shipped_slack_call_maps_carry_typed_g5_signatures() {
+        // §13.1 G5: the five declared CALL maps report the SAME typed signatures the compiled
+        // `driver-slack` procedure registry does — name, parameter names, parameter types, and the
+        // irreversibility flag. That parity is the contract half of effect-equivalence: a declared
+        // twin must not merely fire the right wire call, it must ADVERTISE the same procedure.
+        let d = DeclaredDriver {
+            name: "slack".into(),
+            base_url: "https://slack.com/api".into(),
+            auth: r#"{"kind":"bearer"}"#.into(),
+            pagination: None,
+            pushdown: None,
+            views: vec![],
+            maps: vec![
+                ("CALL slack.react(channel text, ts text, emoji text)", false),
+                ("CALL slack.pin(channel text, ts text)", true),
+                ("CALL slack.unpin(channel text, ts text)", false),
+                ("CALL slack.update(channel text, ts text, text text)", false),
+                ("CALL slack.delete(channel text, ts text)", true),
+            ]
+            .into_iter()
+            .map(|(verb, irreversible)| DeclaredMap {
+                path: "/slack/{ws}/{channel}/messages".into(),
+                verb: verb.into(),
+                body: String::new(),
+                irreversible,
+            })
+            .collect(),
+        };
+        let declared = d.procedures();
+        // The compiled registry, read through the driver contract (no private module access).
+        use qfs_core::Driver as _;
+        let compiled_driver = qfs_driver_slack::SlackDriver::new(std::sync::Arc::new(
+            qfs_driver_slack::MockSlackClient::new(),
+        ));
+        let compiled = compiled_driver.procedures().to_vec();
+        let render = |p: &qfs_core::ProcSig| {
+            (
+                p.name.clone(),
+                p.params
+                    .iter()
+                    .map(|a| (a.name.clone(), a.ty.clone()))
+                    .collect::<Vec<_>>(),
+                p.irreversible,
+            )
+        };
+        assert_eq!(
+            declared.iter().map(render).collect::<Vec<_>>(),
+            compiled.iter().map(render).collect::<Vec<_>>(),
+            "the declared typed CALL signatures match the compiled registry's"
+        );
+
+        // The SHIPPED asset declares exactly those five, with their signatures.
+        let script = qfs_skill::SLACK_DRIVER;
+        for expected in [
+            "CALL slack.react ( channel text, ts text, emoji text )",
+            "CALL slack.pin ( channel text, ts text )",
+            "CALL slack.unpin ( channel text, ts text )",
+            "CALL slack.update ( channel text, ts text, text text )",
+            "CALL slack.delete ( channel text, ts text )",
+        ] {
+            assert!(script.contains(expected), "the asset declares `{expected}`");
+        }
+        // …and the irreversible pair is marked, so PREVIEW/COMMIT gate them like the compiled CALLs.
+        // Counted over the STATEMENT lines only (a `--` comment naming the flag is not a marking).
+        let marked = script
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--") && l.contains("IRREVERSIBLE"))
+            .count();
+        assert_eq!(
+            marked, 2,
+            "pin and delete are the two irreversible declared CALLs"
+        );
+    }
+
+    #[test]
+    fn declared_call_signature_parses_typed_and_untyped() {
+        // The G5 grammar's two arms: a typed signature lifts to typed params; the no-signature
+        // shorthand still parses and yields an untyped (param-less) procedure — today's behaviour,
+        // deliberately preserved.
+        let typed = declared_proc_sig("CALL slack.react(channel text, ts text, emoji text)", false)
+            .expect("a typed signature is a procedure");
+        assert_eq!(typed.name, "react");
+        assert_eq!(
+            typed
+                .params
+                .iter()
+                .map(|p| (p.name.as_str(), p.ty.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("channel", qfs_core::ColumnType::Text),
+                ("ts", qfs_core::ColumnType::Text),
+                ("emoji", qfs_core::ColumnType::Text),
+            ]
+        );
+        let untyped = declared_proc_sig("CALL github.merge", true).expect("untyped shorthand");
+        assert_eq!(untyped.name, "merge");
+        assert!(untyped.params.is_empty() && untyped.irreversible);
+        // A universal verb is not a procedure.
+        assert!(declared_proc_sig("INSERT", false).is_none());
     }
 
     #[test]

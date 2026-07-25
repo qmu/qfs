@@ -2645,10 +2645,50 @@ fn map_verb(input: &mut Stream<'_>) -> ModalResult<String> {
     if opt(kw(Keyword::Call)).parse_next(input)?.is_some() {
         let driver = cut_err(ident).parse_next(input)?.node;
         let _ = cut_err(punct(Token::Dot)).parse_next(input)?;
-        let action = cut_err(ident).parse_next(input)?.node;
-        return Ok(format!("CALL {driver}.{action}"));
+        // A procedure NAME may collide with a frozen keyword (`slack.update`, `slack.delete`) — the
+        // action sits in a name position, not a grammar position, so a keyword-shaped word is read
+        // as its canonical text. This is what keeps a declared twin's procedure names identical to
+        // the compiled registry's instead of forcing a rename.
+        let action = cut_err(action_word).parse_next(input)?;
+        // §13.1 G5: an OPTIONAL typed parameter list, so a declared CALL reports the same typed
+        // signature the compiled describe registry does (`react(channel: Text, ts: Text, emoji:
+        // Text)`) and the params bind into the effect body as `row.<param>`. Without the list the
+        // CALL is untyped — today's behaviour, preserved as the no-signature shorthand. Rendered
+        // into the stored verb label as `CALL <drv>.<action>(<p> <ty>, …)`, so the whole signature
+        // lives in the one column the registry already keys declarations by.
+        let params = opt(call_signature_params).parse_next(input)?;
+        return Ok(match params {
+            Some(sig) => format!("CALL {driver}.{action}({sig})"),
+            None => format!("CALL {driver}.{action}"),
+        });
     }
     policy_verb_token(input)
+}
+
+/// A procedure-name word in a `CALL <driver>.<action>` position: a bare identifier, or a frozen
+/// keyword read as its canonical lowercase text (a name position, not a grammar position).
+fn action_word(input: &mut Stream<'_>) -> ModalResult<String> {
+    any.verify_map(|t: Spanned<Token>| match t.node {
+        Token::Ident(s) => Some(s),
+        Token::Keyword(k) => Some(k.text().to_string()),
+        _ => None,
+    })
+    .parse_next(input)
+}
+
+/// `( <param> <type>, … )` — a declared CALL's typed parameter list (§13.1 G5). Reuses the
+/// `CREATE TABLE`/`CREATE TYPE` column-type vocabulary so a declared signature's types are the SAME
+/// canonical scalar set every other declaration speaks. Rendered back to `<p> <ty>, …`.
+fn call_signature_params(input: &mut Stream<'_>) -> ModalResult<String> {
+    let _ = punct(Token::LParen).parse_next(input)?;
+    let params: Vec<TableColumnDef> =
+        cut_err(separated(1.., table_column_def, punct(Token::Comma))).parse_next(input)?;
+    let _ = cut_err(punct(Token::RParen)).parse_next(input)?;
+    Ok(params
+        .iter()
+        .map(|p| format!("{} {}", p.name, p.ty))
+        .collect::<Vec<_>>()
+        .join(", "))
 }
 
 /// Reject a path whose `{param}` template segment collides with a glob (`*`/`?`) or an `@version`

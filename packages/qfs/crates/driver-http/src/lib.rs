@@ -116,6 +116,17 @@ impl RestDriver {
         }
     }
 
+    /// Builder: declare the procedures this mount answers (§13.1 **G5**). A declared
+    /// `CREATE MAP CALL <drv>.<action> ( <param> <type>, … )` lifts to a typed [`ProcSig`] here, so
+    /// `DESCRIBE` reports the same typed signature a compiled driver's registry does and `CALL`
+    /// resolution is a capability check rather than a wire round-trip. Empty (the default) keeps a
+    /// compiled `/rest` mount procedure-free.
+    #[must_use]
+    pub fn with_procs(mut self, procs: Vec<ProcSig>) -> Self {
+        self.procs = procs;
+        self
+    }
+
     /// Borrow the synchronous applier (e.g. to drive a `qfs_plan::commit` directly, or to
     /// build the runtime bridge).
     #[must_use]
