@@ -102,3 +102,10 @@ retired.
 - 2026-07-25 — ticket archived — 20260724014300-cf-queue-pull-twin-and-retirement.md
 - 2026-07-25 — ticket archived — 20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md
 - 2026-07-25 — run recorded (+1.05h) — 20260725-101714
+
+## Reflection
+
+### 2026-07-25 run 20260725-101714
+- blocked: acceptance items 3 and 4 stopped on blueprint 13.1 G4 per-row fan-out, which is ruled but unimplemented — a declared CALL cannot resolve a channel name to an id without it, so the effect-equivalence proof and the compiled-driver retirement that depends on it both stayed open. G4 is internal work, not an external blocker, but implementing it changes the mission's agreed plan and only a replan may authorize that.
+- leaked questions: should G4 become its own ticket ahead of the remaining slack work, given it is also the critical path for playbook entry 3, the drive twin. And should a path {param} binding extend into a map body expression — today the declared post map takes channel from the incoming row because a MAP body VALUES expression is row-closed.
+- front-load next: when a mission's plan depends on a blueprint item that is ruled but unimplemented, name that item as an explicit prerequisite ticket at mission-creation time rather than discovering it at the third acceptance item — this mission's entry conditions checked G1 and G2 and never asked whether G4 was shipped.
