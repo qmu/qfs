@@ -59,3 +59,24 @@ precedent is the /markdown retirement (v0.0.87, plugin 0.15.0).
 - The equivalence fixtures must survive the deletion (re-point the compiled side of the harness
   at recorded expected rows, as the /markdown retirement did with its oracle).
 - Update blueprint §13.3's slack row status in the same commit so the playbook stays true.
+
+## Not started — the ratchet's own gate is not green (run 20260725-101714)
+
+The overnight `/monitor` drive reached this ticket and did NOT implement it. The reason is this
+ticket's first line: it is *"the twin-and-retire ratchet's deletion step, gated on BOTH equivalence
+tickets green."* Only one is.
+
+- `20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md` — **done** (commit `cf75d76`):
+  `slack_driver.qfs` is committed and every declared read is proven row-equivalent to `driver-slack`
+  on shared hermetic fixtures, with the G2 pushdown parameters proven at the wire request.
+- `20260724014100-slack-call-maps-effect-equivalent.md` — **still open** (partial, commit `362c499`).
+  The G5 typed signatures landed and match the compiled registry exactly, but the five CALLs' WIRE
+  effect equivalence is unproven and the channel-name→id resolution parity cannot be reproduced until
+  blueprint §13.1 **G4** (per-row fan-out, `FOLLOW … INTO`) is implemented.
+
+Deleting `driver-slack` now would remove the very oracle the outstanding equivalence proof compares
+against — the ratchet run backwards. Blueprint §13.3's slack row states the bar as *"declared reads
+row-equivalent … **AND** the 5 CALL maps + post map effect-equivalent"*; half a bar is not a bar.
+
+**To unblock:** finish `20260724014100` (G4 fan-out → declared CALL dispatch → the five wire-level
+equivalence tests), then run this ticket unchanged. Nothing in this ticket's own steps needs revising.
