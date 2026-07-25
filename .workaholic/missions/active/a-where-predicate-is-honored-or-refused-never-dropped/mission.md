@@ -95,3 +95,11 @@ cannot expand, codec errors name post-decode columns, and `describe`'s pushdown 
 - 2026-07-25 — ticket archived — 20260717180200-expand-silently-no-ops-on-json-and-unknown-columns.md
 - 2026-07-25 — ticket archived — 20260717180300-codec-source-error-names-the-pre-decode-columns.md
 - 2026-07-25 — run recorded (+1.37h) — 20260725-101714
+- 2026-07-25 — story reported — work-20260724-011029.md
+
+## Reflection
+
+### 2026-07-25 run 20260725-101714
+- blocked: nothing stopped autonomy — all four tickets were implemented and gated green, and the release-readiness findings were fixed in-worktree without an escalation.
+- leaked questions: whether select on an unknown column should refuse like where and expand or keep its documented silent drop, which is already inconsistent between drivers; and whether a codec pipeline's missing-column check should move back to plan time by teaching the planner the decoded schema.
+- front-load next: when a mission changes a stage from silently succeeding to refusing, pre-authorize a sweep of the taught surface and the in-repo comments that justified the old behaviour — this run's worst defect was six shipped github recipes naming columns the driver never had, which the cookbook ratchet could not catch because it only proves a recipe parses; and audit every facet that opts out of a new check, since two claimed to apply their own residual and applied an unvalidated one.
