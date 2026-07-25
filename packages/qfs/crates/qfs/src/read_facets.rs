@@ -443,6 +443,17 @@ fn object_content_batch(key: &str, bytes: Vec<u8>) -> RowBatch {
     RowBatch::new(schema, vec![row])
 }
 
+/// S3/R2 accept **no** backend search pseudo-column: `list_objects_v2` filters by key prefix and
+/// nothing else, and every column a listing row carries is in [`object_listing_schema`]. The empty
+/// list is therefore the honest argument to [`refuse_unknown_where_column`] — stated explicitly so
+/// a future backend filter (a tag/metadata query) has an obvious place to declare itself instead of
+/// being smuggled in as a silent drop.
+const OBJ_SEARCH_COLUMNS: &[&str] = &[];
+
+/// The same for `/cf`'s KV / queue / artifact branches: those APIs take a key prefix or a count cap
+/// and no filter expression, so every predicate column must be a real, described column.
+const CF_SEARCH_COLUMNS: &[&str] = &[];
+
 /// The blocking object-storage read: parse the node, then LIST (bucket) or DOWNLOAD (object). The
 /// SigV4 backend's reqwest transport drives its own runtime via `block_on`, so the caller runs this
 /// off the async executor's thread (see [`ObjReadDriver::scan`]).
@@ -458,13 +469,21 @@ fn obj_scan(
     };
     let path = Path::new(path_str);
     match ObjNode::parse(&path).map_err(|e| invalid(e.code()))? {
-        // A concrete object key downloads its content (one `content` row).
+        // A concrete object key downloads its content (one `content` row). The pushed `WHERE` is
+        // enforced HERE (this facet declares `honors_pushed_filter`, so the executor stands back):
+        // before, a predicate on a concrete key was neither pushed nor applied anywhere, so
+        // `/s3/<bucket>/<key> |> where key == '<other>'` DELIVERED the row it excluded.
         ObjNode::Object { key, .. } => {
             let bytes = driver
                 .get(&path, None)
                 .map_err(|e| invalid(e.code()))?
                 .into_bytes();
-            Ok(object_content_batch(&key, bytes))
+            let batch = object_content_batch(&key, bytes);
+            refuse_unknown_where_column(&batch, filter, OBJ_SEARCH_COLUMNS, path_str)?;
+            Ok(match filter {
+                Some(predicate) => qfs_exec::apply_residual(batch, predicate),
+                None => batch,
+            })
         }
         // A bucket/prefix lists objects (native prefix/delimiter pushdown + truthful residual).
         ObjNode::Bucket { .. } => {
@@ -473,6 +492,11 @@ fn obj_scan(
                 .ls(&path, &pushdown, None)
                 .map_err(|e| invalid(e.code()))?;
             let batch = RowBatch::new(object_listing_schema(), page.to_rows());
+            // The listing schema is fully described and S3 has NO search pseudo-column, so a
+            // predicate naming anything else is a typo: refuse it rather than let it fall into the
+            // residual, match no object, and answer `rows: []` at exit 0 (the defect this mission
+            // exists to kill — the `honors_pushed_filter` opt-out bypasses the executor's check).
+            refuse_unknown_where_column(&batch, filter, OBJ_SEARCH_COLUMNS, path_str)?;
             let mut batch = match residual {
                 Some(predicate) => qfs_exec::apply_residual(batch, &predicate),
                 None => batch,
@@ -514,8 +538,11 @@ impl ReadDriver for ObjReadDriver {
         }
     }
 
-    /// `obj_scan` applies the driver's truthful `plan_ls` residual over the listed objects, so the
-    /// returned rows already satisfy the pushed `WHERE` exactly.
+    /// `obj_scan` applies the driver's truthful `plan_ls` residual over the listed objects (and the
+    /// whole predicate over a downloaded object's one row), so the returned rows already satisfy
+    /// the pushed `WHERE` exactly — and it makes the executor's refusal itself first
+    /// ([`refuse_unknown_where_column`]), so opting out of the checked seam does not reintroduce
+    /// the silent drop it exists to prevent.
     fn honors_pushed_filter(&self) -> bool {
         true
     }
@@ -580,6 +607,10 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
     };
     let path = Path::new(&scan.path);
     match CfNode::parse(&path).map_err(|e| invalid(e.code()))? {
+        // D1 needs no check HERE: `compile` validates the whole `WHERE` against the table catalog
+        // and returns a structured `unknown_column` before any row is fetched (sql-core's
+        // `compile`), so the refusal already happens one layer down. The branches below have no
+        // such compiler and get the check inline.
         CfNode::D1Table { db, table } => {
             let spec = query_spec_from_pushed(&scan.pushed);
             let (rows, residual) = driver
@@ -612,7 +643,14 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
             let mut batch = RowBatch::new(kv_table_schema(), rows);
             // `kv_list_keys` takes no predicate, so the WHOLE pushed `WHERE` is unpushed here.
             // Apply it before the projection narrows the columns away — this facet declares
-            // `honors_pushed_filter`, so the executor will not do it for us.
+            // `honors_pushed_filter`, so the executor will not do it for us. CHECKED first: an
+            // unknown column would otherwise match no row and answer `rows: []` at exit 0.
+            refuse_unknown_where_column(
+                &batch,
+                scan.pushed.filter.as_ref(),
+                CF_SEARCH_COLUMNS,
+                &scan.path,
+            )?;
             if let Some(predicate) = &scan.pushed.filter {
                 batch = qfs_exec::apply_residual(batch, predicate);
             }
@@ -628,6 +666,12 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
                 .map(|entry| vec![entry.to_kv_row()])
                 .unwrap_or_default();
             let mut batch = RowBatch::new(kv_table_schema(), rows);
+            refuse_unknown_where_column(
+                &batch,
+                scan.pushed.filter.as_ref(),
+                CF_SEARCH_COLUMNS,
+                &scan.path,
+            )?;
             if let Some(predicate) = &scan.pushed.filter {
                 batch = qfs_exec::apply_residual(batch, predicate);
             }
@@ -650,6 +694,12 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
                 .collect();
             let mut batch = RowBatch::new(queue_tail_schema(), rows);
             // `queue_tail` takes only a count cap, so the pushed `WHERE` is wholly unpushed here.
+            refuse_unknown_where_column(
+                &batch,
+                scan.pushed.filter.as_ref(),
+                CF_SEARCH_COLUMNS,
+                &scan.path,
+            )?;
             if let Some(predicate) = &scan.pushed.filter {
                 batch = qfs_exec::apply_residual(batch, predicate);
             }
@@ -666,6 +716,12 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
                 .map(|repo| repo.to_row())
                 .collect();
             let mut batch = RowBatch::new(artifacts_repos_schema(), rows);
+            refuse_unknown_where_column(
+                &batch,
+                scan.pushed.filter.as_ref(),
+                CF_SEARCH_COLUMNS,
+                &scan.path,
+            )?;
             if let Some(predicate) = &scan.pushed.filter {
                 batch = qfs_exec::apply_residual(batch, predicate);
             }
@@ -686,6 +742,12 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
                 .map(|repo| vec![repo.to_row()])
                 .unwrap_or_default();
             let mut batch = RowBatch::new(artifacts_repos_schema(), rows);
+            refuse_unknown_where_column(
+                &batch,
+                scan.pushed.filter.as_ref(),
+                CF_SEARCH_COLUMNS,
+                &scan.path,
+            )?;
             if let Some(predicate) = &scan.pushed.filter {
                 batch = qfs_exec::apply_residual(batch, predicate);
             }
@@ -709,7 +771,9 @@ impl ReadDriver for CfReadDriver {
     /// Every `cf_scan` branch enforces the pushed `WHERE` itself — the D1 branch via the SQL
     /// compiler's truthful residual, the KV / queue / artifact branches by applying the whole
     /// predicate — and each does so BEFORE narrowing to the pushed projection, which is why the
-    /// executor cannot re-check this facet from outside.
+    /// executor cannot re-check this facet from outside. Each branch also makes the refusal the
+    /// executor would have made: D1 through the compiler's catalog validation, the others through
+    /// [`refuse_unknown_where_column`], so an unknown column is refused, never matched by nothing.
     fn honors_pushed_filter(&self) -> bool {
         true
     }
@@ -1523,5 +1587,187 @@ mod tests {
         // `text`/`full_text` search pseudo-columns the file schema does not carry, which a blanket
         // executor-side re-filter would resolve to nothing and drop every row.
         assert!(DriveReadDriver::new(Arc::new(drive_listing())).honors_pushed_filter());
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // The other two `honors_pushed_filter` opt-outs: `/s3` + `/r2` and `/cf`'s KV / queue /
+    // artifact branches. Both bypass the executor's checked seam, so both owe the same refusal —
+    // the mission's law ("a predicate is honored or refused, never dropped") is only true across
+    // ALL drivers if these make it themselves. The shipped facet inventory omitted them.
+    // ------------------------------------------------------------------------------------------
+
+    /// The reason of a structured facet error (every refusal here is an `InvalidPath`).
+    fn reason_of(err: &CfsError) -> &'static str {
+        match err {
+            CfsError::InvalidPath { reason, .. } => reason,
+            other => panic!("expected a structured InvalidPath, got {other:?}"),
+        }
+    }
+
+    /// An `/s3` read facet over a two-object `assets` bucket behind the in-memory mock backend.
+    fn s3_facet() -> ObjReadDriver {
+        use qfs_driver_objstore::{Bucket, ListPage, MockObjectBackend, ObjRegistry, ObjectMeta};
+        let backend = Arc::new(
+            MockObjectBackend::new()
+                .with_list_page(ListPage::new(vec![
+                    ObjectMeta::new("logs/a.json", 10),
+                    ObjectMeta::new("logs/b.json", 20),
+                ]))
+                .with_get_body(b"{}".to_vec()),
+        );
+        let registry = ObjRegistry::new().with_bucket("assets", Bucket::new(backend));
+        ObjReadDriver::new(Arc::new(ObjDriver::new(
+            qfs_driver_objstore::Scheme::S3,
+            registry,
+        )))
+    }
+
+    #[tokio::test]
+    async fn s3_where_on_an_unknown_column_is_refused_not_an_empty_listing() {
+        // `/s3` declares `where_: true` AND `honors_pushed_filter`, so the executor stands back and
+        // the driver's `plan_ls` residual is the only thing that sees the predicate. A typo'd
+        // column fell into that residual, matched no object, and answered `rows: []` at exit 0 —
+        // exactly the defect this mission exists to kill, on a facet its inventory missed.
+        let err = s3_facet()
+            .scan(
+                &scan_with_filter("/s3/assets", col_eq("nosuchcol", "x")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .expect_err("an unknown column is refused");
+        assert_eq!(reason_of(&err), "unknown_column");
+    }
+
+    #[tokio::test]
+    async fn s3_where_on_a_real_column_still_narrows_the_listing() {
+        // The other direction: the refusal must not swallow a legitimate predicate. `key =` is
+        // pushed as a superset prefix and kept as a truthful residual, so the facet narrows to the
+        // one matching object.
+        let batch = s3_facet()
+            .scan(
+                &scan_with_filter("/s3/assets", col_eq("key", "logs/b.json")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .expect("a real column is honored");
+        assert_eq!(batch.rows.len(), 1);
+        assert_eq!(
+            batch.rows[0].values[0],
+            Value::Text("logs/b.json".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn s3_object_read_enforces_the_pushed_where_over_its_delivered_row() {
+        // A concrete key downloads one `content` row. The predicate was neither pushed nor applied
+        // anywhere, and the executor was told to stand back — so an excluding `WHERE` DELIVERED the
+        // row it excluded (a wrong answer, worse than an empty one).
+        let excluded = s3_facet()
+            .scan(
+                &scan_with_filter("/s3/assets/logs/a.json", col_eq("key", "logs/other.json")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .expect("a real column is honored");
+        assert!(
+            excluded.rows.is_empty(),
+            "an excluding predicate must not deliver the row"
+        );
+
+        // …and the matching one still comes back, so this narrows rather than empties.
+        let matched = s3_facet()
+            .scan(
+                &scan_with_filter("/s3/assets/logs/a.json", col_eq("key", "logs/a.json")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .expect("a real column is honored");
+        assert_eq!(matched.rows.len(), 1);
+
+        // An unknown column on the same node is refused, not silently matched by nothing.
+        let err = s3_facet()
+            .scan(
+                &scan_with_filter("/s3/assets/logs/a.json", col_eq("nosuchcol", "x")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .expect_err("an unknown column is refused");
+        assert_eq!(reason_of(&err), "unknown_column");
+    }
+
+    /// A `/cf` read facet with a KV namespace, a queue, and an artifacts namespace behind mocks.
+    fn cf_facet() -> CfReadDriver {
+        use qfs_driver_cf::{CfRegistry, MockCfBackend, NoopArtifactTokenSealer, QueueMsg};
+        let kv = Arc::new(
+            MockCfBackend::new().with_kv_keys(vec!["alpha".to_string(), "beta".to_string()]),
+        );
+        let queue = Arc::new(
+            MockCfBackend::new()
+                .with_queue_msg(QueueMsg::new("m1", b"one".to_vec(), 1))
+                .with_queue_msg(QueueMsg::new("m2", b"two".to_vec(), 1)),
+        );
+        let artifacts = Arc::new(MockCfBackend::new().with_artifact_namespace("default"));
+        let registry = CfRegistry::new()
+            .with_kv("cache", kv)
+            .with_queue("jobs", queue)
+            .with_artifacts(artifacts, Arc::new(NoopArtifactTokenSealer));
+        CfReadDriver::new(Arc::new(CfDriver::new(registry)))
+    }
+
+    #[tokio::test]
+    async fn cf_kv_where_on_an_unknown_column_is_refused_not_an_empty_listing() {
+        let err = cf_facet()
+            .scan(
+                &scan_with_filter("/cf/kv/cache", col_eq("nosuchcol", "x")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .expect_err("an unknown column is refused");
+        assert_eq!(reason_of(&err), "unknown_column");
+    }
+
+    #[tokio::test]
+    async fn cf_kv_where_on_a_real_column_still_narrows_the_keys() {
+        let batch = cf_facet()
+            .scan(
+                &scan_with_filter("/cf/kv/cache", col_eq("key", "beta")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .expect("a real column is honored");
+        assert_eq!(batch.rows.len(), 1);
+        assert_eq!(batch.rows[0].values[0], Value::Text("beta".to_string()));
+    }
+
+    #[tokio::test]
+    async fn cf_queue_and_artifacts_refuse_an_unknown_where_column() {
+        for path in ["/cf/queue/jobs", "/cf/artifacts"] {
+            let result = cf_facet()
+                .scan(
+                    &scan_with_filter(path, col_eq("nosuchcol", "x")),
+                    &RequestContext::anonymous(),
+                )
+                .await;
+            match result {
+                Err(err) => assert_eq!(reason_of(&err), "unknown_column", "at `{path}`"),
+                Ok(batch) => panic!(
+                    "`{path}` answered {} row(s) instead of refusing an unknown column",
+                    batch.rows.len()
+                ),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cf_queue_where_on_a_real_column_still_narrows_the_tail() {
+        let batch = cf_facet()
+            .scan(
+                &scan_with_filter("/cf/queue/jobs", col_eq("id", "m2")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .expect("a real column is honored");
+        assert_eq!(batch.rows.len(), 1);
+        assert_eq!(batch.rows[0].values[0], Value::Text("m2".to_string()));
     }
 }
