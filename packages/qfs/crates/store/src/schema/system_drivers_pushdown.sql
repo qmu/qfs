@@ -1,0 +1,16 @@
+-- System DB — migration #19 (ticket 20260724014000 — blueprint §13.1 G2, declared pushdown):
+-- add a `pushdown` DESCRIPTOR column to the declared-driver registry, so a declared VIEW (or a
+-- driver-level default) can say WHICH predicates push to WHICH wire query parameter, and whether
+-- each pushed parameter means the predicate EXACTLY (residual dropped) or is a looser PREFILTER
+-- (pushed AND kept as the local residual). Residual truthfulness becomes declared data the planner
+-- enforces, instead of a per-driver Rust routine.
+--
+-- Declaration TEXT only, like every other column here: the descriptor names columns, operators and
+-- wire parameter NAMES — there is structurally no place a secret value could ride (§13's
+-- credential-free-script contract is unchanged).
+--
+-- APPEND-ONLY: migration #14 (`system_drivers.sql`) is FROZEN (the checksum guard forbids editing a
+-- shipped migration body). This is a NEW forward-only ALTER that only ADDS a nullable column —
+-- existing `sys_drivers` rows read back `pushdown = NULL`, which is the honest-but-chatty default
+-- (every predicate stays local residual), exactly the pre-G2 behaviour.
+ALTER TABLE sys_drivers ADD COLUMN pushdown TEXT;

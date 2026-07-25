@@ -49,6 +49,9 @@ pub struct ViewSpec {
     /// The `OF <type>`'s row-local refinement predicate (blueprint §5.4), if the type carried a
     /// `WHERE`. Enforced as per-row MEMBERSHIP over each delivered row.
     pub of_refinement: Option<Expr>,
+    /// The view's declared `PUSHDOWN (…)` map (blueprint §13.1 G2), resolved from its own clause or
+    /// its driver's default. `None` = nothing pushes (every predicate stays local residual).
+    pub pushdown: Option<DeclaredPushdown>,
 }
 
 /// One declared write/CALL mapping, resolved for evaluation (blueprint §13 tier 2 — the write
@@ -142,6 +145,7 @@ pub fn eval_view_body<F, G>(
     of_columns: Option<&[String]>,
     of_refinement: Option<&Expr>,
     params: &[(String, String)],
+    wire_params: &[(String, String)],
     fetch: F,
     follow: G,
 ) -> Result<RowBatch, CfsError>
@@ -201,6 +205,10 @@ where
     // 3. Fetch the wire resource over the caller's confined applier (leading `DECODE` = the applier
     //    codec; a `Some` post_body makes it a POST-to-read). The stock `/rest/<name>/<resource>`
     //    addressing the applier resolves.
+    // §13.1 G2: the caller's already-lowered declared pushdown parameters ride onto the wire
+    // resource's query string here — the ONE place a declared read reaches the wire, so a pushed
+    // parameter provably reached the request.
+    let wire_resource = append_wire_params(&wire_resource, wire_params);
     let rest_path = format!("/rest/{driver_name}/{wire_resource}");
     let fetched = fetch(&rest_path, post_body)?;
 
@@ -398,6 +406,216 @@ pub fn eval_map_body(
     })
 }
 
+// ---------------------------------------------------------------------------
+// blueprint §13.1 G2 — DECLARED PUSHDOWN: a per-column predicate→wire-parameter map with residual
+// honesty. The compiled pushdown modules' own discipline (`driver-slack/pushdown.rs` et al.) lifted
+// to declaration data: WHICH predicate pushes to WHICH wire parameter, and whether that parameter
+// means the predicate EXACTly (drop the conjunct from the residual) or is a looser PREFILTER (push
+// it AND keep the exact predicate local — over-fetch then filter, never wrong rows).
+// ---------------------------------------------------------------------------
+
+/// One entry of a declared `PUSHDOWN (…)` map.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushdownEntry {
+    /// `<col> <op> => '<param>' [EXACT|PREFILTER]` — a comparison's wire parameter.
+    Cmp {
+        /// The column the comparison must address (a bare, single-segment column).
+        col: String,
+        /// The comparison operator, as its canonical text (`>=`, `<=`, `>`, `<`, `==`).
+        op: String,
+        /// The wire query (or POST-body) parameter the value is sent as.
+        param: String,
+        /// `true` = the parameter means the predicate EXACTLY (drop the conjunct from the residual);
+        /// `false` = PREFILTER (push it AND keep the conjunct, so the engine re-filters locally).
+        exact: bool,
+    },
+    /// `LIMIT => '<param>'` — the declared page-size parameter.
+    Limit {
+        /// The wire parameter the row cap is sent as.
+        param: String,
+    },
+}
+
+/// A declared pushdown map, parsed from a view's (or its driver's) stored descriptor JSON.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeclaredPushdown {
+    /// The declared entries, in declaration order (the wire parameter order is stable).
+    pub entries: Vec<PushdownEntry>,
+}
+
+/// What lowering a query's pushed predicate/limit through a [`DeclaredPushdown`] produced.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeclaredLowering {
+    /// The `(name, value)` wire query parameters to append to the view's wire source.
+    pub params: Vec<(String, String)>,
+    /// The predicate the wire could NOT express exactly — the caller re-filters this locally.
+    pub residual: Option<qfs_core::Predicate>,
+}
+
+/// Parse a stored `PUSHDOWN (…)` descriptor JSON into a [`DeclaredPushdown`]. An absent, malformed,
+/// or entry-less descriptor yields `None` — which is the honest-but-chatty default (nothing pushes,
+/// every predicate stays residual), never a silent wrong push.
+#[must_use]
+pub fn parse_pushdown(json: &str) -> Option<DeclaredPushdown> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let arr = v.get("entries")?.as_array()?;
+    let str_at = |e: &serde_json::Value, k: &str| {
+        e.get(k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let mut entries = Vec::with_capacity(arr.len());
+    for e in arr {
+        match e.get("kind").and_then(serde_json::Value::as_str) {
+            Some("limit") => entries.push(PushdownEntry::Limit {
+                param: str_at(e, "param")?,
+            }),
+            Some("cmp") => entries.push(PushdownEntry::Cmp {
+                col: str_at(e, "col")?,
+                op: str_at(e, "op")?,
+                param: str_at(e, "param")?,
+                // A descriptor missing `exact` is read as the WEAKER claim (prefilter): an
+                // unreadable exactness flag must never silently drop a conjunct.
+                exact: e
+                    .get("exact")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            }),
+            _ => return None,
+        }
+    }
+    (!entries.is_empty()).then_some(DeclaredPushdown { entries })
+}
+
+/// Lower a query's pushed `predicate` + `limit` through the declared map (blueprint §13.1 G2).
+///
+/// Conjunctions push each conjunct independently: an **EXACT** match pushes its parameter and drops
+/// the conjunct; a **PREFILTER** match pushes its parameter and KEEPS the conjunct as residual; an
+/// unmatched conjunct (and any `OR`/`NOT`/`LIKE`/… shape the map cannot address) stays wholly
+/// residual. That is the same truthful-residual rule the compiled drivers hand-wrote — here it is
+/// read off the declaration.
+#[must_use]
+pub fn lower_declared_pushdown(
+    map: &DeclaredPushdown,
+    predicate: Option<&qfs_core::Predicate>,
+    limit: Option<i64>,
+) -> DeclaredLowering {
+    let mut params: Vec<(String, String)> = Vec::new();
+    let residual = predicate.and_then(|p| lower_predicate(map, p, &mut params));
+    if let Some(n) = limit {
+        if let Some(PushdownEntry::Limit { param }) = map
+            .entries
+            .iter()
+            .find(|e| matches!(e, PushdownEntry::Limit { .. }))
+        {
+            params.push((param.clone(), n.to_string()));
+        }
+    }
+    DeclaredLowering { params, residual }
+}
+
+/// Lower one predicate node, appending pushed params and returning the residual.
+fn lower_predicate(
+    map: &DeclaredPushdown,
+    p: &qfs_core::Predicate,
+    params: &mut Vec<(String, String)>,
+) -> Option<qfs_core::Predicate> {
+    use qfs_core::Predicate;
+    match p {
+        Predicate::And(a, b) => {
+            let ra = lower_predicate(map, a, params);
+            let rb = lower_predicate(map, b, params);
+            match (ra, rb) {
+                (None, None) => None,
+                (Some(r), None) | (None, Some(r)) => Some(r),
+                (Some(ra), Some(rb)) => Some(Predicate::And(Box::new(ra), Box::new(rb))),
+            }
+        }
+        Predicate::Cmp(col, op, lit) => match match_cmp_entry(map, col, *op, lit) {
+            Some((param, value, true)) => {
+                params.push((param, value));
+                None
+            }
+            Some((param, value, false)) => {
+                params.push((param, value));
+                Some(p.clone())
+            }
+            None => Some(p.clone()),
+        },
+        // OR / NOT / IN / BETWEEN / LIKE — no declared entry addresses these shapes, so they stay
+        // residual and the engine filters locally (correctness over completeness).
+        other => Some(other.clone()),
+    }
+}
+
+/// Find the declared entry for one comparison, returning `(param, value, exact)`.
+fn match_cmp_entry(
+    map: &DeclaredPushdown,
+    col: &qfs_core::ColRef,
+    op: qfs_core::CmpOp,
+    lit: &qfs_core::Literal,
+) -> Option<(String, String, bool)> {
+    let [field] = col.path.as_slice() else {
+        return None;
+    };
+    let op_text = cmp_op_text(op)?;
+    let value = match lit {
+        qfs_core::Literal::Text(v) => v.clone(),
+        qfs_core::Literal::Int(v) => v.to_string(),
+        // Only text/int values have an unambiguous wire spelling; anything else stays residual.
+        _ => return None,
+    };
+    map.entries.iter().find_map(|e| match e {
+        PushdownEntry::Cmp {
+            col,
+            op,
+            param,
+            exact,
+        } if col == field && op == op_text => Some((param.clone(), value.clone(), *exact)),
+        _ => None,
+    })
+}
+
+/// The canonical declaration text of a comparison operator, or `None` for one no entry can name.
+fn cmp_op_text(op: qfs_core::CmpOp) -> Option<&'static str> {
+    match op {
+        qfs_core::CmpOp::Ge => Some(">="),
+        qfs_core::CmpOp::Le => Some("<="),
+        qfs_core::CmpOp::Gt => Some(">"),
+        qfs_core::CmpOp::Lt => Some("<"),
+        qfs_core::CmpOp::Eq => Some("=="),
+        _ => None,
+    }
+}
+
+/// Append declared wire parameters to a wire resource, respecting an existing query string (a body
+/// source may already carry one, e.g. `conversations.history?channel={channel}`).
+fn append_wire_params(resource: &str, params: &[(String, String)]) -> String {
+    let mut out = resource.to_string();
+    for (k, v) in params {
+        out.push(if out.contains('?') { '&' } else { '?' });
+        out.push_str(k);
+        out.push('=');
+        out.push_str(&urlencode(v));
+    }
+    out
+}
+
+/// Percent-encode a wire parameter value's reserved characters. Slack `ts` values and ids are
+/// already safe; this keeps an arbitrary text predicate from breaking the query string.
+fn urlencode(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    for b in v.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(b));
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 /// Render a body-source segment list to a `/seg/seg` path, substituting bound `{param}` values.
 /// A segment may carry a query-string suffix (`{file}?create_download_url=1`, blueprint §13 wire
 /// paths): the `{param}` head substitutes, the query rides behind it verbatim.
@@ -420,9 +638,34 @@ fn render_source_path(segments: &[qfs_parser::PathSegment], params: &[(String, S
         }
         if let Some(query) = query {
             out.push('?');
-            out.push_str(query);
+            // A `{param}` may also ride INSIDE the query string (`conversations.history?channel=
+            // {channel}&ts={ts}`), which is where a declared wire read binds most of its arguments —
+            // substitute there too, not only in the segment head.
+            out.push_str(&substitute_params(query, params));
         }
     }
+    out
+}
+
+/// Replace every `{name}` occurrence in `text` with its bound value, leaving an unbound placeholder
+/// verbatim (the same fail-visible rule the segment head uses).
+fn substitute_params(text: &str, params: &[(String, String)]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        let Some(close_rel) = rest[open..].find('}') else {
+            break;
+        };
+        let close = open + close_rel;
+        let key = &rest[open + 1..close];
+        out.push_str(&rest[..open]);
+        match params.iter().find(|(k, _)| k == key) {
+            Some((_, v)) => out.push_str(v),
+            None => out.push_str(&rest[open..=close]),
+        }
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
     out
 }
 
@@ -591,7 +834,7 @@ mod tests {
         let of = vec!["ts".to_string(), "user".to_string(), "text".to_string()];
 
         let mut fetched_path = None;
-        let batch = eval_view_body(&body, "slack", "/slack/history", Some(&of), None, &[], |path, _post| {
+        let batch = eval_view_body(&body, "slack", "/slack/history", Some(&of), None, &[], &[], |path, _post| {
             fetched_path = Some(path.to_string());
             Ok(decode(
                 br#"{"ok":true,"messages":[{"ts":"1","user":"U1","text":"hi"},{"ts":"2","user":"U2","text":"yo"}]}"#,
@@ -631,6 +874,7 @@ mod tests {
             "/chatwork/rooms",
             Some(&of),
             None,
+            &[],
             &[],
             |_path, _post| {
                 Ok(decode(
@@ -673,6 +917,7 @@ mod tests {
             Some(&of),
             None,
             &[],
+            &[],
             |_path, _post| panic!("the fetch must NOT run for an unreadable OF contract"),
             no_follow,
         )
@@ -698,6 +943,7 @@ mod tests {
             "/slack/x",
             None,
             None,
+            &[],
             &[],
             |_path, _post| -> Result<RowBatch, CfsError> {
                 panic!("the fetch must NOT run for a foreign source");
@@ -737,6 +983,7 @@ mod tests {
             None,
             None,
             &params,
+            &[],
             |path, _post| {
                 fetched_path = Some(path.to_string());
                 Ok(decode(br#"[{"message_id":"m1","body":"hi"}]"#))
@@ -793,6 +1040,7 @@ mod tests {
             Some(&of),
             Some(&refinement),
             &[],
+            &[],
             |_path, _post| {
                 Ok(decode(
                     br#"{"ok":true,"messages":[{"ts":"1","user":"U1","text":"hi"}]}"#,
@@ -810,6 +1058,7 @@ mod tests {
             "/slack/history",
             Some(&of),
             Some(&refinement),
+            &[],
             &[],
             |_path, _post| {
                 Ok(decode(
@@ -931,6 +1180,7 @@ mod tests {
             None,
             None,
             &params,
+            &[],
             |path, _post| {
                 // The query-string suffix rides behind the substituted {file} template.
                 assert_eq!(path, "/rest/chatwork/rooms/1/files/9?create_download_url=1");
@@ -973,6 +1223,7 @@ mod tests {
             None,
             None,
             &[],
+            &[],
             |_, _| Ok(decode(br#"[{"url":"https://a"},{"url":"https://b"}]"#)),
             |_| panic!("no follow on an ambiguous batch"),
         )
@@ -990,6 +1241,7 @@ mod tests {
             "/chatwork/files",
             None,
             None,
+            &[],
             &[],
             |_, _| Ok(decode(br#"[{"other":"x"}]"#)),
             |_| panic!("no follow without the field"),

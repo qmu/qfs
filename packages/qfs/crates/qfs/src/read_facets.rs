@@ -235,6 +235,18 @@ impl ReadDriver for RestReadDriver {
             // qfs-exec owns the parser/engine-dependent evaluation (the binary stays off the lower
             // spine); the driver-specific wire read is injected here as a closure over the confined
             // applier — the leading `DECODE` is the applier's own codec.
+            // §13.1 G2: lower the pushed predicate/limit through the view's DECLARED pushdown map.
+            // What the map calls EXACT drops out of the residual; a PREFILTER entry is pushed AND
+            // kept, and anything unmatched stays wholly residual — re-applied locally below, so the
+            // facet returns exactly the pushed query's result (the `SqlReadDriver` discipline).
+            let lowered = spec.pushdown.as_ref().map(|map| {
+                qfs_exec::declared::lower_declared_pushdown(
+                    map,
+                    scan.pushed.filter.as_ref(),
+                    scan.pushed.limit.and_then(|n| i64::try_from(n).ok()),
+                )
+            });
+            let wire_params = lowered.as_ref().map_or(&[][..], |l| l.params.as_slice());
             let mut batch = qfs_exec::declared::eval_view_body(
                 &spec.body,
                 &self.driver_name,
@@ -242,6 +254,7 @@ impl ReadDriver for RestReadDriver {
                 spec.of_columns.as_deref(),
                 spec.of_refinement.as_ref(),
                 &params,
+                wire_params,
                 |rest_path, post_body| {
                     // §13.1 G1: a `Some` post_body is a declared read-over-POST — POST the encoded
                     // wire body and decode the response; `None` is the ordinary GET read.
@@ -267,8 +280,14 @@ impl ReadDriver for RestReadDriver {
                         })
                 },
             )?;
-            // The REST pushdown declares only LIMIT (WHERE/PROJECT stay residual for the engine to
-            // apply after the scan); enforce the pushed cap here.
+            // A pushed WHERE left the local plan, so the facet must deliver exactly the pushed
+            // query's result: re-filter the declared map's truthful residual over the fetched rows.
+            if let Some(residual) = lowered.as_ref().and_then(|l| l.residual.as_ref()) {
+                batch = qfs_exec::apply_residual(batch, residual);
+            }
+            // The REST pushdown declares LIMIT (and, for a view with a declared PUSHDOWN map, WHERE);
+            // enforce the pushed cap locally too — a declared wire `limit` parameter is a page size,
+            // not a promise the service returns at most that many rows.
             if let Some(limit) = scan.pushed.limit {
                 batch
                     .rows

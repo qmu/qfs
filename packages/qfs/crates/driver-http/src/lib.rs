@@ -92,13 +92,18 @@ impl RestDriver {
         secrets: Arc<dyn Secrets>,
     ) -> Self {
         let config = Arc::new(config);
+        // §13.1 G2: a DECLARED driver whose views carry a `PUSHDOWN (…)` map does push `WHERE` — as
+        // the declared predicate→query-parameter lowering the read facet performs. A compiled `/rest`
+        // mount (and any declaration without the clause) leaves the flag `false`, so `WHERE` stays a
+        // local residual exactly as before.
+        let declared_where = config.declared_where_pushdown;
         Self {
             applier: RestApplier::new(Arc::clone(&config), codec, client, secrets),
             // A REST API can natively filter/paginate via query params (a thin passthrough);
-            // full WHERE/ORDER lowering is deferred to E3, so the driver declares only the
-            // limit (pagination cap) it actually pushes today.
+            // full WHERE/ORDER lowering is deferred to E3, so the driver declares the limit
+            // (pagination cap) it always pushes plus, for a declared G2 map, `WHERE`.
             pushdown: PushdownProfile::Partial {
-                where_: false,
+                where_: declared_where,
                 project: false,
                 limit: true,
                 order: false,

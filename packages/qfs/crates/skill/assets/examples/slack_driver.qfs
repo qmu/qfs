@@ -1,0 +1,79 @@
+-- slack_driver.qfs — the DECLARED (query-based) Slack driver: the twin of the compiled driver-slack.
+--
+-- Blueprint §13.3 playbook entry #1. Slack's read surface plus the message post, expressed as
+-- declarative config over the generic /http wire primitive — no compiled Rust. Every read below is
+-- proven ROW-EQUIVALENT to the compiled driver on shared hermetic fixtures
+-- (`crates/qfs/src/declared_driver.rs`, the `slack_twin_*` tests); that equivalence gate is what
+-- authorizes retiring the compiled crate, and it stays in the tree as the twin's regression suite.
+--
+-- INSTALL: preview then commit each statement (they desugar to /sys/drivers rows — an ordinary,
+--   audited local write; zero network). CONNECT binds the stored Slack token from the account layer,
+--   never from this script:
+--     qfs account add slack <label>            # stores the workspace token in the vault
+--     qfs connect /slackd TO slack SECRET 'vault:slack/<label>'
+--
+-- HOST CONFINEMENT (enforced at load): every wire body addresses ONLY /http/slack/… , so this script
+--   is structurally unable to read Slack and exfiltrate elsewhere. It is credential-free by
+--   construction — no clause can carry a token value.
+--
+-- WIRE NAMING: Slack's Web API method names are DOTTED (`conversations.history`). The `.` is a legal
+--   path-segment char, so `/http/slack/conversations.history` addresses the same endpoint the
+--   compiled driver hits — the mount path is DECOUPLED from the wire method the body names.
+
+-- The driver, its cursor pagination (Slack's cursor is NESTED at `response_metadata.next_cursor`),
+-- and the §13.1 G2 declared PUSHDOWN default every message-log view inherits. The EXACT/PREFILTER
+-- tags are the honesty: Slack's `oldest`/`latest` are INCLUSIVE bounds, so `>=`/`<=` mean the
+-- predicate exactly (the conjunct drops from the residual) while the STRICT `>`/`<` are a looser
+-- prefilter — pushed, but the conjunct is KEPT so the engine re-excludes the boundary row locally.
+CREATE DRIVER slack
+  AT 'https://slack.com/api'
+  AUTH BEARER
+  PAGINATE CURSOR (next 'response_metadata.next_cursor' param 'cursor' MAX 50)
+  PUSHDOWN ( ts >= => 'oldest' EXACT, ts <= => 'latest' EXACT,
+             ts > => 'oldest' PREFILTER, ts < => 'latest' PREFILTER, LIMIT => 'limit' );
+
+-- Stable outward row shapes (the `OF` contract) — the SAME columns the compiled driver's DTOs
+-- deliver, which is what makes the reads row-equivalent rather than merely similar.
+CREATE TYPE slack/message ( ts text PRIMARY KEY, user text, text text, thread_ts text, subtype text );
+CREATE TYPE slack/reaction ( name text PRIMARY KEY, count int );
+CREATE TYPE slack/file ( id text PRIMARY KEY, name text, mimetype text, size int, created int, user text );
+CREATE TYPE slack/user ( id text PRIMARY KEY, name text, real_name text, is_bot bool, deleted bool );
+CREATE TYPE slack/channel ( id text PRIMARY KEY, name text, is_private bool );
+
+-- Reads. Each `|> EXPAND <field>` unwraps Slack's `{ok, <collection>}` envelope into one row per
+-- element; the `OF` type then shapes the row to the delivered contract.
+CREATE VIEW /slack/{ws}/channels OF slack/channel AS
+  /http/slack/conversations.list |> DECODE json |> EXPAND channels;
+
+CREATE VIEW /slack/{ws}/{channel}/messages OF slack/message AS
+  /http/slack/conversations.history?channel={channel} |> DECODE json |> EXPAND messages;
+
+CREATE VIEW /slack/{ws}/{channel}/messages/{ts}/replies OF slack/message AS
+  /http/slack/conversations.replies?channel={channel}&ts={ts} |> DECODE json |> EXPAND messages;
+
+CREATE VIEW /slack/{ws}/{channel}/messages/{ts}/reactions OF slack/reaction AS
+  /http/slack/conversations.replies?channel={channel}&ts={ts} |> DECODE json |> EXPAND reactions;
+
+-- The DM read is a READ-OVER-POST (§13.1 G1): `conversations.open` is a POST that RETURNS the IM
+-- channel, so the view carries a leading `|> POST { … }` stage and the response decodes into rows
+-- exactly as a GET's would. `EXPAND channel` flattens the returned `{channel:{id,…}}` object. The
+-- opened `id` is the `Dxxxx` the DM message log below is addressed by.
+CREATE VIEW /slack/{ws}/dms/{user} OF slack/channel AS
+  /http/slack/conversations.open?users={user} |> POST { return_im: true } |> DECODE json |> EXPAND channel;
+
+CREATE VIEW /slack/{ws}/dms/{channel}/messages OF slack/message AS
+  /http/slack/conversations.history?channel={channel} |> DECODE json |> EXPAND messages;
+
+CREATE VIEW /slack/{ws}/files OF slack/file AS
+  /http/slack/files.list |> DECODE json |> EXPAND files;
+
+CREATE VIEW /slack/{ws}/{channel}/files OF slack/file AS
+  /http/slack/files.list?channel={channel} |> DECODE json |> EXPAND files;
+
+CREATE VIEW /slack/{ws}/users OF slack/user AS
+  /http/slack/users.list |> DECODE json |> EXPAND members;
+
+-- A write: post a message. An ordinary reversible INSERT (a message can be deleted). The wire body
+-- is the exact `{channel, text}` `chat.postMessage` expects, built from the incoming row.
+CREATE MAP INSERT /slack/{ws}/{channel}/messages AS
+  INSERT INTO /http/slack/chat.postMessage VALUES ({channel: row.channel, text: row.text});

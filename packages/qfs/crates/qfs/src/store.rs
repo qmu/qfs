@@ -550,13 +550,14 @@ mod tests {
         // public keys t80 + v12 /sys/billing t67 + v13 hosts registry ADR 0008 + v14 /sys/drivers
         // §13 + v15 replayable DDL/config event log + v16 /transform definitions §15 + v17 the
         // re-homed config registry 20260716143641 + v18 the connection_consent `secret_ref`
-        // selector column 20260718203325).
+        // selector column 20260718203325 + v19 the `sys_drivers.pushdown` declared-pushdown
+        // descriptor column §13.1 G2 / 20260724014000).
         let sys = open_system_db().unwrap().expect("config home resolves");
-        assert_eq!(qfs_store::applied_migrations(sys.db()).unwrap().len(), 18);
+        assert_eq!(qfs_store::applied_migrations(sys.db()).unwrap().len(), 19);
         drop(sys);
         // Second open is a verified no-op (still the same applied migrations).
         let sys2 = open_system_db().unwrap().expect("config home resolves");
-        assert_eq!(qfs_store::applied_migrations(sys2.db()).unwrap().len(), 18);
+        assert_eq!(qfs_store::applied_migrations(sys2.db()).unwrap().len(), 19);
         match prev_xdg {
             Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
             None => std::env::remove_var("XDG_CONFIG_HOME"),

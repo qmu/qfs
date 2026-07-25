@@ -236,7 +236,7 @@ impl SysBackend for SystemDbBackend {
             // descriptor names a SCHEME, never a token (the credential-free-script contract).
             SysNode::Drivers => self.scan_system(
                 "SELECT kind, name, base_url, auth, pagination, of_type, verb, body, irreversible, \
-                        created_at \
+                        pushdown, created_at \
                  FROM sys_drivers ORDER BY id",
                 |r| {
                     Ok(Row::new(vec![
@@ -250,6 +250,7 @@ impl SysBackend for SystemDbBackend {
                         nullable_text(r, 7)?,
                         Value::Bool(r.get::<_, i64>(8)? != 0),
                         nullable_text(r, 9)?,
+                        nullable_text(r, 10)?,
                     ]))
                 },
             )?,
@@ -502,6 +503,9 @@ impl SysBackend for SystemDbBackend {
         let verb = optional_text(row, "verb");
         let body = optional_text(row, "body");
         let irreversible = optional_bool(row, "irreversible");
+        // §13.1 G2: the declared PUSHDOWN descriptor (a view's, or a driver-level default). A
+        // selector/parameter-NAME map — structurally no place a secret could ride.
+        let pushdown = optional_text(row, "pushdown");
 
         // §5.4: a `CREATE TYPE` refinement is well-formedness-checked HERE (the store/commit seam),
         // mirroring how a `CREATE TRANSFORM` re-validates its INPUT/OUTPUT before the row lands — so
@@ -584,8 +588,9 @@ impl SysBackend for SystemDbBackend {
 
         tx.execute(
             "INSERT INTO sys_drivers \
-                 (kind, name, base_url, auth, pagination, of_type, verb, body, irreversible) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 (kind, name, base_url, auth, pagination, of_type, verb, body, irreversible, \
+                  pushdown) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 kind,
                 name,
@@ -596,6 +601,7 @@ impl SysBackend for SystemDbBackend {
                 verb,
                 body,
                 i64::from(irreversible),
+                pushdown,
             ],
         )
         .map_err(backend)?;

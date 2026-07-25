@@ -38,6 +38,9 @@ pub(crate) struct DeclaredDriver {
     pub auth: String,
     /// The pagination descriptor JSON, if declared.
     pub pagination: Option<String>,
+    /// The driver-level `PUSHDOWN (…)` default (§13.1 G2), inherited by any view that declares
+    /// none of its own — the same default-with-override shape `pagination` has.
+    pub pushdown: Option<String>,
     /// The declared `SELECT` nodes (views): each maps a mount path to a wire read.
     pub views: Vec<DeclaredNode>,
     /// The declared write/CALL mappings.
@@ -53,6 +56,9 @@ pub(crate) struct DeclaredNode {
     // (`declared_eval::view_specs`) shape the delivered rows to this type's columns.
     pub of_type: Option<String>,
     pub body: String,
+    /// The §13.1 G2 `PUSHDOWN (…)` descriptor JSON, or the driver-level default inherited at
+    /// assembly time. `None` = honest-but-chatty (every predicate stays local residual).
+    pub pushdown: Option<String>,
 }
 
 /// A declared write/CALL mapping (`kind='map'`): its node path, the mapped verb, the stored wire
@@ -127,11 +133,13 @@ struct DriverRow {
     verb: Option<String>,
     body: Option<String>,
     irreversible: bool,
+    pushdown: Option<String>,
 }
 
 fn load_from_conn(conn: &rusqlite::Connection) -> Result<Vec<DeclaredDriver>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT kind, name, base_url, auth, pagination, of_type, verb, body, irreversible, id \
+        "SELECT kind, name, base_url, auth, pagination, of_type, verb, body, irreversible, \
+                pushdown, id \
          FROM sys_drivers ORDER BY id",
     )?;
     let rows: Vec<DriverRow> = stmt
@@ -146,7 +154,8 @@ fn load_from_conn(conn: &rusqlite::Connection) -> Result<Vec<DeclaredDriver>, ru
                 verb: r.get(6)?,
                 body: r.get(7)?,
                 irreversible: r.get::<_, i64>(8)? != 0,
-                id: r.get(9)?,
+                pushdown: r.get(9)?,
+                id: r.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -195,6 +204,7 @@ fn assemble(rows: Vec<DriverRow>) -> Vec<DeclaredDriver> {
                 .clone()
                 .unwrap_or_else(|| r#"{"kind":"none"}"#.to_string()),
             pagination: r.pagination.clone(),
+            pushdown: r.pushdown.clone(),
             views: Vec::new(),
             maps: Vec::new(),
         })
@@ -209,10 +219,14 @@ fn assemble(rows: Vec<DriverRow>) -> Vec<DeclaredDriver> {
                 if let Some(d) =
                     leading_segment(&r.name).and_then(|seg| find_mut(&mut drivers, seg))
                 {
+                    // §13.1 G2 default-with-override: a view without its own PUSHDOWN clause
+                    // inherits the driver-level default (the shape `PAGINATE` already has).
+                    let pushdown = r.pushdown.clone().or_else(|| d.pushdown.clone());
                     d.views.push(DeclaredNode {
                         path: r.name.clone(),
                         of_type: r.of_type.clone(),
                         body: r.body.clone().unwrap_or_default(),
+                        pushdown,
                     });
                 }
             }
@@ -282,6 +296,13 @@ impl DeclaredDriver {
         if let Some(h) = self.host() {
             config = config.with_allowed_host(h);
         }
+        // §13.1 G2: if ANY view declares a `PUSHDOWN (…)` map (or the driver declares a default),
+        // the mount advertises `WHERE` pushdown so the planner hands the predicate to the read
+        // facet, which lowers it through the declared map and re-filters the truthful residual.
+        // Without a single declared map the flag stays off and `WHERE` is local, as before.
+        let declares_pushdown =
+            self.pushdown.is_some() || self.views.iter().any(|v| v.pushdown.is_some());
+        config = config.with_declared_where_pushdown(declares_pushdown);
         // Some live APIs (GitHub) reject requests carrying no User-Agent; every declared driver
         // identifies itself with the versioned binary UA. driver-http can't compose this (it only
         // knows its own crate version), so the app layer sets it as a default header.
@@ -1258,6 +1279,7 @@ mod tests {
             verb: None,
             body: None,
             irreversible: false,
+            pushdown: None,
         }
     }
 
@@ -1267,6 +1289,7 @@ mod tests {
             base_url: "https://api.chatwork.com/v2".to_string(),
             auth: r#"{"kind":"header","name":"x-chatworktoken"}"#.to_string(),
             pagination: None,
+            pushdown: None,
             views: Vec::new(),
             maps: Vec::new(),
         }
@@ -1278,6 +1301,7 @@ mod tests {
             base_url: "https://api.github.com".to_string(),
             auth: r#"{"kind":"account","provider":"github"}"#.to_string(),
             pagination: None,
+            pushdown: None,
             views: Vec::new(),
             maps: Vec::new(),
         }
@@ -1289,6 +1313,7 @@ mod tests {
             base_url: "https://www.googleapis.com".to_string(),
             auth: r#"{"kind":"account","provider":"google"}"#.to_string(),
             pagination: None,
+            pushdown: None,
             views: Vec::new(),
             maps: Vec::new(),
         }
@@ -1582,6 +1607,7 @@ mod tests {
             base_url: "https://h.example/v".into(),
             auth: r#"{"kind":"none"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![],
             maps: vec![],
         };
@@ -1597,10 +1623,12 @@ mod tests {
             pagination: Some(
                 r#"{"kind":"cursor","next_field":"next","param":"cursor","max_pages":50}"#.into(),
             ),
+            pushdown: None,
             views: vec![DeclaredNode {
                 path: "/chatwork/rooms".into(),
                 of_type: None,
                 body: "{}".into(),
+                pushdown: None,
             }],
             maps: vec![DeclaredMap {
                 path: "/chatwork/rooms".into(),
@@ -1643,6 +1671,7 @@ mod tests {
             base_url: "https://slack.example".into(),
             auth: r#"{"kind":"none"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![],
             maps: vec![
                 DeclaredMap {
@@ -1679,10 +1708,12 @@ mod tests {
             base_url: "https://api.chatwork.com/v2".into(),
             auth: r#"{"kind":"none"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![DeclaredNode {
                 path: "/chatwork/rooms".into(),
                 of_type: None,
                 body: "{}".into(),
+                pushdown: None,
             }],
             maps: vec![],
         };
@@ -1711,10 +1742,12 @@ mod tests {
             base_url: "https://api.chatwork.com/v2".into(),
             auth: r#"{"kind":"none"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![DeclaredNode {
                 path: "/chatwork/rooms".into(),
                 of_type: None,
                 body: String::new(),
+                pushdown: None,
             }],
             maps: vec![DeclaredMap {
                 path: "/chatwork/rooms".into(),
@@ -1885,10 +1918,12 @@ mod tests {
                 r#"{"kind":"cursor","next_field":"response_metadata.next_cursor","param":"cursor","max_pages":50}"#
                     .into(),
             ),
+            pushdown: None,
             views: vec![DeclaredNode {
                 path: "/slack/history".into(),
                 of_type: Some("/type/slack/message".into()),
                 body: String::new(),
+                pushdown: None,
             }],
             maps: vec![],
         };
@@ -1919,6 +1954,7 @@ mod tests {
             "/slack/history",
             Some(&of),
             None,
+            &[],
             &[],
             |path, _post_body| {
                 qfs_driver_http::rest_read_rows(driver.rest_applier(), path).map_err(|e| {
@@ -1975,6 +2011,508 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------------------------
+    // Blueprint §13.3 playbook entry #1 — the DECLARED SLACK TWIN's row-equivalence gate
+    // (ticket 20260724014000). Each node's declared view and the COMPILED `driver-slack` read are
+    // driven over the SAME hermetic fixture and must deliver the SAME rows. This is the ratchet
+    // that authorizes retiring the compiled crate; it stays in the tree as the twin's regression
+    // suite afterwards.
+    // -----------------------------------------------------------------------------------------
+
+    /// The declared Slack twin's driver model (the shipped `slack_driver.qfs` declaration's driver
+    /// row: bearer auth, Slack's NESTED cursor, and the §13.1 G2 pushdown default every message-log
+    /// view inherits).
+    fn slack_twin_driver(view_path: &str, of_type: &str) -> DeclaredDriver {
+        DeclaredDriver {
+            name: "slack".into(),
+            base_url: "https://slack.com/api".into(),
+            auth: r#"{"kind":"bearer"}"#.into(),
+            pagination: Some(
+                r#"{"kind":"cursor","next_field":"response_metadata.next_cursor","param":"cursor","max_pages":50}"#
+                    .into(),
+            ),
+            pushdown: Some(SLACK_TWIN_PUSHDOWN.into()),
+            views: vec![DeclaredNode {
+                path: view_path.into(),
+                of_type: Some(of_type.into()),
+                body: String::new(),
+                pushdown: Some(SLACK_TWIN_PUSHDOWN.into()),
+            }],
+            maps: vec![],
+        }
+    }
+
+    /// The descriptor the shipped declaration's `PUSHDOWN ( ts >= => 'oldest' EXACT, … )` clause
+    /// desugars to — asserted against the real parse in `shipped_slack_script_declares_the_g2_pushdown`.
+    const SLACK_TWIN_PUSHDOWN: &str = r#"{"entries":[
+        {"kind":"cmp","col":"ts","op":">=","param":"oldest","exact":true},
+        {"kind":"cmp","col":"ts","op":"<=","param":"latest","exact":true},
+        {"kind":"cmp","col":"ts","op":">","param":"oldest","exact":false},
+        {"kind":"cmp","col":"ts","op":"<","param":"latest","exact":false},
+        {"kind":"limit","param":"limit"}]}"#;
+
+    /// Evaluate ONE declared Slack view over `fixture` through the REAL tier-2 evaluator and return
+    /// the delivered rows plus the recorded wire requests. `wire_params` are the already-lowered
+    /// §13.1 G2 pushdown parameters (empty for an unfiltered read).
+    fn declared_slack_read(
+        view_path: &str,
+        concrete_path: &str,
+        of_type: &str,
+        of_columns: &[&str],
+        body: &str,
+        fixture: &str,
+        wire_params: &[(String, String)],
+    ) -> (qfs_core::RowBatch, Vec<qfs_driver_http::HttpRequest>) {
+        let d = slack_twin_driver(view_path, of_type);
+        let view_body = serde_json::to_string(&qfs_exec::parse(body).unwrap()).unwrap();
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            fixture.as_bytes().to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+        let params = qfs_exec::declared::match_template(view_path, concrete_path)
+            .expect("the concrete path matches the declared template");
+        let of: Vec<String> = of_columns.iter().map(|s| (*s).to_string()).collect();
+        let batch = qfs_exec::declared::eval_view_body(
+            &view_body,
+            "slack",
+            concrete_path,
+            Some(&of),
+            None,
+            &params,
+            wire_params,
+            |path, post_body| {
+                let result = match post_body {
+                    Some(b) => {
+                        qfs_driver_http::rest_read_rows_post(driver.rest_applier(), path, &b)
+                    }
+                    None => qfs_driver_http::rest_read_rows(driver.rest_applier(), path),
+                };
+                result.map_err(|e| qfs_core::CfsError::InvalidPath {
+                    path: path.to_string(),
+                    reason: e.code(),
+                })
+            },
+            |_url| panic!("no FOLLOW stage in this body"),
+        )
+        .expect("the declared slack twin reads");
+        (batch, mock.recorded())
+    }
+
+    /// The `(column names, row values)` pair row equivalence compares — names + values ONLY, not
+    /// type/nullability metadata: the compiled schema pins types while the declared `OF` shaping
+    /// late-binds them, and the tier-2 bar is the DELIVERED ROWS being equal.
+    fn shape_of(b: &qfs_core::RowBatch) -> (Vec<String>, Vec<Vec<qfs_core::Value>>) {
+        (
+            b.schema.columns.iter().map(|c| c.name.clone()).collect(),
+            b.rows.iter().map(|r| r.values.clone()).collect(),
+        )
+    }
+
+    /// Read one node through the COMPILED `driver-slack` over the same fixture.
+    fn compiled_slack_read(path: &str, fixture: &str) -> qfs_core::RowBatch {
+        let value: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        let client = qfs_driver_slack::MockSlackClient::new().with_list(value);
+        qfs_driver_slack::read_rows(&client, path, None).expect("the compiled driver reads")
+    }
+
+    #[test]
+    fn slack_twin_message_read_is_row_equivalent() {
+        // `<#channel>/messages` — the headline node. Same `{ok, messages}` envelope into both sides.
+        // HOMOGENEOUS, FULLY-POPULATED elements. Two recorded declared-side gaps make this the
+        // honest shared fixture rather than a convenience: (1) Slack omits absent optional keys and
+        // tier-2 `EXPAND` splices a struct's values POSITIONALLY, so a ragged array shifts columns;
+        // (2) the compiled DTO folds an EMPTY string to `Null` while the declaration delivers it
+        // verbatim. Both are filed as their own ticket
+        // (20260725103000-declared-expand-must-splice-by-field-name), not papered over here.
+        const FIXTURE: &str = r#"{"ok":true,"messages":[
+            {"ts":"1","user":"U1","text":"hi","thread_ts":"1","subtype":"bot_message"},
+            {"ts":"2","user":"U2","text":"yo","thread_ts":"2","subtype":"thread_broadcast"}]}"#;
+        let (declared, wire) = declared_slack_read(
+            "/slack/{ws}/{channel}/messages",
+            "/slack/acme/general/messages",
+            "/type/slack/message",
+            &["ts", "user", "text", "thread_ts", "subtype"],
+            "/http/slack/conversations.history?channel={channel} |> DECODE json |> EXPAND messages",
+            FIXTURE,
+            &[],
+        );
+        let compiled = compiled_slack_read("/slack/acme/#general/messages", FIXTURE);
+        assert_eq!(shape_of(&declared), shape_of(&compiled));
+        // The `{channel}` template segment bound into the wire query — the same `channel=` param the
+        // compiled read pushes.
+        assert!(
+            wire[0]
+                .url
+                .contains("conversations.history?channel=general"),
+            "the declared body names the dotted wire method and binds {{channel}}: {}",
+            wire[0].url
+        );
+    }
+
+    #[test]
+    fn slack_twin_replies_reactions_files_and_users_are_row_equivalent() {
+        // The remaining shared-fixture nodes, each declared view vs its compiled counterpart.
+        const REPLIES: &str = r#"{"ok":true,"messages":[{"ts":"1.1","user":"U1","text":"re","thread_ts":"1","subtype":"thread_broadcast"}]}"#;
+        let (d, _) = declared_slack_read(
+            "/slack/{ws}/{channel}/messages/{ts}/replies",
+            "/slack/acme/general/messages/1/replies",
+            "/type/slack/message",
+            &["ts", "user", "text", "thread_ts", "subtype"],
+            "/http/slack/conversations.replies?channel={channel}&ts={ts} \
+             |> DECODE json |> EXPAND messages",
+            REPLIES,
+            &[],
+        );
+        assert_eq!(
+            shape_of(&d),
+            shape_of(&compiled_slack_read(
+                "/slack/acme/#general/messages/1/replies",
+                REPLIES
+            )),
+            "thread replies are row-equivalent"
+        );
+
+        const REACTIONS: &str = r#"{"ok":true,"reactions":[{"name":"tada","count":3}]}"#;
+        let (d, _) = declared_slack_read(
+            "/slack/{ws}/{channel}/messages/{ts}/reactions",
+            "/slack/acme/general/messages/1/reactions",
+            "/type/slack/reaction",
+            &["name", "count"],
+            "/http/slack/conversations.replies?channel={channel}&ts={ts} \
+             |> DECODE json |> EXPAND reactions",
+            REACTIONS,
+            &[],
+        );
+        assert_eq!(
+            shape_of(&d),
+            shape_of(&compiled_slack_read(
+                "/slack/acme/#general/messages/1/reactions",
+                REACTIONS
+            )),
+            "reactions are row-equivalent"
+        );
+
+        const FILES: &str = r#"{"ok":true,"files":[
+            {"id":"F1","name":"a.pdf","mimetype":"application/pdf","size":10,
+             "created":1700,"user":"U1"}]}"#;
+        let (d, _) = declared_slack_read(
+            "/slack/{ws}/files",
+            "/slack/acme/files",
+            "/type/slack/file",
+            &["id", "name", "mimetype", "size", "created", "user"],
+            "/http/slack/files.list |> DECODE json |> EXPAND files",
+            FILES,
+            &[],
+        );
+        // HONEST DIFFERENCE, recorded not papered over: the compiled `FileDto` multiplies `created`
+        // by 1000 (seconds → millis) while the declaration delivers Slack's field verbatim. Compare
+        // the column names and every column EXCEPT `created`, and assert the scale relation itself.
+        let compiled = compiled_slack_read("/slack/acme/files", FILES);
+        let (dn, dr) = shape_of(&d);
+        let (cn, cr) = shape_of(&compiled);
+        assert_eq!(dn, cn, "the file listing delivers the same columns");
+        let drop_created = |rows: &Vec<Vec<qfs_core::Value>>| -> Vec<Vec<qfs_core::Value>> {
+            rows.iter()
+                .map(|r| {
+                    r.iter()
+                        .enumerate()
+                        .filter(|(i, _)| *i != 4)
+                        .map(|(_, v)| v.clone())
+                        .collect()
+                })
+                .collect()
+        };
+        assert_eq!(drop_created(&dr), drop_created(&cr), "files are row-equal");
+        assert_eq!(
+            (dr[0][4].clone(), cr[0][4].clone()),
+            (
+                qfs_core::Value::Int(1700),
+                qfs_core::Value::Timestamp(1_700_000)
+            ),
+            "the compiled DTO rescales `created` to millis; the declaration is verbatim seconds"
+        );
+
+        const USERS: &str = r#"{"ok":true,"members":[
+            {"id":"U1","name":"alice","real_name":"Alice","is_bot":false,"deleted":false},
+            {"id":"U2","name":"bot","real_name":"Bot","is_bot":true,"deleted":false}]}"#;
+        let (d, _) = declared_slack_read(
+            "/slack/{ws}/users",
+            "/slack/acme/users",
+            "/type/slack/user",
+            &["id", "name", "real_name", "is_bot", "deleted"],
+            "/http/slack/users.list |> DECODE json |> EXPAND members",
+            USERS,
+            &[],
+        );
+        assert_eq!(
+            shape_of(&d),
+            shape_of(&compiled_slack_read("/slack/acme/users", USERS)),
+            "the user directory is row-equivalent"
+        );
+    }
+
+    #[test]
+    fn slack_twin_dm_read_rides_the_g1_post_stage() {
+        // The DM read: `conversations.open` is a POST that RETURNS the IM channel, so the declared
+        // view carries the §13.1 G1 leading `|> POST { … }` stage and its response decodes into rows
+        // exactly as a GET's would. This is the shape the compiled driver's live client performs
+        // internally at request time (v0.0.89's user-token DM fix); the declaration makes it an
+        // addressable node instead of a hidden client step.
+        const OPENED: &str =
+            r#"{"ok":true,"channel":{"id":"D07ALICE","name":"","is_private":true}}"#;
+        let (batch, wire) = declared_slack_read(
+            "/slack/{ws}/dms/{user}",
+            "/slack/acme/dms/U07ALICE",
+            "/type/slack/channel",
+            &["id", "name", "is_private"],
+            "/http/slack/conversations.open?users={user} |> POST { return_im: true } \
+             |> DECODE json |> EXPAND channel",
+            OPENED,
+            &[],
+        );
+        assert_eq!(
+            wire[0].method,
+            qfs_driver_http::HttpMethod::Post,
+            "a read-over-POST issues a POST"
+        );
+        assert!(
+            wire[0].url.contains("conversations.open?users=U07ALICE"),
+            "the DM peer bound into the wire request: {}",
+            wire[0].url
+        );
+        assert_eq!(
+            batch.rows[0].values[0],
+            qfs_core::Value::Text("D07ALICE".into()),
+            "the opened IM channel id comes back as a row"
+        );
+
+        // …and the opened `Dxxxx` addresses the DM message log, whose rows are equivalent to the
+        // compiled `dms/<user>/messages` read over the same fixture.
+        const DM: &str = r#"{"ok":true,"messages":[{"ts":"9","user":"U07ALICE","text":"ping","thread_ts":"9","subtype":"me_message"}]}"#;
+        let (d, _) = declared_slack_read(
+            "/slack/{ws}/dms/{channel}/messages",
+            "/slack/acme/dms/D07ALICE/messages",
+            "/type/slack/message",
+            &["ts", "user", "text", "thread_ts", "subtype"],
+            "/http/slack/conversations.history?channel={channel} |> DECODE json |> EXPAND messages",
+            DM,
+            &[],
+        );
+        assert_eq!(
+            shape_of(&d),
+            shape_of(&compiled_slack_read(
+                "/slack/acme/dms/U07ALICE/messages",
+                DM
+            )),
+            "the DM message log is row-equivalent"
+        );
+    }
+
+    #[test]
+    fn slack_twin_declared_pushdown_reaches_the_wire_with_a_truthful_residual() {
+        // §13.1 G2, the headline property: the DECLARED pushdown map lowers a `WHERE` into Slack's
+        // real `oldest`/`latest`/`limit` query parameters, and the residual it reports is TRUTHFUL —
+        // an inclusive `>=` is EXACT (conjunct dropped), a strict `>` is a PREFILTER (pushed AND
+        // kept, because Slack's inclusive bound would also return the boundary row). This is the
+        // compiled `driver-slack/pushdown.rs` discipline, read off the declaration instead of Rust.
+        use qfs_core::{CmpOp, ColRef, Literal, Predicate};
+        let map =
+            qfs_exec::declared::parse_pushdown(SLACK_TWIN_PUSHDOWN).expect("descriptor parses");
+        let cmp = |op, v: &str| Predicate::Cmp(ColRef::col("ts"), op, Literal::Text(v.to_string()));
+
+        // EXACT: `ts >= '100'` → `oldest=100`, and NOTHING is left residual.
+        let exact =
+            qfs_exec::declared::lower_declared_pushdown(&map, Some(&cmp(CmpOp::Ge, "100")), None);
+        assert_eq!(
+            exact.params,
+            vec![("oldest".to_string(), "100".to_string())]
+        );
+        assert!(
+            exact.residual.is_none(),
+            "an inclusive bound means the predicate exactly, so the conjunct drops"
+        );
+
+        // EXACT the other way: `ts <= '200'` → `latest=200`.
+        let upper =
+            qfs_exec::declared::lower_declared_pushdown(&map, Some(&cmp(CmpOp::Le, "200")), None);
+        assert_eq!(
+            upper.params,
+            vec![("latest".to_string(), "200".to_string())]
+        );
+        assert!(upper.residual.is_none());
+
+        // PREFILTER: `ts > '100'` still pushes `oldest=100`, but KEEPS the strict comparison so the
+        // engine re-excludes the `ts == '100'` boundary row locally (the t20 lesson).
+        let strict =
+            qfs_exec::declared::lower_declared_pushdown(&map, Some(&cmp(CmpOp::Gt, "100")), None);
+        assert_eq!(
+            strict.params,
+            vec![("oldest".to_string(), "100".to_string())]
+        );
+        assert_eq!(
+            strict.residual,
+            Some(cmp(CmpOp::Gt, "100")),
+            "a looser wire bound keeps the exact predicate as the local residual"
+        );
+
+        // A predicate NO entry addresses stays wholly residual — nothing is pushed, nothing is lost.
+        let unpushable = Predicate::Cmp(
+            ColRef::col("user"),
+            CmpOp::Eq,
+            Literal::Text("U1".to_string()),
+        );
+        let residual_only =
+            qfs_exec::declared::lower_declared_pushdown(&map, Some(&unpushable), None);
+        assert!(residual_only.params.is_empty());
+        assert_eq!(residual_only.residual, Some(unpushable));
+
+        // LIMIT lowers to Slack's page-size parameter.
+        let limited = qfs_exec::declared::lower_declared_pushdown(&map, None, Some(25));
+        assert_eq!(
+            limited.params,
+            vec![("limit".to_string(), "25".to_string())]
+        );
+
+        // …and the lowered parameters PROVABLY reach the wire request: the same three parameters,
+        // carried onto the declared view's wire source by the real evaluator.
+        let (_batch, wire) = declared_slack_read(
+            "/slack/{ws}/{channel}/messages",
+            "/slack/acme/general/messages",
+            "/type/slack/message",
+            &["ts", "user", "text", "thread_ts", "subtype"],
+            "/http/slack/conversations.history?channel={channel} |> DECODE json |> EXPAND messages",
+            r#"{"ok":true,"messages":[{"ts":"150","user":"U1","text":"in","thread_ts":"150","subtype":"me_message"}]}"#,
+            &[
+                ("oldest".to_string(), "100".to_string()),
+                ("latest".to_string(), "200".to_string()),
+                ("limit".to_string(), "25".to_string()),
+            ],
+        );
+        let url = &wire[0].url;
+        assert!(
+            url.contains("channel=general")
+                && url.contains("oldest=100")
+                && url.contains("latest=200")
+                && url.contains("limit=25"),
+            "every declared-pushdown parameter reached the wire request: {url}"
+        );
+    }
+
+    #[test]
+    fn shipped_slack_script_installs_statement_for_statement() {
+        // The SHIPPED twin asset: split like the config splitter, then assert every statement PARSES
+        // on the shipped grammar, and MEASURE the §13.2 conciseness bar (≤ ~40 statement-lines for a
+        // tier-1/2 service; chatwork.qfs = 32 is the calibration point).
+        let script = qfs_skill::SLACK_DRIVER;
+        let mut stmts: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        for raw in script.lines() {
+            let line = if raw.trim_start().starts_with('#') {
+                ""
+            } else {
+                raw.split("--").next().unwrap_or("")
+            };
+            let mut rest = line;
+            while let Some(pos) = rest.find(';') {
+                cur.push_str(&rest[..pos]);
+                if !cur.trim().is_empty() {
+                    stmts.push(cur.trim().to_string());
+                }
+                cur.clear();
+                rest = &rest[pos + 1..];
+            }
+            if !rest.is_empty() {
+                cur.push_str(rest);
+                cur.push('\n');
+            }
+        }
+        if !cur.trim().is_empty() {
+            stmts.push(cur.trim().to_string());
+        }
+        assert_eq!(
+            stmts.len(),
+            16,
+            "1 driver + 5 types + 9 views + 1 map: {stmts:?}"
+        );
+        for s in &stmts {
+            assert!(
+                qfs_exec::parse(s).is_ok(),
+                "a shipped slack twin statement must parse: {s}"
+            );
+        }
+        // The §13.2 CONCISENESS BAR, measured not asserted: non-comment, non-blank lines.
+        let statement_lines = script
+            .lines()
+            .filter(|l| {
+                let t = l.trim();
+                !t.is_empty() && !t.starts_with("--")
+            })
+            .count();
+        assert!(
+            statement_lines <= 40,
+            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~40 statement-lines); \
+             measured {statement_lines}"
+        );
+        // Host-confinement floor over the shipped bytes: every /http/ reference is /http/slack/.
+        assert_eq!(
+            script.matches("/http/").count(),
+            script.matches("/http/slack/").count(),
+            "every /http/ occurrence addresses the slack host"
+        );
+        // Credential-free by construction.
+        assert!(!script.contains("xoxb-") && !script.contains("Bearer "));
+    }
+
+    #[test]
+    fn shipped_slack_script_declares_the_g2_pushdown() {
+        // The declaration's `PUSHDOWN (…)` clause must actually desugar to the descriptor the
+        // equivalence tests lower through — parsed from the SHIPPED bytes, not a paraphrase.
+        // Strip `--` comments the way the install splitter does, then take the driver statement.
+        let stripped: String = qfs_skill::SLACK_DRIVER
+            .lines()
+            .map(|l| l.split("--").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let driver_stmt = stripped
+            .split(';')
+            .find(|s| s.contains("CREATE DRIVER slack"))
+            .expect("the shipped asset declares the driver")
+            .to_string();
+        let stmt = qfs_exec::parse(driver_stmt.trim()).expect("the driver statement parses");
+        let rendered = format!("{stmt:?}");
+        for expected in [
+            "oldest",
+            "latest",
+            "limit",
+            "\\\"exact\\\":true",
+            "\\\"exact\\\":false",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "the desugared driver row carries `{expected}`: {rendered}"
+            );
+        }
+        // And the descriptor the tests use is EQUIVALENT to the shipped one (same entries, order).
+        let shipped_json = rendered
+            .split("Str(\"")
+            .find(|s| s.starts_with("{\\\"entries\\\""))
+            .map(|s| {
+                s.split("\")")
+                    .next()
+                    .unwrap_or_default()
+                    .replace("\\\"", "\"")
+            })
+            .expect("the pushdown descriptor is stored as JSON");
+        assert_eq!(
+            qfs_exec::declared::parse_pushdown(&shipped_json),
+            qfs_exec::declared::parse_pushdown(SLACK_TWIN_PUSHDOWN),
+            "the test descriptor is the shipped declaration's own"
+        );
+    }
+
     #[test]
     fn read_over_post_pulls_rows_through_the_real_evaluator() {
         // Blueprint §13.1 G1 read-over-POST, proven hermetically end-to-end (ticket
@@ -1990,10 +2528,12 @@ mod tests {
             base_url: "https://api.cloudflare.com/client/v4".into(),
             auth: r#"{"kind":"bearer"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![DeclaredNode {
                 path: "/cf/pull".into(),
                 of_type: Some("/type/cf/message".into()),
                 body: String::new(),
+                pushdown: None,
             }],
             maps: vec![],
         };
@@ -2039,6 +2579,7 @@ mod tests {
             "/cf/pull",
             Some(&of),
             None,
+            &[],
             &[],
             // The read facet's own dispatch (mirrors `read_facets`): a `Some` post_body is a
             // read-over-POST — POST the encoded wire body; `None` would be the ordinary GET.
@@ -2111,10 +2652,12 @@ mod tests {
             base_url: "https://api.cloudflare.com/client/v4".into(),
             auth: r#"{"kind":"bearer"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![DeclaredNode {
                 path: "/cloudflare/accounts/{account}/queues/{queue}/messages/pull".into(),
                 of_type: Some("/type/cloudflare/queue_message".into()),
                 body: String::new(),
+                pushdown: None,
             }],
             maps: vec![],
         };
@@ -2159,6 +2702,7 @@ mod tests {
             "/cloudflare/accounts/acct/queues/q1/messages/pull",
             Some(&of),
             None,
+            &[],
             &[],
             |path, post_body| {
                 let result = match post_body {
@@ -2298,6 +2842,7 @@ mod tests {
             base_url: "https://slack.com/api".into(),
             auth: r#"{"kind":"bearer"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![],
             maps: vec![DeclaredMap {
                 path: "/slack/post".into(),
@@ -2430,6 +2975,7 @@ mod tests {
             base_url: "https://slack.com/api".into(),
             auth: r#"{"kind":"bearer"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![],
             maps: vec![DeclaredMap {
                 path: "/slack/post".into(),
@@ -2527,10 +3073,12 @@ mod tests {
             base_url: "https://api.chatwork.com/v2".into(),
             auth: r#"{"kind":"header","name":"x-chatworktoken"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![DeclaredNode {
                 path: "/chatwork/rooms/{room}/files/{file}/blob".into(),
                 of_type: None,
                 body: blob_body,
+                pushdown: None,
             }],
             maps: vec![],
         };
@@ -2635,6 +3183,7 @@ mod tests {
             base_url: "https://api.chatwork.com/v2".into(),
             auth: r#"{"kind":"none"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![],
             maps: vec![DeclaredMap {
                 path: "/chatwork/rooms/{room}/files".into(),
@@ -2739,21 +3288,25 @@ mod tests {
             base_url: "https://api.cloudflare.com/client/v4".into(),
             auth: r#"{"kind":"bearer"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![
                 DeclaredNode {
                     path: "/cloudflare/zones".into(),
                     of_type: Some("/type/cloudflare/zone".into()),
                     body: zones_body,
+                    pushdown: None,
                 },
                 DeclaredNode {
                     path: "/cloudflare/zones/{zone}/dns_records".into(),
                     of_type: Some("/type/cloudflare/dns_record".into()),
                     body: String::new(),
+                    pushdown: None,
                 },
                 DeclaredNode {
                     path: "/cloudflare/accounts/{account}/queues".into(),
                     of_type: None,
                     body: String::new(),
+                    pushdown: None,
                 },
             ],
             maps: vec![DeclaredMap {
@@ -2779,12 +3332,14 @@ mod tests {
             base_url: "https://api.cloudflare.com/client/v4".into(),
             auth: r#"{"kind":"bearer"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![
                 DeclaredNode {
                     path: "/cloudflare/accounts/{account}/storage/kv/namespaces/{namespace}/keys"
                         .into(),
                     of_type: None,
                     body: String::new(),
+                    pushdown: None,
                 },
                 DeclaredNode {
                     path:
@@ -2792,6 +3347,7 @@ mod tests {
                             .into(),
                     of_type: None,
                     body: String::new(),
+                    pushdown: None,
                 },
             ],
             maps: vec![
@@ -3074,10 +3630,12 @@ mod tests {
             base_url: "https://api.chatwork.com/v2".into(),
             auth: r#"{"kind":"header","name":"x-chatworktoken"}"#.into(),
             pagination: None,
+            pushdown: None,
             views: vec![DeclaredNode {
                 path: "/chatwork/rooms".into(),
                 of_type: Some("/type/chatwork/room".into()),
                 body: "{}".into(),
+                pushdown: None,
             }],
             maps: vec![],
         };
@@ -3120,7 +3678,8 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE sys_drivers (
                  id INTEGER PRIMARY KEY, kind TEXT, name TEXT, base_url TEXT, auth TEXT,
-                 pagination TEXT, of_type TEXT, verb TEXT, body TEXT, irreversible INTEGER
+                 pagination TEXT, of_type TEXT, verb TEXT, body TEXT, irreversible INTEGER,
+                 pushdown TEXT
              );
              INSERT INTO sys_drivers (kind, name, base_url, auth, verb, body, irreversible) VALUES
                ('driver', 'chatwork', 'https://old.example',  '{\"kind\":\"none\"}', NULL, NULL, 0),

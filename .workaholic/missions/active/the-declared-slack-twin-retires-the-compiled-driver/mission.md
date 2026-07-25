@@ -84,7 +84,7 @@ retired.
 
 ## Acceptance
 
-- [ ] slack.qfs declares the read surface + post map within the conciseness bar and reads row-equivalent to driver-slack on the shared hermetic fixtures, DM read included (#20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md)
+- [x] slack.qfs declares the read surface + post map within the conciseness bar and reads row-equivalent to driver-slack on the shared hermetic fixtures, DM read included (#20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md)
 - [ ] The five typed CALL maps are effect-equivalent to the compiled CALLs on fixtures (#20260724014100-slack-call-maps-effect-equivalent.md)
 - [ ] driver-slack is deleted per the shared retirement steps with docs/skills regenerated and the plugin minor-bumped in all four fields (#20260724014200-retire-the-compiled-slack-driver.md)
 - [x] The /cf compiled queue-pull is twinned, proven equivalent on the wire fixture, and deleted; the honest-tiering table records the exception closed (#20260724014300-cf-queue-pull-twin-and-retirement.md)
@@ -100,3 +100,4 @@ retired.
 - 2026-07-24 - ticket added - 20260724014300-cf-queue-pull-twin-and-retirement.md
 - 2026-07-24 - drive_authorized stamped after the creation interrogation (playbook-grounded set; per-ticket Policies and Quality Gate pre-answered) - mission.md
 - 2026-07-25 — ticket archived — 20260724014300-cf-queue-pull-twin-and-retirement.md
+- 2026-07-25 — ticket archived — 20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md

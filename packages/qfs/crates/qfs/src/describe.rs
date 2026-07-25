@@ -466,6 +466,7 @@ mod tests {
             base_url: "https://api.example.io/v1".to_string(),
             auth: r#"{"kind":"none"}"#.to_string(),
             pagination: None,
+            pushdown: None,
             views: Vec::<DeclaredNode>::new(),
             maps: Vec::<DeclaredMap>::new(),
         };
