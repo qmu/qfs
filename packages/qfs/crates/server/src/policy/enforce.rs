@@ -12,10 +12,15 @@
 //! A handler with no policy, or an empty policy, therefore **denies every write effect**.
 //!
 //! ## What is evaluated
-//! Only **write/CALL** effects (INSERT/UPSERT/UPDATE/REMOVE/CALL, and `/server` config
-//! writes) are gated — these are the effects a COMMIT plan carries. `Read`/`List` nodes are
-//! pure dependencies of a write (blueprint §7) and are skipped (a pure read produces an empty
-//! commit plan and routes through the SEPARATE read path; see the crate docs).
+//! [`evaluate_with_context`] gates the **write/CALL** effects (INSERT/UPSERT/UPDATE/REMOVE/CALL,
+//! and `/server` config writes) a COMMIT plan carries. `Read`/`List` nodes inside such a plan are
+//! pure dependencies of the write (blueprint §7) and stay skipped there.
+//!
+//! A **pure read never reaches that walk at all**: it lowers to an EMPTY commit plan and routes
+//! through the separate read path. [`evaluate_reads_with_context`] is that path's gate — the same
+//! rules, the same first-match order, the same default-deny, evaluated as [`Verb::Select`] over the
+//! [`ReadTarget`]s the read is about to scan. Both faces share [`decide_effect`], so a grant can
+//! never mean one thing to a write and another to a read.
 //!
 //! ## can ∧ may
 //! This is the **may** layer only (does the *handler's policy* permit the verb). The t13
@@ -37,7 +42,9 @@ pub enum PolicyDecision {
     Allow,
     /// The plan is denied. Carries the offending node and the reason coordinates.
     Deny {
-        /// The plan-local node id of the first denied effect.
+        /// The plan-local node id of the first denied effect — or, on the read path
+        /// ([`evaluate_reads_with_context`]), the zero-based index of the denied
+        /// [`ReadTarget`] in the scan list. Secret-free either way.
         node: u32,
         /// The verb of the denied effect.
         verb: Verb,
@@ -112,6 +119,34 @@ impl PolicyDecision {
                     driver
                 ),
             }),
+        }
+    }
+}
+
+/// One **read target** the read path is about to scan: the source/driver name plus the addressed
+/// VFS path the `FROM` named. Owned and secret-free — driver + path only, never a predicate value
+/// or a credential.
+///
+/// This is the read path's analogue of a plan effect node's `(driver, target)`: a pure SELECT
+/// produces an EMPTY commit plan, so there is no node to read the coordinates off. The serve seam
+/// derives these from the physical plan's scan leaves and hands them to
+/// [`evaluate_reads_with_context`], which evaluates each as a [`Verb::Select`] effect — with `path`
+/// feeding the `AT` [`ScopeGlob`](super::model::ScopeGlob) axis exactly as a write's target does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadTarget {
+    /// The source/driver the scan runs against (secret-free name only).
+    pub driver: String,
+    /// The full addressed VFS path the scan reads (`/mock/items`, `/members/alice/mail`).
+    pub path: String,
+}
+
+impl ReadTarget {
+    /// Construct a read target from owned driver + path text.
+    #[must_use]
+    pub fn new(driver: impl Into<String>, path: impl Into<String>) -> Self {
+        ReadTarget {
+            driver: driver.into(),
+            path: path.into(),
         }
     }
 }
@@ -235,52 +270,109 @@ pub fn evaluate_with_context(
             }
         };
 
-        // Walk rules top-down; the first rule that matches (in this actor's context) decides
-        // this effect. First-match means an earlier DENY wins over a later ALLOW.
-        let mut decided: Option<(Effectivity, Option<usize>)> = None;
-        for (idx, rule) in policy.rules.iter().enumerate() {
-            if rule_matches_in_context(rule, verb, &driver, path, ctx) {
-                decided = Some((rule.effect, Some(idx)));
-                break;
-            }
-        }
-        // No rule matched ⇒ fall to the policy default (fail-closed for the default policy).
-        let (effect, rule) = decided.unwrap_or((policy.default, None));
-
-        if effect == Effectivity::Deny {
-            // t37 OBS-2: when this denial is a default-deny of an irreversible verb, detect a
-            // broad `ALLOW ALL` allow rule that matched the driver/verbset but was held back by
-            // the irreversible-strictness rule — so the reason can name that near-match instead
-            // of reading as a generic default-deny. Pure: scans the rules already in hand.
-            let held_by_broad_all = if rule.is_none() && verb.is_irreversible_class() {
-                policy.rules.iter().position(|r| {
-                    r.effect == Effectivity::Allow
-                        && r.is_broad_all()
-                        && r.verbs.contains(verb)
-                        && r.driver.matches(&driver, path)
-                })
-            } else {
-                None
-            };
-            // t57: when the default-deny fired but a rule DID match the verb/driver and only the
-            // actor/scope/condition axis held it back, name that failing axis (secret-free) so the
-            // denial is legible as a narrowed grant that did not apply, not a missing rule.
-            let detail = if rule.is_none() && held_by_broad_all.is_none() {
-                near_miss_axis(policy, verb, &driver, path, ctx)
-            } else {
-                None
-            };
-            return PolicyDecision::Deny {
-                node: node.id.index(),
-                verb,
-                driver,
-                rule,
-                held_by_broad_all,
-                detail,
-            };
+        if let Some(deny) = decide_effect(policy, node.id.index(), verb, driver, path, ctx) {
+            return deny;
         }
     }
     PolicyDecision::Allow
+}
+
+/// Evaluate `policy` against the **read targets** a pure read is about to scan, for a resolved
+/// [`DecisionContext`] (the mission's enforcement half). Pure: no I/O, no mutation.
+///
+/// A pure read lowers to an EMPTY commit plan, so [`evaluate_with_context`] sees nothing to gate —
+/// which is exactly why a read used to pass under ANY policy. This is the read path's gate: each
+/// target is evaluated as a [`Verb::Select`] effect through the SAME [`decide_effect`] the write
+/// walk uses (first matching rule decides; an earlier `DENY` beats a later `ALLOW`; no match falls
+/// to `policy.default`, which is `Deny` for the default/empty policy). The target's `path` feeds the
+/// `AT` scope axis, its `driver` the `ON` driver glob, and `ctx` the `FOR`/`WHERE` axes — so one
+/// policy governs reads and writes with one vocabulary.
+///
+/// Returns the FIRST denial, or [`PolicyDecision::Allow`] when every target is granted. An EMPTY
+/// target list is an `Allow`: there is nothing to read, so there is nothing to refuse.
+#[must_use]
+pub fn evaluate_reads_with_context(
+    policy: &Policy,
+    reads: &[ReadTarget],
+    ctx: &DecisionContext,
+) -> PolicyDecision {
+    for (idx, target) in reads.iter().enumerate() {
+        let node = u32::try_from(idx).unwrap_or(u32::MAX);
+        if let Some(deny) = decide_effect(
+            policy,
+            node,
+            Verb::Select,
+            target.driver.clone(),
+            &target.path,
+            ctx,
+        ) {
+            return deny;
+        }
+    }
+    PolicyDecision::Allow
+}
+
+/// Decide ONE `(verb, driver, path)` against `policy` for the resolved actor `ctx`: returns the
+/// [`PolicyDecision::Deny`] when the policy refuses it, or `None` when it is permitted.
+///
+/// The single decision procedure BOTH faces share — the write/CALL plan walk
+/// ([`evaluate_with_context`]) and the read walk ([`evaluate_reads_with_context`]). Keeping it in
+/// one place is what makes per-face permission drift structurally impossible: first-matching-rule
+/// order, the fail-closed `policy.default`, the broad-`ALL` irreversible hold-back, and the
+/// secret-free near-miss axis are computed once and mean the same thing to every caller.
+fn decide_effect(
+    policy: &Policy,
+    node: u32,
+    verb: Verb,
+    driver: String,
+    path: &str,
+    ctx: &DecisionContext,
+) -> Option<PolicyDecision> {
+    // Walk rules top-down; the first rule that matches (in this actor's context) decides this
+    // effect. First-match means an earlier DENY wins over a later ALLOW.
+    let mut decided: Option<(Effectivity, Option<usize>)> = None;
+    for (idx, rule) in policy.rules.iter().enumerate() {
+        if rule_matches_in_context(rule, verb, &driver, path, ctx) {
+            decided = Some((rule.effect, Some(idx)));
+            break;
+        }
+    }
+    // No rule matched ⇒ fall to the policy default (fail-closed for the default policy).
+    let (effect, rule) = decided.unwrap_or((policy.default, None));
+    if effect != Effectivity::Deny {
+        return None;
+    }
+
+    // t37 OBS-2: when this denial is a default-deny of an irreversible verb, detect a broad
+    // `ALLOW ALL` allow rule that matched the driver/verbset but was held back by the
+    // irreversible-strictness rule — so the reason can name that near-match instead of reading as
+    // a generic default-deny. Pure: scans the rules already in hand.
+    let held_by_broad_all = if rule.is_none() && verb.is_irreversible_class() {
+        policy.rules.iter().position(|r| {
+            r.effect == Effectivity::Allow
+                && r.is_broad_all()
+                && r.verbs.contains(verb)
+                && r.driver.matches(&driver, path)
+        })
+    } else {
+        None
+    };
+    // t57: when the default-deny fired but a rule DID match the verb/driver and only the
+    // actor/scope/condition axis held it back, name that failing axis (secret-free) so the denial
+    // is legible as a narrowed grant that did not apply, not a missing rule.
+    let detail = if rule.is_none() && held_by_broad_all.is_none() {
+        near_miss_axis(policy, verb, &driver, path, ctx)
+    } else {
+        None
+    };
+    Some(PolicyDecision::Deny {
+        node,
+        verb,
+        driver,
+        rule,
+        held_by_broad_all,
+        detail,
+    })
 }
 
 /// Find the first rule that matched the verb+driver but failed one of the t57 axes, and name the
@@ -365,12 +457,54 @@ mod tests {
         }
     }
 
+    /// The INVERSION of the retired `select_only_plan_is_allowed_even_under_empty_policy`.
+    ///
+    /// That test pinned the inert-on-reads state: a pure read lowered to an empty commit plan, so
+    /// the enforcer had nothing to gate and every read passed under every policy. The read path now
+    /// has its own gate ([`evaluate_reads_with_context`]) and an empty policy — whose `default` is
+    /// `Deny` — REFUSES the read. This test is the proof the inert state is gone; qfs is
+    /// experimental, so the old behaviour is broken deliberately with no compatibility shim.
     #[test]
-    fn select_only_plan_is_allowed_even_under_empty_policy() {
-        // A pure read produces no write nodes; the commit plan is empty ⇒ Allow.
+    fn select_on_the_read_path_is_denied_under_empty_policy() {
         let policy = Policy::default();
-        let plan = plan_of(vec![write_node(0, EffectKind::Read, "mail", "/mail/inbox")]);
-        assert!(evaluate(&policy, &plan).is_allow());
+        let reads = [ReadTarget::new("mail", "/mail/inbox")];
+        match evaluate_reads_with_context(&policy, &reads, &DecisionContext::anonymous()) {
+            PolicyDecision::Deny {
+                node, verb, driver, ..
+            } => {
+                assert_eq!(node, 0, "the first denied read target");
+                assert_eq!(verb, Verb::Select, "a read is classified as SELECT");
+                assert_eq!(driver, "mail");
+            }
+            PolicyDecision::Allow => panic!("an empty policy must deny the read (default-deny)"),
+        }
+        // An explicit grant opens it — the same rule vocabulary a write uses.
+        let granted = Policy::new("reader")
+            .with_rule(Rule::allow(VerbSet::one(Verb::Select), DriverGlob::any()));
+        assert!(
+            evaluate_reads_with_context(&granted, &reads, &DecisionContext::anonymous()).is_allow()
+        );
+    }
+
+    /// The counterpart invariant: a `Read` DEPENDENCY node inside a WRITE plan is still skipped by
+    /// the plan walk. Enabling read enforcement must not silently re-gate every write's read leg —
+    /// the write-side decision matrix is unchanged (mission acceptance 3, "nothing widens" also
+    /// means "nothing narrows by accident").
+    #[test]
+    fn read_dependency_of_a_write_plan_is_still_skipped_by_the_plan_walk() {
+        // A policy that grants INSERT but NOT select: the write's read dependency must not deny it.
+        let policy = Policy::new("writer")
+            .with_rule(Rule::allow(VerbSet::one(Verb::Insert), DriverGlob::any()));
+        let plan = plan_of(vec![
+            write_node(0, EffectKind::Read, "mail", "/mail/inbox"),
+            write_node(1, EffectKind::Insert, "log", "/log"),
+        ]);
+        assert!(
+            evaluate(&policy, &plan).is_allow(),
+            "a write's Read dependency is not a policy-bearing effect (blueprint §7)"
+        );
+        assert_eq!(classify_effect(&EffectKind::Read), EffectClass::Read);
+        assert_eq!(classify_effect(&EffectKind::List), EffectClass::Read);
     }
 
     #[test]

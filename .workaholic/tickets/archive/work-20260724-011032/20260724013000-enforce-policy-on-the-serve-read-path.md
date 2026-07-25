@@ -3,7 +3,7 @@ created_at: 2026-07-24T01:30:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Domain, Infrastructure]
-effort:
+effort: 2h
 commit_hash:
 category: Changed
 depends_on:
@@ -70,3 +70,35 @@ answer matter.
   correct — reuse `rule_matches_in_context`; do not fork a read-specific matcher.
 - Watch the dep-direction guard (`crates/cmd/tests/dep_direction.rs`) — the evaluation stays in
   `qfs-server`/`qfs-http`, never leaks into `qfs-exec`.
+
+## Final Report
+
+Development completed as planned. The serve read path now evaluates SELECT against the endpoint's
+resolved policy under the request's real actor, before any driver scan runs.
+
+### Discovered Insights
+
+- **Insight**: A pure read produces an EMPTY plan, not a plan of `Read` nodes. `build_plan` returns
+  `Plan::pure()` for a `SELECT` (`crates/exec/src/exec.rs`), so the inert-on-reads state was not
+  "the enforcer skips `EffectKind::Read`" — it was "there is nothing for the enforcer to look at".
+  Making `classify_effect` map `Read` to `SELECT` would therefore have gated every WRITE's read
+  dependency (changing the write-side decision matrix) while still leaving pure reads ungated. The
+  fix had to be a second entry point over the read's scan targets, derived from the physical plan.
+  **Context**: anyone reaching for "just classify Read as SELECT" will get the blast radius exactly
+  backwards.
+- **Insight**: the request-time gate looked the endpoint's policy up by ENDPOINT NAME
+  (`policies.get(&route.name)`), while registration looked it up by the endpoint's `policy:` REF.
+  A policy not named after its endpoint silently applied at registration and not at request time.
+  Fixed by carrying the ref on `CompiledRoute` and resolving through `qfs_server::resolve_policy`.
+  **Context**: this was invisible while reads were ungated and writes were re-gated identically at
+  registration; enabling read enforcement is what made the divergence observable.
+- **Insight**: `qfs-exec::scan_targets` deliberately shares `execute_read_with`'s planning steps
+  (codec-tail strip + `plan_query`) rather than re-deriving them. If the two ever drift, the gate
+  adjudicates a different set of paths than the driver is asked for — a silent authorization hole.
+  **Context**: keep them adjacent in `exec.rs`, and never re-implement target derivation elsewhere.
+- **Insight**: the shipped boot fixture `crates/server/fixtures/server_boot.qfs` carried a comment
+  asserting the opposite of this mission ("a pure READ produces no commit plan, so it needs no
+  POLICY"). Fixture prose is a specification a lot of tests count against — changing it moved four
+  independent audit-entry-count assertions.
+  **Context**: audit counts in `qfs-server`/`qfs-cmd` tests are keyed to that fixture's statement
+  count; adding a statement to it means updating them together.

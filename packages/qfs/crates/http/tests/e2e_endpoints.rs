@@ -150,6 +150,11 @@ fn reads_with_mock(scans: Arc<AtomicUsize>) -> Arc<ReadRegistry> {
 
 /// Build an `EndpointDef` storing the query as the canonical span-normalised `StatementSpec`,
 /// exactly as t31's DDL desugar does (no re-parse at request time).
+/// The permissive read policy every scenario endpoint binds to. Reads are default-denied like any
+/// other effect, so an endpoint that serves rows must be GRANTED `SELECT`; the scenarios that prove
+/// the refusal bind no policy instead.
+const READ_POLICY: &str = "read-any";
+
 fn endpoint(name: &str, method: &str, route: &str, query_src: &str) -> EndpointDef {
     let stmt = parse(query_src).expect("endpoint query parses");
     let spec = StatementSpec::from_statement(stmt);
@@ -158,12 +163,20 @@ fn endpoint(name: &str, method: &str, route: &str, query_src: &str) -> EndpointD
         method: method.to_string(),
         route: route.to_string(),
         query: StatementSource::new(spec.canonical()),
-        policy: None,
+        policy: Some(READ_POLICY.to_string()),
     }
 }
 
 fn state_with(endpoints: Vec<EndpointDef>) -> ServerState {
     let mut state = ServerState::new();
+    state.policies.insert(
+        READ_POLICY.to_string(),
+        PolicyDef {
+            name: READ_POLICY.to_string(),
+            handler: String::new(),
+            allow: vec!["ALLOW SELECT".to_string()],
+        },
+    );
     for ep in endpoints {
         state.endpoints.insert(ep.name.clone(), ep);
     }

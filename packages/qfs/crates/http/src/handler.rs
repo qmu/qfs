@@ -22,7 +22,9 @@ use qfs_server::PolicyDef;
 use crate::encode::{encode_rows, negotiate};
 use crate::error::HttpError;
 use crate::params::QueryArgs;
-use crate::policy::{assert_read_only, decision_for};
+use crate::policy::{
+    assert_plan_allowed, assert_select_allowed, decision_for, resolve_endpoint_policy,
+};
 use crate::rewrite::bind_params;
 use crate::route::CompiledRoute;
 use crate::{HttpRequest, HttpResponse};
@@ -153,13 +155,25 @@ async fn dispatch_inner(
     //    the session is absent/invalid.
     let req_ctx = resolve_request_principal(req, ctx);
 
-    // 4. Defence-in-depth policy gate on the bound plan, evaluated UNDER THE RESOLVED ACTOR
-    //    (registration already gated it under anonymous). Snapshot the live policies BEFORE the
-    //    gate; no lock is held across the later `.await`.
-    let plan = qfs_exec::build_plan(&bound, &ctx.engine).map_err(HttpError::Eval)?;
+    // 4. Resolve the endpoint's bound policy ONCE, then gate BOTH faces of the request under the
+    //    resolved actor. Snapshot the live policies BEFORE the gate; no lock is held across the
+    //    later `.await`. Resolution is by the endpoint's policy REF (fail-closed: an absent or
+    //    dangling ref is the default-deny policy).
+    let actor = decision_for(&req_ctx);
     let policies = ctx.policies_snapshot();
-    let policy = policies.get(&route.name);
-    assert_read_only(&plan, policy, &decision_for(&req_ctx)).map_err(HttpError::Policy)?;
+    let policy = resolve_endpoint_policy(route.policy.as_deref(), &policies);
+
+    // 4a. Write/CALL effects (defence in depth — registration already gated these under anonymous).
+    let plan = qfs_exec::build_plan(&bound, &ctx.engine).map_err(HttpError::Eval)?;
+    assert_plan_allowed(&plan, &policy, &actor).map_err(HttpError::Policy)?;
+
+    // 4b. The READ face: adjudicate every path this request would scan as a SELECT, BEFORE the
+    //     driver runs. A pure read lowers to an empty commit plan, so 4a sees nothing to gate —
+    //     without this the resolved principal would be known and then ignored, and every readable
+    //     path would be readable by everyone. Planning the targets is pure (no I/O, no scan); a
+    //     statement that cannot be planned as a read fails here exactly as the executor would.
+    let targets = qfs_exec::scan_targets(&bound, &ctx.engine.mounts).map_err(HttpError::Eval)?;
+    assert_select_allowed(&targets, &policy, &actor).map_err(HttpError::Policy)?;
 
     // 5. Evaluate the bound query through the qfs-exec read executor (t29), under the principal.
     let rows = execute_read(&bound, &ctx.engine.mounts, &ctx.reads, &req_ctx)

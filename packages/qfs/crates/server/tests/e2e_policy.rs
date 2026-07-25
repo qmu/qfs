@@ -758,8 +758,8 @@ fn scenario10_fixtures_boot_with_attached_policies() {
     let s = rt.snapshot();
     assert_eq!(
         s.policies.len(),
-        1,
-        "server_boot carries its leastpriv policy"
+        2,
+        "server_boot carries its leastpriv write policy and its publicread SELECT grant"
     );
     let leastpriv = s.policies.get("leastpriv").expect("leastpriv policy");
 

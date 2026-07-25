@@ -278,16 +278,26 @@ pub fn render_server() -> String {
     let _ = writeln!(s, "## Policy & least privilege\n");
     let _ = writeln!(
         s,
-        "`create policy` gates writes by verb / path / irreversibility — an irreversible effect \
-         (`remove`, `call mail.send`) can be blocked or required to be explicitly acknowledged. \
-         **Credentials are never inline in a config**: a binding references a stored connection by \
+        "`create policy` gates every effect a binding reaches — **reads included**. It grants by \
+         verb / path / irreversibility, and an irreversible effect (`remove`, `call mail.send`) can \
+         be blocked or required to be explicitly acknowledged. **Default-deny is the law:** a served \
+         request is evaluated against the endpoint's attached policy under the caller's resolved \
+         principal, so an endpoint with no policy (or a dangling policy name) serves nothing — a \
+         read it does not grant is refused with a `403` policy error before any source is touched, \
+         never an empty result. Grant reads with `allow select` (add `for user:…` / `for role:…` to \
+         narrow to a principal, `at <path-glob>` to narrow to a sub-tree).\n"
+    );
+    let _ = writeln!(
+        s,
+        "**Credentials are never inline in a config**: a binding references a stored connection by \
          handle (`qfs account add <provider> <label>`), and no token is ever written to a config, a \
          log, or a generated doc. Examples below use placeholder handles only.\n"
     );
     let _ = writeln!(
         s,
         "```qfs\n\
-         create endpoint recent on 'GET /recent' as /mail/inbox |> limit 5\n\
+         create policy readmail ALLOW select ON mail\n\
+         create endpoint recent on 'GET /recent' policy readmail as /mail/inbox |> limit 5\n\
          create trigger notify on /mail/inbox do insert into /slack/acme/general/messages values (NEW.subject)\n\
          create job nightly every '1h' do remove /tmp/scratch where age > 7\n\
          create policy api ALLOW select DENY insert, update, remove, call\n\

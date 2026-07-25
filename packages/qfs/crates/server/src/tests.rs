@@ -56,7 +56,11 @@ fn boot_fixture_reaches_deterministic_state() {
         2,
         "view + materialized view share /server/views"
     );
-    assert_eq!(state.policies.len(), 1);
+    assert_eq!(
+        state.policies.len(),
+        2,
+        "leastpriv (the write grants) + publicread (the endpoint's SELECT grant)"
+    );
     assert_eq!(state.webhooks.len(), 1);
 
     // The materialized view is flagged; the plain view is not.
@@ -536,15 +540,16 @@ fn insert_then_remove_round_trips() {
 fn boot_records_one_audit_entry_per_mutation_and_drain_flushes() {
     let mut rt = Runtime::new();
     rt.boot(&fixture_path()).expect("boot");
-    // 8 statements => 8 committed mutations => 8 audit entries.
-    assert_eq!(rt.audit().len(), 8, "one audit entry per /server mutation");
+    // 9 statements => 9 committed mutations => 9 audit entries. The fixture gained a second
+    // POLICY row when reads became policy-gated: the endpoint attaches a SELECT grant.
+    assert_eq!(rt.audit().len(), 9, "one audit entry per /server mutation");
     // The entries are secret-free (names + ops only).
     for entry in rt.audit().snapshot() {
         let s = entry.summary();
         assert!(s.contains("/server/"), "entry names its node: {s}");
     }
     // Drain flushes and reports the count.
-    assert_eq!(rt.audit().drain(), 8);
+    assert_eq!(rt.audit().drain(), 9);
 }
 
 // ---- run loop shutdown (audit drain) ---------------------------------------
@@ -559,7 +564,7 @@ fn run_loop_drains_audit_on_ctrl_c() {
     let audit = rt.audit().clone();
     assert!(!audit.is_empty());
     let drained = audit.drain();
-    assert_eq!(drained, 8, "shutdown drains every recorded entry");
+    assert_eq!(drained, 9, "shutdown drains every recorded entry");
 }
 
 // ---- not-server-config rejection -------------------------------------------
