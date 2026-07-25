@@ -98,3 +98,10 @@ no-policy and dangling-policy deny), and a denied read is a structured, secret-f
 - 2026-07-25 — ticket archived — 20260724013200-fail-closed-and-structured-denial-on-reads.md
 - 2026-07-25 — run recorded (+0.89h) — 20260725-101714
 - 2026-07-25 — story reported — work-20260724-011032.md
+
+## Reflection
+
+### 2026-07-25 run 20260725-101714
+- blocked: nothing stopped autonomy — the three-ticket queue drained, the full gate stayed green, and the four pre-release corrections were applied in-worktree without an escalation.
+- leaked questions: which policy governs the statement bridge POST /api/run, which has no policy field to resolve and whose answer touches the parked what-may-I-administer ruling; and whether MINOR is the right plugin bump for a taught-surface break that turns a shipped cookbook recipe into a 403.
+- front-load next: when a mission turns a default-deny on, pre-authorize a sweep of the in-repo claims it will falsify — four of this branch's defects were a taught prose spelling, a fixture comment, and two blueprint statements, none of which any test could catch; and rule the non-endpoint serve faces' policy source before the next mission touches one.
