@@ -9,7 +9,7 @@ assignee: a@qmu.jp
 strategy: integrations-are-declared-not-compiled
 drive_authorized: true
 predicted_hours:
-actual_hours:
+actual_hours: 1.37
 tickets: []
 stories: []
 concerns: []
@@ -94,3 +94,4 @@ cannot expand, codec errors name post-decode columns, and `describe`'s pushdown 
 - 2026-07-25 — ticket archived — 20260717180100-where-on-an-unknown-column-returns-zero-rows-at-exit-0.md
 - 2026-07-25 — ticket archived — 20260717180200-expand-silently-no-ops-on-json-and-unknown-columns.md
 - 2026-07-25 — ticket archived — 20260717180300-codec-source-error-names-the-pre-decode-columns.md
+- 2026-07-25 — run recorded (+1.37h) — 20260725-101714

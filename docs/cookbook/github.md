@@ -49,8 +49,8 @@ The `(!)` marks the irreversible gate: a merge can't be undone.
 ::: tip Reads run now; writes preview
 Every **read** returns rows immediately. Every **write** (`update`, `insert`, `call`) *previews* by
 default and changes nothing — add `--commit` to apply it, `--commit-irreversible` for the ones that
-can't be undone (merging, commenting). Paste any recipe below and safely watch what it *would* do
-first.
+can't be undone (merging a PR, dispatching a workflow run). Paste any recipe below and safely watch
+what it *would* do first.
 :::
 
 GitHub isn't reachable until you connect an account to it — one command, once, in
@@ -90,16 +90,28 @@ rows:
 | a repo | `/github/acme/web` | directory of collections |
 | pull requests | `/github/acme/web/pulls` | directory of PRs |
 | one pull request | `/github/acme/web/pulls/42` | file (the `CALL` target) |
+| a PR's reviews | `/github/acme/web/pulls/42/reviews` | directory of reviews |
 | issues | `/github/acme/web/issues` | directory of issues |
-| reviews | `/github/acme/web/reviews` | directory of reviews |
-| review requests | `/github/acme/web/review_requests` | directory of pending requests |
+| an issue's comments | `/github/acme/web/issues/87/comments` | directory of comments |
 | releases | `/github/acme/web/releases` | directory of releases |
+| branches | `/github/acme/web/branches` | directory of branch refs |
 
-PR columns include `number`, `title`, `author`, `state`, `created_at`, `merged_at`, `mergeable`,
-`review_decision`, `checks_status`, `head_sha`, `additions`, `deletions`, and the nested
-`requested_reviewers` (with `.login`, `.team`) and `reviews` arrays. Issue columns include `number`,
-`title`, `state`, `author`, `assignee`, `milestone`, `label`, `created_at`, `updated_at`,
-`closed_at`. Run `qfs describe /github/acme/web/pulls` for the exact schema and verbs of any node.
+The columns are exactly these — nothing else is queryable, and a `where` on a name that is not on
+this list is **refused** (a structured `unknown_column` at a non-zero exit), not answered with zero
+rows:
+
+| collection | columns |
+| ---------- | ------- |
+| `pulls` | `number`, `title`, `body`, `state`, `user`, `head_ref`, `head_sha`, `base_ref`, `merged`, `created_at` |
+| `issues` | `number`, `title`, `body`, `state`, `user`, `assignees`, `labels`, `created_at`, `updated_at` |
+| `comments` | `id`, `user`, `body`, `created_at` |
+| `reviews` | `id`, `user`, `state`, `body` |
+| `releases` | `id`, `tag_name`, `name`, `body`, `draft`, `prerelease`, `created_at` |
+| `branches` | `name`, `sha`, `protected` |
+
+`user` is the author login (there is no `author` column); `assignees` and `labels` are **text
+arrays** you `expand` to get one row per element. Run `qfs describe /github/acme/web/pulls` for the
+exact schema and verbs of any node.
 
 ## List & filter pull requests
 
@@ -108,29 +120,49 @@ PR columns include `number`, `title`, `author`, `state`, `created_at`, `merged_a
 ```qfs
 /github/acme/web/pulls
 |> where state == 'open'
-     AND author IN ('rin', 'kenji', 'sora', 'mei')
-|> select number, title, author, created_at
+     AND user IN ('rin', 'kenji', 'sora', 'mei')
+|> select number, title, user, created_at
 |> order by created_at ASC
 ```
 
-**Expand requested reviewers** to see who is blocking each open PR:
+**Who has already reviewed PR 42, and what they said** — reviews are a sub-collection of the PR
+itself, so the PR number is part of the path:
+
+```qfs
+/github/acme/web/pulls/42/reviews
+|> where state == 'CHANGES_REQUESTED'
+|> select id, user, body
+|> order by id ASC
+```
+
+**Which branch each open PR targets** — `head_ref`/`base_ref` are plain columns:
 
 ```qfs
 /github/acme/web/pulls
-|> where state == 'open'
-|> expand requested_reviewers
-|> select number, requested_reviewers.login, requested_reviewers.team
-|> order by number ASC
+|> where state == 'open' AND base_ref == 'main'
+|> select number, title, head_ref, head_sha
+|> order by number DESC
 ```
 
 ## List & filter issues
 
-**Read the open issues** — number, assignee, and milestone, lowest number first:
+**Read the open issues** — number, assignees, and labels, lowest number first:
 
 ```qfs
 /github/acme/web/issues
 |> where state == 'open'
-|> select number, title, assignee, milestone
+|> select number, title, assignees, labels
+|> order by number ASC
+```
+
+`assignees` is a text array. `expand` explodes it into **one row per assignee**, so a per-person
+queue is one stage away:
+
+```qfs
+/github/acme/web/issues
+|> where state == 'open'
+|> expand assignees
+|> select number, title, assignees
 |> order by number ASC
 ```
 
@@ -139,22 +171,25 @@ PR columns include `number`, `title`, `author`, `state`, `created_at`, `merged_a
 `GROUP BY` then `AGGREGATE … AS …` rolls raw rows into a report — the same two-stage shape you use on
 any other source.
 
-**PR throughput** — count merged pull requests per author over the last 90 days:
+**PR throughput** — count merged pull requests per author since a date. `merged` is a boolean
+column; there is no `merged_at`, so bound the window with `created_at`:
 
 ```qfs
 /github/acme/web/pulls
-|> where state == 'merged' AND merged_at >= '2026-03-28'
-|> group by author
+|> where merged == true AND created_at >= '2026-03-28'
+|> group by user
 |> aggregate count(number) as merged_prs
 |> order by merged_prs DESC
 ```
 
-**Issue load per label:**
+**Issue load per label** — `labels` is an array, so `expand` it into one row per label first, then
+group:
 
 ```qfs
 /github/acme/web/issues
 |> where state == 'open'
-|> group by label
+|> expand labels
+|> group by labels
 |> aggregate count(number) as open_issues
 |> order by open_issues DESC
 ```
@@ -164,43 +199,75 @@ any other source.
 Field updates on issues preview like any write and only apply on `--commit`; the preview lists the
 affected issue numbers first.
 
-**Tag every stale open issue** so a backlog-grooming bot picks it up:
+**Tag every stale open issue** so a backlog-grooming bot picks it up. The writable issue fields are
+`state`, `title`, `body`, and `labels` (a label set that **replaces** the existing one):
 
 ```qfs
 /github/acme/web/issues
 |> where state == 'open' AND updated_at < '2026-03-26'
-|> update set label = 'stale'
+|> update set labels = 'stale'
 ```
 
-## Merge & comment — irreversible
+## Comment — reversible
 
-**Squash-merge an approved, mergeable PR** — `github.merge` is a one-way door; the preview shows
-which PR, `--commit-irreversible` performs the squash:
+A comment is an `INSERT` into an issue's (or PR's) `comments` sub-collection, so the number it
+attaches to is part of the **path**, and the only field is `body`:
+
+```qfs
+insert into /github/acme/web/issues/87/comments
+  values (body)
+         ('CI is red on this PR - please take a look.')
+```
+
+It previews like any write and posts on `--commit`. A POST is **at-least-once**: if the request
+times out the driver never silently retries, because the comment may already have landed.
+
+## Merge & review — the `CALL` procedures
+
+`/github` declares exactly three procedures: `merge`, `dispatch`, and `review`. `merge` and
+`dispatch` are irreversible; `review` is not (a later review supersedes it).
+
+| procedure | params | irreversible |
+| --------- | ------ | ------------ |
+| `github.merge` | `method`, `sha` | yes |
+| `github.dispatch` | `workflow`, `ref`, `inputs` | yes |
+| `github.review` | `event`, `body` | no |
+
+**Squash-merge one PR** — `merge` takes the PR number from the **path**, not from an argument, and
+`github.merge` is a one-way door:
+
+```qfs
+/github/acme/web/pulls/42
+|> call github.merge(method => 'squash')
+```
+
+**Merge only if nobody pushed since you looked** — pass the `head_sha` you read as the `sha`
+precondition, and GitHub refuses the merge if the branch moved:
+
+```qfs
+/github/acme/web/pulls/42
+|> call github.merge(method => 'squash', sha => 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678')
+```
+
+To bulk-merge, read the candidates first and then merge each by its own path — a `CALL` addressed at
+a collection has no PR number to act on:
 
 ```qfs
 /github/acme/web/pulls
-|> where number == 42 AND state == 'open' AND mergeable == true
-|> call github.merge(number => number, method => 'squash')
+|> where user == 'dependabot[bot]' AND state == 'open'
+|> select number, title, head_sha
 ```
 
-**Auto-merge every approved Dependabot PR** with a passing build (an irreversible bulk merge):
+**Request changes on a PR** — a submitted review, reversible in the sense that a later review
+supersedes it:
 
 ```qfs
-/github/acme/web/pulls
-|> where author == 'dependabot[bot]' AND review_decision == 'APPROVED' AND checks_status == 'success'
-|> call github.merge(number => number, method => 'squash')
-```
-
-**Comment on a PR whose build is red** (irreversible — posts publicly):
-
-```qfs
-/github/acme/web/pulls
-|> where number == 87 AND checks_status == 'failure'
-|> call github.comment(number => number, body => 'CI is red on this PR - please take a look.')
+/github/acme/web/pulls/87
+|> call github.review(event => 'REQUEST_CHANGES', body => 'CI is red on this PR - please take a look.')
 ```
 
 ::: warning Irreversible
-`CALL github.merge` and `CALL github.comment` can't be undone. In a one-shot each needs
-`--commit --commit-irreversible`; the `(!)` in the `PREVIEW` marks the gate. Reads and the preview
-of a merge run with no extra flags once the account is connected.
+`CALL github.merge` and `CALL github.dispatch` can't be undone. In a one-shot each needs
+`--commit --commit-irreversible`; the `(!)` in the `PREVIEW` marks the gate. Reads, comments,
+`github.review`, and the preview of a merge run with no extra flags once the account is connected.
 :::
