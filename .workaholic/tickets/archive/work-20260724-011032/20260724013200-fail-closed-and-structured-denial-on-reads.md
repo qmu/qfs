@@ -3,9 +3,9 @@ created_at: 2026-07-24T01:32:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Domain]
-effort:
+effort: 1h
 commit_hash:
-category: Added
+category: Changed
 depends_on: [20260724013000-enforce-policy-on-the-serve-read-path.md]
 mission: what-a-principal-can-see-and-do-is-granted-by-policy
 ---
@@ -52,3 +52,26 @@ Two proof surfaces for the newly-enforced read path:
   guarantee here is `PolicyDecision::deny_reason`'s existing contract — keep it, assert it.
 - If the structured-denial shape needs a serve-face representation (HTTP status + body), follow
   the existing structured-error conventions in `crates/http` rather than inventing one.
+
+## Final Report
+
+Development completed as planned. Fail-closed is proven on the read path in all three resolution
+shapes, and a denied read is now provably a structured refusal rather than an empty relation.
+
+### Discovered Insights
+
+- **Insight**: the no-widening proof is best written as a FROZEN decision matrix rather than a
+  prose claim — nine `(policy, plan) -> allowed?` rows whose verdicts predate read enforcement.
+  The two rows that actually catch the plausible regressions are "a SELECT-only grant grants NO
+  write" and "a write's Read dependency is not gated, even on an ungranted driver": those are the
+  exact two ways read enforcement could have leaked into the write side.
+  **Context**: extend the matrix rather than adding scattered one-off assertions.
+- **Insight**: `EffectClass::Unknown` is unconstructible today because `classify_effect`'s match is
+  total over the known `EffectKind` variants. That is the property worth pinning (the residual arm
+  exists so a FUTURE variant starts denied), so the test asserts totality rather than pretending to
+  exercise a branch it cannot reach.
+  **Context**: an honest test of an unreachable fail-closed branch is a totality test.
+- **Insight**: "distinguishable from an empty result" has to be asserted against a real granted
+  response in the same test, not assumed. The refusal is 403 with `error: policy` and no `rows` or
+  `schema` key; the granted read is 200 with a `rows` envelope. Asserting only the refusal's shape
+  would not prove the two are unconfusable.

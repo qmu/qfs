@@ -82,7 +82,7 @@ no-policy and dangling-policy deny), and a denied read is a structured, secret-f
 
 - [x] The serve read path evaluates SELECT against the endpoint's policy with the resolved actor; the inert-on-reads behavior (empty-commit-plan ⇒ Allow) is gone and the read-allowed test flips accordingly (#20260724013000-enforce-policy-on-the-serve-read-path.md)
 - [x] FOR / AT / WHERE / RoleGraph each admit and deny on reads in both directions, hermetically (#20260724013100-every-grant-axis-bites-on-reads.md)
-- [ ] Fail-closed proven on reads: no-policy deny, dangling-policy deny, anonymous sees only Anyone-granted, and a policy-denied read is a structured secret-free refusal (#20260724013200-fail-closed-and-structured-denial-on-reads.md)
+- [x] Fail-closed proven on reads: no-policy deny, dangling-policy deny, anonymous sees only Anyone-granted, and a policy-denied read is a structured secret-free refusal (#20260724013200-fail-closed-and-structured-denial-on-reads.md)
 
 ## Changelog
 
@@ -95,3 +95,4 @@ no-policy and dangling-policy deny), and a denied read is a structured, secret-f
 - 2026-07-24 — drive_authorized stamped after the creation interrogation (scope ruling above; per-ticket Policies and Quality Gate pre-answered) — mission.md
 - 2026-07-25 — ticket archived — 20260724013000-enforce-policy-on-the-serve-read-path.md
 - 2026-07-25 — ticket archived — 20260724013100-every-grant-axis-bites-on-reads.md
+- 2026-07-25 — ticket archived — 20260724013200-fail-closed-and-structured-denial-on-reads.md

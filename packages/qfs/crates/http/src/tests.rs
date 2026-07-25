@@ -943,3 +943,127 @@ fn local_read_execution_is_not_policy_gated() {
         "the operator's own terminal is unchanged"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Fail-closed + structured denial on the serve read path
+// ---------------------------------------------------------------------------
+
+/// Build a binding serving ONE read endpoint whose `policy:` field is `policy_ref` verbatim, with
+/// only `registered` present in the live policy table. Lets a test drive the three resolution
+/// shapes: a present policy, a DANGLING ref, and no ref at all.
+fn binding_with_policy_ref(
+    policy_ref: Option<&str>,
+    registered: Option<(&str, &[&str])>,
+) -> HttpBinding {
+    let mut binding = HttpBinding::new(engine_with_mock(), reads_with_mock(), 10_000);
+    let mut def = endpoint_without_policy("gated", "GET", "/items", "/mock/items");
+    def.policy = policy_ref.map(str::to_string);
+    let mut state = ServerState::new();
+    if let Some((name, rules)) = registered {
+        state.policies.insert(
+            name.to_string(),
+            qfs_server::PolicyDef {
+                name: name.to_string(),
+                handler: String::new(),
+                allow: rules.iter().map(|r| (*r).to_string()).collect(),
+            },
+        );
+    }
+    state.endpoints.insert(def.name.clone(), def);
+    binding.reconcile(&state).unwrap();
+    binding
+}
+
+/// Fail-closed on reads, all three resolution shapes: NO attached policy denies, a DANGLING policy
+/// ref denies (a typo must never accidentally open a path), and only a present, granting policy
+/// serves. Threading a real principal widens none of them.
+#[test]
+fn no_policy_and_dangling_policy_ref_both_deny_the_read() {
+    let none = binding_with_policy_ref(None, None);
+    let resp = serve_once(&none, &HttpRequest::new(Method::Get, "/items"));
+    assert_eq!(
+        resp.status,
+        403,
+        "an endpoint with no policy serves nothing: {}",
+        resp.body_text()
+    );
+
+    let dangling = binding_with_policy_ref(Some("ghost"), Some(("real", &["ALLOW SELECT"])));
+    let resp = serve_once(&dangling, &HttpRequest::new(Method::Get, "/items"));
+    assert_eq!(
+        resp.status,
+        403,
+        "a dangling policy ref is default-deny, never a fallback to another policy: {}",
+        resp.body_text()
+    );
+
+    let present = binding_with_policy_ref(Some("real"), Some(("real", &["ALLOW SELECT"])));
+    assert_eq!(
+        serve_once(&present, &HttpRequest::new(Method::Get, "/items")).status,
+        200,
+        "only a present, granting policy opens the read"
+    );
+}
+
+/// A policy-denied read is a STRUCTURED REFUSAL, never an empty relation at 200. The response is a
+/// 403 problem body naming the policy class; it carries no `rows`/`schema` payload, and its detail
+/// is secret-free (no token/secret/password markers, no rule internals beyond the verb, driver and
+/// the failing axis). The contrast with a granted read's 200 body is asserted in the same test, so
+/// "distinguishable from an empty result" is proven rather than assumed.
+#[test]
+fn a_denied_read_is_a_structured_refusal_not_an_empty_relation() {
+    let denied =
+        binding_with_policy_ref(Some("narrow"), Some(("narrow", &["ALLOW SELECT ON other"])));
+    let resp = serve_once(&denied, &HttpRequest::new(Method::Get, "/items"));
+    let body = resp.body_text();
+
+    assert_eq!(
+        resp.status, 403,
+        "a denied read is refused, not emptied: {body}"
+    );
+    assert_eq!(resp.content_type, "application/json");
+    assert!(
+        body.contains("\"error\":\"policy\""),
+        "the refusal names its class so an agent can branch on it: {body}"
+    );
+    assert!(
+        !body.contains("\"rows\""),
+        "a refusal must carry no result payload: {body}"
+    );
+    assert!(
+        !body.contains("\"schema\""),
+        "a refusal must carry no result schema: {body}"
+    );
+    assert!(
+        body.contains("SELECT"),
+        "the refusal names the verb it refused: {body}"
+    );
+    for marker in ["token", "secret", "password", "credential"] {
+        assert!(
+            !body.to_lowercase().contains(marker),
+            "the refusal must be secret-free (found `{marker}`): {body}"
+        );
+    }
+
+    // The contrast: a granted read returns 200 WITH a rows payload. An empty relation and a
+    // refusal are therefore never confusable — different status, different body shape.
+    let granted = binding_with_policy_ref(Some("open"), Some(("open", &["ALLOW SELECT"])));
+    let ok = serve_once(&granted, &HttpRequest::new(Method::Get, "/items"));
+    assert_eq!(ok.status, 200);
+    assert!(
+        ok.body_text().contains("\"rows\""),
+        "a granted read's envelope carries rows: {}",
+        ok.body_text()
+    );
+}
+
+/// The signed-out state stays a first-class ANSWER where it is granted to everyone: an unscoped
+/// `ALLOW SELECT` (subject `anyone`) serves the anonymous request 200 with rows. Refusing every
+/// unauthenticated request outright is explicitly NOT what this gate does.
+#[test]
+fn an_anyone_granted_read_still_answers_an_anonymous_request() {
+    let public = binding_with_policy_ref(Some("public"), Some(("public", &["ALLOW SELECT"])));
+    let resp = serve_once(&public, &HttpRequest::new(Method::Get, "/items"));
+    assert_eq!(resp.status, 200, "not a 401: {}", resp.body_text());
+    assert!(resp.body_text().contains("alpha"), "{}", resp.body_text());
+}

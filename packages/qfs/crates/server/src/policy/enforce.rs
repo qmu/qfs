@@ -1173,4 +1173,195 @@ mod tests {
             }
         }
     }
+
+    // ---- fail-closed on reads --------------------------------------------------------------
+
+    /// An anonymous actor sees ONLY what `Subject::Anyone` + `Condition::Always` grants. The
+    /// signed-out state stays a first-class answer where it is granted to everyone, and contributes
+    /// nothing anywhere else — the property that keeps "resolve the principal" from ever widening a
+    /// default.
+    #[test]
+    fn anonymous_reads_only_what_anyone_is_granted() {
+        let anon = DecisionContext::anonymous();
+        let reads = read_of("mail", "/mail/inbox");
+
+        // Anyone + Always ⇒ the anonymous read succeeds (not a 401, not an error: an answer).
+        let public = Policy::new("public")
+            .with_rule(Rule::allow(VerbSet::one(Verb::Select), DriverGlob::any()));
+        assert!(evaluate_reads_with_context(&public, &reads, &anon).is_allow());
+
+        // Narrowed on ANY axis ⇒ the anonymous read is denied.
+        let by_user = Policy::new("u").with_rule(
+            Rule::allow(VerbSet::one(Verb::Select), DriverGlob::any())
+                .for_subject(Subject::User("alice".into())),
+        );
+        assert!(!evaluate_reads_with_context(&by_user, &reads, &anon).is_allow());
+
+        let by_role = Policy::new("r").with_rule(
+            Rule::allow(VerbSet::one(Verb::Select), DriverGlob::any())
+                .for_subject(Subject::Role("member".into())),
+        );
+        assert!(!evaluate_reads_with_context(&by_role, &reads, &anon).is_allow());
+
+        let by_condition = Policy::new("c").with_rule(
+            Rule::allow(VerbSet::one(Verb::Select), DriverGlob::any())
+                .when(Condition::MemberOf("/directories/google/groups/eng".into())),
+        );
+        assert!(
+            !evaluate_reads_with_context(&by_condition, &reads, &anon).is_allow(),
+            "an anonymous actor resolves no membership, so a conditional grant never applies"
+        );
+    }
+
+    /// An EMPTY policy and an empty read list are the two fail-closed edges: no rule can grant a
+    /// read, and a statement that scans nothing has nothing to refuse.
+    #[test]
+    fn empty_policy_denies_every_read_and_an_empty_scan_list_is_vacuously_allowed() {
+        let empty = Policy::default();
+        assert!(
+            !evaluate_reads_with_context(
+                &empty,
+                &read_of("mail", "/mail/inbox"),
+                &DecisionContext::for_user("alice")
+            )
+            .is_allow(),
+            "resolving a real principal must not widen the empty policy"
+        );
+        assert!(
+            evaluate_reads_with_context(&empty, &[], &DecisionContext::anonymous()).is_allow(),
+            "no scan targets ⇒ nothing to refuse"
+        );
+    }
+
+    /// The **no-widening regression**: a frozen snapshot of the WRITE-side decision matrix. Every
+    /// row is a `(policy, plan) -> allowed?` pair whose verdict predates read enforcement. If
+    /// gating reads ever changes a write decision — most plausibly by re-classifying a write's
+    /// `Read` dependency, or by letting a `SELECT` grant leak into a write verb — a row here flips
+    /// and this test fails.
+    #[test]
+    fn enabling_read_enforcement_did_not_change_any_write_side_decision() {
+        let ctx = DecisionContext::anonymous();
+        let cases: Vec<(&str, Policy, Plan, bool)> = vec![
+            (
+                "empty policy denies INSERT",
+                Policy::default(),
+                plan_of(vec![write_node(0, EffectKind::Insert, "log", "/log")]),
+                false,
+            ),
+            (
+                "ALLOW INSERT grants INSERT",
+                Policy::new("p")
+                    .with_rule(Rule::allow(VerbSet::one(Verb::Insert), DriverGlob::any())),
+                plan_of(vec![write_node(0, EffectKind::Insert, "log", "/log")]),
+                true,
+            ),
+            (
+                "ALLOW INSERT does not grant REMOVE",
+                Policy::new("p")
+                    .with_rule(Rule::allow(VerbSet::one(Verb::Insert), DriverGlob::any())),
+                plan_of(vec![write_node(0, EffectKind::Remove, "log", "/log")]),
+                false,
+            ),
+            (
+                "a broad ALLOW ALL grants INSERT",
+                Policy::new("p")
+                    .with_rule(Rule::allow(VerbSet::all(), DriverGlob::any()).as_all_token()),
+                plan_of(vec![write_node(0, EffectKind::Insert, "log", "/log")]),
+                true,
+            ),
+            (
+                "a broad ALLOW ALL does not grant REMOVE",
+                Policy::new("p")
+                    .with_rule(Rule::allow(VerbSet::all(), DriverGlob::any()).as_all_token()),
+                plan_of(vec![write_node(0, EffectKind::Remove, "log", "/log")]),
+                false,
+            ),
+            (
+                "an explicit REMOVE,CALL list grants REMOVE",
+                Policy::new("p").with_rule(Rule::allow(
+                    VerbSet::from_verbs(&[Verb::Remove, Verb::Call]),
+                    DriverGlob::any(),
+                )),
+                plan_of(vec![write_node(0, EffectKind::Remove, "log", "/log")]),
+                true,
+            ),
+            (
+                "a SELECT-only grant grants NO write",
+                Policy::new("readonly")
+                    .with_rule(Rule::allow(VerbSet::one(Verb::Select), DriverGlob::any())),
+                plan_of(vec![write_node(0, EffectKind::Insert, "log", "/log")]),
+                false,
+            ),
+            (
+                "a write's Read dependency is not gated, even on an ungranted driver",
+                Policy::new("p").with_rule(Rule::allow(
+                    VerbSet::one(Verb::Insert),
+                    DriverGlob::new("log"),
+                )),
+                plan_of(vec![
+                    write_node(0, EffectKind::Read, "mail", "/mail/inbox"),
+                    write_node(1, EffectKind::Insert, "log", "/log"),
+                ]),
+                true,
+            ),
+            (
+                "a plan of pure Read/List dependencies has no gated effect",
+                Policy::default(),
+                plan_of(vec![
+                    write_node(0, EffectKind::Read, "mail", "/mail/inbox"),
+                    write_node(1, EffectKind::List, "mail", "/mail"),
+                ]),
+                true,
+            ),
+        ];
+        for (label, policy, plan, expected_allow) in cases {
+            assert_eq!(
+                evaluate_with_context(&policy, &plan, &ctx).is_allow(),
+                expected_allow,
+                "write-side decision changed: {label}"
+            );
+        }
+    }
+
+    /// Effect classification is TOTAL over the known kinds and fail-closed for anything else: every
+    /// known kind maps to a read dependency or a concrete verb, and the residual arm is
+    /// [`EffectClass::Unknown`], which [`evaluate_with_context`] denies outright. A future
+    /// `EffectKind` variant therefore starts denied, never silently permitted.
+    #[test]
+    fn effect_classification_is_total_and_the_unknown_class_denies() {
+        use qfs_core::{ServerNode, ServerWriteOp};
+        assert_eq!(classify_effect(&EffectKind::Read), EffectClass::Read);
+        assert_eq!(classify_effect(&EffectKind::List), EffectClass::Read);
+        assert_eq!(
+            classify_effect(&EffectKind::Insert),
+            EffectClass::Verb(Verb::Insert)
+        );
+        assert_eq!(
+            classify_effect(&EffectKind::Upsert),
+            EffectClass::Verb(Verb::Upsert)
+        );
+        assert_eq!(
+            classify_effect(&EffectKind::Update),
+            EffectClass::Verb(Verb::Update)
+        );
+        assert_eq!(
+            classify_effect(&EffectKind::Remove),
+            EffectClass::Verb(Verb::Remove)
+        );
+        assert_eq!(
+            classify_effect(&EffectKind::Call(ProcId::new("mail.send"))),
+            EffectClass::Verb(Verb::Call)
+        );
+        assert_eq!(
+            classify_effect(&EffectKind::ServerConfigWrite {
+                node: ServerNode::Policies,
+                op: ServerWriteOp::Upsert,
+            }),
+            EffectClass::Verb(Verb::Upsert)
+        );
+        // The Unknown class is the fail-closed residual: `verb_for_effect` reports no verb for it,
+        // and the enforcer's Unknown arm returns a Deny (it is unconstructible today precisely
+        // because the match above is total — that totality is the property this pins).
+        assert_eq!(verb_for_effect(&EffectKind::Read), None);
+    }
 }
