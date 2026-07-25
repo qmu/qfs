@@ -3,9 +3,9 @@ created_at: 2026-07-17T18:03:00+09:00
 author: a@qmu.jp
 type: bugfix
 layer: [Domain]
-effort:
+effort: 2h
 commit_hash:
-category:
+category: Changed
 depends_on:
 mission: a-where-predicate-is-honored-or-refused-never-dropped
 ---
@@ -250,3 +250,96 @@ or `|| true`.
   produce no signal at all.
 - `eval.rs:156` is a three-way `|` arm (`Filter | Shape | Codec`). The fix must split `Codec` out
   rather than change the arm's behavior for all three.
+
+## Final Report — the codec node now reports "undetermined", and the runtime names the real columns (2026-07-25)
+
+**The chosen shape, and why.** `PlanSource::Codec` was split out of the three-way
+`Filter | Shape | Codec` arm and given its **own** schema field, always **empty** — the type model's
+existing word for "undescribable". Of the three answers the ticket offers, this is "reporting that
+the schema is undetermined after a `decode`": it is the only one that is *true*. The planner holds
+the blob source's `describe` and nothing else (`exec/src/codec.rs:10-15` records exactly why), so
+any column list it emits after a decode is a guess presented as a declaration. `Filter` and `Shape`
+keep reporting `input.schema()` — they really are schema-preserving — which is what the arm split
+was for.
+
+**And the honest error is not lost, it moved to where the truth is.** Since the tickets driven
+alongside this one (`20260717180100`, `20260717180200`) put the `where`/`expand` refusals in the
+ENGINE — over the batch a source actually delivered — the codec tail's local evaluation now raises
+them against the **decoded** relation:
+
+```
+$ qfs run "/local<FIX>/a.md |> decode md |> expand front_matter"
+{"error":{"code":"codec_then_query","kind":"usage","message":"post-decode evaluation failed:
+ UnknownColumn { stage: \"expand\", name: \"front_matter\", available: [\"path\",\"tags\",\"title\",\"body\"] }"}}
+EXIT=2
+```
+
+`available` is the **post-decode** column set — exactly what the ticket asked for. Nothing was
+taught to the planner; the plan-time claim was withdrawn and the runtime claim is the true one.
+
+**Two folds needed the same leniency**, or the fix would have replaced one false claim with another:
+`expand` and a column projection over an empty schema would have raised `UnknownColumn` with
+`available: []` — no longer false, but still a refusal against a schema nobody knows. Both now stay
+late-bound when the incoming schema is empty, matching the posture `typeck.rs:487-488` already takes
+for an undescribing driver. The `transform` INPUT-membership check got the same treatment for the
+same reason (every declared column reads as "missing" against an empty schema).
+
+### Quality Gate
+
+1. **The pre-decode columns are no longer reported.** The verbatim pipeline, run:
+
+   ```
+   $ qfs run "/local<FIX>/a.md |> decode md |> expand front_matter |> transform triage"
+   {"preview":{ … READ /local/…/a.md … CALL transform.triage … },"committed":false}
+   {"error":{"code":"commit_required", …}}
+   EXIT=4
+   ```
+
+   Before: `unknown_column` at EXIT=2 with
+   `available: ["name","path","size","modified","is_dir","mode","content"]` — the blob listing's
+   seven columns, **zero** of which the decoded relation has. The false list is gone; the statement
+   plans, and because it carries a `transform` it routes to PREVIEW (a model call is never a silent
+   read), which is the ordinary behaviour of any transform-bearing statement.
+2. **The shape is stated and justified** — above and in the commit body: *undetermined after a
+   codec*, plus the two fold leniencies it forces. The planner was **not** taught the decoded
+   schema (out of scope, the developer's decision).
+3. **Both directions** — `a_codec_node_reports_an_undetermined_schema_not_the_input_columns`
+   asserts the codec node's schema is EMPTY; on the old code it was the input's two columns, so the
+   test cannot pass there. `a_stage_after_a_codec_does_not_get_refused_against_the_pre_decode_columns`
+   asserts `expand`/`select`/`where` after a codec all evaluate, each of which the old code refused
+   with the wrong list.
+4. **The "real constraints" this ticket recorded have MOVED, and saying so is part of the report.**
+   Re-measured on the current binary — two of the three guards the ticket asked to leave unchanged
+   **no longer exist**, retired by the collection-set decode and codec-tail work that landed since:
+
+   | ticket's expectation (2026-07-17) | measured 2026-07-25 |
+   | --- | --- |
+   | `… \|> where path like '%.md' \|> decode md` → `decode_needs_single_blob` | **2 rows, EXIT=0** — a collection-set decode (blueprint §13b) |
+   | `… \|> where name == 'a.md' \|> decode md` → `decode_needs_blob` | **1 row, EXIT=0** — the listing materializes `content` when a DECODE is present |
+   | `… \|> decode md \|> expand tags` → `codec_then_query` | **2 rows, EXIT=0** — the codec tail runs locally |
+
+   `codec_then_query` still exists as the *wrapper code* for a post-decode failure (see the run in
+   the header), but not as a blanket refusal of querying decoded data. Nothing here lifted them —
+   they were already gone; this report corrects the record rather than asserting a guard it did not
+   check.
+5. **A clean `decode` is untouched** — `/local<FIX>/a.md |> decode md |> select title` → one row,
+   `title: "Alpha"`, EXIT=0; the bare `decode md` still returns `path, tags, title, body` at EXIT=0.
+6. **`Filter` and `Shape` are untouched** — pinned by the control half of the first test
+   (`|> where id == 1` and `|> limit 2` both still report the input's columns). A fix that changed
+   the whole three-way arm would fail exactly there.
+7. **The masking, measured after.** The verbatim pipeline no longer raises a first error at all; it
+   plans and previews. What used to hide behind the false `unknown_column` is now reachable: the
+   post-decode `expand front_matter` failure is raised by the codec tail's own evaluation, with the
+   true columns. Stated plainly: nothing masks anything here now, because the plan-time claim that
+   fired first has been withdrawn rather than corrected in place.
+8. **Workspace gates green** — `cargo test --workspace`, `cargo clippy --workspace --all-targets -D
+   warnings`, `cargo fmt --all --check`, `gen-docs --check`, `gen-skills --check`,
+   `check-migrations`, each at a raw exit code. Patch bumped on this branch (0.0.89 → 0.0.90).
+
+**One consequence worth recording, not a defect.** A codec pipeline whose post-decode stage names a
+column the decoded relation lacks is no longer rejected at plan time — it is rejected when the codec
+tail evaluates. For a transform-bearing pipeline that means the failure arrives after PREVIEW rather
+than before it. No effect is applied, and the codec tail evaluates its stages **in order**, so an
+`expand` ahead of a `transform` still fails before any model call. Moving that check earlier would
+mean teaching the planner the decoded schema — the deep change this ticket explicitly leaves to the
+developer.

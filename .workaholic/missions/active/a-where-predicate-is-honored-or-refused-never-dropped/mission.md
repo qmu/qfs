@@ -78,7 +78,7 @@ cannot expand, codec errors name post-decode columns, and `describe`'s pushdown 
 - [x] Unpushed `where` predicates get a local Filter or a structured refusal at the planner seam, across all drivers; the gdrive listing defect is gone in both directions and `describe` pushdown flags are honest (#20260723020055-gdrive-where-pushdown-silent-drop.md)
 - [x] `where` on an unknown column returns a structured `unknown_column` error at non-zero exit, general across drivers, distinguishable from an empty result (#20260717180100-where-on-an-unknown-column-returns-zero-rows-at-exit-0.md)
 - [x] `expand` on a non-expandable or unknown column is a structured error, never a silent pass-through (#20260717180200-expand-silently-no-ops-on-json-and-unknown-columns.md)
-- [ ] A codec source error names the post-decode columns the caller queried (#20260717180300-codec-source-error-names-the-pre-decode-columns.md)
+- [x] A codec source error names the post-decode columns the caller queried (#20260717180300-codec-source-error-names-the-pre-decode-columns.md)
 
 ## Changelog
 
@@ -93,3 +93,4 @@ cannot expand, codec errors name post-decode columns, and `describe`'s pushdown 
 - 2026-07-25 — ticket archived — 20260723020055-gdrive-where-pushdown-silent-drop.md
 - 2026-07-25 — ticket archived — 20260717180100-where-on-an-unknown-column-returns-zero-rows-at-exit-0.md
 - 2026-07-25 — ticket archived — 20260717180200-expand-silently-no-ops-on-json-and-unknown-columns.md
+- 2026-07-25 — ticket archived — 20260717180300-codec-source-error-names-the-pre-decode-columns.md

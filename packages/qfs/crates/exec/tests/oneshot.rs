@@ -2415,7 +2415,7 @@ mod pushed_filter_enforcement {
             .map(|id| {
                 Row::new(vec![
                     Value::Text(id.into()),
-                    Value::Text(format!("{id}.pdf").into()),
+                    Value::Text(format!("{id}.pdf")),
                 ])
             })
             .collect()

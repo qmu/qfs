@@ -1549,3 +1549,71 @@ fn a_selection_segment_is_refused_outside_read_planning() {
         );
     }
 }
+
+// ---- A codec node reports an UNDETERMINED schema, never the pre-decode columns (t-20260717180300) ----
+
+#[test]
+fn a_codec_node_reports_an_undetermined_schema_not_the_input_columns() {
+    // `PlanSource::schema()` used to answer for `Codec` the way it answers for `Filter`/`Shape` —
+    // with the INPUT's schema. But a decode is not schema-preserving: it replaces the blob
+    // listing's columns with the decoded document's. So every diagnostic raised over a codec
+    // pipeline named the PRE-decode columns, a set with zero overlap with the relation's real
+    // ones. The honest answer is "undetermined" (an empty, late-bound schema).
+    let value = eval("/mail |> decode json").expect("a codec pipeline evaluates");
+    let rel = value.as_relation().expect("a query yields a relation");
+    assert!(
+        rel.schema().columns.is_empty(),
+        "after a codec the schema is undetermined, got {:?}",
+        rel.schema().column_names()
+    );
+
+    // The control that pins the split: `Filter` and `Shape` ARE schema-preserving, so they must
+    // still report the input's schema. A fix that over-reached to the whole three-way arm would
+    // break exactly here.
+    let filtered = eval("/mail |> where id == 1").expect("a filter evaluates");
+    assert_eq!(
+        filtered
+            .as_relation()
+            .expect("relation")
+            .schema()
+            .column_names(),
+        vec!["id".to_string(), "subject".to_string()],
+        "a WHERE preserves the input schema"
+    );
+    let shaped = eval("/mail |> limit 2").expect("a limit evaluates");
+    assert_eq!(
+        shaped
+            .as_relation()
+            .expect("relation")
+            .schema()
+            .column_names(),
+        vec!["id".to_string(), "subject".to_string()],
+        "a LIMIT preserves the input schema"
+    );
+}
+
+#[test]
+fn a_stage_after_a_codec_does_not_get_refused_against_the_pre_decode_columns() {
+    // The user-visible half: naming a column that is not in the PRE-decode listing used to be a
+    // plan-time `UnknownColumn` whose `available` list was the blob source's columns — an error
+    // fired first, so it masked every later guard, and its content was false. With the schema
+    // undetermined these stages stay late-bound at plan time; the refusal is the RUNTIME's, over
+    // the decoded batch, where the true columns exist.
+    for src in [
+        "/mail |> decode json |> expand whatever",
+        "/mail |> decode json |> select whatever",
+        "/mail |> decode json |> where whatever == 'x'",
+    ] {
+        assert!(
+            eval(src).is_ok(),
+            "`{src}` must not be refused against the pre-decode columns"
+        );
+    }
+
+    // The control: WITHOUT a codec the same stage is still checked against the real schema, so
+    // the leniency is scoped to "undescribable", not switched on globally.
+    assert!(
+        eval("/mail |> expand whatever").is_err(),
+        "a described relation still refuses an unexpandable/unknown column"
+    );
+}
