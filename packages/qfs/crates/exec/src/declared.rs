@@ -63,9 +63,25 @@ pub struct MapSpec {
     /// The mount-path template the universal write verb addresses (`{param}` segments bind at
     /// apply time from the incoming effect path).
     pub template: String,
+    /// The stored verb label: a universal verb (`INSERT`) or a `CALL <driver>.<action>[(<sig>)]`
+    /// (blueprint §13.1 G5). The apply facet selects the map by it, so a CALL map answers ONLY its
+    /// own procedure and a universal write never lands on a CALL map that shares its mount path.
+    pub verb: String,
     /// The stored body: serde JSON of a parsed `Statement::Effect` whose `VALUES (<expr>)` maps a
     /// bound `row` to the wire body.
     pub body: String,
+}
+
+/// The unqualified action of a declared `CALL` map's verb label (`CALL slack.react(channel text,
+/// …)` → `react`), or `None` for a universal-verb map. The one parser both the §13.1 G5 signature
+/// lift and the CALL dispatch read the label with, so the advertised procedure and the dispatched
+/// one cannot drift apart.
+#[must_use]
+pub fn call_action(verb: &str) -> Option<&str> {
+    let rest = verb.strip_prefix("CALL ")?;
+    let head = rest.split_once('(').map_or(rest, |(head, _)| head);
+    let action = head.trim().split_once('.')?.1.trim();
+    (!action.is_empty()).then_some(action)
 }
 
 /// The evaluated wire write of a declared MAP (blueprint §13 tier 2): the confined
@@ -83,6 +99,11 @@ pub struct MapWrite {
     /// ticket 20260711121526), `None` for the default JSON encode. The caller's applier resolves
     /// the named encoding (an unknown name is its structured refusal, never a silent JSON).
     pub encoding: Option<String>,
+    /// The wire effect kind the BODY itself declares (`INSERT INTO /http/… VALUES (…)` → `Insert`).
+    /// A declared `CALL` has no wire verb of its own — `Call` is not a kind the generic REST driver
+    /// services — so the caller stamps this onto the wire effect and the CALL is issued as exactly
+    /// the write its body names.
+    pub wire_kind: qfs_core::EffectKind,
 }
 
 /// Match a concrete mount path against a view-path template, binding `{param}` segments. Returns the
@@ -403,7 +424,18 @@ pub fn eval_map_body(
         rest_path,
         bodies,
         encoding,
+        wire_kind: wire_kind_of(effect.verb),
     })
+}
+
+/// The parsed body verb as the runtime effect kind the wire applier services.
+const fn wire_kind_of(verb: qfs_parser::EffectVerb) -> qfs_core::EffectKind {
+    match verb {
+        qfs_parser::EffectVerb::Insert => qfs_core::EffectKind::Insert,
+        qfs_parser::EffectVerb::Upsert => qfs_core::EffectKind::Upsert,
+        qfs_parser::EffectVerb::Update => qfs_core::EffectKind::Update,
+        qfs_parser::EffectVerb::Remove => qfs_core::EffectKind::Remove,
+    }
 }
 
 // ---------------------------------------------------------------------------

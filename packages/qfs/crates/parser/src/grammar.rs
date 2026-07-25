@@ -1278,7 +1278,10 @@ fn call_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
     let call_span = kw(Keyword::Call).parse_next(input)?;
     let driver = ident(input)?;
     let _ = punct(Token::Dot).parse_next(input)?;
-    let action = ident(input)?;
+    // The action sits in a NAME position, so a keyword-shaped procedure name reads as its canonical
+    // text — the same ruling `CREATE MAP CALL <drv>.<action>` already makes. Without it a registry
+    // may DECLARE a procedure (`slack.update`) that no `|> CALL` could ever spell.
+    let action = action_word(input)?;
     let args = opt(named_arg_list).parse_next(input)?.unwrap_or_default();
     let end = action.span.end;
     Ok(PipeOp::Call(CallRef {
@@ -2649,7 +2652,7 @@ fn map_verb(input: &mut Stream<'_>) -> ModalResult<String> {
         // action sits in a name position, not a grammar position, so a keyword-shaped word is read
         // as its canonical text. This is what keeps a declared twin's procedure names identical to
         // the compiled registry's instead of forcing a rename.
-        let action = cut_err(action_word).parse_next(input)?;
+        let action = cut_err(action_word).parse_next(input)?.node;
         // §13.1 G5: an OPTIONAL typed parameter list, so a declared CALL reports the same typed
         // signature the compiled describe registry does (`react(channel: Text, ts: Text, emoji:
         // Text)`) and the params bind into the effect body as `row.<param>`. Without the list the
@@ -2667,10 +2670,10 @@ fn map_verb(input: &mut Stream<'_>) -> ModalResult<String> {
 
 /// A procedure-name word in a `CALL <driver>.<action>` position: a bare identifier, or a frozen
 /// keyword read as its canonical lowercase text (a name position, not a grammar position).
-fn action_word(input: &mut Stream<'_>) -> ModalResult<String> {
+fn action_word(input: &mut Stream<'_>) -> ModalResult<Spanned<String>> {
     any.verify_map(|t: Spanned<Token>| match t.node {
-        Token::Ident(s) => Some(s),
-        Token::Keyword(k) => Some(k.text().to_string()),
+        Token::Ident(s) => Some(Spanned::new(s, t.span)),
+        Token::Keyword(k) => Some(Spanned::new(k.text().to_string(), t.span)),
         _ => None,
     })
     .parse_next(input)

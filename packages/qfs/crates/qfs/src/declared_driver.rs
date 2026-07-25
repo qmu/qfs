@@ -2603,6 +2603,415 @@ mod tests {
         );
     }
 
+    /// Every `CREATE MAP` the SHIPPED `slack_driver.qfs` declares, loaded as the [`DeclaredMap`]
+    /// rows an install writes into `/sys/drivers`: mount path, canonical verb label, stored body,
+    /// and the `IRREVERSIBLE` flag — read from the SHIPPED bytes, so the effect-equivalence proofs
+    /// below cannot drift from the declaration an operator actually installs.
+    fn shipped_slack_maps() -> Vec<DeclaredMap> {
+        let stripped: String = qfs_skill::SLACK_DRIVER
+            .lines()
+            .map(|l| l.split("--").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let maps: Vec<DeclaredMap> = stripped
+            .split(';')
+            .map(str::trim)
+            .filter(|s| s.starts_with("CREATE MAP "))
+            .map(|stmt| {
+                // The declaration wraps across lines; collapse it to one line so the `AS` seam and
+                // the signature parens are found the same way wherever the author broke the line.
+                let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
+                let (head, tail) = stmt
+                    .split_once(" AS ")
+                    .expect("a MAP declares `AS <effect>`");
+                let (body_src, irreversible) = match tail.trim().strip_suffix("IRREVERSIBLE") {
+                    Some(b) => (b.trim(), true),
+                    None => (tail.trim(), false),
+                };
+                let head = head.trim_start_matches("CREATE MAP ").trim();
+                // `CALL <drv>.<action> ( <sig> ) /<node>` or `<VERB> /<node>`. The verb label is
+                // rendered canonically (no space before the signature, `, `-joined params) — the
+                // shape `declared_proc_sig`/`call_action` read, asserted against the compiled
+                // registry in `shipped_slack_call_maps_carry_typed_g5_signatures`.
+                let (verb, path) = match head.split_once('(') {
+                    Some((call_head, rest)) => {
+                        let (sig, path) = rest.split_once(')').expect("a signature closes");
+                        let sig = sig
+                            .split(',')
+                            .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        (format!("{}({sig})", call_head.trim()), path.trim())
+                    }
+                    None => {
+                        let (verb, path) = head.split_once(' ').expect("a verb then a node path");
+                        (verb.trim().to_string(), path.trim())
+                    }
+                };
+                DeclaredMap {
+                    path: path.to_string(),
+                    verb,
+                    body: serde_json::to_string(&qfs_exec::parse(body_src).expect("body parses"))
+                        .expect("body serializes"),
+                    irreversible,
+                }
+            })
+            .collect();
+        assert_eq!(
+            maps.len(),
+            6,
+            "the post map plus the five CALL maps: {maps:?}"
+        );
+        maps
+    }
+
+    /// The shipped Slack twin as a whole declared driver (driver row + every declared map). The
+    /// six maps SHARE the `/slack/{ws}/{channel}/messages` mount path, so dispatch here is a real
+    /// selection problem: the post INSERT and the five CALLs are told apart by their verb alone.
+    fn shipped_slack_declared_driver() -> DeclaredDriver {
+        DeclaredDriver {
+            name: "slack".into(),
+            base_url: "https://slack.com/api".into(),
+            auth: r#"{"kind":"bearer"}"#.into(),
+            pagination: None,
+            pushdown: None,
+            views: vec![],
+            maps: shipped_slack_maps(),
+        }
+    }
+
+    /// One CALL argument as the evaluator lowers it: the declared parameter name and its value.
+    type CallArg = (&'static str, String);
+
+    /// One equivalence case: the declared action, its arguments, the COMPILED effect twin, and the
+    /// Slack Web-API method the oracle must hit.
+    type CallEquivalenceCase = (
+        &'static str,
+        Vec<CallArg>,
+        qfs_driver_slack::SlackEffect,
+        &'static str,
+    );
+
+    /// Drive ONE declared `CALL slack.<action>` through the FULL commit stack (interpreter → mount
+    /// remap → the §13 write facet → the confined applier) and return the recorded wire request.
+    async fn declared_slack_call_request(
+        action: &str,
+        args: &[CallArg],
+        irreversible: bool,
+    ) -> qfs_driver_http::HttpRequest {
+        use qfs_core::{
+            Column, ColumnType, DriverId, EffectKind, EffectNode, NodeId, PlanBuilder, ProcId, Row,
+            RowBatch, Schema, Target, Value, VfsPath,
+        };
+        use qfs_runtime::{CapabilitySet, DriverRegistry, Interpreter};
+
+        let d = shipped_slack_declared_driver();
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"{"ok":true}"#.to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+        let remap = declared_remap("/slack", "slack").expect("remap");
+        let facet = crate::apply_facets::RestApplyDriver::new(
+            Arc::new(qfs_driver_http::rest_apply_driver(&driver)),
+            "slack".to_string(),
+            crate::declared_eval::map_specs(&d),
+        );
+        let registry = DriverRegistry::new().with(
+            remap.outer_id(),
+            Arc::new(crate::mount_adapter::MountApplyDriver::new(
+                remap,
+                Arc::new(facet),
+            )),
+        );
+        let interp = Interpreter::with_defaults(registry);
+
+        // The call's arguments as the one row the evaluator lowered them to (each column named by
+        // its declared parameter) — the shape `eval_terminal_call` builds for every driver.
+        let batch = RowBatch::new(
+            Schema::new(
+                args.iter()
+                    .map(|(n, _)| Column::new(*n, ColumnType::Text, false))
+                    .collect(),
+            ),
+            vec![Row::new(
+                args.iter().map(|(_, v)| Value::Text(v.clone())).collect(),
+            )],
+        );
+        let mut b = PlanBuilder::new();
+        b.push(
+            EffectNode::new(
+                NodeId(0),
+                EffectKind::Call(ProcId::new(format!("slack.{action}"))),
+                Target::new(
+                    DriverId::new("slack"),
+                    // An ALREADY-RESOLVED channel id addresses the node: name→id resolution is
+                    // blueprint §13.1 G4 (per-row FOLLOW fan-out), ruled but unimplemented, and is
+                    // this ticket's still-open QG2 — never silently papered over here.
+                    VfsPath::new("/slack/W1/C0EQUIV/messages"),
+                ),
+            )
+            .with_args(batch)
+            .irreversible(irreversible),
+        );
+        let caps = CapabilitySet::none().grant(
+            DriverId::new("slack"),
+            &EffectKind::Call(ProcId::new(format!("slack.{action}"))),
+        );
+        let outcome = interp
+            .commit(b.build(), &caps)
+            .await
+            .expect("the declared CALL commits");
+        assert!(
+            outcome.is_complete(),
+            "the declared CALL reached the wire: {outcome:?}"
+        );
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 1, "one wire exchange per declared CALL");
+        recorded[0].clone()
+    }
+
+    /// A recording Slack transport (no socket): records every request, answers from a FIFO queue.
+    /// The compiled oracle's wire seam — the same `qfs-http-core` DTOs the declared side records.
+    struct RecordingSlackTransport {
+        responses: std::sync::Mutex<std::collections::VecDeque<qfs_driver_http::HttpResponse>>,
+        recorded: std::sync::Mutex<Vec<qfs_driver_http::HttpRequest>>,
+    }
+
+    impl qfs_driver_slack::HttpTransport for RecordingSlackTransport {
+        fn send(
+            &self,
+            req: &qfs_driver_http::HttpRequest,
+        ) -> Result<qfs_driver_http::HttpResponse, qfs_driver_slack::TransportError> {
+            self.recorded.lock().unwrap().push(req.clone());
+            self.responses.lock().unwrap().pop_front().ok_or_else(|| {
+                qfs_driver_slack::TransportError {
+                    reason: "mock transport exhausted".to_string(),
+                }
+            })
+        }
+    }
+
+    /// Drive ONE compiled [`SlackEffect`] through the REAL `RestSlackClient` and return the
+    /// recorded wire request — the oracle every declared CALL is compared against.
+    fn compiled_slack_call_request(
+        effect: &qfs_driver_slack::SlackEffect,
+    ) -> qfs_driver_http::HttpRequest {
+        use qfs_driver_slack::SlackClient as _;
+        let transport = Arc::new(RecordingSlackTransport {
+            responses: std::sync::Mutex::new(
+                vec![qfs_driver_http::HttpResponse::new(
+                    200,
+                    br#"{"ok":true}"#.to_vec(),
+                )]
+                .into(),
+            ),
+            recorded: std::sync::Mutex::new(Vec::new()),
+        });
+        let client = qfs_driver_slack::RestSlackClient::new(
+            transport.clone(),
+            seeded_slack_secrets(),
+            qfs_secrets::CredentialKey::new(
+                qfs_secrets::DriverId::new("slack"),
+                qfs_secrets::ConnectionId::new("default").unwrap(),
+            ),
+            qfs_driver_slack::BodyErrorRule::On,
+        );
+        client.apply(effect).expect("the compiled CALL applies");
+        let recorded = transport.recorded.lock().unwrap().clone();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "an id-addressed channel needs no resolution round-trip"
+        );
+        recorded[0].clone()
+    }
+
+    #[tokio::test]
+    async fn shipped_slack_call_maps_are_wire_equivalent_to_the_compiled_calls() {
+        // Ticket 20260724014100 QG1 — the EFFECT half of the equivalence bar (the contract half is
+        // `shipped_slack_call_maps_carry_typed_g5_signatures`). Each of the five shipped CALL maps
+        // and its COMPILED `SlackEffect` twin are driven to a recorded wire request, and the two
+        // requests must agree on METHOD, ENDPOINT and PAYLOAD — including the channel id, which
+        // both sides must carry through untouched. The channel is addressed by its ALREADY-RESOLVED
+        // `Cxxxx` id: name→id resolution is the ticket's open QG2 (blueprint §13.1 G4).
+        const CHANNEL: &str = "C0EQUIV";
+        let ts = "1719000000.000100".to_string();
+        let cases: Vec<CallEquivalenceCase> = vec![
+            (
+                "react",
+                vec![
+                    ("channel", CHANNEL.to_string()),
+                    ("ts", ts.clone()),
+                    ("emoji", "eyes".to_string()),
+                ],
+                qfs_driver_slack::SlackEffect::AddReaction {
+                    channel: CHANNEL.into(),
+                    ts: ts.clone(),
+                    emoji: "eyes".into(),
+                },
+                "/reactions.add",
+            ),
+            (
+                "pin",
+                vec![("channel", CHANNEL.to_string()), ("ts", ts.clone())],
+                qfs_driver_slack::SlackEffect::Pin {
+                    channel: CHANNEL.into(),
+                    ts: ts.clone(),
+                },
+                "/pins.add",
+            ),
+            (
+                "unpin",
+                vec![("channel", CHANNEL.to_string()), ("ts", ts.clone())],
+                qfs_driver_slack::SlackEffect::Unpin {
+                    channel: CHANNEL.into(),
+                    ts: ts.clone(),
+                },
+                "/pins.remove",
+            ),
+            (
+                "update",
+                vec![
+                    ("channel", CHANNEL.to_string()),
+                    ("ts", ts.clone()),
+                    ("text", "edited".to_string()),
+                ],
+                qfs_driver_slack::SlackEffect::UpdateMessage {
+                    channel: CHANNEL.into(),
+                    ts: ts.clone(),
+                    text: "edited".into(),
+                },
+                "/chat.update",
+            ),
+            (
+                "delete",
+                vec![("channel", CHANNEL.to_string()), ("ts", ts.clone())],
+                qfs_driver_slack::SlackEffect::DeleteMessage {
+                    channel: CHANNEL.into(),
+                    ts: ts.clone(),
+                },
+                "/chat.delete",
+            ),
+        ];
+        let irreversible: std::collections::HashMap<String, bool> = shipped_slack_maps()
+            .iter()
+            .filter_map(|m| {
+                qfs_exec::declared::call_action(&m.verb).map(|a| (a.to_string(), m.irreversible))
+            })
+            .collect();
+
+        for (action, args, compiled_effect, endpoint) in cases {
+            let irr = *irreversible
+                .get(action)
+                .expect("the shipped asset declares this CALL");
+            let declared = declared_slack_call_request(action, &args, irr).await;
+            let compiled = compiled_slack_call_request(&compiled_effect);
+
+            assert_eq!(
+                declared.method, compiled.method,
+                "`{action}`: same wire METHOD"
+            );
+            assert_eq!(declared.url, compiled.url, "`{action}`: same wire ENDPOINT");
+            assert!(
+                compiled.url.ends_with(endpoint),
+                "`{action}`: the oracle really hit {endpoint}: {}",
+                compiled.url
+            );
+            let body_of = |req: &qfs_driver_http::HttpRequest| -> serde_json::Value {
+                serde_json::from_slice(req.body.as_deref().expect("a POST body"))
+                    .expect("valid JSON")
+            };
+            let (declared_body, compiled_body) = (body_of(&declared), body_of(&compiled));
+            assert_eq!(
+                declared_body, compiled_body,
+                "`{action}`: same wire PAYLOAD"
+            );
+            assert_eq!(
+                declared_body.get("channel").and_then(|c| c.as_str()),
+                Some(CHANNEL),
+                "`{action}`: the resolved channel id reached the wire unchanged"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn declared_call_dispatch_selects_the_map_by_procedure_not_by_path() {
+        // The selection the six shipped maps force: they ALL mount at
+        // `/slack/{ws}/{channel}/messages`, so a CALL that matched by path alone would fire
+        // whichever map was declared first (the post map). `slack.unpin` must reach `pins.remove`
+        // even though `slack.pin` (pins.add) declares the same path and the same signature shape.
+        let req = declared_slack_call_request(
+            "unpin",
+            &[
+                ("channel", "C0EQUIV".to_string()),
+                ("ts", "1.1".to_string()),
+            ],
+            false,
+        )
+        .await;
+        assert_eq!(req.url, "https://slack.com/api/pins.remove");
+    }
+
+    #[test]
+    fn declared_slack_call_signatures_reject_a_malformed_argument() {
+        // Ticket 20260724014100 QG3: with CALL dispatch wired, a declared mount's typed G5
+        // signatures are what a `|> CALL` resolves against — so a wrong-shaped argument is refused
+        // at TYPECHECK, before a plan (let alone a wire request) exists. One negative case per
+        // DISTINCT declared shape: `(channel, ts, emoji)`, `(channel, ts)`, `(channel, ts, text)`.
+        let d = shipped_slack_declared_driver();
+        let mount = declared_describe_mount("/slack", &d).expect("the declared describe mount");
+        let mut reg = qfs_core::MountRegistry::new();
+        reg.register(Arc::new(mount)).expect("registers");
+        let resolve = |src: &str| {
+            let stmt = qfs_exec::parse(src).expect("the statement parses");
+            qfs_core::Resolver::new(&reg).resolve_statement(&stmt)
+        };
+
+        // Positive controls: the well-shaped calls resolve, and the declared irreversibility rides.
+        let ok = resolve(
+            "/slack/W1/C1/messages |> CALL slack.react(channel => 'C1', ts => '1.1', emoji => 'eyes')",
+        )
+        .expect("a well-shaped declared CALL resolves");
+        assert_eq!(ok[0].qualified, "slack.react");
+        assert!(!ok[0].irreversible);
+        let pinned =
+            resolve("/slack/W1/C1/messages |> CALL slack.pin(channel => 'C1', ts => '1.1')")
+                .expect("pin resolves");
+        assert!(pinned[0].irreversible, "the declared pin is IRREVERSIBLE");
+
+        // `react(channel, ts, emoji)` — one argument too many.
+        let arity =
+            resolve("/slack/W1/C1/messages |> CALL slack.react('C1', '1.1', 'eyes', 'surplus')")
+                .expect_err("a fourth argument is not in the signature");
+        assert_eq!(arity.code(), "arity_mismatch");
+
+        // `pin(channel, ts)` — right arity, but a parameter the SHAPE does not declare (react's
+        // `emoji`). The refusal names the DECLARED parameters, so it is the declaration's own typed
+        // signature doing the rejecting.
+        let unknown =
+            resolve("/slack/W1/C1/messages |> CALL slack.pin(channel => 'C1', emoji => 'eyes')")
+                .expect_err("pin declares no `emoji`");
+        assert_eq!(unknown.code(), "unknown_arg");
+        match unknown {
+            qfs_core::ResolveError::UnknownArg { arg, params, .. } => {
+                assert_eq!(arg, "emoji");
+                assert_eq!(params, vec!["channel".to_string(), "ts".to_string()]);
+            }
+            other => panic!("expected the structured unknown-arg refusal: {other:?}"),
+        }
+
+        // `update(channel, ts, text)` — its third parameter is `text`, not `emoji`. (`update` is a
+        // frozen keyword; it is spellable here because a procedure name is a NAME position.)
+        let wrong_param = resolve(
+            "/slack/W1/C1/messages |> CALL slack.update(channel => 'C1', ts => '1.1', emoji => 'x')",
+        )
+        .expect_err("update declares no `emoji`");
+        assert_eq!(wrong_param.code(), "unknown_arg");
+    }
+
     #[test]
     fn declared_call_signature_parses_typed_and_untyped() {
         // The G5 grammar's two arms: a typed signature lifts to typed params; the no-signature

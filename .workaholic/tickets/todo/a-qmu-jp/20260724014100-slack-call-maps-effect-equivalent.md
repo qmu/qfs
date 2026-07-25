@@ -75,13 +75,43 @@ at the wall the remaining half sits behind. What is committed and green:
   the COMPILED `SlackDriver::procedures()` — name, parameter names, parameter types, irreversibility
   — and they are equal. `declared_call_signature_parses_typed_and_untyped` covers both grammar arms.
 
-**What is NOT done — this ticket's Quality Gate items 1-3 are still open:**
+A second `/monitor` wave of the same run (20260725-101714) then closed **QG1 and QG3**. What that
+wave landed:
 
-1. **Wire-level effect equivalence (QG1).** The five maps are declared and their bodies are the right
-   shape, but no test yet drives BOTH the declared map and the compiled `SlackEffect` to a recorded
-   wire request and compares method / endpoint / resolved channel id / payload. Signature parity is
-   the contract half; the effect half is unproven.
-2. **Name→id resolution parity (QG2) — the real wall.** The compiled driver resolves `#name` → `Cxxxx`
+- **Declared CALL DISPATCH is wired** (`crates/qfs/src/apply_facets.rs`). A `CALL` effect on a
+  declared mount now selects the map whose declared **action** matches the called procedure — not
+  merely its mount path, which matters because the six shipped Slack maps (the post `INSERT` plus the
+  five CALLs) ALL mount at `/slack/{ws}/{channel}/messages`; a path-only match would have fired
+  whichever map was declared first. The stored verb label rides onto `MapSpec` for that selection,
+  and `MapWrite` now carries the wire verb the map BODY declares, which the facet stamps onto the
+  wire effect (`Call` is not a kind the generic REST driver services). A CALL matching no declared
+  CALL map still reaches the stock applier and is refused terminally — an unmapped CALL fails, it
+  never POSTs something else.
+- **A parse gap the dispatch exposed** (`crates/parser/src/grammar.rs`): `|> CALL <drv>.<action>`
+  read the action with `ident`, so `CALL slack.update(…)` did not parse — `update` is a frozen
+  keyword. The registry could DECLARE a procedure no `CALL` could spell (this hit the COMPILED
+  driver too, which has advertised `slack.update` since v0.0.89). The action sits in a NAME position,
+  so it now reads a keyword-shaped word as its canonical text — the same ruling `CREATE MAP CALL`
+  already makes.
+- **QG1 is proven** by `shipped_slack_call_maps_are_wire_equivalent_to_the_compiled_calls`: for each
+  of react / pin / unpin / update / delete, the SHIPPED asset's map (bodies read out of
+  `slack_driver.qfs` itself, so the proof cannot drift from what an install writes) is driven through
+  the full commit stack to a recorded wire request, the compiled `SlackEffect` twin is driven through
+  the real `RestSlackClient` over a recording transport, and the two requests are asserted equal on
+  METHOD, ENDPOINT and PAYLOAD — with the channel id asserted to reach the wire unchanged. The
+  channel is addressed by an already-resolved `Cxxxx` id, so the proof does not depend on the
+  unimplemented resolution below.
+- **QG3 is proven** by `declared_slack_call_signatures_reject_a_malformed_argument`: with dispatch
+  wired, a `|> CALL` against the declared mount resolves against the declared G5 signatures, so a
+  wrong-shaped argument is refused at TYPECHECK before a plan exists. One negative case per distinct
+  declared shape — `react(channel, ts, emoji)` with a surplus argument (`arity_mismatch`),
+  `pin(channel, ts)` with react's `emoji` (`unknown_arg`, and the refusal names the DECLARED
+  parameters), `update(channel, ts, text)` with `emoji` for `text` (`unknown_arg`).
+
+**What is NOT done — Quality Gate item 2 is still open:**
+
+1. ~~**Wire-level effect equivalence (QG1).**~~ Closed by the second wave (above).
+2. **Name→id resolution parity (QG2) — the real wall, still standing.** The compiled driver resolves `#name` → `Cxxxx`
    (and `Uxxxx` → `Dxxxx`) INSIDE its live client, on the way to every ID-requiring call. A
    declaration cannot express that today: it is a per-row fan-out into a second wire request, which
    is blueprint §13.1 **G4** (`|> FOLLOW <field> INTO /http/<drv>/<template>`) — **ruled but not
@@ -89,14 +119,23 @@ at the wall the remaining half sits behind. What is committed and green:
    "a name-addressed channel resolves before the effect fires" nor "an unresolvable name is a
    structured preview-time error" can be reproduced. This is the blocking dependency, and it is
    internal, not external.
-3. **Typecheck rejection of a malformed argument (QG3).** Declared CALL maps are declared and
-   advertised, but `CALL` DISPATCH for a declared mount is not wired (`declared_driver::map_verb`
-   still returns `None` for a `CALL …` label, so no wire verb is aggregated for it), so there is no
-   path on which a wrong-shaped argument is checked.
+3. ~~**Typecheck rejection of a malformed argument (QG3).**~~ Closed by the second wave (above).
 
-**Recommended next slice:** implement G4 per-row fan-out first (it is the shared prerequisite for
-this ticket's QG2 *and* for the drive twin, playbook entry #3), then wire declared-CALL dispatch, then
-the five wire-level equivalence tests.
+**Recommended next slice:** implement G4 per-row fan-out — now queued as its own ticket,
+`20260725124400-declared-follow-into-per-row-fan-out-g4.md`. It is the shared prerequisite for this
+ticket's QG2 *and* for the drive twin (playbook entry #3), and it is the only thing left between this
+ticket and closure.
 
-**The tracked concern `slack-workspace-namespace-still-advertises-verb`** is NOT resolved by this
-partial: the declared twin's honest verb set cannot be final while CALL dispatch is unwired.
+**This ticket therefore stays OPEN on QG2 alone**, and
+`20260724014200-retire-the-compiled-slack-driver.md` stays BLOCKED on it: deleting `driver-slack`
+now would remove the compiled oracle the outstanding resolution proof compares against.
+
+**The tracked concern `slack-workspace-namespace-still-advertises-verb`** is still NOT resolved: CALL
+dispatch is wired now, but the twin's honest verb set is settled only when the retirement ticket
+lands, and that is blocked on QG2.
+
+**One thing observed but deliberately NOT changed** (no shipped declaration hits it today, so it is a
+note, not a ticket): a UNIVERSAL-verb map still issues its wire leg under the OPERATOR's verb rather
+than the verb its body declares, so a hypothetical `CREATE MAP REMOVE … AS INSERT INTO /http/…` would
+send a DELETE carrying a body. Only the CALL arm consults `MapWrite::wire_kind`. Every shipped map
+(chatwork, cloudflare, slack) declares a body whose verb already matches its map verb.

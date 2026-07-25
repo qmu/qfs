@@ -9,7 +9,7 @@ assignee: a@qmu.jp
 strategy: integrations-are-declared-not-compiled
 drive_authorized: true
 predicted_hours:
-actual_hours:
+actual_hours: 1.05
 tickets: []
 stories: []
 concerns: []
@@ -101,3 +101,4 @@ retired.
 - 2026-07-24 - drive_authorized stamped after the creation interrogation (playbook-grounded set; per-ticket Policies and Quality Gate pre-answered) - mission.md
 - 2026-07-25 — ticket archived — 20260724014300-cf-queue-pull-twin-and-retirement.md
 - 2026-07-25 — ticket archived — 20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md
+- 2026-07-25 — run recorded (+1.05h) — 20260725-101714

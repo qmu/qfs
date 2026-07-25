@@ -53,6 +53,7 @@ pub(crate) fn map_specs(
         .iter()
         .map(|m| qfs_exec::declared::MapSpec {
             template: m.path.clone(),
+            verb: m.verb.clone(),
             body: m.body.clone(),
         })
         .collect()
