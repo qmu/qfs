@@ -2533,3 +2533,132 @@ mod pushed_filter_enforcement {
         assert_eq!(rows.len(), 3, "no `where` means no filtering");
     }
 }
+
+/// `EXPAND` refuses what it cannot explode (ticket 20260717180200), through the path a real
+/// `qfs run` read takes: `block_on_read` → lower → partition → `MiniEvaluator`. The stage used to
+/// return the input relation unchanged at exit 0 for BOTH a `Json` column (its `NotExpandable` was
+/// discarded by an `unwrap_or`) and an absent one (short-circuited before the check).
+mod expand_refuses_what_it_cannot_expand {
+    use super::*;
+    use qfs_core::Fields;
+
+    fn doc_schema() -> Schema {
+        Schema::new(vec![
+            Column::new("id", ColumnType::Int, false),
+            // The shipped shape this ticket was measured against: a `Json` blob column.
+            Column::new("frontmatter", ColumnType::Json, true),
+            Column::new("tags", ColumnType::Array(Box::new(ColumnType::Text)), false),
+            Column::new(
+                "author",
+                ColumnType::Struct(Schema::new(vec![
+                    Column::new("name", ColumnType::Text, false),
+                    Column::new("email", ColumnType::Text, false),
+                ])),
+                false,
+            ),
+        ])
+    }
+
+    fn doc_rows() -> Vec<Row> {
+        vec![Row::new(vec![
+            Value::Int(1),
+            Value::Struct(Fields::new(vec![(
+                "title".into(),
+                Value::Text("Alpha".into()),
+            )])),
+            Value::Array(vec![Value::Text("x".into()), Value::Text("y".into())]),
+            Value::Struct(Fields::new(vec![
+                ("name".into(), Value::Text("ann".into())),
+                ("email".into(), Value::Text("ann@example.com".into())),
+            ])),
+        ])]
+    }
+
+    struct Docs;
+
+    impl qfs_core::Driver for Docs {
+        fn mount(&self) -> &str {
+            "/docs"
+        }
+        fn describe(&self, _p: &Path) -> Result<NodeDesc, CfsError> {
+            Ok(NodeDesc::new(Archetype::RelationalTable, doc_schema()))
+        }
+        fn capabilities(&self, _p: &Path) -> Capabilities {
+            Capabilities::none().select()
+        }
+        fn procedures(&self) -> &[qfs_core::ProcSig] {
+            &[]
+        }
+        fn pushdown(&self) -> &PushdownProfile {
+            &PushdownProfile::None
+        }
+        fn applier(&self) -> &dyn PlanApplier {
+            Box::leak(Box::new(NoopApplier))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ReadDriver for Docs {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
+            Ok(RowBatch::new(doc_schema(), doc_rows()))
+        }
+    }
+
+    fn read(query: &str) -> Result<qfs_exec::RowSet, qfs_exec::ExecError> {
+        let mut engine = Engine::new();
+        engine.mounts.register(Arc::new(Docs)).unwrap();
+        let reads = ReadRegistry::new().with(DriverId::new("docs"), Arc::new(Docs));
+        block_on_read(
+            &parse(query).unwrap(),
+            &engine.mounts,
+            &reads,
+            &qfs_core::RequestContext::anonymous(),
+        )
+    }
+
+    #[test]
+    fn a_json_column_is_refused_instead_of_passing_the_rows_through() {
+        // Defect 1. `Schema::expand` has always documented "expanding a scalar / `Json` /
+        // `Unknown` column is rejected"; the executed path threw that `Err` away and returned the
+        // input, so the schema still said `json` and the rows were byte-identical to a plain read.
+        let err = read("/docs/documents |> expand frontmatter")
+            .expect_err("a Json column cannot be exploded");
+        assert_eq!(err.code, "not_expandable", "{err:?}");
+    }
+
+    #[test]
+    fn an_absent_column_is_refused_instead_of_passing_the_rows_through() {
+        // Defect 2. This one never reached `Schema::expand` at all — the early `else { return
+        // batch }` meant a typo produced output indistinguishable from the un-expanded read.
+        let err =
+            read("/docs/documents |> expand nosuchcol").expect_err("an absent column is refused");
+        assert_eq!(err.code, "unknown_column", "{err:?}");
+    }
+
+    #[test]
+    fn the_array_case_is_untouched() {
+        // The positive control that proves the stage is not simply inert now: a real `Array`
+        // column still explodes, one row per element, and its column becomes the element type.
+        let out = read("/docs/documents |> expand tags").expect("an array still expands");
+        assert_eq!(out.len(), 2, "1 row of 2 tags becomes 2 rows");
+        let tags = out.schema.column("tags").expect("the tags column survives");
+        assert_eq!(tags.ty, ColumnType::Text, "array → element type");
+    }
+
+    #[test]
+    fn the_struct_case_is_untouched() {
+        // `Struct` flattening (one level, fields spliced in place) is equally unaffected.
+        let out = read("/docs/documents |> expand author").expect("a struct still expands");
+        assert_eq!(out.len(), 1);
+        assert!(out.schema.column("name").is_some(), "fields are spliced in");
+        assert!(out.schema.column("email").is_some());
+        assert!(
+            out.schema.column("author").is_none(),
+            "the struct column itself is replaced"
+        );
+    }
+}

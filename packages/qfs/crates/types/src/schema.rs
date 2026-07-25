@@ -316,6 +316,15 @@ impl Schema {
     /// Other columns are preserved in place. Expanding a scalar / `Json` / `Unknown`
     /// column is rejected.
     ///
+    /// **This contract is now enforced at runtime** (ticket 20260717180200): the engine's
+    /// `EXPAND` kernel propagates both errors instead of discarding them, so a `Json` or absent
+    /// column is a structured refusal at a non-zero exit rather than the input relation returned
+    /// unchanged. One deliberate difference: a column typed `Unknown` is **not** refused by the
+    /// engine, because there `Unknown` means "not known yet" (an `EXTEND`-computed column, an
+    /// aggregate output, an undescribable relation) rather than "known to be a scalar" — the rows
+    /// may genuinely hold arrays. This function still rejects it, as the pure type model should;
+    /// the engine simply keeps the schema late-bound instead of asking.
+    ///
     /// # Errors
     /// - [`TypeError::UnknownColumn`] if `field` is absent.
     /// - [`TypeError::NotExpandable`] if `field` is not an `Array`/`Struct`.

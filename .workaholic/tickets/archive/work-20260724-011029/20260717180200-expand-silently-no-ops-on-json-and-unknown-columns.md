@@ -3,9 +3,9 @@ created_at: 2026-07-17T18:02:00+09:00
 author: a@qmu.jp
 type: bugfix
 layer: [Domain]
-effort:
+effort: 2h
 commit_hash:
-category:
+category: Changed
 depends_on:
 mission: a-where-predicate-is-honored-or-refused-never-dropped
 ---
@@ -274,3 +274,81 @@ or `|| true`.
   `20260717180100`. Filed separately because the mechanisms differ — `expand` swallows an error that
   IS raised (`unwrap_or`), while `where` never raises one (an absent column types as `Unknown`) —
   and either can land alone. If both are driven together, the two-path structure is the common seam.
+
+## Final Report — the swallow points are closed at the kernel (2026-07-25)
+
+**Which side owns the refusal, and why.** The ticket offers two candidates — the executed kernel
+(`engine/src/eval.rs`) or the lowering (`pushdown/src/lower.rs`). The kernel owns it. The lowering
+cannot: `plan.rs`'s `schema_of` describes the driver **ROOT** (`describe_root`), not the addressed
+node, so a check there would see the wrong columns for `/sql/db/users`, `/drive/my/<folder>` and
+every other addressed relation. The kernel sees the schema of the rows the driver actually
+delivered, which is by definition the relation's. This is the same conclusion the sibling ticket
+`20260717180100` reached for `where`, and both now refuse at the same seam.
+
+**The three swallow points, closed rather than worked around:**
+
+| site | before | now |
+| --- | --- | --- |
+| `eval.rs:481-483` | absent column → `return batch` (unchanged), before `Schema::expand` is ever called | `ExpandError::Unknown` carrying the column and the available list |
+| `eval.rs:485` | `.unwrap_or(batch.schema.clone())` **discarded** `Schema::expand`'s `Err` | the `Err` propagates; a `Json`/scalar column is `ExpandError::NotExpandable` |
+| `eval.rs:498-499` | a `Json` value fell to the scalar arm, so rows agreed with the un-updated schema and nothing looked wrong | unreachable for a non-collection COLUMN (refused above); it now handles only a `Null`/late-bound VALUE inside an expandable column |
+
+`expand`'s signature changed from `RowBatch` to `Result<RowBatch, ExpandError>` — the type-level
+part of the fix, since a `RowBatch`-returning kernel structurally cannot report the errors its own
+contract documents. `combine.rs:227`'s infallible `Ok(...)` wrapper is gone with it.
+
+**One deliberate departure from the documented contract, and the doc says so now.** `schema.rs`
+rejects a `Json`, scalar **or `Unknown`** column. The engine refuses the first two and stays lenient
+on `Unknown`, because there `Unknown` means *not known yet* — an `EXTEND`-computed column, an
+aggregate output, a relation whose shape resolves at runtime — not *known to be a scalar*; refusing
+it would reject values that really are arrays. The same rule covers an EMPTY schema (an
+undescribable relation), matching the late-binding posture the `where` fix preserves. `schema.rs`'s
+doc now records this difference explicitly instead of asserting a rejection the engine does not make.
+
+### Quality Gate
+
+1. **The Json case is refused.** No cred-free live surface carries a `Json` column any more — the
+   compiled `/markdown` driver whose `documents.frontmatter` this was measured against has been
+   retired in favour of `/collections` — so the Json case is proven through the SAME executed path a
+   `qfs run` read takes (`block_on_read` → lower → partition → `MiniEvaluator`) over an in-memory
+   source in `expand_refuses_what_it_cannot_expand::a_json_column_is_refused_instead_of_passing_the_rows_through`:
+   code `not_expandable`, kind `usage`, exit 2. The message names the column and its type:
+   `` `expand` cannot explode column 'frontmatter': it is a json value, not an array or a struct ``.
+2. **The unknown-column case is refused**, live, with raw exit codes:
+
+   ```
+   $ qfs run "/local<FIX> |> expand nosuchcol"
+   {"error":{"code":"unknown_column","kind":"usage","message":"`expand` names column 'nosuchcol',
+    which this relation does not carry; available: [name, path, size, modified, is_dir, mode, content]"}}
+   EXIT=2
+
+   $ qfs run "/local<FIX> |> expand name"       # a scalar column, the same class
+   {"error":{"code":"not_expandable","kind":"usage","message":"`expand` cannot explode column
+    'name': it is a scalar (text), not an array or a struct"}}
+   EXIT=2
+
+   $ qfs run "/local<FIX> |> expand content"    # bytes
+   … "not_expandable" …   EXIT=2
+   ```
+
+3. **Both directions.** Structurally, not just by re-running: the old `expand` returned `RowBatch`,
+   **not** `Result` — it had no channel to produce the error each new test asserts, and it returned
+   the input unchanged in exactly these two cases. Every one of the four tests calls
+   `expect_err`/`expect` against that behaviour, so none of them can pass on the old kernel.
+4. **The Array case is untouched** — `the_array_case_is_untouched` reads one row carrying a
+   two-element `Array(Text)` and gets **2 rows** back with the column moving `array` → `text`, the
+   same 3→4 shape the ticket's positive control measured. The engine's own
+   `residual_expand_explodes_array_of_struct` (array-of-struct flattening) still passes unchanged.
+5. **`Struct` expansion is untouched** — `the_struct_case_is_untouched`: the struct column is
+   replaced by its fields, spliced in place.
+6. **The swallow points are closed, not worked around** — see the table above; the refusal is in the
+   kernel, and the `RowBatch`-returning `expand` that could not report an error no longer exists.
+7. **The doc and the behaviour agree** — `schema.rs:316-317` is rewritten to state what the binary
+   does, including the `Unknown` exception and why it is not the same case.
+8. **Workspace gates green** — `cargo test --workspace` at a raw exit code, plus the branch gate.
+   Patch bumped on this branch (0.0.89 → 0.0.90).
+
+**Scope kept.** Whether `expand` SHOULD work on `Json` is untouched — this ticket delivers the
+honest error that is the precondition for that decision. The `/markdown`-vs-`decode md` question is
+not advanced or retired here, `Array`/`Struct` semantics are unchanged, and the two plan paths were
+not reconciled.

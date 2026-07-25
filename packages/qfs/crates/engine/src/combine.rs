@@ -274,7 +274,18 @@ fn eval_combine(
             group_by,
             aggregates,
         )),
-        CombineOp::Expand(field) => Ok(eval::expand(unary(inputs, cursor, transform)?, field)),
+        // `EXPAND` refuses what it cannot explode (ticket 20260717180200): an absent column, or a
+        // scalar/`Json` one. It used to return the input unchanged at exit 0 in both cases.
+        CombineOp::Expand(field) => {
+            eval::expand(unary(inputs, cursor, transform)?, field).map_err(|e| match e {
+                eval::ExpandError::Unknown(missing) => {
+                    EngineError::unknown_column("expand", missing)
+                }
+                eval::ExpandError::NotExpandable { field, ty } => {
+                    EngineError::NotExpandable { field, ty }
+                }
+            })
+        }
         // Binary ops: two inputs.
         CombineOp::HashJoin(on) => {
             let (l, r) = binary(inputs, cursor, "HashJoin", transform)?;

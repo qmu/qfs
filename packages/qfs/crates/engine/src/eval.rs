@@ -559,16 +559,63 @@ fn fold_extreme(vals: &[&Value], want: Ordering) -> Value {
     best.cloned().unwrap_or(Value::Null)
 }
 
+/// What `EXPAND` refuses (ticket 20260717180200): the two errors [`Schema::expand`] has always
+/// documented and the executed path used to swallow — one discarded by `unwrap_or`, the other
+/// short-circuited before the check ever ran.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ExpandError {
+    /// The named column is not in the (described) schema.
+    Unknown(MissingColumn),
+    /// The column is present but is not a collection — a scalar or a `Json` blob.
+    NotExpandable {
+        /// The column `EXPAND` named.
+        field: Name,
+        /// Its declared type, rendered.
+        ty: String,
+    },
+}
+
 /// `EXPAND <field>` — explode a nested collection column into rows (blueprint §4). An `Array`
 /// of structs flattens each element's fields; an `Array` of scalars yields one row per
-/// element; a `Struct` flattens one level. Non-collection fields pass the row through.
-#[must_use]
-pub(crate) fn expand(batch: RowBatch, field: &Name) -> RowBatch {
+/// element; a `Struct` flattens one level.
+///
+/// **A column it cannot explode is refused, not passed through.** Before, an absent column returned
+/// the batch unchanged, and a `Json`/scalar column had [`Schema::expand`]'s `NotExpandable`
+/// discarded by an `unwrap_or` — so the stage produced output byte-identical to its input at exit 0
+/// and the caller could not tell it had done nothing.
+///
+/// The one late-bound case that still passes through is a column typed `Unknown`: that means "not
+/// known yet" (an `EXTEND`-computed column, an aggregate output, a relation whose shape only
+/// resolves at runtime), not "known to be a scalar", so refusing it would reject a value that
+/// really is an array in the rows. An EMPTY schema — an undescribable relation — is the same case
+/// and is likewise never refused.
+///
+/// # Errors
+/// [`ExpandError`] for an absent column or a non-collection one.
+pub(crate) fn expand(batch: RowBatch, field: &Name) -> Result<RowBatch, ExpandError> {
+    // An undescribable relation stays late-bound: nothing here is known to be wrong.
+    if batch.schema.columns.is_empty() {
+        return Ok(batch);
+    }
     let Some(idx) = batch.schema.columns.iter().position(|c| &c.name == field) else {
-        return batch;
+        return Err(ExpandError::Unknown(MissingColumn {
+            name: field.clone(),
+            available: batch.schema.column_names(),
+        }));
     };
-    // Output schema: replace the field column per the type model's `expand`.
-    let schema = batch.schema.expand(field).unwrap_or(batch.schema.clone());
+    // Output schema: replace the field column per the type model's `expand`. A late-bound
+    // (`Unknown`) column keeps the schema as-is; anything else propagates `NotExpandable`.
+    let schema = if matches!(batch.schema.columns[idx].ty, ColumnType::Unknown) {
+        batch.schema.clone()
+    } else {
+        batch
+            .schema
+            .expand(field)
+            .map_err(|_| ExpandError::NotExpandable {
+                field: field.clone(),
+                ty: render_type(&batch.schema.columns[idx].ty),
+            })?
+    };
     let mut out_rows = Vec::new();
     for row in batch.rows {
         let target = row.values.get(idx).cloned().unwrap_or(Value::Null);
@@ -581,11 +628,23 @@ pub(crate) fn expand(batch: RowBatch, field: &Name) -> RowBatch {
             Value::Struct(fields) => {
                 out_rows.push(splice_row(&row, idx, fields.into_values()));
             }
-            // A scalar/Null field is not expandable: keep the row unchanged.
+            // A Null / late-bound value in an expandable column: keep the row unchanged. (A
+            // genuinely non-collection COLUMN was refused above, against the schema.)
             other => out_rows.push(splice_row(&row, idx, vec![other])),
         }
     }
-    RowBatch::new(schema, out_rows)
+    Ok(RowBatch::new(schema, out_rows))
+}
+
+/// A short, stable rendering of a column type for a refusal message (`json`, `text`, `array`, …).
+fn render_type(ty: &ColumnType) -> String {
+    match ty {
+        ColumnType::Array(_) => "an array".to_string(),
+        ColumnType::Struct(_) => "a struct".to_string(),
+        ColumnType::Json => "a json value".to_string(),
+        ColumnType::Unknown => "late-bound".to_string(),
+        other => format!("a scalar ({other:?})").to_lowercase(),
+    }
 }
 
 /// Flatten one expanded element into the row's replacement values.
