@@ -2809,12 +2809,20 @@ previous external run as metadata, so a plan reads only what changed since. Reve
 (drafts, UPSERTs to storage, view materialization) run unattended; irreversible `CALL`s in a
 plan still require the server's configured irreversible-commit policy.
 
+**Every endpoint attaches a policy — reads included.** Default-deny is the law on the serve
+face: a request is evaluated against the endpoint's attached policy under the caller's
+resolved principal *before* any source is read, so an endpoint with no policy (or one naming
+a policy that does not exist) serves nothing — the request comes back `403` with a structured
+policy error, never an empty result pretending there was no data.
+
 **Expose the current on-call engineer as a read-only HTTP endpoint.**
 
 ```qfs
-# qfs-cookbook: grammar=extended; milestone=M8; features=create endpoint,where,order by,limit,select
-# GET /oncall returns the single active rotation row as JSON
-create endpoint GET /oncall as
+# qfs-cookbook: grammar=extended; milestone=M8; features=create endpoint,policy,where,order by,limit,select
+# GET /oncall returns the single active rotation row as JSON.
+# Default-deny is the law on the serve face, reads included: without an attached POLICY
+# granting SELECT the endpoint serves nothing (a 403 policy error, not an empty result).
+create endpoint GET /oncall policy read_oncall as
   /sql/pg/oncall_rotations
   |> where active == true
   |> order by shift_start DESC
@@ -2825,9 +2833,10 @@ create endpoint GET /oncall as
 **Serve a per-customer order history endpoint keyed by a path parameter.**
 
 ```qfs
-# qfs-cookbook: grammar=extended; milestone=M8; features=create endpoint,where,join,order by,select
-# GET /customers/:id/orders joins orders to line items for the requested customer
-create endpoint GET /customers/:id/orders as
+# qfs-cookbook: grammar=extended; milestone=M8; features=create endpoint,policy,where,join,order by,select
+# GET /customers/:id/orders joins orders to line items for the requested customer.
+# The attached POLICY must grant SELECT on every path the query reads — both tables.
+create endpoint GET /customers/:id/orders policy read_orders as
   /sql/pg/orders
   |> where customer_id == :id
   |> join /sql/pg/line_items on line_items.order_id == orders.id
@@ -2838,9 +2847,10 @@ create endpoint GET /customers/:id/orders as
 **Accept new leads over HTTP and write them straight into Postgres.**
 
 ```qfs
-# qfs-cookbook: grammar=extended; milestone=M8; features=create endpoint,insert into,values,returning
-# POST /leads ingests the JSON body and returns the created row's id
-create endpoint POST /leads as
+# qfs-cookbook: grammar=extended; milestone=M8; features=create endpoint,policy,insert into,values,returning
+# POST /leads ingests the JSON body and returns the created row's id.
+# A write endpoint needs the write verb granted too — this one's POLICY allows INSERT.
+create endpoint POST /leads policy write_leads as
   REQUEST.body
   |> insert into /sql/pg/leads
        values (email => email, name => name, source => source, captured_at => now())
@@ -2850,9 +2860,10 @@ create endpoint POST /leads as
 **Publish a daily KPI summary as a cached JSON endpoint.**
 
 ```qfs
-# qfs-cookbook: grammar=extended; milestone=M8; features=create endpoint,aggregate,group by,select,encode
-# GET /metrics/daily aggregates today's orders by channel and emits JSON
-create endpoint GET /metrics/daily as
+# qfs-cookbook: grammar=extended; milestone=M8; features=create endpoint,policy,aggregate,group by,select,encode
+# GET /metrics/daily aggregates today's orders by channel and emits JSON.
+# Aggregation does not exempt the read: the underlying path still needs a SELECT grant.
+create endpoint GET /metrics/daily policy read_metrics as
   /sql/pg/orders
   |> where placed_at >= date_trunc('day', now())
   |> aggregate count() as orders, sum(total) as revenue group by channel
@@ -3141,9 +3152,10 @@ create materialized view /views/error_rate as
 **Serve the materialized dashboard back out through an endpoint.**
 
 ```qfs
-# qfs-cookbook: grammar=extended; milestone=M8; features=create endpoint,as,order by,encode
-# Endpoint reads the precomputed view, so requests are cheap
-create endpoint GET /dashboard/exec as
+# qfs-cookbook: grammar=extended; milestone=M8; features=create endpoint,policy,as,order by,encode
+# Endpoint reads the precomputed view, so requests are cheap.
+# Reading a materialized view is still a read: it needs its own SELECT grant.
+create endpoint GET /dashboard/exec policy read_dashboard as
   /views/exec_dashboard
   |> order by revenue DESC
   |> encode json

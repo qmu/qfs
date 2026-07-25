@@ -284,8 +284,11 @@ pub fn render_server() -> String {
          request is evaluated against the endpoint's attached policy under the caller's resolved \
          principal, so an endpoint with no policy (or a dangling policy name) serves nothing — a \
          read it does not grant is refused with a `403` policy error before any source is touched, \
-         never an empty result. Grant reads with `allow select` (add `for user:…` / `for role:…` to \
-         narrow to a principal, `at <path-glob>` to narrow to a sub-tree).\n"
+         never an empty result. Grant reads with `allow select` (add `for user <name>` / `for role \
+         <name>` to narrow to a principal, `at <path-glob>` to narrow to a sub-tree). The statement \
+         spells the subject with a **space**, not a colon: `for user alice`. The colon form \
+         (`user:alice`) is the *stored* rule-string label read back out of `/sys/policies`; the two \
+         are not interchangeable, and `for user:alice` in a `create policy` is a parse error.\n"
     );
     let _ = writeln!(
         s,
