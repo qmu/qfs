@@ -9,7 +9,7 @@ assignee: a@qmu.jp
 strategy: access-derives-from-the-resolved-principal
 drive_authorized: true
 predicted_hours:
-actual_hours:
+actual_hours: 0.89
 tickets: []
 stories: []
 concerns: []
@@ -96,3 +96,5 @@ no-policy and dangling-policy deny), and a denied read is a structured, secret-f
 - 2026-07-25 — ticket archived — 20260724013000-enforce-policy-on-the-serve-read-path.md
 - 2026-07-25 — ticket archived — 20260724013100-every-grant-axis-bites-on-reads.md
 - 2026-07-25 — ticket archived — 20260724013200-fail-closed-and-structured-denial-on-reads.md
+- 2026-07-25 — run recorded (+0.89h) — 20260725-101714
+- 2026-07-25 — story reported — work-20260724-011032.md

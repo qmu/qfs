@@ -352,3 +352,5 @@ live backlog.
 - 2026-07-19 — ticket archived — 20260718203326-cf-surface-from-committed-declaration.md
 - 2026-07-22 — mission achieved — mission.md
 - 2026-07-22 — drive authorization revoked on archive - an achieved mission must not keep authorizing its leftover queue tickets for unattended runs (audit finding, 2026-07-22) — mission.md
+- 2026-07-25 — concern resolved (unstuck) — cf-live-203090-unimplemented-cf-and.md
+- 2026-07-25 — concern resolved (unstuck) — create-account-ships-the-core-two.md
