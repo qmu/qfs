@@ -7,8 +7,9 @@
 //! - each format decodes a fixture to an asserted `RowBatch`;
 //! - markdown+frontmatter yields frontmatter columns + a `body` column;
 //! - `decode → encode → decode` is value-stable (semantic round-trip);
-//! - `EXPAND items` over a `Value::Array` produces one row per element; scalar/absent
-//!   `EXPAND` follows the documented rule; `a.b.c` navigates structs without flattening;
+//! - `EXPAND items` over a `Value::Array` produces one row per element; the `expand` HELPER is
+//!   total on a scalar/absent field (the LANGUAGE's `|> expand` refuses both — see below);
+//!   `a.b.c` navigates structs without flattening;
 //! - malformed input returns a structured `CfsError::Decode` (never a panic).
 
 // Integration test: assertions may panic/unwrap freely.
@@ -338,16 +339,20 @@ fn expand_array_of_structs_flattens_element_fields() {
 }
 
 #[test]
-fn expand_scalar_field_is_passthrough() {
+fn the_expand_helper_is_total_on_a_scalar_field() {
+    // This pins the HELPER's own totality, NOT a language rule: `|> expand <scalar>` in a
+    // statement is a structured refusal (`not_expandable`), never a silent passthrough. The
+    // helper stays total because it has no channel to report on and no caller on that path.
     let schema = Schema::new(vec![Column::new("a", ColumnType::Int, false)]);
     let batch = RowBatch::new(schema, vec![Row::new(vec![Value::Int(5)])]);
     let out = expand(&batch, "a");
-    // Not a collection → unchanged passthrough (documented rule).
     assert_eq!(out, batch);
 }
 
 #[test]
-fn expand_absent_field_is_passthrough() {
+fn the_expand_helper_is_total_on_an_absent_field() {
+    // Same scoping: the LANGUAGE refuses an absent `expand` field (`unknown_column`); this is
+    // only the helper's total-function behaviour.
     let batch = batch_with_array_column();
     let out = expand(&batch, "nope");
     assert_eq!(out, batch);

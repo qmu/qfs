@@ -371,9 +371,12 @@ of customer` vocabulary generalised, never a transform special case:
   inline anonymous structural literal, the §5.2 column-list production) — asserts the relation's
   type at that point. The `transform triage |> of (…)` twin is exactly this stage following a
   transform: `of` is its own `PipeOp` (the 20th, §5.3a), never a transform-coupled suffix.
-  **Checked at plan time** against the stage's computed schema (§5.3's rules make the schema known
-  at every seam): a mismatch is a plan-time structured error (`of_assertion_failed`) naming the
-  differing columns — the missing, the unexpected, and the type-mismatched. A named type is resolved
+  **Checked at plan time** against the stage's computed schema: a mismatch is a plan-time
+  structured error (`of_assertion_failed`) naming the differing columns — the missing, the
+  unexpected, and the type-mismatched. §5.3's rules make the schema known at every seam **except
+  one**: a codec seam deliberately reports `Schema::empty()` (a decode's columns are undescribable
+  until the bytes are read), so `… |> decode <fmt> |> of <type>` is compared against an empty
+  schema and there is nothing plan time can honestly prove there. A named type is resolved
   from the plan-time declared-type registry (the `transform_defs` twin; the pure planner cannot read
   the System DB), so an unknown name is a structured `of_type_unresolved`. Where the asserted type
   carries a refinement, the structural half is plan-checked and the predicate half is membership at
@@ -1881,9 +1884,11 @@ names which definition made it.
 
 **Plan shape — local, non-pushable, schema-transforming, impure.** No driver executes
 `transform` natively; the planner always places it in the local segment (pushdown proceeds
-normally upstream; everything downstream runs locally over the declared output schema). Unlike
-the pass-through codecs, `transform` rewrites the schema at plan time — the type checker uses
-the declaration, not inference. And unlike every query stage, it is an **effect**: a statement
+normally upstream; everything downstream runs locally over the declared output schema). The
+codecs also reshape the relation, but their result is **undescribable at plan time** — a codec
+seam reports `Schema::empty()` and everything downstream stays late-bound until the bytes are
+decoded. `transform` is the opposite: it rewrites the schema **at plan time**, because the type
+checker reads the declaration rather than inferring from data. And unlike every query stage, it is an **effect**: a statement
 containing `transform` is never a pure read — it evaluates to a Plan carrying a model-call
 effect node. The pure/wasm engine only *plans* it; the call itself is performed by an **async
 applier the binary injects** (the `driver-claude` template: pure declaration crate, runtime

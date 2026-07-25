@@ -246,10 +246,13 @@ pub enum LogicalPlan {
         /// The right input.
         rhs: Box<LogicalPlan>,
     },
-    /// `|> TRANSFORM <name>` — the model-calling stage (blueprint §15, decision W). Unlike the
-    /// pass-through codec/shape ops it is **schema-transforming** (the relation becomes the
-    /// definition's OUTPUT) and it is **never pushed to a source** — [`single_source`] returns
-    /// `None` for it so the partitioner keeps it (and everything after it) local.
+    /// `|> TRANSFORM <name>` — the model-calling stage (blueprint §15, decision W). It is
+    /// **schema-transforming at plan time** (the relation becomes the definition's declared
+    /// OUTPUT) — unlike the schema-preserving shape ops, and unlike the codec ops, which do
+    /// reshape the relation but into a schema that is **undescribable at plan time** (their seam
+    /// reports an empty schema and leaves everything downstream late-bound). It is also **never
+    /// pushed to a source** — [`single_source`] returns `None` for it so the partitioner keeps it
+    /// (and everything after it) local.
     Transform {
         /// The upstream relation the model reads.
         input: Box<LogicalPlan>,

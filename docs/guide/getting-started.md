@@ -93,8 +93,10 @@ content
 ```
 
 `decode json` on its own unpacks the file into rows (`{"k":1,"name":"alpha"}`); add `|> encode yaml`
-(or `toml`, `csv`, …) to transcode. Codecs must be the **final** stages of a pipeline — a relational
-operator after a codec is rejected.
+(or `toml`, `csv`, …) to transcode. Codecs are normally the **final** stages of a pipeline. A
+relational operator after one is allowed, but it is checked at **run time** — a codec's output
+columns are unknown until the bytes are decoded, so naming a column that is not there fails when the
+decode runs, naming the true post-decode columns.
 
 ### Query the system catalog
 

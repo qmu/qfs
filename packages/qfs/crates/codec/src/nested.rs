@@ -12,27 +12,36 @@ use qfs_types::{Row, RowBatch, Schema, Value};
 ///   [`Value::Struct`] flattens each element's fields into the row columns (matching
 ///   [`Schema::expand`]); an array of scalars replaces the field column with the element.
 /// - [`Value::Struct`] → flattens the struct's fields into the row (de-nesting one level).
-/// - **scalar / `Null` / `Json` / absent** → the row passes through **unchanged** but
-///   with the field column dropped from the schema only if it was expandable. The
-///   documented rule: a non-collection `EXPAND` is a **passthrough** that yields zero
-///   *extra* rows (it does not multiply), and an empty array yields **zero** rows for
-///   that input (the row is filtered out).
+/// - **scalar / `Null` / `Json` / absent** → this HELPER passes the row through
+///   **unchanged**, yielding zero *extra* rows (it does not multiply). An empty array
+///   yields **zero** rows for that input (the row is filtered out).
 ///
 /// The schema is computed once via [`Schema::expand`]; if the field is not expandable
-/// at the type level the original batch is returned unchanged (passthrough).
+/// at the type level this helper returns the original batch unchanged.
+///
+/// ## Not the language's `EXPAND` rule
+/// The passthrough above is this helper's OWN total-function behaviour, scoped to this
+/// function — it is **not** what the query language does. A statement's `|> expand <field>`
+/// on an absent, scalar, or `Json` column is a **structured refusal** (`not_expandable` /
+/// `unknown_column`), never a silent passthrough: a stage that cannot be honored is never
+/// dropped (mission `a-where-predicate-is-honored-or-refused-never-dropped`, 2026-07-25).
+/// This helper has no in-repo caller on that path; the query stage refuses before any
+/// value-level expansion is attempted.
 ///
 /// # Errors
-/// Never errors: it degrades to passthrough so a pipeline stays runnable (blueprint §4). The
-/// `Result` shape is reserved for a future strict mode.
+/// This helper never errors — it is total by construction. The `Result` shape is reserved for
+/// a future strict mode.
 #[must_use]
 pub fn expand(batch: &RowBatch, field: &str) -> RowBatch {
     let Some(idx) = batch.schema.columns.iter().position(|c| c.name == field) else {
-        // Absent field: passthrough (blueprint §4 documented rule).
+        // Absent field: this helper's own total-function passthrough (the LANGUAGE's `expand`
+        // refuses an absent field before reaching here — see the doc comment above).
         return batch.clone();
     };
 
     let Ok(out_schema) = batch.schema.expand(&field.to_string()) else {
-        // Not expandable (scalar/Json/Unknown): passthrough unchanged.
+        // Not expandable (scalar/Json/Unknown): this helper passes through unchanged; the
+        // language stage refuses (`not_expandable`) rather than reaching this arm.
         return batch.clone();
     };
 
