@@ -936,4 +936,241 @@ mod tests {
         assert!(evaluate(&policy, &plan).is_allow());
         assert!(evaluate_with_context(&policy, &plan, &DecisionContext::anonymous()).is_allow());
     }
+
+    // ---- every grant axis bites on READS, both directions -----------------------------------
+    //
+    // The t57 axes were proven for writes. These are the read-side matrices: per axis, ONE proof
+    // that the matching actor's read succeeds and ONE that the non-matching actor's is denied.
+    // They reuse the same `Rule`/`DecisionContext` builders the write-side tests use — the point
+    // is precisely that reads ride the SAME rules, not a parallel read-side vocabulary.
+
+    /// The one-target read every axis test adjudicates.
+    fn read_of(driver: &str, path: &str) -> Vec<ReadTarget> {
+        vec![ReadTarget::new(driver, path)]
+    }
+
+    /// FOR `user:` — a read granted to Alice admits Alice and denies Bob (and anonymous).
+    #[test]
+    fn for_user_axis_bites_on_reads_both_directions() {
+        let policy = Policy::new("alice-reads").with_rule(
+            Rule::allow(VerbSet::one(Verb::Select), DriverGlob::new("mail"))
+                .for_subject(Subject::User("alice".into())),
+        );
+        let reads = read_of("mail", "/mail/inbox");
+
+        assert!(
+            evaluate_reads_with_context(&policy, &reads, &DecisionContext::for_user("alice"))
+                .is_allow(),
+            "the granted user reads"
+        );
+
+        let denied =
+            evaluate_reads_with_context(&policy, &reads, &DecisionContext::for_user("bob"));
+        match &denied {
+            PolicyDecision::Deny { rule, detail, .. } => {
+                assert_eq!(
+                    *rule, None,
+                    "the narrowed rule did not match ⇒ default-deny"
+                );
+                assert_eq!(detail.as_deref(), Some("actor"), "names the failing axis");
+            }
+            PolicyDecision::Allow => panic!("a rule for Alice must not grant Bob"),
+        }
+        assert!(
+            !evaluate_reads_with_context(&policy, &reads, &DecisionContext::anonymous()).is_allow(),
+            "an anonymous read of a FOR-narrowed grant is denied"
+        );
+    }
+
+    /// FOR `role:` — including the INHERITED case: `owner` holds what `member` was granted, while a
+    /// role outside the grant is denied.
+    #[test]
+    fn for_role_axis_bites_on_reads_including_inheritance() {
+        let policy = Policy::new("members-read").with_rule(
+            Rule::allow(VerbSet::one(Verb::Select), DriverGlob::any())
+                .for_subject(Subject::Role("member".into())),
+        );
+        let reads = read_of("mail", "/mail/inbox");
+        let graph = RoleGraph::new().inherits("owner", "member");
+
+        let member = DecisionContext::for_user("m").with_roles(["member".to_string()], &graph);
+        assert!(evaluate_reads_with_context(&policy, &reads, &member).is_allow());
+
+        let owner = DecisionContext::for_user("o").with_roles(["owner".to_string()], &graph);
+        assert!(
+            evaluate_reads_with_context(&policy, &reads, &owner).is_allow(),
+            "owner inherits member's read grant (additive inheritance)"
+        );
+
+        let guest = DecisionContext::for_user("g").with_roles(["guest".to_string()], &graph);
+        assert!(
+            !evaluate_reads_with_context(&policy, &reads, &guest).is_allow(),
+            "a role outside the grant reads nothing"
+        );
+    }
+
+    /// FOR `group:` — a group-scoped read grant admits a member of that group and no one else.
+    #[test]
+    fn for_group_axis_bites_on_reads_both_directions() {
+        let policy = Policy::new("eng-reads").with_rule(
+            Rule::allow(VerbSet::one(Verb::Select), DriverGlob::any())
+                .for_subject(Subject::Group("eng".into())),
+        );
+        let reads = read_of("mail", "/mail/inbox");
+
+        let in_group = DecisionContext::for_user("u").with_groups(["eng".to_string()]);
+        assert!(evaluate_reads_with_context(&policy, &reads, &in_group).is_allow());
+
+        let out_group = DecisionContext::for_user("u").with_groups(["sales".to_string()]);
+        assert!(
+            !evaluate_reads_with_context(&policy, &reads, &out_group).is_allow(),
+            "a different group is fail-closed"
+        );
+    }
+
+    /// AT — the `ScopeGlob` path scope decides on the READ's scanned path: Alice's sub-tree is
+    /// admitted, a read one principal over is denied, and the denial names the scope.
+    #[test]
+    fn at_scope_axis_bites_on_reads_both_directions() {
+        let policy = Policy::new("alice-subtree").with_rule(
+            Rule::allow(VerbSet::one(Verb::Select), DriverGlob::any())
+                .scoped(ScopeGlob::parse("/members/alice/**").unwrap()),
+        );
+        let ctx = DecisionContext::for_user("alice");
+
+        let in_scope = read_of("mail", "/members/alice/mail/inbox");
+        assert!(evaluate_reads_with_context(&policy, &in_scope, &ctx).is_allow());
+
+        let out_of_scope = read_of("mail", "/members/bob/mail/inbox");
+        match evaluate_reads_with_context(&policy, &out_of_scope, &ctx) {
+            PolicyDecision::Deny { verb, detail, .. } => {
+                assert_eq!(verb, Verb::Select);
+                assert_eq!(detail.as_deref(), Some("scope /members/alice/**"));
+            }
+            PolicyDecision::Allow => panic!("a read outside the AT scope must be denied"),
+        }
+    }
+
+    /// WHERE — the `member_of('/directories/...')` conditional grant, resolved through the EXISTING
+    /// membership-resolver seam (never from inside the pure enforcer), decides a read the same way
+    /// it decides a write.
+    #[test]
+    fn where_member_of_axis_bites_on_reads_both_directions() {
+        use crate::policy::context::{resolve_memberships, MembershipResolver};
+
+        /// A test resolver: `u1` is in the eng directory, nobody else is.
+        struct OnlyU1;
+        impl MembershipResolver for OnlyU1 {
+            fn is_member(&self, actor: Option<&str>, directory: &str) -> bool {
+                actor == Some("u1") && directory == "/directories/google/groups/eng"
+            }
+        }
+
+        let dir = "/directories/google/groups/eng";
+        let policy = Policy::new("eng-only-read").with_rule(
+            Rule::allow(VerbSet::one(Verb::Select), DriverGlob::any())
+                .when(Condition::MemberOf(dir.into())),
+        );
+        let reads = read_of("mail", "/mail/inbox");
+
+        // The membership is resolved UP FRONT into the context; the enforcer only does set lookup.
+        let member = resolve_memberships(DecisionContext::for_user("u1"), &policy, &OnlyU1);
+        assert!(evaluate_reads_with_context(&policy, &reads, &member).is_allow());
+
+        let outsider = resolve_memberships(DecisionContext::for_user("u2"), &policy, &OnlyU1);
+        let denied = evaluate_reads_with_context(&policy, &reads, &outsider);
+        assert!(!denied.is_allow(), "a non-member reads nothing");
+        let reason = denied.deny_reason().unwrap();
+        assert!(
+            reason.contains("member_of"),
+            "the denial names the failing condition: {reason}"
+        );
+        assert!(reason.contains("SELECT"), "and the verb: {reason}");
+        // Secret-free: the reason carries the directory ref, never credential material.
+        assert!(!reason.to_lowercase().contains("secret"));
+        assert!(!reason.to_lowercase().contains("password"));
+    }
+
+    /// The irreversible-strictness invariant is untouched by the read work: a bare `ALLOW ALL`
+    /// grants the reversible verbs — SELECT included, so it DOES open a read — but still never
+    /// grants REMOVE or CALL. Enabling read enforcement must not have loosened `Rule::matches`.
+    #[test]
+    fn broad_allow_all_grants_reads_but_still_never_grants_irreversible() {
+        let policy = Policy::new("broad")
+            .with_rule(Rule::allow(VerbSet::all(), DriverGlob::any()).as_all_token());
+        let ctx = DecisionContext::anonymous();
+
+        assert!(
+            evaluate_reads_with_context(&policy, &read_of("mail", "/mail/inbox"), &ctx).is_allow(),
+            "SELECT is reversible: a broad ALL grants it"
+        );
+        let remove = plan_of(vec![write_node(
+            0,
+            EffectKind::Remove,
+            "mail",
+            "/mail/inbox",
+        )]);
+        assert!(
+            !evaluate_with_context(&policy, &remove, &ctx).is_allow(),
+            "a broad ALLOW ALL must still NOT grant REMOVE"
+        );
+        let call = plan_of(vec![write_node(
+            0,
+            EffectKind::Call(ProcId::new("mail.send")),
+            "mail",
+            "/mail/outbox",
+        )]);
+        assert!(
+            !evaluate_with_context(&policy, &call, &ctx).is_allow(),
+            "a broad ALLOW ALL must still NOT grant CALL"
+        );
+    }
+
+    /// Deny-precedence holds on reads too: an earlier `DENY SELECT` for one role beats a later
+    /// blanket `ALLOW SELECT`, and the non-denied actor still reads through the later rule.
+    #[test]
+    fn first_match_deny_precedence_holds_on_reads() {
+        let policy = Policy::new("read-precedence")
+            .with_rule(
+                Rule::deny(VerbSet::one(Verb::Select), DriverGlob::any())
+                    .for_subject(Subject::Role("intern".into())),
+            )
+            .with_rule(Rule::allow(VerbSet::one(Verb::Select), DriverGlob::any()));
+        let reads = read_of("mail", "/mail/inbox");
+        let graph = RoleGraph::new();
+
+        let intern = DecisionContext::for_user("i").with_roles(["intern".to_string()], &graph);
+        match evaluate_reads_with_context(&policy, &reads, &intern) {
+            PolicyDecision::Deny { rule, .. } => assert_eq!(rule, Some(0), "the earlier DENY wins"),
+            PolicyDecision::Allow => panic!("the intern's read must be denied"),
+        }
+        let staff = DecisionContext::for_user("s").with_roles(["staff".to_string()], &graph);
+        assert!(evaluate_reads_with_context(&policy, &reads, &staff).is_allow());
+    }
+
+    /// A read with SEVERAL scan targets (a federated join) is granted only when EVERY target is:
+    /// one ungranted leaf denies the whole read, and the denial names that leaf.
+    #[test]
+    fn every_scanned_target_must_be_granted_not_just_the_first() {
+        let policy = Policy::new("mail-only").with_rule(Rule::allow(
+            VerbSet::one(Verb::Select),
+            DriverGlob::new("mail"),
+        ));
+        let federated = vec![
+            ReadTarget::new("mail", "/mail/inbox"),
+            ReadTarget::new("sql", "/sql/shop/orders"),
+        ];
+        match evaluate_reads_with_context(&policy, &federated, &DecisionContext::anonymous()) {
+            PolicyDecision::Deny {
+                node, verb, driver, ..
+            } => {
+                assert_eq!(node, 1, "the second (ungranted) leaf is the denial");
+                assert_eq!(verb, Verb::Select);
+                assert_eq!(driver, "sql");
+            }
+            PolicyDecision::Allow => {
+                panic!("a federated read is only as granted as its weakest leg")
+            }
+        }
+    }
 }
