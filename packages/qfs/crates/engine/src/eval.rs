@@ -120,7 +120,83 @@ fn regex_lite(s: &str, p: &str) -> bool {
     }
 }
 
-/// Filter a batch by a predicate.
+/// A column a stage named that the relation does not carry — the structured refusal that replaces
+/// "resolve to `None`, so the row does not match" for a **described** schema.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct MissingColumn {
+    /// The column the query named.
+    pub name: Name,
+    /// The columns the relation actually carries, in order.
+    pub available: Vec<Name>,
+}
+
+/// Refuse a predicate that names a column absent from a **described** schema.
+///
+/// `resolve` maps two different situations onto the same `None` — *this column is not in the
+/// schema* and *this value is null / this dotted path is unnavigable* — and `eval_predicate` turns
+/// both into "the row does not match". For the second that is right (a total predicate); for the
+/// first it made a typo indistinguishable from an honest empty result, at exit 0.
+///
+/// Only the **head** of each column reference is checked, and only against a NON-EMPTY schema:
+///
+/// - a dotted path (`meta.title`) navigates a `Json`/`Struct` value whose inner fields are
+///   late-bound by design, so only `meta` has to exist;
+/// - an EMPTY schema means the relation is undescribable (a driver that does not describe its
+///   columns, or a relation whose shape is only known after a codec), and late-binding stays —
+///   refusing there would false-reject a column that really is present at runtime.
+///
+/// `also_accepted` widens the described schema with names the SOURCE understands even though no
+/// row carries them: a backend **search pseudo-column** (Drive's `fullText`, Gmail's `label`) is a
+/// legitimate thing to filter on, so a facet passes its own list and the rest still refuses.
+pub(crate) fn check_predicate_columns(
+    schema: &Schema,
+    p: &Predicate,
+    also_accepted: &[&str],
+) -> Result<(), MissingColumn> {
+    if schema.columns.is_empty() {
+        return Ok(());
+    }
+    let mut refs: Vec<&ColRef> = Vec::new();
+    collect_col_refs(p, &mut refs);
+    for col in refs {
+        let Some(head) = col.path.first() else {
+            continue;
+        };
+        if schema.column(head).is_none() && !also_accepted.contains(&head.as_str()) {
+            let mut available = schema.column_names();
+            available.extend(also_accepted.iter().map(|n| (*n).to_string()));
+            return Err(MissingColumn {
+                name: head.clone(),
+                available,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Every column reference a predicate resolves, in evaluation order — `Cmp`, `In`, `Between` and
+/// `Like` alike, through the whole boolean structure. All four take the same `resolve` path, so all
+/// four are checked (a `NOT`/`OR` arm hides a typo just as well as a bare comparison).
+fn collect_col_refs<'p>(p: &'p Predicate, out: &mut Vec<&'p ColRef>) {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            collect_col_refs(a, out);
+            collect_col_refs(b, out);
+        }
+        Predicate::Not(inner) => collect_col_refs(inner, out),
+        Predicate::Cmp(col, _, _)
+        | Predicate::In(col, _)
+        | Predicate::Between(col, _, _)
+        | Predicate::Like(col, _) => out.push(col),
+    }
+}
+
+/// Filter a batch by a predicate. Total: an unresolvable comparison drops the row.
+///
+/// This is the **driver-residual** form — the predicate a driver reports it could not express
+/// exactly. Such a residual may legitimately name a backend **search pseudo-column** the described
+/// schema does not carry (Drive's `fullText`, Gmail's `to`), so it is evaluated, never refused.
+/// The caller-written `WHERE` goes through [`filter_checked`].
 #[must_use]
 pub(crate) fn filter(batch: RowBatch, p: &Predicate) -> RowBatch {
     let schema = batch.schema.clone();
@@ -130,6 +206,16 @@ pub(crate) fn filter(batch: RowBatch, p: &Predicate) -> RowBatch {
         .filter(|r| eval_predicate(p, &schema, r))
         .collect();
     RowBatch::new(schema, rows)
+}
+
+/// [`filter`] for a **caller-written `WHERE`**: refuse an unknown column against a described
+/// schema instead of answering the empty relation a typo would otherwise produce.
+///
+/// # Errors
+/// [`MissingColumn`] when the predicate names a column the (non-empty) schema does not carry.
+pub(crate) fn filter_checked(batch: RowBatch, p: &Predicate) -> Result<RowBatch, MissingColumn> {
+    check_predicate_columns(&batch.schema, p, &[])?;
+    Ok(filter(batch, p))
 }
 
 /// Project a batch to a column list (`*`/empty is identity). Unknown columns are dropped.

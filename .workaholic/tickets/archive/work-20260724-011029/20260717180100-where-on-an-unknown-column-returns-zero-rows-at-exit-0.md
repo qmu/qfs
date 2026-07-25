@@ -3,9 +3,9 @@ created_at: 2026-07-17T18:01:00+09:00
 author: a@qmu.jp
 type: bugfix
 layer: [Domain]
-effort:
+effort: 4h
 commit_hash:
-category:
+category: Changed
 depends_on: [20260723020055-gdrive-where-pushdown-silent-drop.md]
 mission: a-where-predicate-is-honored-or-refused-never-dropped
 ---
@@ -252,3 +252,98 @@ or `|| true`; both mask the status this ticket is about.
 - The two-path structure (`core/src/eval.rs` typed fold vs. `pushdown/src/lower.rs` → `engine`) is
   the reason a plan-time claim in a comment is not evidence about runtime behavior. Whatever fix
   lands, its test must exercise the path a real `qfs run` takes.
+
+## Final Report — the refusal lives at the seam that sees the delivered rows (2026-07-25)
+
+**Where the check had to go, and why not where the ticket looked.** The mechanism section is
+accurate: `typeck.rs`'s `column_type` collapses "absent column" into `Unknown`, and
+`engine/src/eval.rs`'s `resolve → None → false` drops the row. But neither is the place to fix it,
+because **neither layer knows the relation's columns**. The plan-time fold (`core/src/eval.rs`) is
+not on a plain read's path, and the lowering the read DOES take (`pushdown/src/lower.rs`) gets its
+schema from `plan.rs`'s `schema_of`, which describes the **driver ROOT** (`describe_root`) — for
+`/sql/db/users` that is the `/sql` catalog, not the table. A check there would have false-rejected
+every real column of every addressed node.
+
+The one schema that is certainly the relation's is the one the **driver actually delivered**. So the
+refusal runs in `qfs-engine`, over the batch:
+
+- `eval::filter_checked` — the caller-written `WHERE`. Used by `CombineOp::Filter` (every driver
+  that pushes no predicate: `/local`, `/sys`, `/git`, `/type`, `/collections`, declared drivers …)
+  and by the read executor's pushed-filter seam (`apply_where`, for facets that do not enforce the
+  predicate themselves — `/github`, `/slack`).
+- `eval::filter` — unchanged and infallible — stays the **driver-residual** form. That split is
+  load-bearing: a driver's truthful residual may name a backend search pseudo-column no row carries
+  (Drive's `fullText`, Gmail's `label`), and refusing it would break a real capability.
+
+**The five facets that resolve a `WHERE` inside a backend query language** never reach either, so
+each got the same refusal where its own catalog lives — and in three of them the inconsistency was
+already glaring, since a projected or ordered unknown name was ALREADY a structured error while a
+filtered one was not:
+
+| surface | before | now |
+| --- | --- | --- |
+| `/sql`, `/cf` D1 | `WHERE nosuchcol` fell through `lower_cmp`'s catalog test into the residual → `rows: []` | `SqlError::UnknownColumn { reason: "not a column of the table (WHERE)" }` |
+| `/ga` | same, against the property catalog | `GaError::UnknownField { reason: "… (WHERE)" }` (`date` stays the report's own window coordinate) |
+| `/mail`, `/drive` | same, against the `q=`/`q` mapping | the facet calls `qfs_exec::check_where_columns(schema, p, SEARCH_COLUMNS)`; each driver now publishes the pseudo-columns it filters on that no row carries |
+
+### Quality Gate
+
+1. **The defect is refused, with raw exit codes.** (`/markdown` no longer exists in this tree — the
+   compiled driver was retired in favour of `/collections`, which needs a registered view; `/sys`
+   contributes two independent nodes and `/type` a third relation instead.)
+
+   ```
+   $ qfs run "/local<FIX> |> where nosuchcol == 'zzz'"
+   {"error":{"code":"unknown_column","kind":"usage","message":"`where` names column 'nosuchcol',
+    which this relation does not carry; available: [name, path, size, modified, is_dir, mode, content]"}}
+   EXIT=2
+
+   $ qfs run "/sys/drivers |> where nosuchcol == 'zzz'"
+   … available: [kind, name, base_url, auth, pagination, of_type, verb, body, irreversible, created_at]
+   EXIT=2
+
+   $ qfs run "/sys/connections |> where nosuchcol == 'zzz'"
+   … available: [driver, connection, created_at]      EXIT=2
+
+   $ qfs run "/type |> where nosuchcol == 'zzz'"
+   … available: [name, columns, refinement, created_at]   EXIT=2
+   ```
+
+2. **Both directions.** `where_on_a_column_absent_from_a_described_schema_is_refused` asserts the
+   code, the stage, the column and the exact available list; it cannot pass on the old code, which
+   returned `Ok` with zero rows. The `/sql` and `/ga` compiler tests likewise assert an `Err` where
+   the old code produced a residual (and each pins the control that still compiles).
+3. **"No matches" is untouched.**
+   `where_on_a_real_column_with_no_match_stays_an_empty_relation_at_success` pins it, and by run:
+   `/local<FIX> |> where name == 'nonexistent.md'` → `row_count: 0`, **EXIT=0**, full schema
+   preserved. `/type |> where name == 'no-such-type'` → same.
+4. **The late-bound case is preserved.** `where_over_an_undescribable_schema_stays_late_bound`: an
+   EMPTY schema is never refused — the predicate still executes. This is the branch
+   `typeck.rs:487-488` protects, and the check's first line is `if schema.columns.is_empty()`.
+   `a_dotted_path_only_requires_its_head_column` pins the other half: `meta.title` needs only
+   `meta`, so Json navigation stays late-bound, while an absent HEAD is still refused.
+5. **The stated rationale is reconciled — the cited guarantee does not exist.** Measured now:
+
+   ```
+   $ qfs run "/local<FIX> |> select nosuchcol"        → {"schema":[],"rows":[{},{}]}   EXIT=0
+   $ qfs run "/local<FIX> |> select name, nosuchcol"  → only `name`; the unknown name is dropped   EXIT=0
+   ```
+
+   So `typeck.rs:138`'s *"projection is where an unknown column is a hard error (t05)"* is false of
+   the binary on the executed read path. The comment is **corrected**, not left standing: it now
+   records what was measured, names the engine's `where` check as the refusal that actually fires,
+   and marks "should projection refuse too?" as an open, separate decision rather than an assumed
+   one. (`/sql` is the exception that proves it — there `SELECT nosuchcol` IS refused, by the SQL
+   compiler's own catalog validation, which is exactly the validation `WHERE` was missing.)
+6. **Every operator, not just `Cmp`.** `every_predicate_operator_refuses_an_unknown_column_not_just_cmp`
+   covers `In`, `Between`, `Like`, a `NOT` arm and an `OR` arm — all take the same
+   `resolve → None → false` path. Confirmed by run on `/sys/drivers`: all five return
+   `unknown_column` at **EXIT=2**. The collector walks the whole boolean structure, so a typo buried
+   in a disjunct cannot hide.
+7. **Workspace gates green** — `cargo test --workspace` with a raw exit code (no pipe), plus the
+   branch gate. Patch bumped on this branch (0.0.89 → 0.0.90).
+
+**Scope kept.** No projection behaviour was changed; `Json` navigation semantics are untouched; the
+two plan paths were not restructured; and the late-binding posture for genuinely undescribable
+schemas is intact — the fix removes only the **conflation** of "undescribable" with "described, and
+this is not one of its columns".

@@ -49,6 +49,11 @@ pub use output::{JsonRenderer, OutputFormat, Renderer, TableRenderer};
 // dep-direction guard keeps off qfs-engine directly) can apply a driver's pushed-WHERE residual —
 // the rows a driver returns after pushing only the faithfully-renderable part of a predicate.
 pub use qfs_engine::apply_residual;
+// The same seam's unknown-column REFUSAL, for a facet that resolves the `WHERE` inside its own
+// backend query language and so never reaches the executor's checked path: it names the columns the
+// rows carry plus the driver's search pseudo-columns, and refuses anything else instead of letting
+// a typo answer `rows: []` at exit 0.
+pub use qfs_engine::check_where_columns;
 // The refinement-predicate AST type (blueprint §5.4) rides through here so the terminal binary can
 // name a declared type's `WHERE` predicate without taking a direct `qfs-parser` edge (it stays off
 // the lower spine — same posture as `parse`/`ViewSpec`).

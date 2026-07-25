@@ -590,3 +590,226 @@ fn cross_service_pack_attachments_project_expr_array_agg_extend() {
     assert_eq!(row.values[col("subject")], Value::Text("Q3".into()));
     assert_eq!(row.values[col("body")], Value::Text("See attached".into()));
 }
+
+// ---- `WHERE` on an unknown column: a refusal, not an empty relation (ticket 20260717180100) ----
+
+/// Run `plan` over `batch` through the real partition → evaluate path.
+fn run_local(plan: &LogicalPlan, batch: RowBatch) -> Result<RowBatch, qfs_engine::EngineError> {
+    let reg = SourceRegistry::new().with(SourceId::new("api"), none());
+    let phys = partition_by_source(plan, &reg).unwrap();
+    MiniEvaluator::new().execute(&phys, ScanResults::new(vec![batch]))
+}
+
+fn where_plan(schema: Schema, predicate: Predicate) -> LogicalPlan {
+    LogicalPlan::Filter {
+        input: Box::new(LogicalPlan::scan(SourceId::new("api"), schema)),
+        predicate,
+    }
+}
+
+#[test]
+fn where_on_a_column_absent_from_a_described_schema_is_refused() {
+    // The defect: `resolve` returns `None` for an absent column and the predicate maps that to
+    // "the row does not match", so a TYPO returned the same empty relation an honest miss does —
+    // at exit 0, indistinguishable in rows, schema and status. It is now a structured refusal
+    // naming the column AND the schema it was checked against.
+    let err = run_local(
+        &where_plan(
+            users_schema(),
+            Predicate::Cmp(
+                ColRef::col("nosuchcol"),
+                CmpOp::Eq,
+                Literal::Text("zzz".into()),
+            ),
+        ),
+        users_batch(),
+    )
+    .expect_err("an unknown column is refused");
+    assert_eq!(err.code(), "unknown_column");
+    match &err {
+        qfs_engine::EngineError::UnknownColumn {
+            stage,
+            name,
+            available,
+        } => {
+            assert_eq!(*stage, "where");
+            assert_eq!(name, "nosuchcol");
+            assert_eq!(
+                available,
+                &vec!["id".to_string(), "name".into(), "age".into()]
+            );
+        }
+        other => panic!("expected UnknownColumn, got {other:?}"),
+    }
+}
+
+#[test]
+fn where_on_a_real_column_with_no_match_stays_an_empty_relation_at_success() {
+    // The control that makes the refusal meaningful: "nothing matched" must remain a valid answer,
+    // not become an error. If this ever failed, the fix would have made every empty result look
+    // like a malformed query — the opposite corruption.
+    let out = run_local(
+        &where_plan(
+            users_schema(),
+            Predicate::Cmp(
+                ColRef::col("name"),
+                CmpOp::Eq,
+                Literal::Text("nobody".into()),
+            ),
+        ),
+        users_batch(),
+    )
+    .expect("a real column with no match is not an error");
+    assert!(out.rows.is_empty());
+    assert_eq!(
+        out.schema.column_names().len(),
+        3,
+        "the schema is preserved"
+    );
+}
+
+#[test]
+fn every_predicate_operator_refuses_an_unknown_column_not_just_cmp() {
+    // `In`, `Between` and `Like` take the SAME `resolve → None → false` path `Cmp` does, so each
+    // one hid a typo the same way; and a `NOT`/`OR` arm hides one just as well. All are checked.
+    let unknown = ColRef::col("nosuchcol");
+    let cases: Vec<(&str, Predicate)> = vec![
+        (
+            "in",
+            Predicate::In(unknown.clone(), vec![Literal::Text("a".into())]),
+        ),
+        (
+            "between",
+            Predicate::Between(unknown.clone(), Literal::Int(1), Literal::Int(2)),
+        ),
+        (
+            "like",
+            Predicate::Like(unknown.clone(), qfs_types::Pattern("%x%".into())),
+        ),
+        (
+            "not",
+            Predicate::Not(Box::new(Predicate::Cmp(
+                unknown.clone(),
+                CmpOp::Eq,
+                Literal::Text("x".into()),
+            ))),
+        ),
+        (
+            "or",
+            Predicate::Or(
+                Box::new(Predicate::Cmp(
+                    ColRef::col("name"),
+                    CmpOp::Eq,
+                    Literal::Text("ann".into()),
+                )),
+                Box::new(Predicate::Cmp(
+                    unknown.clone(),
+                    CmpOp::Eq,
+                    Literal::Text("x".into()),
+                )),
+            ),
+        ),
+    ];
+    for (label, predicate) in cases {
+        match run_local(&where_plan(users_schema(), predicate), users_batch()) {
+            Err(e) => assert_eq!(e.code(), "unknown_column", "`{label}` refuses"),
+            Ok(batch) => panic!("`{label}` returned rows instead of refusing: {batch:?}"),
+        }
+    }
+}
+
+#[test]
+fn where_over_an_undescribable_schema_stays_late_bound() {
+    // The leniency this fix must NOT remove: a driver that does not describe its columns yields an
+    // EMPTY schema, and a predicate over it has to keep executing (the row values are the only
+    // truth there). Refusing here would false-reject a column that really is present at runtime.
+    let empty = Schema::new(Vec::new());
+    let batch = RowBatch::new(empty.clone(), vec![Row::new(vec![])]);
+    let out = run_local(
+        &where_plan(
+            empty,
+            Predicate::Cmp(
+                ColRef::col("whatever"),
+                CmpOp::Eq,
+                Literal::Text("x".into()),
+            ),
+        ),
+        batch,
+    )
+    .expect("an undescribable relation is never refused");
+    // The predicate still evaluates (and drops the row, since nothing resolves) — the point is
+    // that it EXECUTED rather than being rejected at the seam.
+    assert!(out.rows.is_empty());
+}
+
+#[test]
+fn a_dotted_path_only_requires_its_head_column() {
+    // `meta.title` navigates a Json/Struct value whose inner fields are late-bound by design, so
+    // only `meta` must exist. Checking deeper would break the documented navigation semantics.
+    let schema = Schema::new(vec![
+        Column::new("id", ColumnType::Int, false),
+        Column::new("meta", ColumnType::Json, true),
+    ]);
+    let batch = RowBatch::new(
+        schema.clone(),
+        vec![Row::new(vec![Value::Int(1), Value::Null])],
+    );
+    let out = run_local(
+        &where_plan(
+            schema.clone(),
+            Predicate::Cmp(
+                ColRef::path(vec!["meta".into(), "title".into()]),
+                CmpOp::Eq,
+                Literal::Text("x".into()),
+            ),
+        ),
+        batch.clone(),
+    );
+    assert!(
+        out.is_ok(),
+        "a present head with a late-bound path executes"
+    );
+
+    // But an absent HEAD is still the malformed question this ticket is about.
+    let err = run_local(
+        &where_plan(
+            schema,
+            Predicate::Cmp(
+                ColRef::path(vec!["nosuchcol".into(), "title".into()]),
+                CmpOp::Eq,
+                Literal::Text("x".into()),
+            ),
+        ),
+        batch,
+    )
+    .expect_err("an absent head column is refused even under a dotted path");
+    assert_eq!(err.code(), "unknown_column");
+}
+
+#[test]
+fn a_driver_residual_may_name_a_backend_pseudo_column_and_still_evaluates() {
+    // The counterpart the refusal must NOT catch: `apply_residual` carries a DRIVER's truthful
+    // residual, which legitimately names a search pseudo-column the described schema does not have
+    // (Drive's `fullText`, Gmail's `to`). Refusing there would turn every such `where` into an
+    // error; the caller-written `WHERE` path (`apply_where`) is the one that refuses.
+    let out = qfs_engine::apply_residual(
+        users_batch(),
+        &Predicate::Cmp(
+            ColRef::col("fullText"),
+            CmpOp::Eq,
+            Literal::Text("x".into()),
+        ),
+    );
+    assert!(out.rows.is_empty(), "it evaluates (and matches nothing)");
+
+    let err = qfs_engine::apply_where(
+        users_batch(),
+        &Predicate::Cmp(
+            ColRef::col("fullText"),
+            CmpOp::Eq,
+            Literal::Text("x".into()),
+        ),
+    )
+    .expect_err("the caller-written form refuses the same predicate");
+    assert_eq!(err.code(), "unknown_column");
+}

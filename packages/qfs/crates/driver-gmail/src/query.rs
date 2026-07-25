@@ -79,6 +79,15 @@ pub fn build_query(label: Option<&str>, predicate: Option<&Predicate>) -> Pushdo
     }
 }
 
+/// The names Gmail's `q=` filters on that are **not** columns of a message row — the search
+/// pseudo-columns. A `WHERE` may legitimately name one, so an unknown-column refusal has to accept
+/// them alongside the described schema (see `qfs_engine::check_where_columns`).
+///
+/// - `label` → `label:<id>` (the row carries `label_ids`, the array, not this scalar)
+/// - `is_unread` → `is:unread` / `is:read` (a derived flag, no column)
+/// - `to` → `to:<addr>` (the recipient header is searchable but not part of a message row)
+pub const SEARCH_COLUMNS: &[&str] = &["label", "is_unread", "to"];
+
 /// The part of `predicate` Gmail's `q=` cannot express **exactly** — the predicate the caller must
 /// re-apply locally over the fetched rows so a `WHERE` is never silently dropped (the read facet
 /// applies this; see `ReadDriver::honors_pushed_filter`). A `date` bound comes back **coerced** to

@@ -89,7 +89,8 @@ pub struct CompileResult {
 /// error rather than a raw backend failure).
 ///
 /// # Errors
-/// [`SqlError::UnknownColumn`] if a projected or `ORDER BY` name is not a column of the table.
+/// [`SqlError::UnknownColumn`] if a projected, `ORDER BY`, or `WHERE` name is not a column of the
+/// table.
 pub fn compile(
     schema: &str,
     table: &TableCatalog,
@@ -118,6 +119,26 @@ pub fn compile(
             col: col.clone(),
             desc: *desc,
         });
+    }
+
+    // Validate the WHERE against the catalog, for the same reason the projection and ORDER BY are
+    // validated above: an unknown column there is a structured error, so it must not be one here.
+    // Before this check a `WHERE nosuchcol = 'x'` fell through `lower_cmp`'s catalog test into the
+    // RESIDUAL, the engine evaluated it over rows that have no such column, every row failed, and
+    // the query answered `rows: []` at exit 0 — a typo and an honest "nothing matched" were the
+    // same answer (ticket 20260717180100). A dotted path (`a.b`) is checked at its TOP-LEVEL
+    // column only: the SQL column is `a`, and what it indexes into is late-bound.
+    if let Some(p) = &spec.predicate {
+        let mut named = Vec::new();
+        residual_columns(p, &mut named);
+        for name in named {
+            if table.column(&name).is_none() {
+                return Err(SqlError::UnknownColumn {
+                    name,
+                    reason: "not a column of the table (WHERE)",
+                });
+            }
+        }
     }
 
     // Lower the WHERE: build the compiled predicate + the bound params, and accumulate the

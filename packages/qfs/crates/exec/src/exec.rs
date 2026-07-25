@@ -111,7 +111,7 @@ pub async fn execute_read_with(
         //     accept backend search pseudo-columns, and apply their own truthful residual).
         let batch = match &scan.pushed.filter {
             Some(predicate) if !driver.honors_pushed_filter() => {
-                qfs_engine::apply_residual(batch, predicate)
+                qfs_engine::apply_where(batch, predicate).map_err(map_engine_error)?
             }
             _ => batch,
         };
@@ -154,6 +154,10 @@ fn map_engine_error(err: qfs_engine::EngineError) -> ExecError {
         EngineError::TransformNoExecutor { .. }
         | EngineError::TransformFailed { .. }
         | EngineError::TransformOutputMismatch { .. } => ErrorKind::CommitFailed,
+        // A stage naming a column the relation does not carry, or asking `expand` to explode a
+        // scalar/`Json`, is a malformed QUERY — the author fixes it, so it is a usage-class
+        // refusal (exit 2), distinguishable from the empty relation an honest miss returns.
+        EngineError::UnknownColumn { .. } | EngineError::NotExpandable { .. } => ErrorKind::Usage,
         _ => ErrorKind::Internal,
     };
     ExecError::new(kind, err.code(), err.to_string())

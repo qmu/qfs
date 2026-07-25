@@ -80,6 +80,32 @@ fn apply_driver_residual(batch: RowBatch, residual: Option<qfs_types::Predicate>
     }
 }
 
+/// Refuse a pushed `WHERE` that names a column the returned rows do not carry and the backend does
+/// not know as a **search pseudo-column** — the unknown-column check for a facet that declares
+/// [`qfs_exec::ReadDriver::honors_pushed_filter`] and therefore never passes through the executor's
+/// checked seam.
+///
+/// Without it, a typo'd column falls into the driver's residual, matches no row, and the query
+/// answers `rows: []` at exit 0 — indistinguishable from an honest miss (ticket 20260717180100).
+/// `search_columns` is the driver's own list of names it filters on that no row carries, so a
+/// legitimate `fullText`/`label` predicate is not mistaken for a typo.
+fn refuse_unknown_where_column(
+    batch: &RowBatch,
+    predicate: Option<&qfs_types::Predicate>,
+    search_columns: &[&str],
+    path: &str,
+) -> Result<(), CfsError> {
+    let Some(p) = predicate else {
+        return Ok(());
+    };
+    qfs_exec::check_where_columns(&batch.schema, p, search_columns).map_err(|_| {
+        CfsError::InvalidPath {
+            path: path.to_string(),
+            reason: "unknown_column",
+        }
+    })
+}
+
 /// Apply the WHOLE pushed `WHERE` over a facet's returned rows — the eager form for a backend that
 /// expresses no part of it and whose every predicate column is a real, described column (`/github`,
 /// `/slack`). The read executor applies the same predicate again for these facets (they do not
@@ -764,6 +790,12 @@ impl ReadDriver for GmailReadDriver {
             // driver reports precisely that lossy part as its residual. Apply it here so the rows
             // are exactly the predicate's result — before, the residual was computed and thrown
             // away, and a lossy match returned rows the `WHERE` did not select.
+            refuse_unknown_where_column(
+                &batch,
+                predicate,
+                qfs_driver_gmail::query::SEARCH_COLUMNS,
+                &scan.path,
+            )?;
             Ok(apply_driver_residual(
                 batch,
                 qfs_driver_gmail::query::unpushed_residual(predicate),
@@ -814,6 +846,12 @@ impl ReadDriver for DriveReadDriver {
             // it as the residual. Applying it here is the fix for the reported defect: a
             // `/drive/<folder> |> where id == '<absent>'` used to return the COMPLETE unfiltered
             // listing at exit 0, because the residual was computed and then discarded.
+            refuse_unknown_where_column(
+                &batch,
+                predicate,
+                qfs_driver_gdrive::query::SEARCH_COLUMNS,
+                &scan.path,
+            )?;
             Ok(apply_driver_residual(
                 batch,
                 qfs_driver_gdrive::query::unpushed_residual(predicate),
@@ -1439,6 +1477,43 @@ mod tests {
                 if query.contains("name = 'alpha.pdf'"))
         });
         assert!(pushed, "the exact term reached Drive's `q`");
+    }
+
+    #[tokio::test]
+    async fn drive_where_on_an_unknown_column_is_refused_not_an_empty_listing() {
+        // The `/drive` half of ticket 20260717180100. A facet that declares
+        // `honors_pushed_filter` never reaches the executor's checked seam, so it makes the same
+        // refusal itself: a typo'd column would otherwise land in the driver's residual, match no
+        // row, and answer `rows: []` at exit 0 — the malformed question answered with "none".
+        let driver = DriveReadDriver::new(Arc::new(drive_listing()));
+        let err = driver
+            .scan(
+                &scan_with_filter("/drive/my", col_eq("nosuchcol", "x")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .expect_err("an unknown column is refused");
+        match err {
+            CfsError::InvalidPath { reason, .. } => assert_eq!(reason, "unknown_column"),
+            other => panic!("expected a structured unknown-column error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn drive_where_on_a_backend_search_pseudo_column_still_runs() {
+        // The refusal must not catch Drive's own search vocabulary: `text` maps to
+        // `fullText contains`, which no file row carries as a column. Refusing it would break a
+        // real capability in the name of catching typos.
+        let batch = DriveReadDriver::new(Arc::new(drive_listing()))
+            .scan(
+                &scan_with_filter("/drive/my", col_eq("text", "quarterly")),
+                &RequestContext::anonymous(),
+            )
+            .await
+            .expect("a search pseudo-column is accepted");
+        // It is a LOSSY pre-filter, so the residual re-check runs and (over these fixture rows,
+        // which carry no such column) matches nothing — the point is that it executed.
+        assert!(batch.rows.is_empty());
     }
 
     #[test]
