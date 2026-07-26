@@ -9,7 +9,7 @@ assignee: a@qmu.jp
 strategy: integrations-are-declared-not-compiled
 drive_authorized: true
 predicted_hours:
-actual_hours: 1.05
+actual_hours: 1.47
 tickets: []
 stories: []
 concerns: []
@@ -104,9 +104,15 @@ retired.
 - 2026-07-25 — run recorded (+1.05h) — 20260725-101714
 
 - 2026-07-26 — mission replanned - developer ruling 2026-07-26: G4 per-row fan-out sequenced as an explicit prerequisite of ticket 20260724014100 rather than discovered inside it; map body expressions ruled to reach the path parameters; no acceptance item added or reworded — 20260725124400-declared-follow-into-per-row-fan-out-g4.md
+- 2026-07-26 — run recorded (+0.42h) — 20260726-184527
 ## Reflection
 
 ### 2026-07-25 run 20260725-101714
 - blocked: acceptance items 3 and 4 stopped on blueprint 13.1 G4 per-row fan-out, which is ruled but unimplemented — a declared CALL cannot resolve a channel name to an id without it, so the effect-equivalence proof and the compiled-driver retirement that depends on it both stayed open. G4 is internal work, not an external blocker, but implementing it changes the mission's agreed plan and only a replan may authorize that.
 - leaked questions: should G4 become its own ticket ahead of the remaining slack work, given it is also the critical path for playbook entry 3, the drive twin. And should a path {param} binding extend into a map body expression — today the declared post map takes channel from the incoming row because a MAP body VALUES expression is row-closed.
 - front-load next: when a mission's plan depends on a blueprint item that is ruled but unimplemented, name that item as an explicit prerequisite ticket at mission-creation time rather than discovering it at the third acceptance item — this mission's entry conditions checked G1 and G2 and never asked whether G4 was shipped.
+
+### 2026-07-26 run 20260726-184527
+- blocked: acceptance items 3 and 4 again, one layer deeper than last run. G4 per-row fan-out shipped, but it substitutes a value INTO an address, while Slack's channel-name lookup is a REVERSE lookup against a collection - the oracle GETs conversations.list and scans it locally, because the Web API has no name-addressed channel endpoint. A map body also has no stage slot on the write path. Both were established by running the thing, not by reasoning about it.
+- leaked questions: whether the reverse lookup is a new stage or a selector grown onto FOLLOW INTO; whether QG2's preview-time bar is deliberate when the compiled oracle it is measured against resolves at commit; and whether a declared lookup pages like the oracle or refuses when a next cursor exists.
+- front-load next: two consecutive runs found the remainder deeper than the plan, both times because the plan named a capability without checking what shape the external API actually offers. Before the next twin mission, inventory the oracle's own client for lookups that are reverse rather than substitutional - that is the property that decides whether a declaration can express it at all.
