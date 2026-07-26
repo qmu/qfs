@@ -84,3 +84,32 @@ it does not survive the bridge being exposed.
 - If the "which policy governs the bridge" question cannot be answered without the parked
   super-admin split, record it as blocked and name that decision — the mission's scope ruling
   forbids closing it as a side effect.
+
+## Ruling (developer, 2026-07-26)
+
+**The bridge is governed by its own named policy row, resolved and enforced the way an endpoint's
+policy now is.** This answers the open question the Considerations section named as potentially
+blocking: it does **not** route through the parked super-admin split, and it does **not** reuse the
+existing `api` row.
+
+What this settles:
+
+- `POST /api/run` resolves a **dedicated, named** bridge policy — not the endpoint-name lookup, and
+  not the shared `api` row that today gates MCP, the dashboard and reconcile together.
+- **Fail closed.** If that policy is absent or its reference dangles, the bridge denies, matching
+  the no-policy and dangling-ref cases already frozen for the endpoint face in `9623d6f`.
+- The hardcoded `RequestContext::anonymous()` goes away; the bridge adjudicates under the request's
+  resolved principal, so an anonymous caller sees only `Anyone` + `Always` grants exactly as on the
+  endpoint face.
+- The loopback-only default bind stays what it is — a deployment posture, not the authorization
+  control — and is not counted as mitigation once this lands.
+
+Rejected alternatives, recorded so they are not re-litigated: treating a loopback caller as an
+operator-local super-admin (it presumes the parked "what may I administer" ruling, which this
+mission's scope forbids closing as a side effect), and widening the existing `api` row (it is the
+coarse-grant defect that the compound concern `one-coarse-api-policy-row-for` now tracks at
+urgent — reusing it would deepen exactly the risk being tracked).
+
+The related concern `one-coarse-api-policy-row-for` (urgent) is the tracked risk this ticket
+discharges on the read leg; splitting the remaining non-endpoint faces off the shared `api` row is
+that concern's own remit, not this ticket's.

@@ -1,5 +1,5 @@
 ---
-status: active
+status: superseded
 severity: moderate
 last_seen: 2026-07-24T01:08:52+09:00
 first_seen: 
@@ -9,6 +9,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/30
 origin_branch: work-20260707-180554
 origin_commit: e7e44ee
 mission: 
+superseded_by: one-coarse-api-policy-row-for
 ---
 
 # The `api` policy row gates MCP, dashboard, and reconcile alike
