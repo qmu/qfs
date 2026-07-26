@@ -6,7 +6,7 @@ layer: [Domain]
 effort:
 commit_hash:
 category: Added
-depends_on: [20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md, 20260725124400-declared-follow-into-per-row-fan-out-g4.md]
+depends_on: [20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md, 20260725124400-declared-follow-into-per-row-fan-out-g4.md, 20260726190000-declared-reverse-lookup-for-write-path-name-resolution.md]
 mission: the-declared-slack-twin-retires-the-compiled-driver
 ---
 
@@ -161,3 +161,38 @@ driver-slack would remove the compiled oracle the outstanding effect-equivalence
 against.
 
 Remaining here after G4 lands: QG2 only. QG1 and QG3 are closed at `73fa5de`.
+
+## Blocked — G4 shipped, and QG2 did NOT become provable (run 20260726-184527)
+
+The overnight `/monitor` drive implemented blueprint §13.1 G4 in full (`365d521`: `FOLLOW <field>
+INTO /http/<drv>/<template>`, per-row, confined per row, bounded at 50, refusing an unresolvable
+value rather than guessing). It then attempted this ticket's QG2 and found that **the replan's
+premise does not hold**: G4 is necessary for QG2 but it is not sufficient, for two reasons that are
+structural rather than effort. Both are demonstrated on
+`20260725124400-declared-follow-into-per-row-fan-out-g4.md` with the commands and their raw output;
+in short:
+
+1. **G4 substitutes a value INTO an address; Slack's `#name` lookup is a reverse lookup against a
+   collection.** The oracle's own `resolve_channel_id` GETs `conversations.list` and scans the array
+   locally, because the Slack Web API has no name-addressed channel endpoint. There is no template a
+   `#name` can be substituted into. (`Uxxxx` → `Dxxxx` IS expressible —
+   `conversations.open?users={channel}` is a pure substitution — so the DM arm of QG2 is reachable
+   and the `#name` arm is not.)
+2. **The resolution is on the WRITE path and a map body has no stage slot.** `eval_map_body`'s
+   pipeline arm accepts exactly one `ENCODE` over `VALUES`; the grammar refuses a `FOLLOW` there
+   with `parse_error` / `UNKNOWN_KEYWORD` (raw output on the G4 ticket).
+
+**A third thing surfaced that only the developer can settle, and it changes what QG2 should even
+say.** This ticket's QG2 asks for a *preview-time* structured error. The COMPILED driver it compares
+against resolves inside `RestSlackClient::apply` — at **commit**, not preview. So the bar as written
+is stricter than the oracle. Either that is deliberate (the declared twin gets the better surface)
+or QG2 should read "before the effect leg fires". Writing the equivalence test before that is
+settled would let the test pick the answer.
+
+The residue is minted as
+`20260726190000-declared-reverse-lookup-for-write-path-name-resolution.md`, which this ticket now
+depends on. **No acceptance item was added to the mission** — the agreed plan stands.
+
+`20260724014200-retire-the-compiled-slack-driver.md` therefore stays blocked behind this ticket for
+the same reason as before: `driver-slack` is the oracle the outstanding proof compares against, and
+deleting it now would run the ratchet backwards.

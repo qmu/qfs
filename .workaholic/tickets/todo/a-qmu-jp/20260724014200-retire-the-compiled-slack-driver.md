@@ -80,3 +80,17 @@ row-equivalent … **AND** the 5 CALL maps + post map effect-equivalent"*; half 
 
 **To unblock:** finish `20260724014100` (G4 fan-out → declared CALL dispatch → the five wire-level
 equivalence tests), then run this ticket unchanged. Nothing in this ticket's own steps needs revising.
+
+## Still not started (run 20260726-184527) — the gate moved closer but is not green
+
+The overnight `/monitor` drive shipped blueprint §13.1 G4 (`365d521`) and closed the two remaining
+sub-items of `20260724014100` that G4 could close — but **not QG2**, which turned out to need a
+second ruled primitive (a declared reverse lookup on the write path, minted as
+`20260726190000-declared-reverse-lookup-for-write-path-name-resolution.md`). Since the last run:
+
+- `20260724014100` QG1 and QG3 remain closed (`73fa5de`); QG2 is still open, now with the precise
+  structural reason recorded on both it and the G4 ticket rather than a pointer to unbuilt work.
+
+This ticket's own first line remains the gate — *"gated on BOTH equivalence tickets green"* — and it
+is not. `driver-slack` is still the oracle the outstanding proof compares against; deleting it now
+destroys the evidence. Nothing in the four retirement steps needs revising.
