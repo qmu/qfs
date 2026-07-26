@@ -134,3 +134,33 @@ through `tail`.
 - The engine's `EngineError::UnknownColumn` already carries a `stage` field, and `project` sits
   directly beside the `filter_checked`/`expand` refusals it would copy — the implementation is
   small. The cost of this ticket is the judgement, not the code.
+
+## Ruling (developer, 2026-07-26)
+
+**Refuse.** An unknown column in a caller-written `select` is a structured error, consistent with
+`where` and `expand` as of `96a4912` / `f133493`, and consistent with `/sql`, which has always
+refused one. This ticket is no longer a decision — it is an implementation.
+
+Why this direction and not the documented silent drop: the leniency was never a designed
+affordance, it was the absence of a check, and it is *already* inconsistent between drivers today —
+the same statement refuses on `/sql` and silently succeeds on the generic engine. Keeping it would
+mean writing that inconsistency down as intended. The mission's law is that a stage which cannot be
+honored is refused, never ignored; `select` is the last member of the family still ignoring one.
+
+Implementation notes carried from the measurement above:
+
+- The refusal is against **the schema the driver actually delivered**, and inherits the same
+  leniencies the sibling folds already have: an empty or late-bound schema stays lenient, and a
+  driver residual stays lenient for search pseudo-columns. Do not tighten those in this ticket.
+- The codec seam reports an undetermined (empty) schema by design since `be3a05c`, so a post-decode
+  `select` must stay lenient at plan time and refuse at runtime over the decoded batch — the same
+  shape law 4 established.
+- `ErrorKind::Usage`, exit 2, matching the other two refusals. This makes ticket
+  `20260725143100` (the FAQ under-describes exit 2) strictly more worth doing, not less.
+- The only-unknown projection case — today returning the row count with an empty schema — is the
+  clearest failing case to pin as a regression test.
+
+Sequencing: this lands **after** `20260725143000` (raise the cookbook ratchet from parse-only to a
+typecheck) if that is ready, because this refusal will break any shipped recipe still naming a
+column that does not exist, and the ratchet is what proves none remain. If the ratchet is not ready
+first, sweep the cookbook by hand in the same slice.
