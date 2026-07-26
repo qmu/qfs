@@ -32,7 +32,7 @@ equivalences for understanding the closed algebra, not extra exported syntax:
 | `decode fmt`, `encode fmt` | codec-declared relation/blob transforms |
 | `transform name` | declared model-call stage with explicit input/output relation types |
 | `switch col { 'a' => arm, else => arm }` | `partition(rel, col)` routed to declared effect arms — the arm union is the declared effect set |
-| `follow field` | declared-driver second fetch: the delivered row's URL field GETs its raw bytes as a one-row `content` relation (declared view bodies only) |
+| `follow field [into /http/drv/tmpl]` | declared-driver per-row join-to-wire: with `into`, one templated detail request per delivered row spliced back into it (bounded at 50, confined per row); without it, the bytes shorthand — the delivered row's URL field GETs its raw bytes as a one-row `content` relation (declared view bodies only) |
 | write stages and `call driver.action(...)` | effect seams that construct a plan, then pass through preview/commit |
 
 The grammar is **fixed and small** — adding a new service never adds new keywords. A new service is just a new path; a new action is a `call`; a new format is a `decode`/`encode`. This page is generated from the binary itself, so it always matches the version you have installed.
@@ -187,7 +187,13 @@ switch_arm    = ( string | "else" ) , "=>" , arm_body ;
 (* follow request carries NO driver credential (the URL is self-authorizing). Anywhere else    *)
 (* the stage is a structured refusal. A wire path may carry a `?query=…` suffix behind its     *)
 (* last segment (`/files/{file}?create_download_url=1`).                                        *)
-follow_stage  = "follow" , name ;   (* contextual ident, not reserved *)
+(* With an `into /http/<self>/<template>` tail (blueprint §13.1 G4) the SAME stage is a        *)
+(* PER-ROW fan-out: for each delivered row the named field is substituted into the template,   *)
+(* that confined detail request is issued through the driver's own applier (re-checked per     *)
+(* row), and the decoded detail is spliced back into the row. The bytes form above is the      *)
+(* no-template shorthand. The fan-out is bounded (50 rows, the cursor pagination's budget) and *)
+(* an unresolvable value is refused, never guessed.                                            *)
+follow_stage  = "follow" , name , [ "into" , path ] ;  (* contextual idents, not reserved *)
 arm_body      = [ query_stage , { "|>" , query_stage } , "|>" ] ,
                 ( "insert into" , target , [ "returning" , projection ]
                 | "upsert into" , target , [ "returning" , projection ]

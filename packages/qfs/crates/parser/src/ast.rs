@@ -224,9 +224,12 @@ pub enum PipeOp {
     /// keywords — the keyword set stays 39). The governance test locks this variant into the
     /// closed-core set (the second additive pipe stage).
     Switch(SwitchStage),
-    /// `FOLLOW <field>` — the declared-driver second-fetch stage (blueprint §13, ticket
-    /// 20260711121526): take the named field of the (single) delivered row as the URL of a
-    /// second GET and deliver its raw bytes as a one-row `content` batch. ONLY meaningful
+    /// `FOLLOW <field> [INTO <path>]` — the declared-driver second-fetch stage (blueprint §13,
+    /// ticket 20260711121526), generalized by §13.1 **G4** into a per-row fan-out: without `INTO`
+    /// it takes the named field of the (single) delivered row as the URL of a second GET and
+    /// delivers its raw bytes as a one-row `content` batch; with `INTO /http/<drv>/<template>` it
+    /// issues ONE templated detail request per delivered row and splices the decoded detail back
+    /// into that row. ONLY meaningful
     /// inside a declared view body — every other context refuses it structurally at lowering.
     /// A **contextual-identifier** stage like `transform`/`switch` (`follow` is *not* a frozen
     /// keyword — the keyword set stays 39). The governance test locks this variant into the
@@ -307,14 +310,28 @@ pub struct OfColumn {
     pub unique: bool,
 }
 
-/// A `FOLLOW <field>` reference (blueprint §13): the delivered-row field whose text value is
-/// the URL of the second GET (e.g. a `download_url` the service minted). Evaluated by the
-/// declared-view evaluator; the follow request carries NO driver credentials (the URL is
-/// self-authorizing), so no secret can leave the driver's declared host.
+/// A `FOLLOW <field> [INTO <path>]` reference (blueprint §13, generalized by §13.1 **G4**):
+/// `FOLLOW` is a **per-row join-to-wire**, of which blob download is one instance.
+///
+/// - **Bytes form** (`into: None`) — the shipped shape: the named field of the single delivered
+///   row is a URL the evaluator GETs, delivering its raw bytes as a one-row `content` batch. The
+///   follow request carries NO driver credentials (the URL is self-authorizing), so no secret can
+///   leave the driver's declared host.
+/// - **Fan-out form** (`into: Some(template)`, §13.1 G4) — the general shape: for EACH delivered
+///   row the named field is substituted into the `/http/<drv>/<template>` detail address, that
+///   request is issued through the driver's own confined applier, and the decoded detail is spliced
+///   back into the row. The target is a `/http/<self>/…` template like every other declared wire
+///   address, so the anti-exfiltration boundary is re-checked **per row**.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FollowRef {
-    /// The delivered-row field carrying the follow URL.
+    /// The delivered-row field carrying the follow URL (bytes form) or the value substituted into
+    /// the detail template (fan-out form).
     pub field: Ident,
+    /// `INTO /http/<drv>/<detail-template>` — the per-row fan-out target (§13.1 G4). `None` is the
+    /// no-template bytes shorthand. Spans are not carried: the segments participate in the stored
+    /// body's byte-stable canonical form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub into: Option<Vec<PathSegment>>,
     /// Source span of the `follow <field>` stage.
     #[serde(
         serialize_with = "serialize_span",

@@ -1044,19 +1044,33 @@ fn transform_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
     }))
 }
 
-/// `FOLLOW <field>` — the declared-driver second-fetch stage (blueprint §13, ticket
-/// 20260711121526).
+/// `FOLLOW <field> [INTO <path>]` — the declared-driver second-fetch stage (blueprint §13, ticket
+/// 20260711121526), generalized to a per-row fan-out by §13.1 **G4**.
 ///
-/// `follow` is a **contextual identifier** (matched by [`word`], NOT a frozen keyword — the
-/// keyword set stays 39, the `transform`/`switch` lesson); `<field>` is a bare identifier naming
-/// the delivered-row field whose text value is the follow URL. Shape only here — "only valid in
-/// a declared view body" is a structured lowering/eval refusal, not a parse error.
+/// `follow` (and the `into` tail) are **contextual identifiers** (matched by [`word`], NOT frozen
+/// keywords — the keyword set stays 39, the `transform`/`switch` lesson); `<field>` is a bare
+/// identifier naming the delivered-row field. Without `INTO` the field's text value is the follow
+/// URL (the bytes shorthand); with `INTO /http/<drv>/<detail-template>` it is substituted into that
+/// template once per delivered row. Shape only here — "only valid in a declared view body" and the
+/// `/http/<self>` confinement are structured lowering/eval refusals, not parse errors.
 fn follow_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
     let start = word("follow").parse_next(input)?;
     let field = ident(input)?;
+    let mut end = field.span.end;
+    // `into` commits: `FOLLOW id INTO` with no path is a hard error, never an `alt` fallthrough
+    // that would silently degrade the fan-out into the bytes form.
+    let into = match opt(word("into")).parse_next(input)? {
+        None => None,
+        Some(_) => {
+            let target = cut_err(path_expr).parse_next(input)?;
+            end = target.span.end;
+            Some(target.segments)
+        }
+    };
     Ok(PipeOp::Follow(FollowRef {
         field: field.node,
-        span: Span::new(start.start, field.span.end),
+        into,
+        span: Span::new(start.start, end),
     }))
 }
 

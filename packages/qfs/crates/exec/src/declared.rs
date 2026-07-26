@@ -29,6 +29,14 @@ use qfs_pushdown::{lower_query, lower_scalar, partition_by_source, SourceId, Sou
 /// Mirrors the blob convention of the local driver (`content` carries the bytes).
 pub const FOLLOW_CONTENT_COL: &str = "content";
 
+/// The ceiling on a `FOLLOW … INTO` per-row fan-out (blueprint §13.1 G4): N delivered rows are N
+/// wire requests, so the stage is **bounded and visible**, never a silent request storm. The number
+/// is the one the declared cursor pagination already uses (`PAGINATE CURSOR (… MAX 50)`) — one
+/// chattiness budget, one number. A delivered batch larger than this is a structured refusal naming
+/// the cap, not a truncation: silently hydrating the first 50 of 500 rows would be a quiet wrong
+/// answer, which is exactly what the fan-out must not produce.
+pub const FOLLOW_FANOUT_MAX: usize = 50;
+
 /// The synthetic source id every declared-view body scan routes to — the wire namespace. The body is
 /// fetched by the injected closure (not a registered read driver), so the id only needs to be stable;
 /// `PushdownProfile::None` keeps every op residual (run by the engine over the fetched batch), which
@@ -171,7 +179,10 @@ pub fn eval_view_body<F, G>(
     follow: G,
 ) -> Result<RowBatch, CfsError>
 where
-    F: FnOnce(&str, Option<Value>) -> Result<RowBatch, CfsError>,
+    // `Fn`, not `FnOnce`: a §13.1 G4 `FOLLOW … INTO` fan-out calls the SAME confined wire closure
+    // once per delivered row, so the detail requests ride the driver's own auth + host pin exactly
+    // as the first fetch does.
+    F: Fn(&str, Option<Value>) -> Result<RowBatch, CfsError>,
     G: FnOnce(&str) -> Result<Vec<u8>, CfsError>,
 {
     let invalid = |reason: &'static str| CfsError::InvalidPath {
@@ -269,16 +280,35 @@ where
             let PipeOp::Follow(fref) = &pipeline.ops[at] else {
                 unreachable!("position() matched a Follow op");
             };
-            let url = follow_url(&delivered, &fref.field).map_err(invalid)?;
-            let bytes = follow(&url)?;
-            let batch = RowBatch::new(
-                Schema::new(vec![Column::new(
-                    FOLLOW_CONTENT_COL,
-                    ColumnType::Bytes,
-                    false,
-                )]),
-                vec![Row::new(vec![Value::Bytes(bytes)])],
-            );
+            // Two forms of the one stage (blueprint §13.1 G4 — `FOLLOW` is a per-row
+            // join-to-wire, of which blob download is one instance):
+            //   * `INTO <template>` — the general per-row fan-out (detail hydration, an id→object
+            //     resolution), issued through the driver's OWN confined applier;
+            //   * no template — the bytes shorthand: ONE self-authorizing GET off the delivered
+            //     URL, performed by the credential-free `follow` closure.
+            let batch = match &fref.into {
+                Some(template) => fan_out_rows(
+                    &delivered,
+                    &fref.field,
+                    template,
+                    driver_name,
+                    params,
+                    view_path,
+                    &fetch,
+                )?,
+                None => {
+                    let url = follow_url(&delivered, &fref.field).map_err(invalid)?;
+                    let bytes = follow(&url)?;
+                    RowBatch::new(
+                        Schema::new(vec![Column::new(
+                            FOLLOW_CONTENT_COL,
+                            ColumnType::Bytes,
+                            false,
+                        )]),
+                        vec![Row::new(vec![Value::Bytes(bytes)])],
+                    )
+                }
+            };
             let rest_ops = pipeline.ops[at + 1..].to_vec();
             if rest_ops.is_empty() {
                 batch
@@ -298,6 +328,157 @@ where
     // 5. Shape to the declared `OF` type (the delivered contract) — project to its columns, then
     //    membership-check each delivered row against the type's refinement (blueprint §5.4).
     shape_to_type(evaluated, of_columns, of_refinement, view_path)
+}
+
+/// The §13.1 **G4** per-row fan-out: for EACH delivered row, substitute the row into the
+/// `INTO /http/<drv>/<template>` detail address, issue that request through the driver's own
+/// confined wire closure, and splice the decoded detail back into the row.
+///
+/// Four rules, each one of the ticket's Policies made mechanical:
+///
+/// * **Bounded and visible.** N rows are N requests, so a batch above [`FOLLOW_FANOUT_MAX`] is a
+///   structured refusal naming the cap — never a silent storm, and never a truncation (hydrating
+///   the first 50 of 500 would be the quiet wrong answer the cap exists to prevent).
+/// * **Confined per row.** The rendered target is re-checked against `/http/<driver>/…` for EVERY
+///   row, not once for the template: the anti-exfiltration boundary holds per request.
+/// * **Refuse, never guess.** A row whose `<field>` is absent, `Null`, or empty is refused here —
+///   at PREVIEW, where the read runs — rather than silently spliced as `Null` or sent to the wire
+///   as a garbage id. A detail request that answers with no row (or more than one) is likewise a
+///   refusal: "this value does not resolve" is an answer, "I picked one" is not.
+/// * **One shape for every row.** The first row's detail schema is the contract; a later row whose
+///   detail carries different columns is a refusal rather than a ragged batch.
+///
+/// **Substitution scope and precedence.** `{name}` in the template resolves against the DELIVERED
+/// ROW's columns first, then the view's bound `{param}` segments. Row-first is the honest default
+/// for a stage whose whole meaning is "per row"; a template `{channel}` in a fan-out reads as the
+/// row's channel, and the view parameter is the outer fallback.
+///
+/// **Splice precedence.** The detail's columns are appended to the row, and on a name collision the
+/// DETAIL replaces the row's value: the row carried a stub, the detail is the hydrated truth, which
+/// is the entire point of a list→detail fan-out.
+fn fan_out_rows<F>(
+    delivered: &RowBatch,
+    field: &str,
+    template: &[qfs_parser::PathSegment],
+    driver_name: &str,
+    params: &[(String, String)],
+    view_path: &str,
+    fetch: &F,
+) -> Result<RowBatch, CfsError>
+where
+    F: Fn(&str, Option<Value>) -> Result<RowBatch, CfsError>,
+{
+    let invalid = |reason: &'static str| CfsError::InvalidPath {
+        path: view_path.to_string(),
+        reason,
+    };
+
+    if delivered.rows.len() > FOLLOW_FANOUT_MAX {
+        return Err(invalid(
+            "a FOLLOW … INTO fan-out is one wire request per delivered row and is capped at 50 \
+             rows — narrow the view's WHERE/LIMIT rather than issuing an unbounded request storm",
+        ));
+    }
+    let idx = delivered
+        .schema
+        .columns
+        .iter()
+        .position(|c| c.name == field)
+        .ok_or_else(|| invalid("the FOLLOW field was not delivered by the preceding stages"))?;
+
+    let mut schema: Option<Schema> = None;
+    let mut rows: Vec<Row> = Vec::with_capacity(delivered.rows.len());
+    for row in &delivered.rows {
+        // The followed value must be a concrete, non-empty scalar. A `Null`/absent/empty field is
+        // the unresolvable reference: refused here, never guessed onto the wire.
+        let followed = row.values.get(idx).and_then(wire_text).ok_or_else(|| {
+            invalid(
+                "the FOLLOW … INTO field is empty or not a text/int value on some delivered row — \
+                 an unresolvable reference is refused, never guessed",
+            )
+        })?;
+        // Row-first bindings (see the precedence note above), with the followed field guaranteed
+        // present under its own name even when the row spells it as an int.
+        let mut bindings: Vec<(String, String)> = Vec::new();
+        for (col, value) in delivered.schema.columns.iter().zip(&row.values) {
+            if let Some(text) = wire_text(value) {
+                bindings.push((col.name.clone(), text));
+            }
+        }
+        bindings.push((field.to_string(), followed));
+        bindings.extend(params.iter().cloned());
+
+        let target = render_source_path(template, &bindings);
+        // Re-checked PER ROW: a row value can never steer the request off the driver's own host.
+        let wire_resource = confined_wire_resource(&target, driver_name).ok_or_else(|| {
+            invalid("a FOLLOW … INTO target addresses a foreign host (§13 confinement)")
+        })?;
+        let detail = fetch(&format!("/rest/{driver_name}/{wire_resource}"), None)?;
+        let [detail_row] = detail.rows.as_slice() else {
+            return Err(invalid(
+                "a FOLLOW … INTO detail request must answer with exactly one row — a value that \
+                 resolves to none (or to several) is refused, not guessed",
+            ));
+        };
+
+        let mut names: Vec<String> = delivered
+            .schema
+            .columns
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        let mut values = row.values.clone();
+        for (col, value) in detail.schema.columns.iter().zip(&detail_row.values) {
+            match names.iter().position(|n| n == &col.name) {
+                Some(at) => values[at] = value.clone(),
+                None => {
+                    names.push(col.name.clone());
+                    values.push(value.clone());
+                }
+            }
+        }
+        let shape = Schema::new(
+            names
+                .iter()
+                .map(|n| Column::new(n.clone(), ColumnType::Unknown, true))
+                .collect(),
+        );
+        match &schema {
+            None => schema = Some(shape),
+            Some(first) => {
+                if first.columns.len() != shape.columns.len()
+                    || first
+                        .columns
+                        .iter()
+                        .zip(&shape.columns)
+                        .any(|(a, b)| a.name != b.name)
+                {
+                    return Err(invalid(
+                        "a FOLLOW … INTO fan-out delivered different columns for different rows — \
+                         the first row's detail shape is the contract",
+                    ));
+                }
+            }
+        }
+        rows.push(Row::new(values));
+    }
+    // Zero delivered rows fan out to zero requests and deliver zero rows, keeping the pre-stage
+    // schema so the ops after the stage still see the columns they were written against.
+    Ok(RowBatch::new(
+        schema.unwrap_or_else(|| delivered.schema.clone()),
+        rows,
+    ))
+}
+
+/// The wire spelling of a delivered value for `{param}` substitution: only text and int have an
+/// unambiguous one. Everything else (`Null`, a struct, a list, bytes) has none — the caller turns
+/// that into the structured "unresolvable reference" refusal rather than inventing a rendering.
+fn wire_text(v: &Value) -> Option<String> {
+    match v {
+        Value::Text(t) if !t.is_empty() => Some(t.clone()),
+        Value::Int(i) => Some(i.to_string()),
+        _ => None,
+    }
 }
 
 /// The follow URL of a delivered batch: exactly ONE row (a follow over zero or many rows is
@@ -865,9 +1046,11 @@ mod tests {
         .unwrap();
         let of = vec!["ts".to_string(), "user".to_string(), "text".to_string()];
 
-        let mut fetched_path = None;
+        // The wire closure is `Fn` (a §13.1 G4 fan-out calls it once per row), so the recorder is
+        // interior-mutable rather than a captured `mut` binding.
+        let fetched_path = std::cell::RefCell::new(None);
         let batch = eval_view_body(&body, "slack", "/slack/history", Some(&of), None, &[], &[], |path, _post| {
-            fetched_path = Some(path.to_string());
+            *fetched_path.borrow_mut() = Some(path.to_string());
             Ok(decode(
                 br#"{"ok":true,"messages":[{"ts":"1","user":"U1","text":"hi"},{"ts":"2","user":"U2","text":"yo"}]}"#,
             ))
@@ -884,7 +1067,7 @@ mod tests {
         assert_eq!(batch.rows.len(), 2, "two messages, not one envelope row");
         // The mount path decoupled from the wire endpoint (the fetch addressed the dotted method).
         assert_eq!(
-            fetched_path.as_deref(),
+            fetched_path.into_inner().as_deref(),
             Some("/rest/slack/conversations.history")
         );
     }
@@ -1007,7 +1190,7 @@ mod tests {
         )
         .expect("matches");
 
-        let mut fetched_path = None;
+        let fetched_path = std::cell::RefCell::new(None);
         let _batch = eval_view_body(
             &body,
             "chatwork",
@@ -1017,14 +1200,14 @@ mod tests {
             &params,
             &[],
             |path, _post| {
-                fetched_path = Some(path.to_string());
+                *fetched_path.borrow_mut() = Some(path.to_string());
                 Ok(decode(br#"[{"message_id":"m1","body":"hi"}]"#))
             },
             no_follow,
         )
         .expect("reads");
         assert_eq!(
-            fetched_path.as_deref(),
+            fetched_path.into_inner().as_deref(),
             Some("/rest/chatwork/rooms/123/messages"),
             "the bound {{room}} substituted into the wire path"
         );
@@ -1288,6 +1471,216 @@ mod tests {
             }
             other => panic!("expected InvalidPath, got {other:?}"),
         }
+    }
+
+    /// Run a `FOLLOW … INTO` view body over a canned list response, recording every fan-out
+    /// request path and answering each from `detail`. The shared harness of the G4 tests below.
+    fn fan_out(
+        body_src: &str,
+        params: &[(String, String)],
+        list: &[u8],
+        detail: impl Fn(&str) -> Result<RowBatch, CfsError>,
+    ) -> (Result<RowBatch, CfsError>, Vec<String>) {
+        let body = serde_json::to_string(&qfs_parser::parse_statement(body_src).unwrap()).unwrap();
+        let seen = std::cell::RefCell::new(Vec::new());
+        let first = std::cell::Cell::new(true);
+        let out = eval_view_body(
+            &body,
+            "maild",
+            "/maild/inbox",
+            None,
+            None,
+            params,
+            &[],
+            |path, _post| {
+                if first.replace(false) {
+                    return Ok(decode(list));
+                }
+                seen.borrow_mut().push(path.to_string());
+                detail(path)
+            },
+            no_follow,
+        );
+        (out, seen.into_inner())
+    }
+
+    #[test]
+    fn follow_into_issues_one_confined_request_per_row_and_splices_the_detail() {
+        // §13.1 G4 QG1 + QG2: a multi-row list fans out to ONE templated detail request per
+        // delivered row, each substituting that row's field, each confined to the driver's own
+        // `/http/<self>` namespace — and each decoded detail is spliced back into its row.
+        let (out, seen) = fan_out(
+            "/http/maild/users/me/messages |> DECODE json |> EXPAND messages \
+             |> FOLLOW id INTO /http/maild/users/me/messages/{id}",
+            &[],
+            br#"{"messages":[{"id":"m1"},{"id":"m2"},{"id":"m3"}]}"#,
+            |path| {
+                let id = path.rsplit('/').next().unwrap_or_default();
+                Ok(decode(
+                    format!(r#"[{{"subject":"s-{id}","from":"a@b"}}]"#).as_bytes(),
+                ))
+            },
+        );
+        let batch = out.expect("the fan-out hydrates every row");
+        assert_eq!(
+            seen,
+            vec![
+                "/rest/maild/users/me/messages/m1",
+                "/rest/maild/users/me/messages/m2",
+                "/rest/maild/users/me/messages/m3",
+            ],
+            "one wire request per delivered row, the row's own id substituted"
+        );
+        let mut names: Vec<&str> = batch
+            .schema
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec!["from", "id", "subject"],
+            "the detail's columns are spliced onto the stub row"
+        );
+        assert_eq!(batch.rows.len(), 3);
+        let at = |name: &str| {
+            batch
+                .schema
+                .columns
+                .iter()
+                .position(|c| c.name == name)
+                .expect("column present")
+        };
+        assert_eq!(
+            batch.rows[1].values[at("id")],
+            Value::Text("m2".to_string())
+        );
+        assert_eq!(
+            batch.rows[1].values[at("subject")],
+            Value::Text("s-m2".to_string()),
+            "each row got ITS OWN detail, not the first row's"
+        );
+    }
+
+    #[test]
+    fn follow_into_is_confined_per_row_and_bounded() {
+        // §13.1 G4 QG2: the anti-exfiltration boundary is re-checked PER ROW — a foreign-host
+        // template is refused before any detail request is issued.
+        let (out, seen) = fan_out(
+            "/http/maild/users/me/messages |> DECODE json |> EXPAND messages \
+             |> FOLLOW id INTO /http/evil/collect/{id}",
+            &[],
+            br#"{"messages":[{"id":"m1"}]}"#,
+            |_| panic!("a foreign-host fan-out must never reach the wire"),
+        );
+        match out.unwrap_err() {
+            CfsError::InvalidPath { reason, .. } => assert!(
+                reason.contains("confinement"),
+                "names the boundary: {reason}"
+            ),
+            other => panic!("expected InvalidPath, got {other:?}"),
+        }
+        assert!(seen.is_empty());
+
+        // …and the fan-out is BOUNDED: 51 rows is 51 requests, so it is refused with the cap
+        // named rather than truncated (a silent first-50 would be a quiet wrong answer).
+        let many: Vec<String> = (0..=FOLLOW_FANOUT_MAX)
+            .map(|i| format!(r#"{{"id":"m{i}"}}"#))
+            .collect();
+        let (out, seen) = fan_out(
+            "/http/maild/users/me/messages |> DECODE json |> EXPAND messages \
+             |> FOLLOW id INTO /http/maild/users/me/messages/{id}",
+            &[],
+            format!(r#"{{"messages":[{}]}}"#, many.join(",")).as_bytes(),
+            |_| panic!("the cap is checked before any request"),
+        );
+        match out.unwrap_err() {
+            CfsError::InvalidPath { reason, .. } => {
+                assert!(reason.contains("50 rows"), "names the cap: {reason}");
+            }
+            other => panic!("expected InvalidPath, got {other:?}"),
+        }
+        assert!(seen.is_empty(), "no request storm, not even a partial one");
+    }
+
+    #[test]
+    fn follow_into_refuses_an_unresolvable_value_rather_than_guessing() {
+        // §13.1 G4 QG3 (the 「推測するな、宣言して拒否せよ」 policy made mechanical): a row whose
+        // followed field is Null is refused HERE — at the read, which is preview time — never
+        // spliced as a silent Null and never sent to the wire as a garbage id.
+        let (out, seen) = fan_out(
+            "/http/maild/users/me/messages |> DECODE json |> EXPAND messages \
+             |> FOLLOW id INTO /http/maild/users/me/messages/{id}",
+            &[],
+            br#"{"messages":[{"id":null}]}"#,
+            |_| panic!("an unresolvable value never reaches the wire"),
+        );
+        match out.unwrap_err() {
+            CfsError::InvalidPath { reason, .. } => assert!(
+                reason.contains("never guessed"),
+                "refuses rather than guesses: {reason}"
+            ),
+            other => panic!("expected InvalidPath, got {other:?}"),
+        }
+        assert!(seen.is_empty());
+
+        // A value that resolves to NO detail row is the same refusal: "this does not resolve" is
+        // an answer; picking one (or splicing Null) is not.
+        let (out, _) = fan_out(
+            "/http/maild/users/me/messages |> DECODE json |> EXPAND messages \
+             |> FOLLOW id INTO /http/maild/users/me/messages/{id}",
+            &[],
+            br#"{"messages":[{"id":"gone"}]}"#,
+            |_| Ok(decode(b"[]")),
+        );
+        match out.unwrap_err() {
+            CfsError::InvalidPath { reason, .. } => assert!(
+                reason.contains("exactly one row"),
+                "names the resolution rule: {reason}"
+            ),
+            other => panic!("expected InvalidPath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn follow_into_substitution_prefers_the_row_over_the_view_param() {
+        // The precedence rule, pinned: `{name}` in a fan-out template resolves against the
+        // DELIVERED ROW first and the view's bound `{param}` only as the outer fallback. A stage
+        // whose whole meaning is "per row" must read its own row; this test fails if that flips.
+        let (out, seen) = fan_out(
+            "/http/maild/users/{user}/messages |> DECODE json |> EXPAND messages \
+             |> FOLLOW id INTO /http/maild/users/{user}/messages/{id}",
+            &[
+                ("user".to_string(), "me".to_string()),
+                ("id".to_string(), "PARAM".to_string()),
+            ],
+            br#"{"messages":[{"id":"m1"}]}"#,
+            |_| Ok(decode(br#"[{"subject":"s"}]"#)),
+        );
+        out.expect("hydrates");
+        assert_eq!(
+            seen,
+            vec!["/rest/maild/users/me/messages/m1"],
+            "the ROW's id wins over the view param of the same name, and {{user}} falls back to \
+             the view param the row does not carry"
+        );
+    }
+
+    #[test]
+    fn follow_into_splices_the_detail_over_a_colliding_stub_column() {
+        // Splice precedence, pinned: the row carried a stub, the detail is the hydrated truth, so
+        // on a name collision the DETAIL replaces the row's value — the point of list→detail.
+        let (out, _) = fan_out(
+            "/http/maild/users/me/messages |> DECODE json |> EXPAND messages \
+             |> FOLLOW id INTO /http/maild/users/me/messages/{id}",
+            &[],
+            br#"{"messages":[{"id":"m1","subject":"STUB"}]}"#,
+            |_| Ok(decode(br#"[{"subject":"HYDRATED"}]"#)),
+        );
+        let batch = out.expect("hydrates");
+        assert_eq!(batch.schema.columns.len(), 2, "no duplicate column appears");
+        assert_eq!(batch.rows[0].values[1], Value::Text("HYDRATED".to_string()));
     }
 
     #[test]

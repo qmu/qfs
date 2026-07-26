@@ -1426,9 +1426,52 @@ fn follow_stage_parses_as_the_follow_pipe_op() {
         panic!("expected a query");
     };
     match p.ops.as_slice() {
-        [PipeOp::Decode(_), PipeOp::Follow(f)] => assert_eq!(f.field, "download_url"),
+        [PipeOp::Decode(_), PipeOp::Follow(f)] => {
+            assert_eq!(f.field, "download_url");
+            // The no-template bytes shorthand: `into` is absent, so §13.1 G4's fan-out arm is not
+            // silently entered by an old declaration.
+            assert_eq!(f.into, None);
+        }
         other => panic!("expected DECODE then FOLLOW, got {other:?}"),
     }
+}
+
+#[test]
+fn follow_into_parses_the_per_row_fan_out_target() {
+    // FOLLOW … INTO (blueprint §13.1 G4): the general per-row fan-out — the delivered field is
+    // substituted into a `/http/<drv>/<detail-template>` address, one request per row. The bytes
+    // download form above is the no-template shorthand of the SAME stage.
+    let src = "/http/maild/users/me/messages |> DECODE json |> EXPAND messages \
+               |> FOLLOW id INTO /http/maild/users/me/messages/{id}";
+    let Statement::Query(p) = parse_ok(src) else {
+        panic!("expected a query");
+    };
+    match p.ops.as_slice() {
+        [PipeOp::Decode(_), PipeOp::Expand(_), PipeOp::Follow(f)] => {
+            assert_eq!(f.field, "id");
+            let names: Vec<&str> = f
+                .into
+                .as_ref()
+                .expect("the INTO target parsed")
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect();
+            assert_eq!(
+                names,
+                vec!["http", "maild", "users", "me", "messages", "{id}"]
+            );
+        }
+        other => panic!("expected DECODE, EXPAND then FOLLOW … INTO, got {other:?}"),
+    }
+    // The stored body round-trips through serde (the install → rehydrate path the declared
+    // evaluator reads the stage back with).
+    let json = serde_json::to_string(&parse_ok(src)).expect("serializes");
+    assert_eq!(
+        serde_json::from_str::<Statement>(&json).expect("rehydrates"),
+        parse_ok(src)
+    );
+    // `INTO` commits: a bare tail is a hard error, never a silent degradation to the bytes form.
+    assert!(parse_statement("/http/x |> DECODE json |> FOLLOW id INTO").is_err());
 }
 
 #[test]
@@ -1886,6 +1929,7 @@ fn closed_core_variant_counts_are_locked() {
         // refusal, never an executable general-pipeline stage.
         PipeOp::Follow(FollowRef {
             field: String::new(),
+            into: None,
             span: Span::new(0, 0),
         }),
         // OF (blueprint §5.6, ticket 20260714154144) — the general use-site type-assertion stage,
