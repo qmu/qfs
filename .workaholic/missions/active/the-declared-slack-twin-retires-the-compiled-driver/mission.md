@@ -103,6 +103,7 @@ retired.
 - 2026-07-25 — ticket archived — 20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md
 - 2026-07-25 — run recorded (+1.05h) — 20260725-101714
 
+- 2026-07-26 — mission replanned - developer ruling 2026-07-26: G4 per-row fan-out sequenced as an explicit prerequisite of ticket 20260724014100 rather than discovered inside it; map body expressions ruled to reach the path parameters; no acceptance item added or reworded — 20260725124400-declared-follow-into-per-row-fan-out-g4.md
 ## Reflection
 
 ### 2026-07-25 run 20260725-101714

@@ -6,7 +6,7 @@ layer: [Domain]
 effort:
 commit_hash:
 category: Added
-depends_on: [20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md]
+depends_on: [20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md, 20260725124400-declared-follow-into-per-row-fan-out-g4.md]
 mission: the-declared-slack-twin-retires-the-compiled-driver
 ---
 
@@ -139,3 +139,25 @@ note, not a ticket): a UNIVERSAL-verb map still issues its wire leg under the OP
 than the verb its body declares, so a hypothetical `CREATE MAP REMOVE … AS INSERT INTO /http/…` would
 send a DELETE carrying a body. Only the CALL arm consults `MapWrite::wire_kind`. Every shipped map
 (chatwork, cloudflare, slack) declares a body whose verb already matches its map verb.
+
+## Replan (developer, 2026-07-26)
+
+**G4 is now an explicit prerequisite of this ticket, not a discovery inside it.**
+`depends_on` gains `20260725124400-declared-follow-into-per-row-fan-out-g4.md`.
+
+Why the plan changed: this mission's entry conditions checked that blueprint §13.1 G1 and G2 had
+shipped and never asked about G4. Quality Gate item 2 — a name-addressed channel resolves before
+the effect fires, and an unresolvable name is a structured preview-time error — cannot be written
+in a declaration at all until per-row fan-out exists, because resolving `#name` to `Cxxxx` is a
+second wire request per row. The overnight run of 2026-07-25 closed QG1 and QG3 against
+already-resolved ids and stopped honestly at QG2 rather than weakening it to something passable.
+
+G4 is also the prerequisite for playbook entry #3 (the drive twin's path→id parent walk), so it is
+sequenced as its own ticket ahead of both rather than buried as a step inside either.
+
+**Nothing in the mission's `## Acceptance` changed** — the agreed plan stands; only the ordering
+under it does. This ticket stays open, and `20260724014200` stays blocked behind it: deleting
+driver-slack would remove the compiled oracle the outstanding effect-equivalence proof compares
+against.
+
+Remaining here after G4 lands: QG2 only. QG1 and QG3 are closed at `73fa5de`.
