@@ -284,8 +284,9 @@ qfs --json view refresh app.qfs cached    # machine-readable receipt
 
 ## `/cf` live configuration
 
-Cloudflare D1/KV/Queues/Artifacts reads and commits are live after the operator stores a Cloudflare
-API token in the qfs vault and connects a mount:
+The compiled `/cf` mount serves **Artifacts** plus an **append-only queue handle** (push). Those
+reads and commits are live after the operator stores a Cloudflare API token in the qfs vault and
+connects a mount:
 
 ```sh
 printf %s "$CLOUDFLARE_API_TOKEN" | qfs account add cf mycf
@@ -295,13 +296,17 @@ qfs connect /cf --driver cf --account mycf
 When the token can see exactly one Cloudflare account, qfs discovers and persists that account id.
 If the token can see multiple accounts, pass `--at <cloudflare_account_id>` to choose one.
 
-At mount registration, qfs discovers D1 databases, KV namespaces, Queues, and Artifacts namespace
-access from the Cloudflare API. D1 databases are registered under their human name and use
-Cloudflare's `uuid` internally; KV namespaces are registered under their title and use Cloudflare's
-`id` internally. Artifacts repositories are exposed as `/cf/artifacts` rows with
-`namespace`, `name`, `id`, `remote_url`, and other non-secret metadata; the repo token returned by
-create is sealed into qfs's vault and is never returned as a column. Without the stored account and
-connected mount, `/cf` is not registered for reads or commits.
+At mount registration, qfs discovers **Queues and Artifacts namespace access only** — it issues no
+D1 or KV discovery call and registers no D1 database or KV namespace. Artifacts repositories are
+exposed as `/cf/artifacts` rows with `namespace`, `name`, `id`, `remote_url`, and other non-secret
+metadata; the repo token returned by create is sealed into qfs's vault and is never returned as a
+column. Each discovered queue is registered as an append-only handle: it advertises `INSERT` and
+nothing else, so a `SELECT` over a `/cf` queue is refused at the parse gate. Without the stored
+account and connected mount, `/cf` is not registered for reads or commits.
+
+**D1 SQL, KV get/put, and queue push *and* pull belong to the declared `/cloudflare` driver**, not
+to `/cf` — install the shipped `cloudflare.qfs` declaration and connect it to the same stored token
+(see the [Cloudflare cookbook](/cookbook/cloudflare)).
 
 ## `qfs skill` — the embedded AI procedure
 
