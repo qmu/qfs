@@ -106,6 +106,7 @@ retired.
 - 2026-07-26 — mission replanned - developer ruling 2026-07-26: G4 per-row fan-out sequenced as an explicit prerequisite of ticket 20260724014100 rather than discovered inside it; map body expressions ruled to reach the path parameters; no acceptance item added or reworded — 20260725124400-declared-follow-into-per-row-fan-out-g4.md
 - 2026-07-26 — run recorded (+0.42h) — 20260726-184527
 - 2026-07-27 — mission carried into a-declared-write-resolves-a-name-the-way-a-query-does — mission.md
+- 2026-07-27 — story reported — work-20260724-011034.md
 ## Reflection
 
 ### 2026-07-25 run 20260725-101714
