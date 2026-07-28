@@ -1696,15 +1696,15 @@ mod tests {
 
     /// A `/cf` read facet with a KV namespace, a queue, and an artifacts namespace behind mocks.
     fn cf_facet() -> CfReadDriver {
-        use qfs_driver_cf::{CfRegistry, MockCfBackend, NoopArtifactTokenSealer, QueueMsg};
+        use qfs_driver_cf::{CfRegistry, MockCfBackend, NoopArtifactTokenSealer};
         let kv = Arc::new(
             MockCfBackend::new().with_kv_keys(vec!["alpha".to_string(), "beta".to_string()]),
         );
-        let queue = Arc::new(
-            MockCfBackend::new()
-                .with_queue_msg(QueueMsg::new("m1", b"one".to_vec(), 1))
-                .with_queue_msg(QueueMsg::new("m2", b"two".to_vec(), 1)),
-        );
+        // The queue is registered with an EMPTY backend deliberately: the compiled queue is
+        // append-only since the pull was retired to the declared `cloudflare.qfs` view, so no
+        // fixture message can be read back through it. It stays in the registry only so the
+        // retirement refusal below has a real node to address.
+        let queue = Arc::new(MockCfBackend::new());
         let artifacts = Arc::new(MockCfBackend::new().with_artifact_namespace("default"));
         let registry = CfRegistry::new()
             .with_kv("cache", kv)
@@ -1739,8 +1739,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cf_queue_and_artifacts_refuse_an_unknown_where_column() {
-        for path in ["/cf/queue/jobs", "/cf/artifacts"] {
+    async fn cf_artifacts_refuses_an_unknown_where_column() {
+        for path in ["/cf/artifacts"] {
             let result = cf_facet()
                 .scan(
                     &scan_with_filter(path, col_eq("nosuchcol", "x")),
@@ -1758,15 +1758,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cf_queue_where_on_a_real_column_still_narrows_the_tail() {
-        let batch = cf_facet()
+    async fn cf_queue_read_is_refused_and_names_the_declared_view() {
+        // The predecessor of this test asserted the compiled queue tail narrowed by a real column.
+        // That surface is retired: the pull moved to the declared `cloudflare.qfs` read-over-POST
+        // view and the compiled queue is append-only. The coverage is kept, inverted — a read must
+        // REFUSE and say where the surface went, so the retirement can never decay into an empty
+        // batch that reads as "no messages".
+        let err = cf_facet()
             .scan(
                 &scan_with_filter("/cf/queue/jobs", col_eq("id", "m2")),
                 &RequestContext::anonymous(),
             )
             .await
-            .expect("a real column is honored");
-        assert_eq!(batch.rows.len(), 1);
-        assert_eq!(batch.rows[0].values[0], Value::Text("m2".to_string()));
+            .expect_err("the retired compiled queue read is refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("append-only"),
+            "the refusal must say the compiled queue is append-only, got: {msg}"
+        );
+        assert!(
+            msg.contains("/cloudflare/"),
+            "the refusal must name the declared view that replaced it, got: {msg}"
+        );
     }
 }
