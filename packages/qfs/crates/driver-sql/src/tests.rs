@@ -1021,6 +1021,61 @@ fn limit_is_pushed_to_sql_only_when_no_residual_remains() {
 }
 
 #[test]
+fn where_on_a_column_the_table_does_not_have_is_refused_not_left_residual() {
+    // A `SELECT nosuchcol` and an `ORDER BY nosuchcol` were already structured errors; a
+    // `WHERE nosuchcol = 'x'` was not — it fell into the RESIDUAL, the engine evaluated it over
+    // rows with no such column, every row failed, and the query answered `rows: []` at exit 0.
+    // A typo and an honest "nothing matched" have to be distinguishable (ticket 20260717180100).
+    let (driver, _be) = driver_over(USERS_DDL);
+    let (schema, table) = driver.resolve_table(&Path::new("/sql/db/users")).unwrap();
+
+    let spec = QuerySpec::new(Vec::new()).with_predicate(Predicate::Cmp(
+        ColRef::col("nosuchcol"),
+        CmpOp::Eq,
+        Literal::Text("x".to_string()),
+    ));
+    match compile(&schema, &table, &spec) {
+        Err(SqlError::UnknownColumn { name, .. }) => assert_eq!(name, "nosuchcol"),
+        other => panic!("expected a structured UnknownColumn, got {other:?}"),
+    }
+
+    // Hidden inside an `OR` arm — the shape that pushes nothing and would otherwise be wholly
+    // residual — is refused just the same.
+    let buried = QuerySpec::new(Vec::new()).with_predicate(Predicate::Or(
+        Box::new(Predicate::Cmp(
+            ColRef::col("active"),
+            CmpOp::Eq,
+            Literal::Bool(true),
+        )),
+        Box::new(Predicate::Cmp(
+            ColRef::col("nosuchcol"),
+            CmpOp::Eq,
+            Literal::Text("x".to_string()),
+        )),
+    ));
+    assert!(
+        matches!(
+            compile(&schema, &table, &buried),
+            Err(SqlError::UnknownColumn { .. })
+        ),
+        "an unknown column inside an OR arm is refused too"
+    );
+
+    // The control: a REAL column with no match is still a clean compile (an empty result stays a
+    // valid answer, and a `~` regex still lowers to a residual rather than an error).
+    let real = QuerySpec::new(Vec::new()).with_predicate(Predicate::Cmp(
+        ColRef::col("name"),
+        CmpOp::Match,
+        Literal::Text("zzz".to_string()),
+    ));
+    let r = compile(&schema, &table, &real).expect("a real column compiles");
+    assert!(
+        r.residual.is_some(),
+        "`~` is still kept residual, not refused"
+    );
+}
+
+#[test]
 fn driver_id_and_mount_are_sql() {
     let (driver, _be) = driver_over(USERS_DDL);
     assert_eq!(driver.mount(), "/sql");

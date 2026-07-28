@@ -2,6 +2,7 @@
 
 ## active
 
+* [a-where-predicate-is-honored-or-refused-never-dropped](active/a-where-predicate-is-honored-or-refused-never-dropped/mission.md) - A where predicate is honored or refused, never dropped
 * [claude-code-sessions-are-queryable-and-steerable-as-qfs-paths](active/claude-code-sessions-are-queryable-and-steerable-as-qfs-paths/mission.md) - Claude Code sessions are queryable and steerable as qfs paths
 * [what-a-principal-can-see-and-do-is-granted-by-policy](active/what-a-principal-can-see-and-do-is-granted-by-policy/mission.md) - What a principal can see and do is granted by policy
 

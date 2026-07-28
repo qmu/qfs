@@ -717,3 +717,42 @@ fn bridge_constructs_and_routes_read_only() {
     );
     assert!(PlanApplier::apply(&mut applier, &node).is_err());
 }
+
+#[test]
+fn where_on_a_field_the_catalog_does_not_have_is_refused_not_left_residual() {
+    // A projected or ordered name outside the catalog was already `UnknownField`; a FILTERED one
+    // was not — it fell into the residual, the engine evaluated it over report rows that carry no
+    // such column, every row failed, and the report answered `rows: []` at exit 0. A typo and an
+    // empty report have to be distinguishable (ticket 20260717180100).
+    let spec = QuerySpec::new(vec!["country".to_string(), "sessions".to_string()]).with_predicate(
+        Predicate::And(
+            Box::new(date_between("2024-01-01", "2024-01-31")),
+            Box::new(Predicate::Cmp(
+                ColRef::col("nosuchdim"),
+                CmpOp::Eq,
+                Literal::Text("JP".to_string()),
+            )),
+        ),
+    );
+    match compile("123", false, &fixture_catalog(), &spec) {
+        Err(GaError::UnknownField { name, .. }) => assert_eq!(name, "nosuchdim"),
+        other => panic!("expected a structured UnknownField, got {other:?}"),
+    }
+
+    // The control: `date` is the report's own window coordinate, not a catalog field, and a real
+    // dimension still compiles (with its residual where the GA operator is loose).
+    let ok = QuerySpec::new(vec!["country".to_string(), "sessions".to_string()]).with_predicate(
+        Predicate::And(
+            Box::new(date_between("2024-01-01", "2024-01-31")),
+            Box::new(Predicate::Cmp(
+                ColRef::col("country"),
+                CmpOp::Eq,
+                Literal::Text("JP".to_string()),
+            )),
+        ),
+    );
+    assert!(
+        compile("123", false, &fixture_catalog(), &ok).is_ok(),
+        "`date` plus a real dimension still compiles"
+    );
+}

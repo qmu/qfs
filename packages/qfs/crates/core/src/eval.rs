@@ -105,6 +105,20 @@ pub enum PlanSource {
         input: Box<PlanSource>,
         /// The codec format name.
         fmt: String,
+        /// The relation's schema after the codec — **always empty**, i.e. undetermined.
+        ///
+        /// A decode is not schema-preserving: `decode md` replaces the blob listing's columns with
+        /// the decoded document's, and which columns those are is **data-dependent** (the planner
+        /// holds only the blob source's `describe`, see `qfs-exec`'s codec module). Reporting the
+        /// INPUT's schema here — which this node did until ticket 20260717180300 — made every
+        /// diagnostic raised over a codec pipeline name the **pre-decode** columns: an operator
+        /// asking why `front_matter` was unknown was told the available columns were
+        /// `name, path, size, modified, is_dir, mode, content`, a set with **zero overlap** with
+        /// the relation's actual `path, tags, title, body`. Empty is the type model's existing word
+        /// for "undescribable", so downstream folds degrade to late-bound rather than asserting
+        /// something false — and the honest error is raised by the RUNTIME, over the decoded batch,
+        /// where the true columns exist.
+        schema: Schema,
     },
     /// `UNION`/`EXCEPT`/`INTERSECT` — a set operation over two relations; the output
     /// schema is the column-wise `unify` of the two sides (blueprint §4).
@@ -151,9 +165,10 @@ impl PlanSource {
             | PlanSource::SetOp { schema, .. }
             | PlanSource::Join { schema, .. }
             | PlanSource::Transform { schema, .. } => schema,
-            PlanSource::Filter { input }
-            | PlanSource::Shape { input }
-            | PlanSource::Codec { input, .. } => input.schema(),
+            // `Filter` and `Shape` ARE schema-preserving, so reporting the input's schema is
+            // correct for them — the `Codec` arm is split out precisely because a decode is not.
+            PlanSource::Filter { input } | PlanSource::Shape { input } => input.schema(),
+            PlanSource::Codec { schema, .. } => schema,
         }
     }
 }
@@ -854,6 +869,15 @@ impl<'r> Evaluator<'r> {
             // EXPAND explodes a collection column (t05 `expand` is the source of truth).
             PipeOp::Expand(field) => {
                 let name = field.last().cloned().unwrap_or_default();
+                // An undescribable relation (an undescribing driver, or anything after a codec)
+                // stays late-bound: the columns are not known here, so neither is whether this one
+                // is expandable. The engine refuses it against the rows it actually produced.
+                if input.schema().columns.is_empty() {
+                    return Ok(PlanSource::Expand {
+                        schema: Schema::empty(),
+                        input: Box::new(input),
+                    });
+                }
                 let schema = input.schema().expand(&name)?;
                 Ok(PlanSource::Expand {
                     input: Box::new(input),
@@ -863,6 +887,8 @@ impl<'r> Evaluator<'r> {
             PipeOp::Decode(codec) | PipeOp::Encode(codec) => Ok(PlanSource::Codec {
                 input: Box::new(input),
                 fmt: codec.fmt.clone(),
+                // Undetermined after a codec — never the input's columns (ticket 20260717180300).
+                schema: Schema::empty(),
             }),
             // Set operations: unify the two sides' schemas column-wise (blueprint §4).
             PipeOp::Union(p) | PipeOp::Except(p) | PipeOp::Intersect(p) => {
@@ -911,16 +937,23 @@ impl<'r> Evaluator<'r> {
                     }
                 })?;
                 let incoming = input.schema();
-                if let Some(missing) = def
-                    .input
-                    .columns
-                    .iter()
-                    .find(|c| incoming.column(&c.name).is_none())
-                {
-                    return Err(EvalError::TransformInputMissing {
-                        name: t.name.clone(),
-                        column: missing.name.clone(),
-                    });
+                // The INPUT-membership check needs a DESCRIBED incoming relation. Over an
+                // undescribable one (an undescribing driver, or anything after a codec) every
+                // declared column would read as "missing" and the stage would be rejected for a
+                // schema nobody knows — the same false claim ticket 20260717180300 removed from
+                // the codec node itself.
+                if !incoming.columns.is_empty() {
+                    if let Some(missing) = def
+                        .input
+                        .columns
+                        .iter()
+                        .find(|c| incoming.column(&c.name).is_none())
+                    {
+                        return Err(EvalError::TransformInputMissing {
+                            name: t.name.clone(),
+                            column: missing.name.clone(),
+                        });
+                    }
                 }
                 Ok(PlanSource::Transform {
                     input: Box::new(input),
@@ -1475,10 +1508,18 @@ impl<'r> Evaluator<'r> {
                 Projection::Expr { expr, alias } => match (alias, expr) {
                     // `col` / `col AS a` → resolve the real column type (source of truth).
                     (alias, qfs_parser::Expr::Col(name)) => {
-                        let col = input.project(std::slice::from_ref(name))?;
-                        let mut c = col.columns.into_iter().next().unwrap_or_else(|| {
+                        // An undescribable relation (an undescribing driver, or anything after a
+                        // codec) types every projected column late-bound instead of rejecting it
+                        // against a schema nobody knows — the leniency the `where`/`expand` folds
+                        // apply, kept consistent here (ticket 20260717180300).
+                        let mut c = if input.columns.is_empty() {
                             Column::new(name.clone(), ColumnType::Unknown, true)
-                        });
+                        } else {
+                            let col = input.project(std::slice::from_ref(name))?;
+                            col.columns.into_iter().next().unwrap_or_else(|| {
+                                Column::new(name.clone(), ColumnType::Unknown, true)
+                            })
+                        };
                         if let Some(a) = alias {
                             c.name = a.clone();
                         }

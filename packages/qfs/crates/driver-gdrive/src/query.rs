@@ -67,6 +67,26 @@ pub fn build_query(parent: Option<&str>, predicate: Option<&Predicate>) -> Pushd
     }
 }
 
+/// The names Drive's `q` filters on that are **not** columns of a file row — the search
+/// pseudo-columns. A `WHERE` may legitimately name one, so an unknown-column refusal has to accept
+/// them alongside the described schema (see `qfs_engine::check_where_columns`).
+///
+/// - `text` / `full_text` / `fullText` → `fullText contains` (a full-text search over the content)
+/// - `parent` → `'<id>' in parents` (a parent-folder scope; the row column is `parents`, plural)
+pub const SEARCH_COLUMNS: &[&str] = &["text", "full_text", "fullText", "parent"];
+
+/// The part of `predicate` Drive's `q` cannot express **exactly** — the predicate the caller must
+/// re-apply locally over the fetched rows so a `WHERE` is never silently dropped (the read facet
+/// applies this; see `ReadDriver::honors_pushed_filter`).
+///
+/// Identical to [`build_query`]'s `residual` and independent of the parent scope: a parent id only
+/// ever contributes an exact `'<id>' in parents` term, never a residual. Exposed separately so the
+/// facet can enforce the predicate without threading the resolved folder id back out of the read.
+#[must_use]
+pub fn unpushed_residual(predicate: Option<&Predicate>) -> Option<Predicate> {
+    build_query(None, predicate).residual
+}
+
 /// The outcome of lowering one comparison/`LIKE` into a Drive query term.
 enum Lowered {
     /// The Drive term means *exactly* the SQL predicate — push it and drop the predicate from

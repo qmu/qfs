@@ -101,6 +101,20 @@ pub async fn execute_read_with(
             .scan(scan, ctx)
             .await
             .map_err(|e| ExecError::from_qfs(&e))?;
+        // 2b. Enforce the pushed `WHERE` over what the facet returned. The pushed predicate is a
+        //     narrowing HINT the driver may honor natively, partially, or not at all — it is never
+        //     a delegation of correctness. Re-applying it here is idempotent where the backend
+        //     already narrowed, and it is what makes "a predicate is honored or refused, never
+        //     dropped" structural: a facet that ignores it over-returns instead of answering the
+        //     unfiltered relation at exit 0. Skipped only for the facets that declare they enforce
+        //     it themselves (`honors_pushed_filter` — those that narrow to a pushed projection or
+        //     accept backend search pseudo-columns, and apply their own truthful residual).
+        let batch = match &scan.pushed.filter {
+            Some(predicate) if !driver.honors_pushed_filter() => {
+                qfs_engine::apply_where(batch, predicate).map_err(map_engine_error)?
+            }
+            _ => batch,
+        };
         batches.push(batch);
     }
 
@@ -184,6 +198,10 @@ fn map_engine_error(err: qfs_engine::EngineError) -> ExecError {
         EngineError::TransformNoExecutor { .. }
         | EngineError::TransformFailed { .. }
         | EngineError::TransformOutputMismatch { .. } => ErrorKind::CommitFailed,
+        // A stage naming a column the relation does not carry, or asking `expand` to explode a
+        // scalar/`Json`, is a malformed QUERY — the author fixes it, so it is a usage-class
+        // refusal (exit 2), distinguishable from the empty relation an honest miss returns.
+        EngineError::UnknownColumn { .. } | EngineError::NotExpandable { .. } => ErrorKind::Usage,
         _ => ErrorKind::Internal,
     };
     ExecError::new(kind, err.code(), err.to_string())

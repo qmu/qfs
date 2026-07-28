@@ -48,3 +48,44 @@ pub fn apply_residual(
 ) -> qfs_types::RowBatch {
     eval::filter(batch, predicate)
 }
+
+/// Enforce a **caller-written `WHERE`** over a [`RowBatch`](qfs_types::RowBatch) — the read
+/// executor's pushed-predicate seam. Same evaluation as [`apply_residual`], plus the refusal
+/// [`apply_residual`] must not make: a predicate naming a column the (described, non-empty) schema
+/// does not carry is [`EngineError::UnknownColumn`], not an empty relation at exit 0.
+///
+/// The split is deliberate. A **driver's** residual may name a backend search pseudo-column the
+/// schema does not carry (Drive's `fullText`, Gmail's `to`) and must still evaluate; a **caller's**
+/// `WHERE` naming a column that is not there is a malformed question, and answering "none" to it
+/// corrupts every consumer that branches on `row_count`.
+///
+/// # Errors
+/// [`EngineError::UnknownColumn`] when the predicate names an absent column.
+pub fn apply_where(
+    batch: qfs_types::RowBatch,
+    predicate: &qfs_types::Predicate,
+) -> Result<qfs_types::RowBatch, EngineError> {
+    eval::filter_checked(batch, predicate)
+        .map_err(|missing| EngineError::unknown_column("where", missing))
+}
+
+/// Refuse a caller-written `WHERE` that names a column neither the relation's (described) schema
+/// nor `also_accepted` carries — the check without the filtering, for a source that resolves the
+/// predicate itself.
+///
+/// A facet that declares `honors_pushed_filter` translates the `WHERE` into its backend's own
+/// query language and never routes it through [`apply_where`], so this is where it gets the same
+/// refusal. `also_accepted` is that backend's **search pseudo-columns** — names it genuinely
+/// filters on that no row carries (Drive's `fullText`/`parent`, Gmail's `label`/`is_unread`) —
+/// which must not be mistaken for typos.
+///
+/// # Errors
+/// [`EngineError::UnknownColumn`] when the predicate names an unaccepted column.
+pub fn check_where_columns(
+    schema: &qfs_types::Schema,
+    predicate: &qfs_types::Predicate,
+    also_accepted: &[&str],
+) -> Result<(), EngineError> {
+    eval::check_predicate_columns(schema, predicate, also_accepted)
+        .map_err(|missing| EngineError::unknown_column("where", missing))
+}

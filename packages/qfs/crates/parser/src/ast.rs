@@ -215,7 +215,9 @@ pub enum PipeOp {
     ///
     /// A **contextual-identifier** stage (`transform` is *not* a frozen keyword — the
     /// keyword set stays 39) naming a declared `CREATE TRANSFORM` definition, resolved
-    /// later. Unlike the pass-through codec stages it is schema-transforming, and its
+    /// later. It is schema-transforming **at plan time** from its declaration — where the
+    /// codec stages reshape the relation into something undescribable at plan time (their
+    /// seam reports an empty schema, leaving everything downstream late-bound). And its
     /// model call is an impure effect performed by an injected applier, never the pure
     /// engine. The governance test locks this variant into the closed-core set.
     Transform(TransformRef),
