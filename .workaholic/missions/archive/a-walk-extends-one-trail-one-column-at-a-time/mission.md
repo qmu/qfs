@@ -2,7 +2,7 @@
 type: Mission
 title: A walk extends one trail one column at a time
 slug: a-walk-extends-one-trail-one-column-at-a-time
-status: active
+status: achieved
 created_at: 2026-07-21T18:33:32+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
@@ -236,3 +236,4 @@ design rulings, not implementation.
 - 2026-07-22 — ticket archived — 20260722122400-record-the-ai-letter-rulings.md
 - 2026-07-22 — ticket archived — 20260722122500-consolidate-14c-open-list-and-hold-non-goals.md
 - 2026-07-23 — story reported — work-20260721-183323.md
+- 2026-07-24 — mission achieved — mission.md
