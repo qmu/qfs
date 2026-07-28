@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-24T01:08:52+09:00
+last_seen: 2026-07-28T12:51:29+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-/sys and /slack roots still are not describable catalog nodes, so cd there fails at describe; that new driver surface was not added on this branch
+Bare `/slack` still errors in `SlackPath::parse` before any cd gate, and driver-sys describes only its named tables, not the root node (see [7752cb3](https://github.com/qmu/qfs/commit/7752cb3)).
 
 ## How to Fix
 
-Implement root-level describe for the /sys and /slack catalog nodes
+Add a root-level describe for both drivers so the cd gate is reachable.
 

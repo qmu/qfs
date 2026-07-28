@@ -10,7 +10,7 @@ origin_branch: work-20260722-084645
 origin_commit: 8bc902d
 created_at: 2026-07-24T00:48:25+09:00
 first_seen: 2026-07-24T00:48:25+09:00
-last_seen: 2026-07-24T00:48:25+09:00
+last_seen: 2026-07-28T12:51:29+09:00
 severity: moderate
 status: active
 resolved_by_pr: 
@@ -21,8 +21,9 @@ resolved_by_commit:
 
 ## Description
 
-A DECODE AST relation field drifted its qfs-test golden snapshot and only the final workspace/golden run caught it (fixed in [183b9a9](https://github.com/qmu/qfs/commit/183b9a9)); per-crate driver runs skip the golden crate.
+A standing process gap in how per-crate runs are scoped (see [8bc902d](https://github.com/qmu/qfs/commit/8bc902d)). This branch's own verification was a full `cargo test --workspace`, which is the mitigation the concern prescribes, but the underlying gap is untouched.
 
 ## How to Fix
 
-Future codec-grammar changes should run the full workspace or qfs-test explicitly before ship; the ship-time tmpfs full-workspace gate covers this at merge time.
+Make the golden crate part of any per-crate run's scope, or forbid per-crate substitution at the gate.
+

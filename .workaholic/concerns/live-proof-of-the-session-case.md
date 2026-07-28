@@ -10,7 +10,7 @@ origin_branch: work-20260719-101118
 origin_commit: 9241270
 created_at: 2026-07-24T01:02:01+09:00
 first_seen: 2026-07-24T01:02:01+09:00
-last_seen: 2026-07-24T01:02:01+09:00
+last_seen: 2026-07-28T12:51:29+09:00
 severity: moderate
 status: active
 resolved_by_pr: 
@@ -21,8 +21,9 @@ resolved_by_commit:
 
 ## Description
 
-Mission acceptance item 8's in-container live proof of the session-carrying case shipped its code dependencies (see [b4f1997](https://github.com/qmu/qfs/commit/b4f1997)) and is proven hermetically, but the container re-run needs ~13G free on `/` and the shared host had ~6.9G; per the ticket's host-safety rule the round did not gamble on the disk (see the addendum in ticket 20260719101204).
+Blocked on host disk, which no code change on this branch clears; the container re-run is still owed (see [9241270](https://github.com/qmu/qfs/commit/9241270)).
 
 ## How to Fix
 
-Re-run `containers/live-round/run.sh` once `/` has ~13G free, paste the fresh transcript into the ticket, and tick the live-round leg. Resource contention, not an implementation gap.
+Reclaim disk and re-run the containerised live round.
+

@@ -5,7 +5,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/18
 origin_branch: work-20260704-181053
 origin_commit: 72c8950
 created_at: 2026-07-05T01:25:53+09:00
-last_seen: 2026-07-24T01:08:52+09:00
+last_seen: 2026-07-28T12:51:29+09:00
 first_seen: 2026-07-05T01:25:53+09:00
 concern_id: console-bundle-pin-unset-live-serve
 severity: low
@@ -19,9 +19,9 @@ mission:
 
 ## Description
 
-PINNED_BUNDLE is still unset pending the published plgg bundle; no console-delivery code changed here
+`resolve_delivery` still returns `Delivery::None` on an empty `sha256_hex`, and `console.rs:320` asserts exactly that, so `PINNED_BUNDLE` remains unset (see [72c8950](https://github.com/qmu/qfs/commit/72c8950)).
 
 ## How to Fix
 
-Set PINNED_BUNDLE once the plgg bundle is published
+Pin the console bundle once the plgg bundle carries a release stamp.
 

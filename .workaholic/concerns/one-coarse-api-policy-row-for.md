@@ -13,8 +13,8 @@ last_seen: 2026-07-26T18:42:08+09:00
 severity: urgent
 status: active
 compound: true
-resolved_by_pr:
-resolved_by_commit:
+resolved_by_pr: 
+resolved_by_commit: 
 ---
 
 # One coarse api policy row for every non-endpoint face, behind a bearer gate never verified live

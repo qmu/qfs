@@ -99,6 +99,7 @@ no-policy and dangling-policy deny), and a denied read is a structured, secret-f
 - 2026-07-25 — run recorded (+0.89h) — 20260725-101714
 - 2026-07-25 — story reported — work-20260724-011032.md
 
+- 2026-07-28 — concern deferred (stuck) — the-statement-bridge-s-read-leg.md
 ## Reflection
 
 ### 2026-07-25 run 20260725-101714

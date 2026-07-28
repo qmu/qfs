@@ -19,6 +19,7 @@
 * [Slack workspace-namespace still advertises Verb::Rm with no query grammar](slack-workspace-namespace-still-advertises-verb.md)
 * [`/sys` and `/slack` do not describe their roots, so `cd` there fails before the gate](sys-and-slack-do-not-describe.md)
 * [The dead Project-DB config tables await their drop migration](the-dead-project-db-config-tables.md)
+* [The statement bridge's read leg is ungated](the-statement-bridge-s-read-leg.md)
 * [The `/type` catalog and the type resolver translate the stored key differently](the-type-catalog-and-the-type.md)
 
 * [archive/](archive/)

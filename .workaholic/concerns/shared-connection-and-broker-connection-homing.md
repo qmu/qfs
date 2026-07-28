@@ -9,7 +9,7 @@ origin_branch: work-20260716-152000
 origin_commit: 974c72d
 created_at: 2026-07-16T16:14:56+09:00
 first_seen: 2026-07-16T16:14:56+09:00
-last_seen: 2026-07-24T01:08:52+09:00
+last_seen: 2026-07-28T12:51:29+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-The team-ownership registries (`shared_connection`, `broker_connection`) still live in the Project DB and are declarative by the same principle the re-homing established; the ticket records them as out of scope (M9 territory, own decision later) (see [ada28be](https://github.com/qmu/qfs/commit/ada28be))
+Explicitly deferred to the Managed Team (M9) work, which has not returned (see [974c72d](https://github.com/qmu/qfs/commit/974c72d)).
 
 ## How to Fix
 
-Decide their homing when the Managed Team work returns to them; the same migration + one-shot copy + reader-repoint pattern applies
+Schedule the M9 work, or rule the homing strategy separately.
 

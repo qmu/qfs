@@ -10,7 +10,7 @@ origin_branch: work-20260722-084646
 origin_commit: f52592b
 created_at: 2026-07-24T00:40:59+09:00
 first_seen: 2026-07-24T00:40:59+09:00
-last_seen: 2026-07-24T00:40:59+09:00
+last_seen: 2026-07-28T12:51:29+09:00
 severity: moderate
 status: active
 resolved_by_pr: 
@@ -21,8 +21,9 @@ resolved_by_commit:
 
 ## Description
 
-Blob-archetype ergonomics (G7) and non-REST-arm handling (G8) are recorded as named parks without trigger conditions (see [fb83df5](https://github.com/qmu/qfs/commit/fb83df5)). The conversion playbook depends on their status being clear to incoming sessions; deferred work risks being silently re-discovered or forgotten.
+G7 and G8 are still parks in the blueprint with no follow-up mission names and no trigger conditions, so a fresh session cannot detect their absence (see [f52592b](https://github.com/qmu/qfs/commit/f52592b)).
 
 ## How to Fix
 
-Record concrete follow-up mission names and trigger conditions for G7 and G8 in blueprint §13.3 (not just "parked"), so a fresh session can detect their absence and either scope around them or escalate if they become load-bearing.
+Name the follow-up mission for each park, or record the trigger that reopens it.
+

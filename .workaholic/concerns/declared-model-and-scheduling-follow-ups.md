@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/33
 origin_branch: work-20260711-121525
 origin_commit: f1a3d21
 created_at: 2026-07-12T01:52:23+09:00
-last_seen: 2026-07-24T01:08:52+09:00
+last_seen: 2026-07-28T12:51:29+09:00
 first_seen: 2026-07-12T01:52:23+09:00
 concern_id: declared-model-and-scheduling-follow-ups
 severity: low
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-Remaining live Chatwork-encoding verification, OAuth-app plumbing and Slack threading follow-ups are untouched; branch changed the declaration-row resolution, not these surfaces
+Live Chatwork-encoding verification, OAuth-app plumbing and Slack threading are all untouched (see [f1a3d21](https://github.com/qmu/qfs/commit/f1a3d21)).
 
 ## How to Fix
 
-Complete live Chatwork-encoding verification, OAuth-app plumbing, and Slack threading
+Execute the follow-up missions for the declared model and scheduling.
 
