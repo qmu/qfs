@@ -11,9 +11,10 @@ created_at: 2026-07-14T01:07:13+09:00
 first_seen: 2026-07-14T01:07:13+09:00
 last_seen: 2026-07-28T13:09:57+09:00
 severity: low
-status: active
+status: superseded
 resolved_by_pr: 
 resolved_by_commit: 
+superseded_by: what-describe-says-is-not-what
 ---
 
 # Slack workspace-namespace still advertises Verb::Rm with no query grammar

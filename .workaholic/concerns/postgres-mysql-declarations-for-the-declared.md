@@ -7,7 +7,7 @@ created_at: 2026-07-02T01:21:00+09:00
 last_seen: 2026-07-28T13:09:57+09:00
 first_seen: 2026-07-02T01:21:00+09:00
 concern_id: postgres-mysql-declarations-for-the-declared
-severity: low
+severity: moderate
 status: active
 resolved_by_pr: 
 resolved_by_commit: 
@@ -24,3 +24,8 @@ The re-homing blocker cleared, but one `sql.qfs` example exists and no per-engin
 
 Complete the Postgres/MySQL type and comment mappings on the declared-registry path.
 
+
+## Re-grade (2026-07-28T21:48:57+09:00)
+
+- severity: low -> moderate
+- rationale: The blocker this concern was parked behind has cleared: commit 23991d5 made path_binding the only sql/git source, retiring the declared-connection seam half. The remaining work - per-engine Postgres and MySQL declarations with full column-type and comment coverage - is now actionable rather than waiting, and low would drop it below the promotion floor just as it becomes doable.

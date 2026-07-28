@@ -1,6 +1,6 @@
 ---
 type: Concern
-concern_id: cd-into-a-blob-file-is
+concern_id: sys-and-slack-do-not-describe
 mission: 
 tickets: [20260713195008-effect-selector-channel-folder-rename.md, 20260714120000-effect-selector-uniform-migration.md, 20260714154144-general-of-type-assertion.md, 20260714182710-shell-face-slice1-ls-cat-describe-typed.md, 20260714182720-shell-face-slice2-cd-gate-enumerable-children.md, 20260714182730-shell-face-slice3-mutation-verbs-per-kind.md, 20260714182740-shell-face-type-mount-and-describe-builtin.md, 20260714220213-resume-shell-face-slices-and-report.md]
 origin_pr: 41
@@ -11,18 +11,19 @@ created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
 last_seen: 2026-07-28T13:09:57+09:00
 severity: low
-status: active
+status: superseded
 resolved_by_pr: 
 resolved_by_commit: 
+superseded_by: what-describe-says-is-not-what
 ---
 
-# `cd` into a blob file is still admitted
+# `/sys` and `/slack` do not describe their roots, so `cd` there fails before the gate
 
 ## Description
 
-driver-local's describe is still path-agnostic and returns `BlobNamespace` unconditionally (see [7752cb3](https://github.com/qmu/qfs/commit/7752cb3)).
+`node_for_path` still requires a `/sys/` prefix and returns `None` for the bare root, so describe raises `UnsupportedVerb` (see [7752cb3](https://github.com/qmu/qfs/commit/7752cb3)). The branch touched that file only for the G2 pushdown column.
 
 ## How to Fix
 
-Refuse `namespace=BlobNamespace` at `cd` time in describe.
+Add a root-level describe for both drivers so the cd gate is reachable.
 

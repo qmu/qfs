@@ -13,8 +13,8 @@ first_seen: 2026-07-28T13:09:57+09:00
 last_seen: 2026-07-28T13:09:57+09:00
 severity: moderate
 status: active
-resolved_by_pr:
-resolved_by_commit:
+resolved_by_pr: 
+resolved_by_commit: 
 ---
 
 # The §13.2 calibration table was mis-measured, and the first real conversion lands at the bar rather than under it
