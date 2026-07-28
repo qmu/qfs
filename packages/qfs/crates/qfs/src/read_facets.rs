@@ -27,7 +27,7 @@ use std::sync::Arc;
 use qfs_core::{
     CfsError, Column, ColumnType, Name, Path, RequestContext, Row, RowBatch, Schema, Value,
 };
-use qfs_driver_cf::{artifacts_repos_schema, kv_table_schema, queue_tail_schema, CfDriver, CfNode};
+use qfs_driver_cf::{artifacts_repos_schema, kv_table_schema, CfDriver, CfNode};
 use qfs_driver_ga::{GaDriver, QuerySpec as GaQuerySpec};
 use qfs_driver_gdrive::GDriveClient;
 use qfs_driver_git::{blobfs, relational, GitDriver, GitNode, GitPath};
@@ -280,6 +280,18 @@ impl ReadDriver for RestReadDriver {
             // qfs-exec owns the parser/engine-dependent evaluation (the binary stays off the lower
             // spine); the driver-specific wire read is injected here as a closure over the confined
             // applier — the leading `DECODE` is the applier's own codec.
+            // §13.1 G2: lower the pushed predicate/limit through the view's DECLARED pushdown map.
+            // What the map calls EXACT drops out of the residual; a PREFILTER entry is pushed AND
+            // kept, and anything unmatched stays wholly residual — re-applied locally below, so the
+            // facet returns exactly the pushed query's result (the `SqlReadDriver` discipline).
+            let lowered = spec.pushdown.as_ref().map(|map| {
+                qfs_exec::declared::lower_declared_pushdown(
+                    map,
+                    scan.pushed.filter.as_ref(),
+                    scan.pushed.limit.and_then(|n| i64::try_from(n).ok()),
+                )
+            });
+            let wire_params = lowered.as_ref().map_or(&[][..], |l| l.params.as_slice());
             let mut batch = qfs_exec::declared::eval_view_body(
                 &spec.body,
                 &self.driver_name,
@@ -287,6 +299,7 @@ impl ReadDriver for RestReadDriver {
                 spec.of_columns.as_deref(),
                 spec.of_refinement.as_ref(),
                 &params,
+                wire_params,
                 |rest_path, post_body| {
                     // §13.1 G1: a `Some` post_body is a declared read-over-POST — POST the encoded
                     // wire body and decode the response; `None` is the ordinary GET read.
@@ -312,8 +325,14 @@ impl ReadDriver for RestReadDriver {
                         })
                 },
             )?;
-            // The REST pushdown declares only LIMIT (WHERE/PROJECT stay residual for the engine to
-            // apply after the scan); enforce the pushed cap here.
+            // A pushed WHERE left the local plan, so the facet must deliver exactly the pushed
+            // query's result: re-filter the declared map's truthful residual over the fetched rows.
+            if let Some(residual) = lowered.as_ref().and_then(|l| l.residual.as_ref()) {
+                batch = qfs_exec::apply_residual(batch, residual);
+            }
+            // The REST pushdown declares LIMIT (and, for a view with a declared PUSHDOWN map, WHERE);
+            // enforce the pushed cap locally too — a declared wire `limit` parameter is a page size,
+            // not a promise the service returns at most that many rows.
             if let Some(limit) = scan.pushed.limit {
                 batch
                     .rows
@@ -680,34 +699,14 @@ fn cf_scan(driver: &CfDriver, scan: &ScanNode) -> Result<RowBatch, CfsError> {
             }
             Ok(batch)
         }
-        CfNode::Queue { name } => {
-            let max = scan
-                .pushed
-                .limit
-                .and_then(|n| u32::try_from(n).ok())
-                .unwrap_or(100);
-            let rows = driver
-                .queue_tail(&name, max)
-                .map_err(|e| invalid(e.code()))?
-                .into_iter()
-                .map(|msg| msg.to_queue_row())
-                .collect();
-            let mut batch = RowBatch::new(queue_tail_schema(), rows);
-            // `queue_tail` takes only a count cap, so the pushed `WHERE` is wholly unpushed here.
-            refuse_unknown_where_column(
-                &batch,
-                scan.pushed.filter.as_ref(),
-                CF_SEARCH_COLUMNS,
-                &scan.path,
-            )?;
-            if let Some(predicate) = &scan.pushed.filter {
-                batch = qfs_exec::apply_residual(batch, predicate);
-            }
-            if let Some(project) = &scan.pushed.project {
-                batch = project_batch(&batch, project);
-            }
-            Ok(batch)
-        }
+        // Consumer PULL retired to the DECLARED `cloudflare.qfs` read-over-POST view (blueprint
+        // §13.1 G1 / §13.3 — the honest-tiering exception closed). The compiled `/cf` queue is
+        // append-only now, so a read is a structured refusal that names where the surface moved,
+        // never an empty batch. (`capabilities` already denies SELECT; this is defense in depth.)
+        CfNode::Queue { .. } => Err(invalid(
+            "the compiled /cf queue is append-only; read a queue through the declared \
+             /cloudflare/accounts/<account>/queues/<queue>/messages/pull view",
+        )),
         CfNode::Artifacts => {
             let rows = driver
                 .artifact_repos()
@@ -1697,15 +1696,15 @@ mod tests {
 
     /// A `/cf` read facet with a KV namespace, a queue, and an artifacts namespace behind mocks.
     fn cf_facet() -> CfReadDriver {
-        use qfs_driver_cf::{CfRegistry, MockCfBackend, NoopArtifactTokenSealer, QueueMsg};
+        use qfs_driver_cf::{CfRegistry, MockCfBackend, NoopArtifactTokenSealer};
         let kv = Arc::new(
             MockCfBackend::new().with_kv_keys(vec!["alpha".to_string(), "beta".to_string()]),
         );
-        let queue = Arc::new(
-            MockCfBackend::new()
-                .with_queue_msg(QueueMsg::new("m1", b"one".to_vec(), 1))
-                .with_queue_msg(QueueMsg::new("m2", b"two".to_vec(), 1)),
-        );
+        // The queue is registered with an EMPTY backend deliberately: the compiled queue is
+        // append-only since the pull was retired to the declared `cloudflare.qfs` view, so no
+        // fixture message can be read back through it. It stays in the registry only so the
+        // retirement refusal below has a real node to address.
+        let queue = Arc::new(MockCfBackend::new());
         let artifacts = Arc::new(MockCfBackend::new().with_artifact_namespace("default"));
         let registry = CfRegistry::new()
             .with_kv("cache", kv)
@@ -1740,8 +1739,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cf_queue_and_artifacts_refuse_an_unknown_where_column() {
-        for path in ["/cf/queue/jobs", "/cf/artifacts"] {
+    async fn cf_artifacts_refuses_an_unknown_where_column() {
+        for path in ["/cf/artifacts"] {
             let result = cf_facet()
                 .scan(
                     &scan_with_filter(path, col_eq("nosuchcol", "x")),
@@ -1759,15 +1758,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cf_queue_where_on_a_real_column_still_narrows_the_tail() {
-        let batch = cf_facet()
+    async fn cf_queue_read_is_refused_and_names_the_declared_view() {
+        // The predecessor of this test asserted the compiled queue tail narrowed by a real column.
+        // That surface is retired: the pull moved to the declared `cloudflare.qfs` read-over-POST
+        // view and the compiled queue is append-only. The coverage is kept, inverted — a read must
+        // REFUSE and say where the surface went, so the retirement can never decay into an empty
+        // batch that reads as "no messages".
+        let err = cf_facet()
             .scan(
                 &scan_with_filter("/cf/queue/jobs", col_eq("id", "m2")),
                 &RequestContext::anonymous(),
             )
             .await
-            .expect("a real column is honored");
-        assert_eq!(batch.rows.len(), 1);
-        assert_eq!(batch.rows[0].values[0], Value::Text("m2".to_string()));
+            .expect_err("the retired compiled queue read is refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("append-only"),
+            "the refusal must say the compiled queue is append-only, got: {msg}"
+        );
+        assert!(
+            msg.contains("/cloudflare/"),
+            "the refusal must name the declared view that replaced it, got: {msg}"
+        );
     }
 }

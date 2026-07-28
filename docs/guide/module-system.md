@@ -113,10 +113,15 @@ Gmail's multipart uploads, MIME assembly, and push channels, or GraphQL and webs
 are honestly named as not yet expressible in the declared surface.
 
 The coexistence of `/cf` and `/cloudflare` is the same story made concrete. The declared
-`/cloudflare` now serves Cloudflare's relational D1 surface, KV, and queue pushes, because plain
-declared REST can express them. The compiled `/cf` remains as a minimal fallback for exactly the
-two things declared REST cannot yet express — pulling from a queue, which is a POST that reads, and
-the Artifacts git-repository surface. When a name would collide, the compiled driver wins and the
+`/cloudflare` now serves Cloudflare's relational D1 surface, KV, and queue pushes **and queue
+pulls**, because plain declared REST can express them — a pull is a read whose wire method is POST,
+which a declaration spells as a leading `|> POST { … }` stage on the view. The compiled `/cf` is now
+a minimal fallback for the **one** surface declared REST cannot express: the Artifacts
+git-repository surface, a Git remote rather than a REST resource. The compiled queue handle that
+remains beside it is append-only — it advertises `INSERT` and nothing else, so a `SELECT` over
+`/cf/queue/…` is refused at the parse gate; read the queue through the declared
+`/cloudflare/accounts/{account}/queues/{queue}/messages/pull` view instead. When a name would
+collide, the compiled driver wins and the
 shadowed declared one is reported rather than silently dropped, which is why the declared surface
 mounts under the distinct name `/cloudflare` while the transition is underway. The direction of
 travel is constant: capability moves from compiled to declared as each twin passes, and the

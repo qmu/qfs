@@ -247,7 +247,8 @@ pub fn sys_node_schema(node: SysNode) -> Schema {
         // `kind`. `base_url`/`auth`/`pagination` are the driver's wire config (auth is a SCHEME
         // descriptor, never a token); `of_type` is a declared view or table contract; `verb`/
         // `irreversible` a declared map's mapping; `body` is the type's columns, an inline table
-        // contract, or the view/map body as serde JSON. Declaration text + selectors ONLY —
+        // contract, or the view/map body as serde JSON; `pushdown` is the §13.1 G2 declared
+        // predicate→wire-parameter map (parameter NAMES only). Declaration text + selectors ONLY —
         // structurally no secret-value column (the credential-free-script contract).
         SysNode::Drivers => Schema::new(vec![
             col("kind", ColumnType::Text, false),
@@ -259,6 +260,7 @@ pub fn sys_node_schema(node: SysNode) -> Schema {
             col("verb", ColumnType::Text, true),
             col("body", ColumnType::Text, true),
             col("irreversible", ColumnType::Bool, false),
+            col("pushdown", ColumnType::Text, true),
             col("created_at", ColumnType::Text, true),
         ]),
         // The service-account consent registry (20260703040000, the CREATE ACCOUNT model): the

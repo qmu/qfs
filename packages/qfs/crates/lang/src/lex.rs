@@ -680,6 +680,14 @@ impl Lexer {
             }
             return path_boundary_word(s);
         }
+        // §13.1 G5: `CREATE MAP CALL <drv>.<action> ( <param> <type>, … ) /<node> AS …`. A `/` after
+        // a closing paren is ordinarily DIVISION, but when that paren closes a declared CALL's typed
+        // parameter list the next token is the mapped NODE PATH. Recognized structurally (the paren
+        // is matched back to a `CALL <ident> . <ident>` head), not by a bare `after RParen` guess, so
+        // `(a + b) / c` keeps lexing as arithmetic.
+        if matches!(prev, Token::RParen) && self.after_call_signature_params() {
+            return true;
+        }
         !matches!(
             prev,
             Token::Str(_)
@@ -693,6 +701,44 @@ impl Lexer {
                 | Token::RParen
                 | Token::RBrace
                 | Token::RBracket
+        )
+    }
+
+    /// Whether the just-emitted `)` closes a §13.1 G5 declared-CALL parameter list — i.e. its
+    /// matching `(` is immediately preceded by the `CALL <driver> . <action>` token shape.
+    fn after_call_signature_params(&self) -> bool {
+        let mut depth = 0usize;
+        let mut open: Option<usize> = None;
+        for (i, t) in self.out.iter().enumerate().rev() {
+            match t.node {
+                Token::RParen => depth += 1,
+                Token::LParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        open = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(open) = open else { return false };
+        if open < 4 {
+            return false;
+        }
+        matches!(
+            (
+                &self.out[open - 4].node,
+                &self.out[open - 3].node,
+                &self.out[open - 2].node,
+                &self.out[open - 1].node,
+            ),
+            (
+                Token::Keyword(Keyword::Call),
+                Token::Ident(_),
+                Token::Dot,
+                Token::Ident(_) | Token::Keyword(_)
+            )
         )
     }
 

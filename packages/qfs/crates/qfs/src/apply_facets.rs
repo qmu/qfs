@@ -14,13 +14,24 @@
 //! wrapped `inner` bridge), whose `send_one` chokepoint pins the host and injects auth. Purity
 //! holds: the mapping constructs the wire effect; only the applier performs I/O at COMMIT.
 //!
+//! ## `CALL` dispatch (blueprint §13.1 G5)
+//! A declared `CREATE MAP CALL <drv>.<action> (<sig>) /<node> AS INSERT INTO /http/<drv>/<method>
+//! VALUES (…)` is dispatched here too: a `CALL` effect selects the map whose declared **action**
+//! matches the called procedure (never merely its mount path — the five Slack CALLs share one mount
+//! path with the post map), binds the call's argument row as `row`, and issues the wire write the
+//! body names. `Call` is not a kind the generic REST driver services, so the wire effect carries the
+//! body's OWN verb ([`qfs_exec::declared::MapWrite::wire_kind`]) rather than the CALL kind.
+//!
 //! ## Fallbacks (tier-1 compatibility, fail-honest)
 //! A write matching **no** declared map, or matching a map with an **empty** stored body (a tier-1
 //! map that declares only the verb, mount path == wire resource), delegates to the stock applier
 //! unchanged. A map whose body fails to evaluate is a terminal effect error — never a silent POST.
+//! A `CALL` that matches no declared CALL map likewise reaches the stock applier, which refuses the
+//! procedure verb terminally: an unmapped CALL fails, it never POSTs something else.
 
 use std::sync::Arc;
 
+use qfs_core::EffectKind;
 use qfs_exec::declared::MapSpec;
 use qfs_runtime::{ApplyCx, ApplyDriver, EffectError, EffectInput, EffectOutput};
 
@@ -64,7 +75,14 @@ impl ApplyDriver for RestApplyDriver {
         // The inbound path arrives as `/rest/<name>/<resource>` (the `MountApplyDriver` remap); the
         // map template is the mount-relative `/<name>/<resource>`, so the `/rest` prefix is stripped.
         let mount_path = qfs_exec::declared::view_path_of_scan(effect.target.path.as_str());
+        // A CALL selects by the PROCEDURE it names (the mount remap re-qualified it inward, so the
+        // action is the tail of the proc id); a universal write selects by mount path among the
+        // non-CALL maps only.
+        let called = call_action_of(&effect.kind);
         let matched = self.maps.iter().find_map(|m| {
+            if !map_answers(m, called) {
+                return None;
+            }
             qfs_exec::declared::match_template(&m.template, &mount_path).map(|params| (m, params))
         });
         let Some((spec, params)) = matched else {
@@ -99,6 +117,10 @@ impl ApplyDriver for RestApplyDriver {
         for body in &write.bodies {
             let mut wire = effect.clone();
             wire.target.path = qfs_core::VfsPath::new(&write.rest_path);
+            if called.is_some() {
+                // The procedure kind stops here: the wire leg is the write the map body declares.
+                wire.kind = write.wire_kind.clone();
+            }
             wire.args = match write.encoding.as_deref() {
                 None => qfs_driver_http::http_body_args(body),
                 Some("multipart") => {
@@ -113,5 +135,30 @@ impl ApplyDriver for RestApplyDriver {
             affected += self.inner.apply_one(&wire, cx).await?.affected;
         }
         Ok(EffectOutput::new(effect.id, affected))
+    }
+}
+
+/// The unqualified action a `CALL` effect names (`rest.react` → `react`), or `None` for a universal
+/// write verb. The proc id arrives already re-qualified inward by the mount remap, so only the tail
+/// after the last `.` is the procedure's own name.
+fn call_action_of(kind: &EffectKind) -> Option<&str> {
+    match kind {
+        EffectKind::Call(proc) => {
+            let qualified = proc.as_str();
+            Some(qualified.rsplit('.').next().unwrap_or(qualified))
+        }
+        _ => None,
+    }
+}
+
+/// Whether a declared map answers this effect. A `CREATE MAP CALL <drv>.<action>` map answers ONLY
+/// the CALL of that action; a universal-verb map answers only a universal write. Without the split
+/// a plain `INSERT` would be served by whichever map was declared FIRST on the mount path — and the
+/// five Slack CALL maps share `/slack/{ws}/{channel}/messages` with the post map.
+fn map_answers(m: &MapSpec, called: Option<&str>) -> bool {
+    match (qfs_exec::declared::call_action(&m.verb), called) {
+        (Some(declared), Some(called)) => declared == called,
+        (None, None) => true,
+        _ => false,
     }
 }

@@ -27,7 +27,7 @@ use qfs_secrets::Secret;
 
 use crate::backend::{
     ArtifactRepo, ArtifactRepoKey, ArtifactTokenSealer, CfBackend, D1DatabaseUuid, HttpApiBackend,
-    KvEntry, MockCfBackend, MockExchange, NoopArtifactTokenSealer, QueueMsg, RecordedCall,
+    KvEntry, MockCfBackend, MockExchange, NoopArtifactTokenSealer, RecordedCall,
 };
 use crate::registry::{CfRegistry, D1Database};
 use crate::{artifacts_repos_schema, cf_apply_driver, CfDriver, CfError, CfNode};
@@ -607,23 +607,15 @@ fn kv_get_put_delete_list_round_trip() {
 }
 
 // ----------------------------------------------------------------------------------------------
-// Queues — send (idempotency key) / pull (tail)
+// Queues — send (idempotency key). PULL retired to the declared `cloudflare.qfs` read-over-POST
+// twin (blueprint §13.1 G1 / §13.3), so the compiled queue is APPEND-ONLY: no `queue_tail`, no
+// `queue_pull` backend arm, and `capabilities` denies SELECT (asserted in `queue_is_append_only`).
 // ----------------------------------------------------------------------------------------------
 
 #[test]
-fn queue_send_carries_idempotency_key_and_pull_tails() {
+fn queue_send_carries_idempotency_key() {
     use qfs_runtime::SharedApplier;
-    let backend = Arc::new(
-        MockCfBackend::new()
-            .with_queue_msg(QueueMsg::new("m1", b"hello".to_vec(), 1))
-            .with_queue_msg(QueueMsg::new("m2", b"world".to_vec(), 2)),
-    );
-    let d = driver_with(backend.clone());
-
-    // PULL (tail) capped at 1.
-    let msgs = d.queue_tail("events", 1).unwrap();
-    assert_eq!(msgs.len(), 1);
-    assert_eq!(msgs[0].id, "m1");
+    let backend = Arc::new(MockCfBackend::new());
 
     // SEND (append) via the applier with an explicit idempotency key.
     let applier = crate::CfApplier::new(registry_with(backend.clone()));
@@ -643,14 +635,13 @@ fn queue_send_carries_idempotency_key_and_pull_tails() {
         .unwrap();
 
     let calls = backend.recorded();
-    assert!(matches!(calls[0], RecordedCall::QueuePull { max: 1, .. }));
     let RecordedCall::QueueSend {
         queue,
         body,
         idempotency_key,
-    } = &calls[1]
+    } = &calls[0]
     else {
-        panic!("expected queue.send, got {:?}", calls[1]);
+        panic!("expected queue.send, got {:?}", calls[0]);
     };
     assert_eq!(queue, "events");
     assert_eq!(body, b"payload");
@@ -837,22 +828,31 @@ fn artifact_delete_uses_the_concrete_repo_path() {
 // ----------------------------------------------------------------------------------------------
 
 #[test]
-fn update_on_a_queue_is_rejected_structurally() {
+fn queue_is_append_only_after_the_pull_retirement() {
+    // Blueprint §13.3: the compiled queue PULL retired to the declared `cloudflare.qfs`
+    // read-over-POST twin, so the compiled `/cf` queue advertises INSERT and nothing else. The
+    // honest-surfaces rule (a describe must advertise exactly what the driver answers) makes this an
+    // assertion, not a comment: a lingering SELECT here would be a phantom capability.
     let backend = Arc::new(MockCfBackend::new());
     let d = driver_with(backend);
     let queue = Path::new("/cf/queue/events");
     let err = check_capability(&d, &queue, Verb::Update).unwrap_err();
     assert_eq!(err.code(), "unsupported_verb");
-    // The supported set advertises exactly INSERT + SELECT (append/log).
     match err {
         qfs_driver::CfsError::UnsupportedVerb { supported, .. } => {
-            assert_eq!(supported, vec!["SELECT", "INSERT"]);
+            assert_eq!(supported, vec!["INSERT"]);
         }
         other => panic!("expected UnsupportedVerb, got {other:?}"),
     }
-    // SELECT and INSERT pass the gate.
-    assert!(check_capability(&d, &queue, Verb::Select).is_ok());
+    // INSERT (append) passes; SELECT (the retired pull) does NOT.
     assert!(check_capability(&d, &queue, Verb::Insert).is_ok());
+    assert_eq!(
+        check_capability(&d, &queue, Verb::Select)
+            .unwrap_err()
+            .code(),
+        "unsupported_verb",
+        "the retired compiled pull is not advertised"
+    );
 }
 
 #[test]

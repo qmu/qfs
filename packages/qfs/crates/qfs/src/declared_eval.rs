@@ -31,6 +31,13 @@ pub(crate) fn view_specs(
                     .as_deref()
                     .map(|_| of_type.map(|dt| dt.columns.clone()).unwrap_or_default()),
                 of_refinement: of_type.and_then(|dt| dt.refinement.clone()),
+                // §13.1 G2: the view's own `PUSHDOWN (…)` clause, or the driver-level default the
+                // loader already resolved onto the node. A malformed descriptor parses to `None` —
+                // honest-but-chatty (everything residual), never a silent wrong push.
+                pushdown: v
+                    .pushdown
+                    .as_deref()
+                    .and_then(qfs_exec::declared::parse_pushdown),
             }
         })
         .collect()
@@ -46,6 +53,7 @@ pub(crate) fn map_specs(
         .iter()
         .map(|m| qfs_exec::declared::MapSpec {
             template: m.path.clone(),
+            verb: m.verb.clone(),
             body: m.body.clone(),
         })
         .collect()

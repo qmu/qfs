@@ -465,6 +465,15 @@ pub const SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "system_config_registry_secret_ref",
         sql: include_str!("schema/system_config_registry_secret_ref.sql"),
     },
+    // 20260724014000 (blueprint §13.1 G2 — declared pushdown): a NEW forward-only ALTER adds the
+    // `pushdown` descriptor column to `sys_drivers`, so a declared VIEW declares which predicates
+    // push to which wire parameter and whether each is EXACT or a PREFILTER. #14 stays frozen; a
+    // pre-G2 row reads back NULL, which is the honest-but-chatty everything-residual default.
+    Migration {
+        version: 19,
+        name: "system_drivers_pushdown",
+        sql: include_str!("schema/system_drivers_pushdown.sql"),
+    },
 ];
 
 /// The Project DB's ordered migration set (forward-only; append, never edit a shipped entry).

@@ -13,7 +13,9 @@
 //! - **KV** (`/cf/kv/<ns>/<key>`) — [`Archetype::BlobNamespace`]. `ls/cp/mv/rm` + a degenerate
 //!   `(key, value)` table for `SELECT`/`UPSERT`; TTL + metadata per entry.
 //! - **Queues** (`/cf/queue/<name>`) — [`Archetype::AppendLog`]. `INSERT` appends a message (with
-//!   an idempotency key — at-least-once-safe), `SELECT … LIMIT n` tails (consumer pull).
+//!   an idempotency key — at-least-once-safe). Consumer PULL retired to the DECLARED
+//!   `cloudflare.qfs` read-over-POST view (blueprint §13.1 G1 / §13.3), so a queue is append-only
+//!   here.
 //! - **Artifacts** (`/cf/artifacts`) — [`Archetype::RelationalTable`]. `SELECT` lists account
 //!   Git repositories, `UPSERT`/`INSERT` creates a repo and seals the returned repo token through an
 //!   injected vault seam, and `REMOVE /cf/artifacts/<namespace>/<repo>` deletes a repo. The token is
@@ -22,8 +24,8 @@
 //! ## Surface
 //! - [`CfDriver`] — the introspective `Driver`: `mount()` = `/cf`, per-node archetype + typed
 //!   schema, per-node capabilities (a D1 table → full CRUD; a KV namespace →
-//!   `{ls,select,upsert,remove,cp,mv,rm}`; a queue → `{insert,select}` only, so `UPDATE`/`JOIN`
-//!   over a queue/KV is rejected at the parse gate), and a `Partial` pushdown for D1 (the whole
+//!   `{ls,select,upsert,remove,cp,mv,rm}`; a queue → `{insert}` only, so `SELECT`/`UPDATE`/`JOIN`
+//!   over a queue is rejected at the parse gate), and a `Partial` pushdown for D1 (the whole
 //!   sqlite vocabulary, reused from t17).
 //! - [`CfApplier`] — the synchronous apply leg `applier()` returns and the
 //!   [`qfs_runtime::SharedApplier`] the bridge drives under `COMMIT`.
@@ -77,7 +79,7 @@ pub use backend::{
     param_to_json, AccountResource, ArtifactRepo, ArtifactRepoKey, ArtifactTokenSealer, CfBackend,
     CreateArtifactRepoRequest, CreatedArtifactRepo, D1DatabaseResource, D1DatabaseUuid,
     HttpApiBackend, HttpExchange, KvEntry, KvNamespaceId, KvNamespaceResource, MockCfBackend,
-    MockExchange, MsgId, NoopArtifactTokenSealer, QueueMsg, QueueName, QueueResource, RecordedCall,
+    MockExchange, MsgId, NoopArtifactTokenSealer, QueueName, QueueResource, RecordedCall,
     TransportError,
 };
 pub use effect::{
@@ -87,7 +89,7 @@ pub use effect::{
 pub use error::CfError;
 pub use path::{CfNode, ARTIFACTS_SEGMENT, D1_SEGMENT, KV_SEGMENT, MOUNT, QUEUE_SEGMENT};
 pub use registry::{CfRegistry, D1Database};
-pub use schema::{artifacts_repos_schema, kv_table_schema, queue_tail_schema};
+pub use schema::{artifacts_repos_schema, kv_table_schema, queue_append_schema};
 
 // Re-export the reused t17 sqlite emitter entry points (now single-sourced in the pure-leaf
 // `qfs-sql-core`) so a caller can render/inspect a D1 statement directly — D1 IS the sqlite
@@ -218,18 +220,6 @@ impl CfDriver {
             .kv_get(handle.api_namespace_id(ns), key)
     }
 
-    /// Tail up to `max` recent messages from a queue (the bounded `SELECT … LIMIT n`).
-    ///
-    /// # Errors
-    /// [`CfError`] on an unregistered queue or a backend failure.
-    pub fn queue_tail(&self, queue: &str, max: u32) -> Result<Vec<QueueMsg>, CfError> {
-        let handle = self.registry().queue(queue)?;
-        handle
-            .backend()
-            .clone()
-            .queue_pull(handle.api_queue_name(), max)
-    }
-
     /// List Artifacts repos across the account's namespaces.
     ///
     /// # Errors
@@ -261,7 +251,8 @@ impl CfDriver {
     /// - a D1 **table** → full CRUD `{select,insert,upsert,update,remove}`.
     /// - a KV **namespace** → `{ls,cp,mv,rm,select,upsert,remove}` (blob verbs + key/value table).
     /// - a KV **key** → `{select,upsert,remove}` (a single entry).
-    /// - a **queue** → `{insert,select}` only (append + bounded tail; `UPDATE`/`REMOVE` denied).
+    /// - a **queue** → `{insert}` only (append; pull is the declared twin, `SELECT`/`UPDATE`/
+    ///   `REMOVE` denied).
     /// - anything else (root / bare service / unregistered) → the empty set.
     fn caps_for(&self, path: &Path) -> Capabilities {
         match CfNode::parse(path) {
@@ -289,9 +280,10 @@ impl CfDriver {
                 Capabilities::from_verbs(&[Verb::Select, Verb::Upsert, Verb::Remove])
             }
             Ok(CfNode::Queue { name }) if self.registry().has_queue(&name) => {
-                // Append/log: INSERT (append) + SELECT (bounded tail) ONLY. UPDATE/REMOVE/JOIN are
-                // rejected at the parse-time gate with a structured error.
-                Capabilities::from_verbs(&[Verb::Insert, Verb::Select])
+                // Append/log: INSERT (append) ONLY. Consumer PULL is the declared `cloudflare.qfs`
+                // read-over-POST twin (§13.3 retirement), so SELECT/UPDATE/REMOVE/JOIN over a
+                // compiled queue are rejected at the parse-time gate with a structured error.
+                Capabilities::from_verbs(&[Verb::Insert])
             }
             Ok(CfNode::Artifacts) if self.registry().has_artifacts() => {
                 Capabilities::from_verbs(&[Verb::Select, Verb::Insert, Verb::Upsert])
@@ -344,7 +336,7 @@ impl Driver for CfDriver {
             )),
             CfNode::Queue { .. } => Ok(NodeDesc::new(
                 Archetype::AppendLog,
-                schema::queue_tail_schema(),
+                schema::queue_append_schema(),
             )),
             CfNode::Artifacts | CfNode::ArtifactRepo { .. } => Ok(NodeDesc::new(
                 Archetype::RelationalTable,

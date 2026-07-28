@@ -197,11 +197,11 @@ qfs connect /cf --driver cf --account mycf
 When the token can see exactly one Cloudflare account, qfs discovers and persists that account id.
 If the token can see multiple accounts, pass `--at <cloudflare_account_id>` to choose one.
 
-With that mount, qfs discovers Cloudflare resources live: `/cf/d1/<db>/<table>` reads and writes
-through D1, `/cf/kv/<namespace>/<key>` reads and upserts KV entries, `/cf/queue/<queue>` tails or
-appends messages, and `/cf/artifacts` lists or creates Artifacts Git repositories. Repo create seals
-the returned Git token into qfs's vault and returns only non-secret metadata through the table.
-Without the stored account and connected mount, `/cf` is not registered for reads or commits.
+With that mount, `/cf/artifacts` lists or creates Artifacts Git repositories — the one Cloudflare
+surface still compiled. Repo create seals the returned Git token into qfs's vault and returns only
+non-secret metadata through the table. Without the stored account and connected mount, `/cf` is not
+registered for reads or commits. D1, KV, and Queues (push **and** pull) live on the declared
+`/cloudflare` driver instead — install `cloudflare.qfs` and see the Cloudflare cookbook.
 
 ```qfs
 /cf/artifacts

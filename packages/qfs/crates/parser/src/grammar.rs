@@ -1044,19 +1044,33 @@ fn transform_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
     }))
 }
 
-/// `FOLLOW <field>` — the declared-driver second-fetch stage (blueprint §13, ticket
-/// 20260711121526).
+/// `FOLLOW <field> [INTO <path>]` — the declared-driver second-fetch stage (blueprint §13, ticket
+/// 20260711121526), generalized to a per-row fan-out by §13.1 **G4**.
 ///
-/// `follow` is a **contextual identifier** (matched by [`word`], NOT a frozen keyword — the
-/// keyword set stays 39, the `transform`/`switch` lesson); `<field>` is a bare identifier naming
-/// the delivered-row field whose text value is the follow URL. Shape only here — "only valid in
-/// a declared view body" is a structured lowering/eval refusal, not a parse error.
+/// `follow` (and the `into` tail) are **contextual identifiers** (matched by [`word`], NOT frozen
+/// keywords — the keyword set stays 39, the `transform`/`switch` lesson); `<field>` is a bare
+/// identifier naming the delivered-row field. Without `INTO` the field's text value is the follow
+/// URL (the bytes shorthand); with `INTO /http/<drv>/<detail-template>` it is substituted into that
+/// template once per delivered row. Shape only here — "only valid in a declared view body" and the
+/// `/http/<self>` confinement are structured lowering/eval refusals, not parse errors.
 fn follow_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
     let start = word("follow").parse_next(input)?;
     let field = ident(input)?;
+    let mut end = field.span.end;
+    // `into` commits: `FOLLOW id INTO` with no path is a hard error, never an `alt` fallthrough
+    // that would silently degrade the fan-out into the bytes form.
+    let into = match opt(word("into")).parse_next(input)? {
+        None => None,
+        Some(_) => {
+            let target = cut_err(path_expr).parse_next(input)?;
+            end = target.span.end;
+            Some(target.segments)
+        }
+    };
     Ok(PipeOp::Follow(FollowRef {
         field: field.node,
-        span: Span::new(start.start, field.span.end),
+        into,
+        span: Span::new(start.start, end),
     }))
 }
 
@@ -1278,7 +1292,10 @@ fn call_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
     let call_span = kw(Keyword::Call).parse_next(input)?;
     let driver = ident(input)?;
     let _ = punct(Token::Dot).parse_next(input)?;
-    let action = ident(input)?;
+    // The action sits in a NAME position, so a keyword-shaped procedure name reads as its canonical
+    // text — the same ruling `CREATE MAP CALL <drv>.<action>` already makes. Without it a registry
+    // may DECLARE a procedure (`slack.update`) that no `|> CALL` could ever spell.
+    let action = action_word(input)?;
     let args = opt(named_arg_list).parse_next(input)?.unwrap_or_default();
     let end = action.span.end;
     Ok(PipeOp::Call(CallRef {
@@ -1956,7 +1973,7 @@ fn transform_word_or_string_clause(
 /// The `/sys/drivers` declaration-registry columns, in the order the desugar emits them (the sys
 /// applier reads them by NAME, so the order is internal). One flat table tags each declaration by
 /// `kind`; per-kind fields are `NULL` for the kinds that don't use them.
-const DRIVER_DECL_COLUMNS: [&str; 9] = [
+const DRIVER_DECL_COLUMNS: [&str; 10] = [
     "kind",         // driver | type | view | map
     "name",         // driver name (driver) or node path (type/view/map)
     "base_url",     // driver AT '<url>'
@@ -1966,6 +1983,7 @@ const DRIVER_DECL_COLUMNS: [&str; 9] = [
     "verb",         // declared map's mapped verb / CALL signature
     "body",         // type columns JSON | view/map body statement JSON
     "irreversible", // declared map's IRREVERSIBLE flag
+    "pushdown",     // declared view/driver PUSHDOWN descriptor JSON (§13.1 G2)
 ];
 
 /// Build the single-row `VALUES (...)` a `/sys/drivers` declaration carries. Absent per-kind fields
@@ -1981,6 +1999,7 @@ fn driver_row_values(
     verb: Option<&str>,
     body: Option<&str>,
     irreversible: bool,
+    pushdown: Option<&str>,
 ) -> Values {
     let lit = |v: Option<&str>| {
         v.map_or(Expr::Lit(Literal::Null), |s| {
@@ -2004,6 +2023,7 @@ fn driver_row_values(
             lit(verb),
             lit(body),
             Expr::Lit(Literal::Bool(irreversible)),
+            lit(pushdown),
         ]],
     }
 }
@@ -2040,6 +2060,7 @@ fn create_driver_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
     let mut base_url = None;
     let mut auth = None;
     let mut pagination = None;
+    let mut pushdown = None;
     loop {
         if base_url.is_none() {
             if let Some(v) = opt(conn_at_clause).parse_next(input)? {
@@ -2056,6 +2077,14 @@ fn create_driver_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
         if pagination.is_none() {
             if let Some(v) = opt(driver_paginate_clause).parse_next(input)? {
                 pagination = Some(v);
+                continue;
+            }
+        }
+        // §13.1 G2: a driver-level PUSHDOWN default, the same default-with-per-view-override shape
+        // `PAGINATE` already has (the adopted terseness device, §13.2).
+        if pushdown.is_none() {
+            if let Some(v) = opt(view_pushdown_clause).parse_next(input)? {
+                pushdown = Some(v);
                 continue;
             }
         }
@@ -2076,6 +2105,7 @@ fn create_driver_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
         None,
         None,
         false,
+        pushdown.as_deref(),
     );
     Ok(insert_sys_drivers(values, create))
 }
@@ -2206,6 +2236,73 @@ fn paginate_link_clause(input: &mut Stream<'_>) -> ModalResult<String> {
     Ok(serde_json::json!({ "kind": "link", "max_pages": max_pages }).to_string())
 }
 
+/// `PUSHDOWN ( <col> <op> => '<param>' [EXACT | PREFILTER], … , [LIMIT => '<param>'] )` — the
+/// declared pushdown map (blueprint §13.1 **G2**). Each entry says which typed column/operator lowers
+/// to which wire query (or POST-body) parameter, and whether the parameter means the predicate
+/// **EXACT**ly (push it and DROP the conjunct from the residual) or is a looser **PREFILTER** (push it
+/// AND keep the exact predicate as the local residual — over-fetch then filter, never wrong rows).
+/// `EXACT` is the default when neither word is given.
+///
+/// This lifts the compiled pushdown modules' own discipline (`driver-slack/pushdown.rs` et al.) to
+/// declaration data: residual truthfulness becomes a declared property the evaluator enforces, not a
+/// per-driver Rust routine. A view with NO `PUSHDOWN` clause is honest-but-chatty (everything
+/// residual) — the clause is opt-in optimization, never a correctness prerequisite.
+///
+/// Returns a JSON descriptor `{"entries":[{"kind":"cmp","col":…,"op":…,"param":…,"exact":bool} |
+/// {"kind":"limit","param":…}]}`. `PUSHDOWN`/`EXACT`/`PREFILTER`/`LIMIT` are contextual UPPERCASE
+/// idents — zero new frozen keywords (`LIMIT` here is the frozen keyword token, read positionally).
+fn view_pushdown_clause(input: &mut Stream<'_>) -> ModalResult<String> {
+    let _ = word("PUSHDOWN").parse_next(input)?;
+    let _ = cut_err(punct(Token::LParen)).parse_next(input)?;
+    let entries: Vec<serde_json::Value> =
+        cut_err(separated(1.., pushdown_entry, punct(Token::Comma))).parse_next(input)?;
+    let _ = cut_err(punct(Token::RParen)).parse_next(input)?;
+    Ok(serde_json::json!({ "entries": entries }).to_string())
+}
+
+/// One `PUSHDOWN (…)` entry: either the `LIMIT => '<param>'` page-size arm or a
+/// `<col> <op> => '<param>' [EXACT|PREFILTER]` comparison arm.
+fn pushdown_entry(input: &mut Stream<'_>) -> ModalResult<serde_json::Value> {
+    alt((pushdown_limit_entry, pushdown_cmp_entry)).parse_next(input)
+}
+
+/// `LIMIT => '<param>'` — the declared page-size parameter (Slack's `limit`, GitHub's `per_page`).
+fn pushdown_limit_entry(input: &mut Stream<'_>) -> ModalResult<serde_json::Value> {
+    let _ = kw(Keyword::Limit).parse_next(input)?;
+    let _ = cut_err(punct(Token::Arrow)).parse_next(input)?;
+    let param = cut_err(string_value).parse_next(input)?;
+    Ok(serde_json::json!({ "kind": "limit", "param": param }))
+}
+
+/// `<col> <op> => '<param>' [EXACT|PREFILTER]` — one comparison's declared wire parameter.
+fn pushdown_cmp_entry(input: &mut Stream<'_>) -> ModalResult<serde_json::Value> {
+    let col = ident(input)?.node;
+    let op = cut_err(pushdown_cmp_op).parse_next(input)?;
+    let _ = cut_err(punct(Token::Arrow)).parse_next(input)?;
+    let param = cut_err(string_value).parse_next(input)?;
+    // EXACT is the default: an unmarked entry claims the parameter means the predicate, which is the
+    // shape a declaration author reaches for first. PREFILTER is the explicit weaker claim.
+    let exact = opt(alt((
+        word("EXACT").map(|_| true),
+        word("PREFILTER").map(|_| false),
+    )))
+    .parse_next(input)?
+    .unwrap_or(true);
+    Ok(serde_json::json!({ "kind": "cmp", "col": col, "op": op, "param": param, "exact": exact }))
+}
+
+/// The comparison operators a declared pushdown entry may name, as their canonical text.
+fn pushdown_cmp_op(input: &mut Stream<'_>) -> ModalResult<&'static str> {
+    alt((
+        punct(Token::Ge).map(|_| ">="),
+        punct(Token::Le).map(|_| "<="),
+        punct(Token::Gt).map(|_| ">"),
+        punct(Token::Lt).map(|_| "<"),
+        punct(Token::EqEq).map(|_| "=="),
+    ))
+    .parse_next(input)
+}
+
 /// A bare non-negative integer literal (for `MAX <n>`).
 fn int_literal(input: &mut Stream<'_>) -> ModalResult<i64> {
     any.verify_map(|t: Spanned<Token>| match t.node {
@@ -2267,6 +2364,7 @@ fn create_type_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
         None,
         Some(&body),
         false,
+        None,
     );
     Ok(insert_sys_drivers(values, create))
 }
@@ -2314,6 +2412,9 @@ fn create_declared_view_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
     let of_type = opt(preceded(word("OF"), cut_err(type_name))).parse_next(input)?;
     let _ = cut_err(kw(Keyword::As)).parse_next(input)?;
     let body = cut_err(inner_statement).parse_next(input)?;
+    // §13.1 G2: the optional declared pushdown map rides AFTER the body (the body's pipeline ends at
+    // the first token that is not a `|>` stage, so `PUSHDOWN` terminates it cleanly).
+    let pushdown = opt(view_pushdown_clause).parse_next(input)?;
     let body_json = body_to_json(&body)?;
     let name = canonical_path(&path);
     let values = driver_row_values(
@@ -2326,6 +2427,7 @@ fn create_declared_view_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
         None,
         Some(&body_json),
         false,
+        pushdown.as_deref(),
     );
     Ok(insert_sys_drivers(values, create))
 }
@@ -2354,6 +2456,7 @@ fn create_map_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
         Some(&verb),
         Some(&body_json),
         irreversible,
+        None,
     );
     Ok(insert_sys_drivers(values, create))
 }
@@ -2416,6 +2519,7 @@ fn create_sql_resource_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
         None,
         Some(&body),
         false,
+        None,
     );
     Ok(insert_sys_drivers(values, create))
 }
@@ -2558,10 +2662,50 @@ fn map_verb(input: &mut Stream<'_>) -> ModalResult<String> {
     if opt(kw(Keyword::Call)).parse_next(input)?.is_some() {
         let driver = cut_err(ident).parse_next(input)?.node;
         let _ = cut_err(punct(Token::Dot)).parse_next(input)?;
-        let action = cut_err(ident).parse_next(input)?.node;
-        return Ok(format!("CALL {driver}.{action}"));
+        // A procedure NAME may collide with a frozen keyword (`slack.update`, `slack.delete`) — the
+        // action sits in a name position, not a grammar position, so a keyword-shaped word is read
+        // as its canonical text. This is what keeps a declared twin's procedure names identical to
+        // the compiled registry's instead of forcing a rename.
+        let action = cut_err(action_word).parse_next(input)?.node;
+        // §13.1 G5: an OPTIONAL typed parameter list, so a declared CALL reports the same typed
+        // signature the compiled describe registry does (`react(channel: Text, ts: Text, emoji:
+        // Text)`) and the params bind into the effect body as `row.<param>`. Without the list the
+        // CALL is untyped — today's behaviour, preserved as the no-signature shorthand. Rendered
+        // into the stored verb label as `CALL <drv>.<action>(<p> <ty>, …)`, so the whole signature
+        // lives in the one column the registry already keys declarations by.
+        let params = opt(call_signature_params).parse_next(input)?;
+        return Ok(match params {
+            Some(sig) => format!("CALL {driver}.{action}({sig})"),
+            None => format!("CALL {driver}.{action}"),
+        });
     }
     policy_verb_token(input)
+}
+
+/// A procedure-name word in a `CALL <driver>.<action>` position: a bare identifier, or a frozen
+/// keyword read as its canonical lowercase text (a name position, not a grammar position).
+fn action_word(input: &mut Stream<'_>) -> ModalResult<Spanned<String>> {
+    any.verify_map(|t: Spanned<Token>| match t.node {
+        Token::Ident(s) => Some(Spanned::new(s, t.span)),
+        Token::Keyword(k) => Some(Spanned::new(k.text().to_string(), t.span)),
+        _ => None,
+    })
+    .parse_next(input)
+}
+
+/// `( <param> <type>, … )` — a declared CALL's typed parameter list (§13.1 G5). Reuses the
+/// `CREATE TABLE`/`CREATE TYPE` column-type vocabulary so a declared signature's types are the SAME
+/// canonical scalar set every other declaration speaks. Rendered back to `<p> <ty>, …`.
+fn call_signature_params(input: &mut Stream<'_>) -> ModalResult<String> {
+    let _ = punct(Token::LParen).parse_next(input)?;
+    let params: Vec<TableColumnDef> =
+        cut_err(separated(1.., table_column_def, punct(Token::Comma))).parse_next(input)?;
+    let _ = cut_err(punct(Token::RParen)).parse_next(input)?;
+    Ok(params
+        .iter()
+        .map(|p| format!("{} {}", p.name, p.ty))
+        .collect::<Vec<_>>()
+        .join(", "))
 }
 
 /// Reject a path whose `{param}` template segment collides with a glob (`*`/`?`) or an `@version`

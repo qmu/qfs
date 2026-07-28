@@ -1024,7 +1024,10 @@ CREATE MAP INSERT /chatwork/rooms/{room}/messages AS
 policy). Each carries a **declaration-cost note**: a device that makes a declaration longer than
 the compiled driver's docs is the wrong device (§13.1's conciseness invariant, measured in the
 inventory). The declared spelling of G1 (read-over-POST) ships and is proven hermetically in
-ticket 20260722091300; the rest are ruled here and implemented as their conversions demand.)*
+ticket 20260722091300; **G2 (declared `PUSHDOWN`), G5 (typed CALL signatures) and G4 (per-row
+`FOLLOW … INTO` fan-out) shipped with the slack-twin mission** (tickets 20260724014000,
+20260724014100 and 20260725124400 — each carries its own shipped-note below); G3, G6, G7 and G8 are
+ruled here and implemented as their conversions demand.)*
 
 **G1 — read-over-POST is a wire source with a body.** A read whose wire shape is a POST (a queue
 pull, a body-carried search, a GraphQL query) is a **VIEW whose leading `/http/<drv>/…` source
@@ -1082,7 +1085,15 @@ CREATE VIEW /slackd/{channel}/messages OF slackd/message AS
 *Declaration-cost:* **+1 line per pushed column** (a driver-level default collapses repeats). A view
 with no `PUSHDOWN` clause is honest-but-chatty (everything residual), so the clause is opt-in
 optimization, never a correctness prerequisite — a twin ships correct first, fast by declaration
-later.
+later. *(**Shipped**, ticket 20260724014000: the clause exists end to end — grammar on
+`CREATE VIEW` and `CREATE DRIVER`, the `sys_drivers.pushdown` System DB column (migration
+`system_drivers_pushdown.sql`), `qfs_exec::declared::lower_declared_pushdown` splitting a `WHERE`
+into pushed params + a truthful residual, and a read facet that pushes the params and re-filters
+what the wire could not express. The shipped `slack_driver.qfs` carries the driver-level
+`PUSHDOWN ( ts >= => 'oldest' EXACT, … , LIMIT => 'limit' )`; hermetic tests assert the **URL** the
+wire saw for `oldest`/`latest`/`limit`, not merely the lowering. Residual honesty is the reader's
+default: a missing exactness flag is read as the WEAKER claim (`PREFILTER`), so an unreadable
+declaration can never silently drop a conjunct.)*
 
 **G3 — MIME/body assembly is the `message` codec (a primitive).** Gmail send/draft's RFC 5322 +
 base64url `raw` field is assembled by a new **`|> ENCODE message`** codec — the compiled
@@ -1124,7 +1135,17 @@ CREATE VIEW /maild/{label} OF maild/message AS
 
 *Declaration-cost:* **+1 stage** (`FOLLOW … INTO …`) per hydration; the twin declares it once per
 list node. It is chatty by construction (this is honest, not a defect — the compiled driver is too);
-batch is the later fast path.
+batch is the later fast path. *(**Shipped**, ticket 20260725124400: a declared view body may write
+`FOLLOW <field> INTO /http/<drv>/<template>`; per delivered row the field is substituted into the
+template, one **confined** detail request is issued through the driver's own applier — so it rides
+the driver's auth and host pin — and the decoded detail is spliced back into that row. The
+no-template download form is unchanged. Two precedence rules are pinned by tests: substitution
+resolves against the delivered **row** first and the view's bound `{param}`s only as the outer
+fallback, and on a column-name collision the spliced **detail** wins. The fan-out is bounded at 50
+rows — the same budget declared cursor pagination spends — and **refuses rather than truncates**.
+**Named limit:** G4 substitutes a value *into* an address; it does **not** answer a reverse lookup
+against a collection (Slack's channel-name→id), which is why the slack retirement did not fire —
+see §13.3.)*
 
 **G5 — a declared `CALL` grows a typed signature.** `CREATE MAP CALL <drv>.<action>` is redefined to
 take an **optional typed parameter list** — `CREATE MAP CALL <drv>.<action> ( <param> <type>, … )
@@ -1140,7 +1161,17 @@ CREATE MAP CALL slackd.react ( channel text, ts text, emoji text ) /slackd/{chan
 ```
 
 *Declaration-cost:* **+1 clause** (the param list), the same length as the compiled proc's own
-signature — parity, not inflation.
+signature — parity, not inflation. *(**Shipped**, ticket 20260724014100: `CREATE MAP CALL` takes the
+optional typed parameter list, a declared driver lifts those maps to typed `ProcSig`s on both its
+describe mount and its live driver — so `DESCRIBE` reports the declared signature credential-free —
+and a test asserts the declared signature list **equals the compiled `SlackDriver` procedure
+registry exactly**. The effect half shipped with it: a `CALL` on a declared mount reaches the wire,
+selected by the **action** the call names rather than by mount path alone (the six shipped Slack
+maps all mount at the same messages node), stamping the wire verb the map body declares; a `CALL`
+matching no declared map is refused terminally rather than POSTing something else. Two lexer facts
+were fixed structurally on the way: a `/` after a closing paren is division, so the
+signature-then-path form did not lex; and a procedure name may be keyword-shaped — `slack.update`
+and `slack.delete` were advertised but **unspellable** since v0.0.89, and are now callable.)*
 
 **G6 — prelude aliases are declared.** A bare-verb prelude shorthand (compiled `POST → slack.post`,
 `SEND → mail.send`) is declared by **`CREATE ALIAS <WORD> FOR <drv>.<action>`**. The redefinition:
@@ -1187,23 +1218,38 @@ grudging fallback, so it is stated as a measurable bar and every §13.1 ruling i
 
 **The bar.** A tier-1/tier-2 REST service's full declaration is **≈ one screen of statements** —
 concretely **≤ ~40 statement-lines** (non-comment, non-blank), with the shipped **`chatwork.qfs` as
-the calibration point: 32 statement-lines / 15 statements for a *complete* tier-1 service including
+the calibration point: 32 statement-lines / 10 statements for a *complete* tier-1 service including
 file transfer** (driver + 3 types + 3 read views + a post map + a FOLLOW-download view + an
 `ENCODE multipart` upload map). A device or ruling that makes a declaration **longer than the
 compiled driver's own docs** is the wrong device — reject it, do not tune it (mission policy).
 
-**Calibration measurements** (statement-lines / statements, measured on the shipped examples):
+**Calibration measurements** (statement-lines / statements, measured on the shipped examples).
+Statement-lines are non-comment, non-blank lines; statements are the `;`-terminated statements
+**outside comments**. *(Re-measured 2026-07-27. The 2026-07-22 figures counted every `;` in the
+file, including the prose semicolons in each script's comment header, which inflated the statements
+column by 5–9 per file; the statement-lines column was and is correct.)*
 
 | Declared driver | statement-lines | statements | what it covers |
 |-----------------|-----------------|------------|----------------|
-| `github_account.qfs` | 18 | 11 | read-only `/ghdecl` slice (proves `AUTH ACCOUNT`) |
-| `chatwork.qfs` | **32** | 15 | **full tier-1 service + file transfer — the calibration point** |
-| `cloudflare.qfs` | 41 | 22 | zones + DNS + KV get/put + queue push + D1 SQL arm |
+| `github_account.qfs` | 18 | 5 | read-only `/ghdecl` slice (proves `AUTH ACCOUNT`) |
+| `chatwork.qfs` | **32** | 10 | **full tier-1 service + file transfer — the calibration point** |
+| `cloudflare.qfs` | 49 | 16 | zones + DNS + KV get/put + queue push + **queue pull (the G1 read-over-POST view + its `queue_message` type)** + D1 SQL arm |
+| `slack_driver.qfs` | **40** | 21 | **full tier-1 twin — 5 types + 9 read views (DM over G1 `\|> POST`) + driver-level G2 `PUSHDOWN` + a post map + 5 typed G5 CALL maps** |
 
 The per-family measurements of the inventory's *expressible today* dispositions — and the projected
 full-twin statement-line counts for slack/github/drive/mail — live **next to the dispositions** in
 `inventory-compiled-driver-surfaces.md` (mission dir) so a later conversion mission reads bar and
-evidence in one place. Every projected twin lands **under ~40 statement-lines**, i.e. under the bar.
+evidence in one place.
+
+**What the first real conversion did to the projection.** `slack_driver.qfs` is the first twin that
+actually *tests* the "every projected twin lands under ~40 statement-lines" claim, and the measured
+answer is **40 — at the bar, not under it**, against a projection of ~25–30. The read surface alone
+shipped at 31 statement-lines (ticket 20260724014000); the five typed G5 CALL maps added the last 9.
+So the bar holds for a full tier-1 twin with no headroom to spare, and the inventory's projections
+for github/drive/mail should be read as **optimistic by roughly a third** — the CALL/write half is
+what the projections under-counted. `cloudflare.qfs` at 49 is over the bar, honestly: it is not one
+tier-1 service but four surfaces (DNS, KV, Queues, D1-SQL) on one mount, so the per-service bar does
+not apply to it as a single number.
 
 **Terseness devices — adopted (with before/after), future (with expected saving), or rejected (in
 writing).** A device is adopted only where its ruling landed and its *after* is measurably shorter
@@ -1213,8 +1259,11 @@ writing).** A device is adopted only where its ruling landed and its *after* is 
   descriptor lives once on `CREATE DRIVER`, not on every view. *Before* (per-view, 5 views): 5
   duplicated `PAGINATE CURSOR (…)` clauses. *After* (`chatwork.qfs`/`cloudflare.qfs`, real): one
   driver-level clause. **Saving: N−1 lines** for an N-view driver (Slack: 4 lines). §13.1 **G2**
-  extends the *same* shape to `PUSHDOWN` (driver-level default, per-view override) — adopted in the
-  ruling, implemented when the slack/github twins land (its ruling records the shape).
+  extends the *same* shape to `PUSHDOWN` (driver-level default, per-view override) — **shipped with
+  the slack twin** (ticket 20260724014000): `slack_driver.qfs` carries **one** driver-level
+  `PUSHDOWN` clause covering `ts >=`/`ts <=`/`ts >`/`ts <`/`LIMIT` across all 9 read views, where a
+  per-view spelling would have cost one clause per messages-shaped view. Measured saving on the real
+  file: **1 line instead of 4**.
 - **`ENCODE`-slot codec for body shapes — ADOPTED (shipped `multipart`; ruled `message`, §13.1 G3).**
   *Before*: a bespoke per-service upload/MIME descriptor. *After* (`chatwork.qfs`, real):
   `INSERT INTO /http/chatwork/rooms/{room}/files |> ENCODE multipart VALUES (row)` — **one word** in
@@ -1254,8 +1303,9 @@ writing).** A device is adopted only where its ruling landed and its *after* is 
 
 This mission is the **gate**. The four per-driver twin conversions are **named and ordered here, not
 created here** — each becomes its own mission only after this mission's §13.1 rulings land (they
-have, in this repository). A fresh session starting the slack conversion reads this section plus
-§13.1/§13.2 and needs to re-derive **nothing**.
+have, in this repository). A fresh session starting a conversion reads this section plus
+§13.1/§13.2 and needs to re-derive **nothing**. Entry #1 (slack) has since **run**; what it found is
+recorded under the table so entries #2–#4 inherit it rather than rediscover it.
 
 **None of the four starts before the rulings land.** They exist so four missions do not each
 rediscover the same wall; the wall got one answer in §13.1. Order is **ascending service-quirk
@@ -1276,27 +1326,82 @@ retirement steps (per every twin, done only after equivalence holds):
    skill caches stop teaching the retired mount.
 4. **Bump the binary patch** (`crates/qfs/Cargo.toml`) per the every-shipped-PR rule.
 
-| # | Mission (to be created later) | Entry condition — §13.1 rulings it needs landed | Row-equivalence bar |
-|---|-------------------------------|--------------------------------------------------|---------------------|
-| 1 | **slack twin** | **G1** (read-over-POST — DM `conversations.open`), **G2** (pushdown `oldest`/`latest`/`limit`), **G5** (typed CALL sigs for react/pin/unpin/update/delete). All ruled; G1 shipped. | declared reads row-equivalent to `driver-slack` on the shared message/thread/reaction/file/user fixtures; the 5 CALL maps + post map effect-equivalent. |
-| 2 | **github twin** | **G2** (pushdown `state`/`labels`/`assignee`/`per_page`), **G5** (merge/dispatch/review sigs). (No G1 — GitHub REST is GET-shaped; GraphQL stays a park.) | declared reads row-equivalent to `driver-github` on the 8-namespace + object + sub-collection fixtures; merge/dispatch/review effect-equivalent (merge stays `IRREVERSIBLE`). |
-| 3 | **drive twin** | **G2** (Drive `q=` translation), **G4** (path→id parent-pointer resolution), **G5** (`copy` sig). **G7** (blob-namespace ergonomics) is **parked** — the twin exposes the ops as views/maps, not the `cp`/`ls`/`mv`/`rm` shell archetype. | declared reads row-equivalent to `driver-gdrive` on the folder/file/id/export fixtures; upload/update/trash/move/copy effect-equivalent. |
-| 4 | **mail twin** | **G3** (`ENCODE message` MIME for send/draft), **G4** (list→detail hydration), **G2** (Gmail `q=`), **G5** (send/reply sigs), **G6** (`SEND` alias, optional). Gmail last precisely because G3/G4 must exist — they do. | declared reads row-equivalent to `driver-gmail` on the label/message/thread/attachment fixtures; draft/send/reply effect-equivalent (send stays `IRREVERSIBLE`); `batch` and push/`watch` remain parks. |
+| # | Mission | Entry condition — §13.1 rulings it needs landed | Row-equivalence bar |
+|---|---------|--------------------------------------------------|---------------------|
+| 1 | **slack twin** — mission `the-declared-slack-twin-retires-the-compiled-driver`, **ran and closed `carried` 2026-07-27**; continues as `a-declared-write-resolves-a-name-the-way-a-query-does` | **G1** (read-over-POST — DM `conversations.open`), **G2** (pushdown `oldest`/`latest`/`limit`), **G5** (typed CALL sigs for react/pin/unpin/update/delete) — **all four now shipped** (G1 in v0.0.85; G2 + G5 + G4 in this mission). | reads **met**: `slack_driver.qfs` is row-equivalent to `driver-slack` on the shared message/thread/reaction/file/user fixtures, DM read included. Effect-equivalence for the 5 CALL maps is **open**, and `driver-slack` is therefore **not deleted** — see the note below. |
+| 2 | **github twin** *(to be created)* | **G2** (pushdown `state`/`labels`/`assignee`/`per_page`), **G5** (merge/dispatch/review sigs). (No G1 — GitHub REST is GET-shaped; GraphQL stays a park.) | declared reads row-equivalent to `driver-github` on the 8-namespace + object + sub-collection fixtures; merge/dispatch/review effect-equivalent (merge stays `IRREVERSIBLE`). |
+| 3 | **drive twin** *(to be created)* | **G2** (Drive `q=` translation), **G4** (path→id parent-pointer resolution), **G5** (`copy` sig). **G7** (blob-namespace ergonomics) is **parked** — the twin exposes the ops as views/maps, not the `cp`/`ls`/`mv`/`rm` shell archetype. | declared reads row-equivalent to `driver-gdrive` on the folder/file/id/export fixtures; upload/update/trash/move/copy effect-equivalent. |
+| 4 | **mail twin** *(to be created)* | **G3** (`ENCODE message` MIME for send/draft), **G4** (list→detail hydration), **G2** (Gmail `q=`), **G5** (send/reply sigs), **G6** (`SEND` alias, optional). Gmail last precisely because G3/G4 must exist — they do. | declared reads row-equivalent to `driver-gmail` on the label/message/thread/attachment fixtures; draft/send/reply effect-equivalent (send stays `IRREVERSIBLE`); `batch` and push/`watch` remain parks. |
+
+**Entry #1 ran — what it landed, and the one wall it stopped on** *(mission
+`the-declared-slack-twin-retires-the-compiled-driver`, created 2026-07-24, two overnight runs, closed
+**`carried`** 2026-07-27)*.
+
+*Landed:* the committed `slack_driver.qfs` (§13.2, 40 statement-lines) declaring the whole Slack read
+surface, **proven row-equivalent to `driver-slack` on shared hermetic fixtures** — DM read included,
+over the G1 `|> POST` stage. §13.1 **G2** (declared `PUSHDOWN`, with its `sys_drivers.pushdown` System
+DB column and `lower_declared_pushdown`), **G5** (typed CALL signatures *and* declared-CALL wire
+dispatch), and **G4** (`|> FOLLOW <field> INTO /http/<drv>/<template>`) all shipped here. The `/cf`
+queue-pull twin followed the full ratchet and the compiled pull was **deleted** (see the tiering
+table below). A lexer fix on the way made `slack.update`/`slack.delete` **callable** — the compiled
+registry had advertised them since v0.0.89 while no statement could spell them.
+
+*Did not fire: the retirement.* **`driver-slack` is still compiled and still registered.** The
+retirement steps above were not run, because acceptance stopped one item short of them.
+
+*The wall, stated precisely so it is not re-derived.* A declared **write** cannot turn `#general`
+into `C0123ABCD`. Slack's Web API offers no name-addressed channel endpoint, so the compiled driver
+GETs `conversations.list` and **scans the returned collection locally** for `name == general`. That
+is a **reverse lookup against a collection**, not a substitution into an address — and G4, which
+substitutes a delivered value *into* a templated endpoint, runs in the opposite direction. G4 is
+shipped and useful; it simply does not answer this. (Two consecutive overnight runs each found the
+remainder one layer deeper than the plan, both times because the plan named a capability without
+first checking what shape the external API actually offers. **Playbook lesson for entries #2–#4:
+before a twin mission is authorized, inventory the compiled oracle's own client for lookups that are
+*reverse* rather than *substitutional*** — that property decides whether a declaration can express
+the write at all.)
+
+*The unlock, already verified by reading the grammar.* The language **already has the piece**: `let`
+binds a pipeline and a let-bound name is a legal source, so the reverse lookup is expressible today
+with **zero new grammar** —
+
+```sql
+let cid = /slack/{ws}/channels |> WHERE name == row.channel |> SELECT id
+```
+
+— and it fails inside a declaration for one narrow reason: `create_map_stmt` parses its body with
+`inner_statement`, and `let_binding` has exactly one call site, `program_seq`, reached only at top
+level and as a `let`'s own body. **A parser wiring decision, not a limit of the language.**
+
+*Successor:* mission **`a-declared-write-resolves-a-name-the-way-a-query-does`** carries the two
+unmet acceptance items (CALL-map effect equivalence; the `driver-slack` retirement). Its
+`drive_authorized` is deliberately unset: the *spelling* of the reverse lookup is a genuine design
+fork — open the map body to `let` (recommended; reuses the already-declared `/slack/{ws}/channels`
+view with its paging and `OF` contract, at the cost of a new confinement rule and a decision about a
+relation-valued `let` where a scalar is expected), a new `LOOKUP` stage, or a selector on
+`FOLLOW … INTO`. The same mechanism is what **playbook entry #3 (drive) needs for its path→id parent
+walk**, so it is not Slack-local.
 
 **Honest tiering — the structural exceptions, restated with reasons (not eroded).** "Declared is the
 normal way" keeps its honest boundary: these stay **compiled**, each for a stated reason, so no
 silent exception rides the conversions. Re-verified against the compiled driver registry at HEAD
-(the four conversions above are the only planned deletions; everything below stays):
+(the four conversions above are the only planned deletions; everything below stays — except the
+`/cf` queue pull, whose "not yet done" reason was retired and is recorded closed):
 
 - **`/git`** — a *local repository*, not a wire: no base URL, no HTTP auth, no `/http/<drv>` host to
   confine. Ruled a **park** by §13.1 **G8** (the declared shape stays wire-only). Compiled.
 - **`/claude`** — a *local on-disk session store* (a path façade over session metadata + an
   append-log; NOT qfs calling an LLM — that is §15 `transform`). No base URL/auth. G8 park. Compiled.
-- **`/cf` queue pull** — a read-over-POST. The **declared spelling now exists** (§13.1 G1, shipped
-  this mission), so the *wall is gone*; but the compiled queue-pull is **still present at HEAD** —
-  its retirement (declare the twin, prove row-equivalence, delete the compiled queue-pull) is a
-  **mechanical follow-up**, deliberately not widened into the G1 ship ticket. Recorded here as the
-  one exception whose reason is "not yet done", not "cannot be done".
+- **`/cf` queue pull** — **CLOSED** (ticket 20260724014300). This was the one exception whose reason
+  was "not yet done", not "cannot be done". The declared spelling shipped with §13.1 G1; the twin
+  then followed the full ratchet: `cloudflare.qfs` declares
+  `/cloudflare/accounts/{account}/queues/{queue}/messages/pull` as a `|> POST { batch_size: 100 }`
+  read-over-POST view, that view was proven **row-equivalent** to the compiled `queue_pull` over a
+  shared hermetic wire fixture, and the compiled pull was then **deleted** (`CfBackend::queue_pull`,
+  `HttpApiBackend::queue_pull`, `CfDriver::queue_tail`, `QueueMsg`, `RecordedCall::QueuePull`, the
+  `/cf` queue read facet). The compiled `/cf` queue handle is now **append-only** — its capability
+  set advertises `INSERT` and nothing else, so no phantom read survives the retirement. **No
+  exception with a "not yet done" reason remains in this table.**
 - **`/cf` Artifacts** — a **git-repo surface** (a Git remote hosted on Cloudflare), so it is a git
   shape, not plain REST; it rides the same G8 reasoning as `/git`. Compiled.
 - **`/local` / `/fs` / `/s3` / `/r2` blob primitives** — the BlobNamespace **primitives** the

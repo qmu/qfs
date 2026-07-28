@@ -2,10 +2,10 @@
 --
 -- Blueprint §13 self-hosting: Cloudflare's plain-REST surface expressed as declarative config over
 -- the generic /http wire primitive — no compiled Rust. D1's relational surface (the SQL planner:
--- WHERE/JOIN/aggregate pushdown), KV get/put, and queue push are all served HERE now — the CREATE
--- SQL D1 arm plus the KV/queue maps below. The compiled /cf driver is a MINIMAL fallback for only
--- what plain declared REST cannot express: queue PULL (a POST-to-read) and Artifacts (a git-repo
--- surface). Extend this surface by adding more CREATE VIEW / MAP / SQL statements.
+-- WHERE/JOIN/aggregate pushdown), KV get/put, queue push AND queue pull are all served HERE now —
+-- the CREATE SQL D1 arm plus the KV/queue maps and the read-over-POST pull view below. The compiled
+-- /cf driver is a MINIMAL fallback for only what plain declared REST cannot express: Artifacts (a
+-- git-repo surface). Extend this surface by adding more CREATE VIEW / MAP / SQL statements.
 -- On a name collision the compiled driver wins, so this mounts at the distinct name `/cloudflare`.
 --
 -- INSTALL: preview then commit each statement (they desugar to /sys/drivers rows — an ordinary,
@@ -109,9 +109,18 @@ CREATE MAP UPSERT /cloudflare/accounts/{account}/storage/kv/namespaces/{namespac
 CREATE MAP INSERT /cloudflare/accounts/{account}/queues/{queue}/messages AS
   INSERT INTO /http/cloudflare/accounts/{account}/queues/{queue}/messages VALUES (row);
 
--- PULL is NOT declared here (recorded gap, honest-surfaces). Cloudflare queue pull is a POST-to-read
--- (POST /http/cloudflare/accounts/{account}/queues/{queue}/messages/pull returning a message batch),
--- and plain declared REST has no POST-that-reads primitive: a declared VIEW is always a GET and a
--- declared MAP is a write effect (no rows returned). Consuming a queue therefore stays on the
--- compiled /cf driver until a declared read-over-POST primitive ships. Everything above needs no
--- such primitive — get/put/push are GET/PUT/POST in the plain CRUD-over-HTTP shape.
+-- PULL — consume a batch of messages. Cloudflare queue pull is a READ whose wire method is POST, so
+-- it is a VIEW whose leading `|> POST { … }` stage carries the request body (blueprint §13.1 G1: the
+-- method is transport, the effect kind is read — no irreversibility gate, rows come back). The
+-- response is `{ "result": { "messages": [ … ] } }`, so `EXPAND result` flattens the envelope object
+-- and `EXPAND messages` explodes the batch into one row per message. `batch_size` is the declared
+-- wire cap; a smaller `|> limit n` on the caller's query still applies locally.
+CREATE TYPE cloudflare/queue_message (
+  id text PRIMARY KEY,
+  body text,
+  attempts int
+);
+
+CREATE VIEW /cloudflare/accounts/{account}/queues/{queue}/messages/pull OF cloudflare/queue_message AS
+  /http/cloudflare/accounts/{account}/queues/{queue}/messages/pull
+  |> POST { batch_size: 100 } |> DECODE json |> EXPAND result |> EXPAND messages;

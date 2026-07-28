@@ -75,6 +75,16 @@ pub const CHATWORK_DRIVER: &str = include_str!("../assets/examples/chatwork.qfs"
 /// credential-free account descriptor are ratcheted by the `qfs` crate's `declared_driver` tests.
 pub const GITHUB_ACCOUNT_DRIVER: &str = include_str!("../assets/examples/github_account.qfs");
 
+/// The shipped **declared-driver** script for Slack — blueprint §13.3 playbook entry #1, the twin of
+/// the compiled `driver-slack`. A multi-statement `CREATE DRIVER`/`TYPE`/`VIEW`/`MAP` install program
+/// (kept OUT of [`EXAMPLES`], which holds single-statement PREVIEW goldens — the `slack` example
+/// there is a message post, not this declaration). It is the first declaration to use the §13.1 **G2**
+/// `PUSHDOWN (…)` map (Slack's `oldest`/`latest`/`limit`, EXACT vs PREFILTER-tagged) and the **G1**
+/// read-over-POST stage (the DM `conversations.open`). Every read it declares is proven
+/// ROW-EQUIVALENT to the compiled driver on shared hermetic fixtures. Credential-free by
+/// construction (no clause carries a token; the value lives in the account layer).
+pub const SLACK_DRIVER: &str = include_str!("../assets/examples/slack_driver.qfs");
+
 pub const EXAMPLES: &[Example] = &[
     Example {
         driver: "mail",

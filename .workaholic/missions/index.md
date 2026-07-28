@@ -2,6 +2,7 @@
 
 ## active
 
+* [a-declared-write-resolves-a-name-the-way-a-query-does](active/a-declared-write-resolves-a-name-the-way-a-query-does/mission.md) - A declared write resolves a name the way a query does
 * [a-where-predicate-is-honored-or-refused-never-dropped](active/a-where-predicate-is-honored-or-refused-never-dropped/mission.md) - A where predicate is honored or refused, never dropped
 * [claude-code-sessions-are-queryable-and-steerable-as-qfs-paths](active/claude-code-sessions-are-queryable-and-steerable-as-qfs-paths/mission.md) - Claude Code sessions are queryable and steerable as qfs paths
 * [what-a-principal-can-see-and-do-is-granted-by-policy](active/what-a-principal-can-see-and-do-is-granted-by-policy/mission.md) - What a principal can see and do is granted by policy
@@ -18,3 +19,4 @@
 * [qfs-viewer-mvp](archive/qfs-viewer-mvp/mission.md) - qfs-viewer MVP
 * [support-create-agent-semantics-that-introduce-a-new-user-principal-with-query-functions-scheduled-launch-and-access-control-to-resources](archive/support-create-agent-semantics-that-introduce-a-new-user-principal-with-query-functions-scheduled-launch-and-access-control-to-resources/mission.md) - support CREATE AGENT semantics that introduce a new user principal with query functions, scheduled launch, and access control to resources
 * [the-declared-driver-dsl-covers-the-compiled-drivers-concisely](archive/the-declared-driver-dsl-covers-the-compiled-drivers-concisely/mission.md) - The declared driver DSL covers the compiled drivers concisely
+* [the-declared-slack-twin-retires-the-compiled-driver](archive/the-declared-slack-twin-retires-the-compiled-driver/mission.md) - The declared slack twin retires the compiled driver

@@ -287,6 +287,14 @@ pub struct RestApiConfig {
     /// another, including after a cursor/link-header follow or an `override_url`.
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
+    /// **Declared pushdown** (blueprint §13.1 G2): whether this mount's declaration carries a
+    /// `PUSHDOWN (…)` map, so a `WHERE` may be pushed to the wire as query parameters. The
+    /// declaration data itself lives with the view (the binary's declared read facet lowers it); this
+    /// flag is only what the driver ADVERTISES in its [`qfs_driver::PushdownProfile`], so the planner
+    /// hands the predicate to the facet instead of filtering it locally. `false` (the default, and
+    /// every compiled `/rest` mount) keeps the pre-G2 behaviour: `WHERE` stays a local residual.
+    #[serde(default)]
+    pub declared_where_pushdown: bool,
 }
 
 fn default_auth() -> AuthStrategy {
@@ -299,6 +307,7 @@ impl RestApiConfig {
     #[must_use]
     pub fn new(base_url: impl Into<String>, resources: Vec<ResourceMap>) -> Self {
         Self {
+            declared_where_pushdown: false,
             base_url: base_url.into(),
             auth: AuthStrategy::None,
             default_headers: Vec::new(),
@@ -313,6 +322,15 @@ impl RestApiConfig {
     #[must_use]
     pub fn with_auth(mut self, auth: AuthStrategy) -> Self {
         self.auth = auth;
+        self
+    }
+
+    /// Builder: advertise that this mount's declaration carries a §13.1 G2 `PUSHDOWN (…)` map, so
+    /// the driver's profile claims `WHERE` and the planner hands the predicate to the read facet
+    /// (which lowers it through the declared map and re-filters the truthful residual locally).
+    #[must_use]
+    pub fn with_declared_where_pushdown(mut self, declared: bool) -> Self {
+        self.declared_where_pushdown = declared;
         self
     }
 

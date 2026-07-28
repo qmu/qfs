@@ -4,7 +4,7 @@
 //!
 //! - **KV** is the degenerate two-column `(key, value)` table view (so `SELECT`/`UPSERT` work
 //!   over a key-value namespace as a relation).
-//! - **Queues** is the append/log tail row `(id, body, attempts)` a bounded `SELECT` yields.
+//! - **Queues** is the append/log message row `(id, body, attempts)` DESCRIBE reports.
 //! - **Artifacts** is the account-scoped repository table. It exposes remote metadata, never the
 //!   repo token returned by Cloudflare create.
 
@@ -20,10 +20,12 @@ pub fn kv_table_schema() -> Schema {
     ])
 }
 
-/// The Queues tail schema: `(id TEXT, body TEXT, attempts INT)`. The row shape a bounded-tail
-/// `SELECT … LIMIT n` over `/cf/queue/<name>` yields (consumer pull / recent messages).
+/// The Queues **append** schema: `(id TEXT, body TEXT, attempts INT)`. The message shape the
+/// append log describes. Consumer PULL retired to the declared `cloudflare.qfs` read-over-POST view
+/// (blueprint §13.3), so this is a DESCRIBE contract only — the compiled `/cf` queue serves
+/// `INSERT` (append) and no longer reads.
 #[must_use]
-pub fn queue_tail_schema() -> Schema {
+pub fn queue_append_schema() -> Schema {
     Schema::new(vec![
         Column::new("id", ColumnType::Text, false),
         Column::new("body", ColumnType::Text, true),
