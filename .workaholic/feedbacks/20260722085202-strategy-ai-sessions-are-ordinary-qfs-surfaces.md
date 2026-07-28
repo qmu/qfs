@@ -1,11 +1,13 @@
 ---
-type: Strategy
-title: AI sessions are ordinary qfs surfaces
-slug: ai-sessions-are-ordinary-qfs-surfaces
-status: active
+type: Feedback
+title: Strategy (retired): AI sessions are ordinary qfs surfaces
+kind: insight
+source: discussion
 created_at: 2026-07-22T08:52:02+09:00
 author: a@qmu.jp
+supersedes:
 ---
+
 
 # AI sessions are ordinary qfs surfaces
 

@@ -2,7 +2,7 @@
 type: Mission
 title: A where predicate is honored or refused, never dropped
 slug: a-where-predicate-is-honored-or-refused-never-dropped
-status: active
+status: achieved
 created_at: 2026-07-24T01:10:44+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
@@ -99,6 +99,7 @@ cannot expand, codec errors name post-decode columns, and `describe`'s pushdown 
 
 - 2026-07-28 — concern deferred (stuck) — the-cookbook-ratchet-only-parses-so.md
 - 2026-07-28 — concern deferred (stuck) — select-on-an-unknown-column-is.md
+- 2026-07-28 — mission achieved — mission.md
 ## Reflection
 
 ### 2026-07-25 run 20260725-101714

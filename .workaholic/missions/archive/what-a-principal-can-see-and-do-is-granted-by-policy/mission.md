@@ -2,7 +2,7 @@
 type: Mission
 title: What a principal can see and do is granted by policy
 slug: what-a-principal-can-see-and-do-is-granted-by-policy
-status: active
+status: achieved
 created_at: 2026-07-24T01:10:45+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
@@ -100,6 +100,7 @@ no-policy and dangling-policy deny), and a denied read is a structured, secret-f
 - 2026-07-25 — story reported — work-20260724-011032.md
 
 - 2026-07-28 — concern deferred (stuck) — the-statement-bridge-s-read-leg.md
+- 2026-07-28 — mission achieved — mission.md
 ## Reflection
 
 ### 2026-07-25 run 20260725-101714

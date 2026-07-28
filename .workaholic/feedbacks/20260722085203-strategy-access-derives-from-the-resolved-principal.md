@@ -1,11 +1,13 @@
 ---
-type: Strategy
-title: Access derives from the resolved principal
-slug: access-derives-from-the-resolved-principal
-status: active
+type: Feedback
+title: Strategy (retired): Access derives from the resolved principal
+kind: insight
+source: discussion
 created_at: 2026-07-22T08:52:03+09:00
 author: a@qmu.jp
+supersedes:
 ---
+
 
 # Access derives from the resolved principal
 

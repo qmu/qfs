@@ -1,11 +1,13 @@
 ---
-type: Strategy
-title: The viewer renders qfs as a walk over trails
-slug: the-viewer-renders-qfs-as-a-walk-over-trails
-status: active
+type: Feedback
+title: Strategy (retired): The viewer renders qfs as a walk over trails
+kind: insight
+source: discussion
 created_at: 2026-07-22T12:20:44+09:00
 author: a@qmu.jp
+supersedes:
 ---
+
 
 # The viewer renders qfs as a walk over trails
 

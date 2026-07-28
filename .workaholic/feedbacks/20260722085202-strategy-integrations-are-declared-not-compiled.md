@@ -1,11 +1,13 @@
 ---
-type: Strategy
-title: Integrations are declared, not compiled
-slug: integrations-are-declared-not-compiled
-status: active
+type: Feedback
+title: Strategy (retired): Integrations are declared, not compiled
+kind: insight
+source: discussion
 created_at: 2026-07-22T08:52:02+09:00
 author: a@qmu.jp
+supersedes:
 ---
+
 
 # Integrations are declared, not compiled
 
