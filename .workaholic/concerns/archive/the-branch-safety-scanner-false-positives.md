@@ -12,7 +12,7 @@ first_seen: 2026-07-15T16:35:34+09:00
 last_seen: 2026-07-24T01:08:52+09:00
 severity: moderate
 status: resolved
-resolved_by_pr: 1ffe09a
+resolved_by_pr: e3366bf
 resolved_by_commit: 
 ---
 

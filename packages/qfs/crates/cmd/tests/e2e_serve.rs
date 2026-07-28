@@ -152,16 +152,18 @@ fn serve_boots_blocks_then_sigint_drains_audit_cleanly() {
         "must reach the supervised run loop:\n{log}"
     );
     assert!(
-        log.contains("audit ledger drained") && log.contains("entries=8"),
-        "shutdown must drain exactly 8 audit entries (one per /server mutation):\n{log}"
+        // 9 = the fixture's /server mutations, one more since reads became policy-gated: the boot
+        // endpoint attaches a `publicread` SELECT grant or the serve face refuses it.
+        log.contains("audit ledger drained") && log.contains("entries=9"),
+        "shutdown must drain exactly 9 audit entries (one per /server mutation):\n{log}"
     );
     let drained_lines = log
         .lines()
         .filter(|l| l.contains("qfs::server::audit"))
         .count();
     assert_eq!(
-        drained_lines, 8,
-        "exactly 8 audit entries flushed on drain (one per /server mutation):\n{log}"
+        drained_lines, 9,
+        "exactly 9 audit entries flushed on drain (one per /server mutation):\n{log}"
     );
 }
 
@@ -215,8 +217,8 @@ fn serve_shuts_down_cleanly_on_sigterm_and_drains_audit() {
         "the supervisor must report it caught SIGTERM:\n{log}"
     );
     assert!(
-        log.contains("audit ledger drained") && log.contains("entries=8"),
-        "SIGTERM must drain exactly 8 audit entries (the same graceful path as SIGINT):\n{log}"
+        log.contains("audit ledger drained") && log.contains("entries=9"),
+        "SIGTERM must drain exactly 9 audit entries (the same graceful path as SIGINT):\n{log}"
     );
 }
 
@@ -283,7 +285,11 @@ fn boot_yields_deterministic_per_collection_counts_and_stable_serde() {
         2,
         "view + materialized view share /server/views"
     );
-    assert_eq!(snap.policies.len(), 1, "policies");
+    assert_eq!(
+        snap.policies.len(),
+        2,
+        "leastpriv (the write grants) + publicread (the endpoint's SELECT grant)"
+    );
     assert_eq!(snap.webhooks.len(), 1, "webhooks");
     assert!(snap.jobs.contains_key("nightly"));
     assert!(snap.jobs.contains_key("weekly"));
@@ -680,7 +686,13 @@ fn serve_endpoint_over_claude_sessions_serves_fixture_rows() {
     let config = base.join("gate.qfs");
     std::fs::write(
         &config,
-        "create endpoint sessions on 'GET /sessions' as /hosts/local/claude/sessions\n",
+        // Reads are policy-gated: the endpoint attaches a SELECT grant or the serve face refuses
+        // it (403) before any driver scan — default-deny is the law for reads as well as writes.
+        concat!(
+            "create policy sessions_read allow select;\n",
+            "create endpoint sessions on 'GET /sessions' policy sessions_read \
+             as /hosts/local/claude/sessions;\n",
+        ),
     )
     .expect("write serve config");
 

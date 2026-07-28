@@ -10,7 +10,7 @@
 * [Golden/anti-drift crate not exercised by per-crate runs](golden-anti-drift-crate-not-exercised.md)
 * [Live proof of the session case deferred on host disk](live-proof-of-the-session-case.md)
 * [/local write materialization is narrow](local-write-materialization-is-narrow.md)
-* [Owner-attended live verification backlog](owner-attended-live-verification-backlog.md)
+* [One coarse api policy row for every non-endpoint face, behind a bearer gate never verified live](one-coarse-api-policy-row-for.md)
 * [Policy-less or denied job re-fires every sweep](policy-less-or-denied-job-re.md)
 * [Postgres/MySQL declarations for the declared-registry path are partial](postgres-mysql-declarations-for-the-declared.md)
 * [qfs-runtime span-buffer test flakes under parallel workspace tests](qfs-runtime-span-buffer-test-flakes.md)
@@ -18,7 +18,6 @@
 * [shared_connection and broker_connection homing is the same question, deferred](shared-connection-and-broker-connection-homing.md)
 * [Slack workspace-namespace still advertises Verb::Rm with no query grammar](slack-workspace-namespace-still-advertises-verb.md)
 * [`/sys` and `/slack` do not describe their roots, so `cd` there fails before the gate](sys-and-slack-do-not-describe.md)
-* [The `api` policy row gates MCP, dashboard, and reconcile alike](the-api-policy-row-gates-mcp.md)
 * [The dead Project-DB config tables await their drop migration](the-dead-project-db-config-tables.md)
 * [The `/type` catalog and the type resolver translate the stored key differently](the-type-catalog-and-the-type.md)
 
