@@ -442,8 +442,14 @@ mod tests {
         (Arc::new(engine), Arc::new(reads))
     }
 
+    /// The policy `/whoami` binds: `ALLOW SELECT` with no `FOR` clause — the unscoped
+    /// [`qfs_http::Subject::Anyone`] grant. Reads are policy-gated like every other effect, so the
+    /// not-signed-in answer stays a first-class ROW only where it is explicitly granted to anyone;
+    /// without this the endpoint would be default-denied, which is the correct fail-closed baseline.
+    const WHOAMI_POLICY: &str = "whoami-public";
+
     /// The `GET /whoami AS /sys/whoami` endpoint, stored as the canonical `StatementSpec` exactly as
-    /// the DDL desugar does.
+    /// the DDL desugar does, bound to the public-read policy above.
     fn whoami_endpoint() -> qfs_http::EndpointDef {
         let stmt = qfs_exec::parse("/sys/whoami").expect("/sys/whoami parses");
         let spec = qfs_core::StatementSpec::from_statement(stmt);
@@ -452,8 +458,25 @@ mod tests {
             method: "GET".to_string(),
             route: "/whoami".to_string(),
             query: qfs_http::StatementSource::new(spec.canonical()),
-            policy: None,
+            policy: Some(WHOAMI_POLICY.to_string()),
         }
+    }
+
+    /// The `ServerState` a live serve boots from for this endpoint: the endpoint row plus the
+    /// `ALLOW SELECT` policy row it references.
+    fn whoami_state() -> qfs_http::ServerState {
+        let mut state = qfs_http::ServerState::new();
+        state.policies.insert(
+            WHOAMI_POLICY.to_string(),
+            qfs_http::PolicyDef {
+                name: WHOAMI_POLICY.to_string(),
+                handler: "whoami".to_string(),
+                allow: vec!["ALLOW SELECT".to_string()],
+            },
+        );
+        let ep = whoami_endpoint();
+        state.endpoints.insert(ep.name.clone(), ep);
+        state
     }
 
     /// Dispatch a `GET /whoami` through the SHIPPED serve pipeline (compile → router → handler),
@@ -464,17 +487,24 @@ mod tests {
         resolver: Option<qfs_http::PrincipalResolver>,
         cookie: Option<&str>,
     ) -> qfs_http::HttpResponse {
-        // The endpoint MUST compile — this is the exact `UnroutedPath` check the live round tripped.
-        let route = qfs_http::compile_endpoint(&whoami_endpoint(), engine, None)
-            .expect("AS /sys/whoami registers over the serve face (no UnroutedPath)");
-        let router = qfs_http::Router::from_routes(vec![route]);
-        let binding = {
+        // Reconcile the binding from the ServerState (endpoint + its policy row), exactly as a live
+        // serve does — so the request-time gate resolves the endpoint's policy ref against the same
+        // live table the production path reads.
+        let mut binding = {
             let b = qfs_http::HttpBinding::new(Arc::clone(engine), Arc::clone(reads), 10_000);
             match resolver {
                 Some(r) => b.with_principal_resolver(r),
                 None => b,
             }
         };
+        qfs_http::Binding::reconcile(&mut binding, &whoami_state())
+            .expect("the whoami endpoint reconciles");
+        let router = binding.current_router();
+        assert_eq!(
+            router.len(),
+            1,
+            "AS /sys/whoami registers over the serve face (no UnroutedPath)"
+        );
         let ctx = binding.ctx();
         let mut req = qfs_http::HttpRequest::new(qfs_http::Method::Get, "/whoami");
         if let Some(c) = cookie {
@@ -526,7 +556,8 @@ mod tests {
             qfs_http::compile_endpoint(&whoami_endpoint(), &engine, None).is_ok(),
             "AS /sys/whoami must register over the serve face (no UnroutedPath)"
         );
-        // GET with no resolver → the anonymous first-class row, 200 (not 404).
+        // GET with no resolver → the anonymous first-class row, 200 (not 404, and not 403: the
+        // endpoint's policy grants SELECT to anyone, so the signed-out state stays a real answer).
         let resp = dispatch_whoami(&engine, &reads, None, None);
         assert_eq!(resp.status, 200, "GET /whoami is 200, not 404");
         let body = resp.body_text();

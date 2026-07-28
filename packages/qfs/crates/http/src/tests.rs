@@ -137,8 +137,24 @@ fn reads_with_mock() -> Arc<ReadRegistry> {
     Arc::new(ReadRegistry::new().with(DriverId::new("mock"), Arc::new(FakeItems::new())))
 }
 
+/// The permissive read policy every fixture endpoint binds to. Reads are default-denied like any
+/// other effect, so a fixture that wants to serve rows must be GRANTED `SELECT` — the tests that
+/// prove the denial side deliberately bind no policy (or a narrowed one) instead.
+const READ_POLICY: &str = "read-any";
+
+/// The `PolicyDef` row for [`READ_POLICY`]: an unscoped `ALLOW SELECT` (every driver, every path,
+/// every actor).
+fn read_any_policy() -> qfs_server::PolicyDef {
+    qfs_server::PolicyDef {
+        name: READ_POLICY.to_string(),
+        handler: String::new(),
+        allow: vec!["ALLOW SELECT".to_string()],
+    }
+}
+
 /// Build an `EndpointDef` from a method/route and a query SOURCE string, storing the query as
-/// the canonical span-normalised `StatementSpec` exactly as t31's DDL desugar does.
+/// the canonical span-normalised `StatementSpec` exactly as t31's DDL desugar does. The endpoint
+/// binds [`READ_POLICY`], which [`state_with`] registers.
 fn endpoint(name: &str, method: &str, route: &str, query_src: &str) -> EndpointDef {
     let stmt = parse(query_src).expect("endpoint query parses");
     let spec = StatementSpec::from_statement(stmt);
@@ -147,12 +163,23 @@ fn endpoint(name: &str, method: &str, route: &str, query_src: &str) -> EndpointD
         method: method.to_string(),
         route: route.to_string(),
         query: qfs_server::StatementSource::new(spec.canonical()),
+        policy: Some(READ_POLICY.to_string()),
+    }
+}
+
+/// Like [`endpoint`], but binding NO policy — the fail-closed shape (an ungranted read is refused).
+fn endpoint_without_policy(name: &str, method: &str, route: &str, query_src: &str) -> EndpointDef {
+    EndpointDef {
         policy: None,
+        ..endpoint(name, method, route, query_src)
     }
 }
 
 fn state_with(endpoints: Vec<EndpointDef>) -> ServerState {
     let mut state = ServerState::new();
+    state
+        .policies
+        .insert(READ_POLICY.to_string(), read_any_policy());
     for ep in endpoints {
         state.endpoints.insert(ep.name.clone(), ep);
     }
@@ -726,4 +753,317 @@ fn eval_error_safe_class_keeps_structured_message() {
     let problem = crate::HttpError::Eval(cap).problem();
     assert_eq!(problem.error, "eval");
     assert_eq!(problem.detail, "driver `mock` does not support REMOVE");
+}
+
+// ---------------------------------------------------------------------------
+// The serve READ path is policy-gated (the mission's enforcement half)
+// ---------------------------------------------------------------------------
+
+/// A binding serving ONE read endpoint, with the `/mock` scans COUNTED so a test can prove a
+/// refusal happened BEFORE the driver ran, and an optional resolved principal.
+///
+/// `allow` is the endpoint's bound policy rules — `None` binds no policy at all (the fail-closed
+/// shape). `user` injects a [`crate::PrincipalResolver`] resolving every request to that user;
+/// `None` leaves every request anonymous.
+struct ReadFixture {
+    binding: HttpBinding,
+    scans: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ReadFixture {
+    /// Dispatch one GET against `path` and return the response.
+    fn get(&self, path: &str) -> crate::HttpResponse {
+        serve_once(&self.binding, &HttpRequest::new(Method::Get, path))
+    }
+
+    /// How many times the read driver was asked to scan.
+    fn scan_count(&self) -> usize {
+        self.scans.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+fn read_fixture(
+    route: &str,
+    query: &str,
+    allow: Option<&[&str]>,
+    user: Option<&str>,
+) -> ReadFixture {
+    let scans = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut engine = Engine::new();
+    engine.mounts.register(Arc::new(FakeItems::new())).unwrap();
+    engine.codecs = qfs_core::CodecRegistry::with_builtins();
+    let reads = Arc::new(ReadRegistry::new().with(
+        DriverId::new("mock"),
+        Arc::new(CountingItems {
+            inner: FakeItems::new(),
+            scans: Arc::clone(&scans),
+        }),
+    ));
+    let mut binding = HttpBinding::new(Arc::new(engine), reads, 10_000);
+    if let Some(u) = user {
+        let u = u.to_string();
+        binding = binding.with_principal_resolver(Arc::new(move |_req: &HttpRequest| {
+            RequestContext::for_user(u.clone())
+        }));
+    }
+
+    let mut def = endpoint_without_policy("gated", "GET", route, query);
+    let mut state = ServerState::new();
+    if let Some(rules) = allow {
+        def.policy = Some("gate".to_string());
+        state.policies.insert(
+            "gate".to_string(),
+            qfs_server::PolicyDef {
+                name: "gate".to_string(),
+                handler: String::new(),
+                allow: rules.iter().map(|r| (*r).to_string()).collect(),
+            },
+        );
+    }
+    state.endpoints.insert(def.name.clone(), def);
+    binding.reconcile(&state).unwrap();
+    ReadFixture { binding, scans }
+}
+
+/// The headline behaviour (ticket 20260724013000): a read is gated like a write. An endpoint whose
+/// policy grants `SELECT` on the scanned path serves; the same request under a `DENY SELECT`, and
+/// under a policy with no matching rule, is REFUSED — and refused BEFORE the driver scan runs, so
+/// the denial is a genuine gate and not a post-hoc filter of rows already fetched.
+#[test]
+fn serve_read_is_gated_and_denial_precedes_the_driver_scan() {
+    // Direction 1 — granted: `ALLOW SELECT ON mock` admits the read.
+    let granted = read_fixture(
+        "/items",
+        "/mock/items",
+        Some(&["ALLOW SELECT ON mock"]),
+        None,
+    );
+    let ok = granted.get("/items");
+    assert_eq!(ok.status, 200, "body: {}", ok.body_text());
+    assert!(ok.body_text().contains("alpha"), "body: {}", ok.body_text());
+    assert!(
+        granted.scan_count() >= 1,
+        "the granted read reached the driver"
+    );
+
+    // Direction 2 — an explicit earlier DENY wins over a later ALLOW (first-match), and the read
+    // never reaches the driver.
+    let denied = read_fixture(
+        "/items",
+        "/mock/items",
+        Some(&["DENY SELECT", "ALLOW SELECT"]),
+        None,
+    );
+    let refused = denied.get("/items");
+    assert_eq!(refused.status, 403, "body: {}", refused.body_text());
+    assert!(
+        refused.body_text().contains("\"error\":\"policy\""),
+        "a denied read is a structured policy refusal: {}",
+        refused.body_text()
+    );
+    assert_eq!(
+        denied.scan_count(),
+        0,
+        "the refusal must precede the driver scan — nothing was read"
+    );
+
+    // Direction 3 — no matching rule under the fail-closed default: a grant for ANOTHER driver
+    // leaves this read default-denied.
+    let unmatched = read_fixture(
+        "/items",
+        "/mock/items",
+        Some(&["ALLOW SELECT ON other"]),
+        None,
+    );
+    let out = unmatched.get("/items");
+    assert_eq!(out.status, 403, "body: {}", out.body_text());
+    assert_eq!(unmatched.scan_count(), 0);
+}
+
+/// The gate consumes the principal the predecessor mission threaded: a rule narrowed with `FOR
+/// user:alice` admits Alice's read and contributes nothing to an anonymous one — the same rule,
+/// both directions, decided by who is asking.
+#[test]
+fn read_gate_evaluates_the_resolved_actor_both_directions() {
+    let rules: &[&str] = &["ALLOW SELECT ON mock FOR user:alice"];
+
+    let alice = read_fixture("/items", "/mock/items", Some(rules), Some("alice"));
+    assert_eq!(
+        alice.get("/items").status,
+        200,
+        "the narrowed rule must bite for the resolved principal"
+    );
+
+    let anon = read_fixture("/items", "/mock/items", Some(rules), None);
+    assert_eq!(
+        anon.get("/items").status,
+        403,
+        "the same rule contributes nothing to an anonymous read (fail closed)"
+    );
+    assert_eq!(anon.scan_count(), 0);
+
+    let bob = read_fixture("/items", "/mock/items", Some(rules), Some("bob"));
+    assert_eq!(
+        bob.get("/items").status,
+        403,
+        "a rule for Alice does not grant Bob"
+    );
+}
+
+/// The request-time gate resolves the endpoint's bound policy REF, not a policy that happens to
+/// share the endpoint's name. A policy named differently from its endpoint must still apply — and a
+/// policy whose name merely matches some other endpoint must not be picked up.
+#[test]
+fn request_time_gate_resolves_the_endpoints_policy_ref_not_its_name() {
+    // The endpoint is named `gated`; its policy is named `gate`. The read is granted only if the
+    // gate follows the REF.
+    let by_ref = read_fixture("/items", "/mock/items", Some(&["ALLOW SELECT"]), None);
+    assert_eq!(
+        by_ref.get("/items").status,
+        200,
+        "the endpoint's `policy:` ref must be the key the request-time gate resolves"
+    );
+    // The compiled route carries the ref so the request path can resolve it at all.
+    let route = by_ref.binding.current_router();
+    assert_eq!(route.len(), 1);
+}
+
+/// The CLI/local read path is untouched by this change: `execute_read` still takes no policy and
+/// still returns rows. The gate lives at the serve seam only (the mission's explicit scope ruling).
+#[test]
+fn local_read_execution_is_not_policy_gated() {
+    let engine = engine_with_mock();
+    let reads = reads_with_mock();
+    let stmt = parse("/mock/items").expect("parses");
+    let rows = qfs_exec::block_on_read(&stmt, &engine.mounts, &reads, &RequestContext::anonymous())
+        .expect("the local read path runs with no policy in sight");
+    assert_eq!(
+        rows.rows.len(),
+        3,
+        "the operator's own terminal is unchanged"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fail-closed + structured denial on the serve read path
+// ---------------------------------------------------------------------------
+
+/// Build a binding serving ONE read endpoint whose `policy:` field is `policy_ref` verbatim, with
+/// only `registered` present in the live policy table. Lets a test drive the three resolution
+/// shapes: a present policy, a DANGLING ref, and no ref at all.
+fn binding_with_policy_ref(
+    policy_ref: Option<&str>,
+    registered: Option<(&str, &[&str])>,
+) -> HttpBinding {
+    let mut binding = HttpBinding::new(engine_with_mock(), reads_with_mock(), 10_000);
+    let mut def = endpoint_without_policy("gated", "GET", "/items", "/mock/items");
+    def.policy = policy_ref.map(str::to_string);
+    let mut state = ServerState::new();
+    if let Some((name, rules)) = registered {
+        state.policies.insert(
+            name.to_string(),
+            qfs_server::PolicyDef {
+                name: name.to_string(),
+                handler: String::new(),
+                allow: rules.iter().map(|r| (*r).to_string()).collect(),
+            },
+        );
+    }
+    state.endpoints.insert(def.name.clone(), def);
+    binding.reconcile(&state).unwrap();
+    binding
+}
+
+/// Fail-closed on reads, all three resolution shapes: NO attached policy denies, a DANGLING policy
+/// ref denies (a typo must never accidentally open a path), and only a present, granting policy
+/// serves. Threading a real principal widens none of them.
+#[test]
+fn no_policy_and_dangling_policy_ref_both_deny_the_read() {
+    let none = binding_with_policy_ref(None, None);
+    let resp = serve_once(&none, &HttpRequest::new(Method::Get, "/items"));
+    assert_eq!(
+        resp.status,
+        403,
+        "an endpoint with no policy serves nothing: {}",
+        resp.body_text()
+    );
+
+    let dangling = binding_with_policy_ref(Some("ghost"), Some(("real", &["ALLOW SELECT"])));
+    let resp = serve_once(&dangling, &HttpRequest::new(Method::Get, "/items"));
+    assert_eq!(
+        resp.status,
+        403,
+        "a dangling policy ref is default-deny, never a fallback to another policy: {}",
+        resp.body_text()
+    );
+
+    let present = binding_with_policy_ref(Some("real"), Some(("real", &["ALLOW SELECT"])));
+    assert_eq!(
+        serve_once(&present, &HttpRequest::new(Method::Get, "/items")).status,
+        200,
+        "only a present, granting policy opens the read"
+    );
+}
+
+/// A policy-denied read is a STRUCTURED REFUSAL, never an empty relation at 200. The response is a
+/// 403 problem body naming the policy class; it carries no `rows`/`schema` payload, and its detail
+/// is secret-free (no token/secret/password markers, no rule internals beyond the verb, driver and
+/// the failing axis). The contrast with a granted read's 200 body is asserted in the same test, so
+/// "distinguishable from an empty result" is proven rather than assumed.
+#[test]
+fn a_denied_read_is_a_structured_refusal_not_an_empty_relation() {
+    let denied =
+        binding_with_policy_ref(Some("narrow"), Some(("narrow", &["ALLOW SELECT ON other"])));
+    let resp = serve_once(&denied, &HttpRequest::new(Method::Get, "/items"));
+    let body = resp.body_text();
+
+    assert_eq!(
+        resp.status, 403,
+        "a denied read is refused, not emptied: {body}"
+    );
+    assert_eq!(resp.content_type, "application/json");
+    assert!(
+        body.contains("\"error\":\"policy\""),
+        "the refusal names its class so an agent can branch on it: {body}"
+    );
+    assert!(
+        !body.contains("\"rows\""),
+        "a refusal must carry no result payload: {body}"
+    );
+    assert!(
+        !body.contains("\"schema\""),
+        "a refusal must carry no result schema: {body}"
+    );
+    assert!(
+        body.contains("SELECT"),
+        "the refusal names the verb it refused: {body}"
+    );
+    for marker in ["token", "secret", "password", "credential"] {
+        assert!(
+            !body.to_lowercase().contains(marker),
+            "the refusal must be secret-free (found `{marker}`): {body}"
+        );
+    }
+
+    // The contrast: a granted read returns 200 WITH a rows payload. An empty relation and a
+    // refusal are therefore never confusable — different status, different body shape.
+    let granted = binding_with_policy_ref(Some("open"), Some(("open", &["ALLOW SELECT"])));
+    let ok = serve_once(&granted, &HttpRequest::new(Method::Get, "/items"));
+    assert_eq!(ok.status, 200);
+    assert!(
+        ok.body_text().contains("\"rows\""),
+        "a granted read's envelope carries rows: {}",
+        ok.body_text()
+    );
+}
+
+/// The signed-out state stays a first-class ANSWER where it is granted to everyone: an unscoped
+/// `ALLOW SELECT` (subject `anyone`) serves the anonymous request 200 with rows. Refusing every
+/// unauthenticated request outright is explicitly NOT what this gate does.
+#[test]
+fn an_anyone_granted_read_still_answers_an_anonymous_request() {
+    let public = binding_with_policy_ref(Some("public"), Some(("public", &["ALLOW SELECT"])));
+    let resp = serve_once(&public, &HttpRequest::new(Method::Get, "/items"));
+    assert_eq!(resp.status, 200, "not a 401: {}", resp.body_text());
+    assert!(resp.body_text().contains("alpha"), "{}", resp.body_text());
 }

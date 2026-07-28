@@ -222,10 +222,31 @@ remove /cf/artifacts/default/starter-repo
 **A read-only `GET /recent` that returns the latest inbox items:**
 
 ```qfs
+create policy readmail
+  ALLOW select ON mail
+
 create endpoint recent
   on 'GET /recent'
+  policy readmail
   as /mail/inbox |> limit 5
 ```
+
+**Every endpoint needs a policy — reads included.** Default-deny is the law on the serve face: a
+request is evaluated against the endpoint's attached policy under the caller's resolved principal
+*before* any source is read. An endpoint with no policy (or one naming a policy that does not exist)
+serves nothing — the request comes back `403` with a structured policy error, never an empty result
+pretending there was no data. Narrow a grant to a principal with `for user alice` / `for role member`
+and to a sub-tree with `at /members/alice/**`:
+
+```qfs
+create policy members_only
+  ALLOW select ON mail FOR role member
+```
+
+**The statement spells the subject with a space, not a colon.** `for user alice` is the grammar;
+`user:alice` is the *stored* rule-string label you read back out of `/sys/policies` (and the form
+that appears inside a `PolicyDef`'s `allow` list). The two are not interchangeable — writing
+`for user:alice` in a `create policy` is a parse error.
 
 **Paging** — an endpoint result is requestable in bounded pages with the `limit` and `offset` query
 knobs: `GET /recent?limit=10&offset=20` returns rows 21–30. This shares the result envelope's `meta`
@@ -342,6 +363,7 @@ what it **omits** is removed.
 ```qfs
 create endpoint recent
   on 'GET /recent'
+  policy api
   as /mail/inbox |> limit 5
 
 create policy api

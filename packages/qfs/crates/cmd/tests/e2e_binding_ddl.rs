@@ -706,8 +706,10 @@ fn serve_boots_mixed_fixture_and_drains_audit_on_sigint() {
         "must reach the supervised run loop:\n{log}"
     );
     assert!(
-        log.contains("audit ledger drained") && log.contains("entries=8"),
-        "shutdown must drain exactly 8 audit entries (one per /server mutation):\n{log}"
+        // 9 = the fixture's /server mutations. It gained a second POLICY row (`publicread`) when
+        // reads became policy-gated: the boot endpoint attaches a SELECT grant or it serves nothing.
+        log.contains("audit ledger drained") && log.contains("entries=9"),
+        "shutdown must drain exactly 9 audit entries (one per /server mutation):\n{log}"
     );
 }
 

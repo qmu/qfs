@@ -11,13 +11,19 @@
 # contextual idents, NOT new frozen keywords (the t31 `AT` lesson).
 CREATE POLICY leastpriv ALLOW INSERT,REMOVE;
 
+# A read grant. Default-deny is the law for READS too: a served SELECT is evaluated against the
+# endpoint's policy before any driver scan, so an endpoint that serves rows must attach a policy
+# granting SELECT. This one is unscoped (`FOR anyone`), the public-read shape.
+CREATE POLICY publicread ALLOW SELECT;
+
 # A cron job, written as the frozen CREATE DDL sugar. It REMOVEs (irreversible) so it attaches
 # the `leastpriv` POLICY (default-deny otherwise).
 CREATE JOB nightly EVERY '1h' DO REMOVE /tmp WHERE age > 7 POLICY leastpriv;
 
-# An HTTP endpoint (sugar), backed by a read query. A pure READ produces no commit plan, so it
-# needs no POLICY (the read path is separate from the COMMIT plan the policy gates).
-CREATE ENDPOINT recent ON 'GET /recent' AS /mail/inbox |> LIMIT 5;
+# An HTTP endpoint (sugar), backed by a read query. A pure READ produces no commit plan, but the
+# read path has its own gate: the served SELECT is evaluated against this attached POLICY under the
+# request's resolved principal, so the endpoint attaches `publicread` or it serves nothing.
+CREATE ENDPOINT recent ON 'GET /recent' POLICY publicread AS /mail/inbox |> LIMIT 5;
 
 # An event trigger (sugar). It INSERTs, so it attaches the `leastpriv` POLICY.
 CREATE TRIGGER notify ON inbox DO INSERT INTO /log VALUES ('fired') POLICY leastpriv;

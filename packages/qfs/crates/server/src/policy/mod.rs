@@ -34,7 +34,8 @@ pub mod shared;
 pub use audit::{FiredDecision, FiredPlanRecord};
 pub use context::{resolve_memberships, DecisionContext, MembershipResolver};
 pub use enforce::{
-    classify_effect, evaluate, evaluate_with_context, verb_for_effect, EffectClass, PolicyDecision,
+    classify_effect, evaluate, evaluate_reads_with_context, evaluate_with_context, verb_for_effect,
+    EffectClass, PolicyDecision, ReadTarget,
 };
 pub use gate::{
     effect_summaries, gate_plan, gate_plan_with_context, resolve_policy, GateOutcome, PolicyTable,

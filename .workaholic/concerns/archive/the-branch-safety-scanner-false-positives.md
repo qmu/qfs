@@ -1,6 +1,6 @@
 ---
 type: Concern
-concern_id: the-interactive-shell-s-local-reads
+concern_id: the-branch-safety-scanner-false-positives
 mission: 
 tickets: [20260713195008-effect-selector-channel-folder-rename.md, 20260714120000-effect-selector-uniform-migration.md, 20260714154144-general-of-type-assertion.md, 20260714182710-shell-face-slice1-ls-cat-describe-typed.md, 20260714182720-shell-face-slice2-cd-gate-enumerable-children.md, 20260714182730-shell-face-slice3-mutation-verbs-per-kind.md, 20260714182740-shell-face-type-mount-and-describe-builtin.md, 20260714220213-resume-shell-face-slices-and-report.md]
 origin_pr: 41
@@ -11,18 +11,18 @@ created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
 last_seen: 2026-07-24T01:08:52+09:00
 severity: moderate
-status: active
-resolved_by_pr: 
+status: resolved
+resolved_by_pr: e3366bf
 resolved_by_commit: 
 ---
 
-# The interactive shell's `/local` reads from the cwd but writes to the filesystem root
+# The branch-safety scanner false-positives on Rust `Token::Variant`, hard-blocking `/ship`
 
 ## Description
 
-The REPL /local read mount (rooted at cwd) vs commit-side applier (rooted at /) mismatch is unfixed — a REPL cp/mv COMMIT still mis-targets and would write to the filesystem root as root; shell.rs/commit.rs were not touched on this branch
+The precision bug is in the workaholic plugin's secret-patterns.sh (a different repo) and cannot be fixed from qfs; unaddressed and still hard-blocks /ship on Rust Token::Variant tokens — this branch adds lexer Token:: usages in document.rs that may trip it
 
 ## How to Fix
 
-Unify the /local root between REPL reads and applier writes
+Fix the false-positive pattern in the workaholic plugin's secret-patterns.sh (ticket already filed in qmu/workaholic)
 

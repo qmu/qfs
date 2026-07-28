@@ -42,7 +42,7 @@ pub use dto::{PlanPreview, ResultMeta, RowSet};
 pub use error::{ErrorKind, ExecError, ExitCode};
 pub use exec::{
     apply_commit, apply_via, block_on_read, block_on_read_with, build_plan, execute_read,
-    execute_read_with, map_qfs_error, parse, plan_preview,
+    execute_read_with, map_qfs_error, parse, plan_preview, scan_targets, ScanTarget,
 };
 pub use output::{JsonRenderer, OutputFormat, Renderer, TableRenderer};
 // Re-export the engine's residual predicate filter so a read facet in the binary (which the

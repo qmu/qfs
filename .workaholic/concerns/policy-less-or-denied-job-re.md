@@ -10,7 +10,7 @@ created_at: 2026-07-12T11:45:00+09:00
 last_seen: 2026-07-24T01:08:52+09:00
 first_seen: 2026-07-12T11:45:00+09:00
 concern_id: policy-less-or-denied-job-re
-severity: low
+severity: moderate
 status: active
 resolved_by_pr: 
 resolved_by_commit: 
@@ -26,3 +26,8 @@ Sweeper denied/policy-less re-fire semantics remain as-is pending live operation
 
 Review and adjust sweeper re-fire semantics based on live operational experience
 
+
+## Re-grade (2026-07-25T11:42:07+09:00)
+
+- severity: low -> moderate
+- rationale: Enabling SELECT enforcement on the serve read path is a hard break in which every previously-passing policy-less read now denies. A scheduled job whose query is a pure read therefore becomes permanently denied after upgrade and re-fires on every sweep with no back-off, so this moves from a latent scheduler gap to a predictable post-upgrade failure mode.

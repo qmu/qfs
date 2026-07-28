@@ -107,6 +107,12 @@ pub struct CompiledRoute {
     pub params: Vec<String>,
     /// The endpoint name (for tracing + diagnostics).
     pub name: String,
+    /// The endpoint's bound POLICY **ref** (`EndpointDef::policy`) — the key the request-time gate
+    /// resolves against the live policy table. Carried on the route because the request path has
+    /// only the route: resolving by endpoint NAME instead would apply the wrong policy (or silently
+    /// none) whenever a policy is not named after its endpoint. `None` ⇒ no policy attached ⇒
+    /// default-deny.
+    pub policy: Option<String>,
 }
 
 /// A route-compile failure (registration time).
@@ -242,6 +248,7 @@ pub fn compile_endpoint(
         query,
         params,
         name: def.name.clone(),
+        policy: def.policy.clone(),
     })
 }
 
