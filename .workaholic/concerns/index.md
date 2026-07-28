@@ -19,6 +19,7 @@
 * [shared_connection and broker_connection homing is the same question, deferred](shared-connection-and-broker-connection-homing.md)
 * [Slack workspace-namespace still advertises Verb::Rm with no query grammar](slack-workspace-namespace-still-advertises-verb.md)
 * [`/sys` and `/slack` do not describe their roots, so `cd` there fails before the gate](sys-and-slack-do-not-describe.md)
+* [The §13.2 calibration table was mis-measured, and the first real conversion lands at the bar rather than under it](the-13-2-calibration-table-was.md)
 * [The cookbook ratchet only parses, so it cannot catch a fabricated column](the-cookbook-ratchet-only-parses-so.md)
 * [The dead Project-DB config tables await their drop migration](the-dead-project-db-config-tables.md)
 * [The statement bridge's read leg is ungated](the-statement-bridge-s-read-leg.md)

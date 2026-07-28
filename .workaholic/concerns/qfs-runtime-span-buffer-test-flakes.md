@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/32
 origin_branch: work-20260709-023822
 origin_commit: 22c61e4
 created_at: 2026-07-11T04:39:49+09:00
-last_seen: 2026-07-28T12:55:39+09:00
+last_seen: 2026-07-28T13:09:57+09:00
 first_seen: 2026-07-11T04:39:49+09:00
 concern_id: qfs-runtime-span-buffer-test-flakes
 severity: low
@@ -20,7 +20,7 @@ resolved_by_commit:
 
 ## Description
 
-No test-isolation work landed on the shared span buffer; the runtime crate is absent from this branch's diff (see [22c61e4](https://github.com/qmu/qfs/commit/22c61e4)).
+The runtime still holds process-global mutable trace state with no per-test isolation harness (see [22c61e4](https://github.com/qmu/qfs/commit/22c61e4)).
 
 ## How to Fix
 

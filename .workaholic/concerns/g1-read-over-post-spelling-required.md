@@ -10,7 +10,7 @@ origin_branch: work-20260722-084646
 origin_commit: f52592b
 created_at: 2026-07-24T00:40:59+09:00
 first_seen: 2026-07-24T00:40:59+09:00
-last_seen: 2026-07-28T12:55:39+09:00
+last_seen: 2026-07-28T13:09:57+09:00
 severity: moderate
 status: active
 resolved_by_pr: 
@@ -21,9 +21,9 @@ resolved_by_commit:
 
 ## Description
 
-The ask is a blueprint §13.1 rationale note; no docs change on this branch addressed it (see [f52592b](https://github.com/qmu/qfs/commit/f52592b)).
+The second half of this concern — that downstream rulings carry the same implementation-detail precision — was **actively contradicted** during this branch: G2, G4 and G5 all shipped here and none carried a shipped-note until the release pass added them (see [3ac4508](https://github.com/qmu/qfs/commit/3ac4508)). The drift recurred exactly as the concern warned.
 
 ## How to Fix
 
-Record the AST-churn rationale in the blueprint and give the process directive a trigger.
+Make the shipped-note part of the definition of done for any blueprint ruling a branch implements, rather than a release-pass cleanup.
 

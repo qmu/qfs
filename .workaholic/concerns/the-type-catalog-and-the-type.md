@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-28T12:55:39+09:00
+last_seen: 2026-07-28T13:09:57+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,7 +20,7 @@ resolved_by_commit:
 
 ## Description
 
-`type_catalog.rs` reads registry rows by kind while driver-type resolves types by reference name; the divergence stands as an unwritten encoding rule (see [7752cb3](https://github.com/qmu/qfs/commit/7752cb3)).
+The path-form vs reference-name divergence stands; `type_catalog.rs` is not in this branch's changed-file set (see [7752cb3](https://github.com/qmu/qfs/commit/7752cb3)).
 
 ## How to Fix
 

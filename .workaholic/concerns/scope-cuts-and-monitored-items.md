@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/33
 origin_branch: work-20260711-121525
 origin_commit: f1a3d21
 created_at: 2026-07-12T01:52:23+09:00
-last_seen: 2026-07-28T12:55:39+09:00
+last_seen: 2026-07-28T13:09:57+09:00
 first_seen: 2026-07-12T01:52:23+09:00
 concern_id: scope-cuts-and-monitored-items
 severity: low
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-Deliberate switch/PDF/stripper scope cuts with no recorded trigger condition (see [f1a3d21](https://github.com/qmu/qfs/commit/f1a3d21)).
+None of the deferred prerequisites landed here (see [f1a3d21](https://github.com/qmu/qfs/commit/f1a3d21)).
 
 ## How to Fix
 
-Record an explicit trigger for each cut so a fresh session can detect when it is due.
+Record an explicit trigger for each cut.
 

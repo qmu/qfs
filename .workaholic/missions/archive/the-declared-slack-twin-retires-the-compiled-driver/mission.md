@@ -107,6 +107,7 @@ retired.
 - 2026-07-26 — run recorded (+0.42h) — 20260726-184527
 - 2026-07-27 — mission carried into a-declared-write-resolves-a-name-the-way-a-query-does — mission.md
 - 2026-07-27 — story reported — work-20260724-011034.md
+- 2026-07-28 — concern deferred (stuck) — the-13-2-calibration-table-was.md
 ## Reflection
 
 ### 2026-07-25 run 20260725-101714

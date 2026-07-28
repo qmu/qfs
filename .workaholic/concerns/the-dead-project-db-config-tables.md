@@ -9,7 +9,7 @@ origin_branch: work-20260716-152000
 origin_commit: 974c72d
 created_at: 2026-07-16T16:14:56+09:00
 first_seen: 2026-07-16T16:14:56+09:00
-last_seen: 2026-07-28T12:55:39+09:00
+last_seen: 2026-07-28T13:09:57+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,7 +20,7 @@ resolved_by_commit:
 
 ## Description
 
-`path_binding` and `connection_consent` are still physically created in the Project DB schema; only `project_drop_active_account.sql` exists (see [974c72d](https://github.com/qmu/qfs/commit/974c72d)).
+Both dead tables are still in the schema with no drop migration (see [974c72d](https://github.com/qmu/qfs/commit/974c72d)).
 
 ## How to Fix
 

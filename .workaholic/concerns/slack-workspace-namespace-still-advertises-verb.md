@@ -9,7 +9,7 @@ origin_branch: work-20260713-233938
 origin_commit: 3dae249
 created_at: 2026-07-14T01:07:13+09:00
 first_seen: 2026-07-14T01:07:13+09:00
-last_seen: 2026-07-28T12:55:39+09:00
+last_seen: 2026-07-28T13:09:57+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-`SlackNode::Files` still lists `Verb::Rm` while the taught delete form is `Verb::Remove` on the single-file node (see [3dae249](https://github.com/qmu/qfs/commit/3dae249)).
+`driver-slack` has **zero diff** versus `origin/main`, so the Files namespace still advertises `Verb::Rm` with no grammar behind it, pinned by a test (see [3dae249](https://github.com/qmu/qfs/commit/3dae249)). The compiled driver was deliberately not deleted, so the advertisement survives the branch. This branch's lexer fix addresses a *different* advertisement lie.
 
 ## How to Fix
 
-Drop the namespace-level advertisement, or give it a grammar.
+Drop the namespace-level advertisement, or give it a grammar — ideally before the successor mission measures a twin against this surface.
 

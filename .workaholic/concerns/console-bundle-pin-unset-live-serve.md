@@ -5,7 +5,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/18
 origin_branch: work-20260704-181053
 origin_commit: 72c8950
 created_at: 2026-07-05T01:25:53+09:00
-last_seen: 2026-07-28T12:55:39+09:00
+last_seen: 2026-07-28T13:09:57+09:00
 first_seen: 2026-07-05T01:25:53+09:00
 concern_id: console-bundle-pin-unset-live-serve
 severity: low
@@ -19,7 +19,7 @@ mission:
 
 ## Description
 
-`PINNED_BUNDLE` remains a compile-time constant whose test still asserts `resolve_delivery` returns `Delivery::None` (see [72c8950](https://github.com/qmu/qfs/commit/72c8950)).
+`PINNED_BUNDLE` is still the empty coordinate, pinned by its own test (see [72c8950](https://github.com/qmu/qfs/commit/72c8950)).
 
 ## How to Fix
 

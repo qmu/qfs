@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/35
 origin_branch: work-20260712-032443
 origin_commit: c30fa0a
 created_at: 2026-07-12T11:45:00+09:00
-last_seen: 2026-07-28T12:55:39+09:00
+last_seen: 2026-07-28T13:09:57+09:00
 first_seen: 2026-07-12T11:45:00+09:00
 concern_id: policy-less-or-denied-job-re
 severity: moderate
@@ -20,7 +20,7 @@ resolved_by_commit:
 
 ## Description
 
-`sweeper.rs` still resolves a policy-less or dangling reference to a deny and records `CronOutcome::Denied` per firing with no suppression of the next sweep (see [c30fa0a](https://github.com/qmu/qfs/commit/c30fa0a)).
+No sweeper source file appears in this branch's 49-file diff (see [c30fa0a](https://github.com/qmu/qfs/commit/c30fa0a)).
 
 ## How to Fix
 

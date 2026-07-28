@@ -4,7 +4,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/11
 origin_branch: work-20260629-110121
 origin_commit: 3c6f995
 created_at: 2026-07-02T01:21:00+09:00
-last_seen: 2026-07-28T12:55:39+09:00
+last_seen: 2026-07-28T13:09:57+09:00
 first_seen: 2026-07-02T01:21:00+09:00
 concern_id: postgres-mysql-declarations-for-the-declared
 severity: low
@@ -18,7 +18,7 @@ mission: declared-drivers-are-the-normal-way-to-add-a-service
 
 ## Description
 
-No `postgres.qfs` or `mysql.qfs` exists among the shipped declarations, and driver-sql has no comment coverage (see [3c6f995](https://github.com/qmu/qfs/commit/3c6f995)).
+The re-homing blocker cleared, but one `sql.qfs` example exists and no per-engine Postgres/MySQL declaration (see [3c6f995](https://github.com/qmu/qfs/commit/3c6f995)). Now actionable rather than parked.
 
 ## How to Fix
 
