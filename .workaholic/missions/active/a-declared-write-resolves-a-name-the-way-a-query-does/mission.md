@@ -59,11 +59,32 @@ This mission is worth doing beyond Slack: the same reverse lookup is what the Dr
 entry #3) needs for its path→id parent walk, and what every future declared write that addresses
 something by a human-readable name will need.
 
+**Widened 2026-07-28 (developer ruling): the mission's property is that a declared write can express
+what the target API actually requires — name resolution is its headline case, not its whole extent.**
+A second instance of the same shape arrived from another repository via `/request`: the shipped
+`INSERT INTO /chatwork/rooms/{room}/messages` — declared in `chatwork.qfs` and taught by
+`docs/cookbook/chatwork.md` — **always fails with 400** against the live API. The declared map sends
+the row as a JSON body; that endpoint, like most plain-REST APIs of its generation, accepts only
+`application/x-www-form-urlencoded`, and `ENCODE` has no form codec (json, jsonl, yaml, toml, csv,
+md, multipart — no form).
+
+So a form-parameter REST API is today **readable but not writable** through a declaration. That is a
+direct counter-example to the blueprint §13 claim that such an API is expressible as declarative
+config, and it is the same failure as the Slack one at a different layer: the declared write cannot
+say something the wire demands. The mission's slug still names the headline case; the Goal above is
+the general property.
+
 ## Scope
 
-**Done when** a declared write can resolve a name against a collection using the query language, the
-five Slack CALL maps are effect-equivalent to the compiled ones on the shared fixtures, and the
-compiled `driver-slack` crate is deleted per the shared retirement steps.
+**Done when** a declared write can resolve a name against a collection using the query language, a
+declared write can produce a form-urlencoded body so a plain-REST API is writable and the shipped
+Chatwork INSERT actually commits, the five Slack CALL maps are effect-equivalent to the compiled ones
+on the shared fixtures, and the compiled `driver-slack` crate is deleted per the shared retirement
+steps.
+
+**The two axes are independent and can be driven in either order.** The form codec has no open design
+ruling blocking it — its shape is settled in its own ticket — so it is drivable now, while the name
+resolution waits on the spelling ruling below. Do not let the blocked axis hold the unblocked one.
 
 **The one open ruling, and it is what blocks `drive_authorized`.** How the reverse lookup is spelled
 is not yet decided. Three candidates were written out with real code on 2026-07-27:
@@ -94,7 +115,16 @@ declared write path walks a stored `Let` node.
 - **G7 blob-namespace ergonomics and G8 non-REST arms** — parked by §13.1.
 - **Live Slack verification.** Equivalence is proven on hermetic shared fixtures; this environment has
   a live-connected Slack workspace and no step here may post, upload, or probe it.
-- **Widening the declared write surface** beyond what name resolution requires.
+- **Widening the declared write surface** beyond what these two axes require. Name resolution and body
+  encoding are both "the declared write cannot say what the wire demands"; a third capability needs
+  its own evidence, not a ride on this mission.
+
+**Attended step, and it cannot be driven unattended.** The form-codec ticket's first Quality Gate item
+requires the Chatwork INSERT to commit **against the live API and appear in the room** — a write other
+people can see. Everything else in that ticket (the encoder unit tests, the `|> ENCODE form` parse
+test, the workspace gate) is hermetic and drivable; the live confirmation is the developer's attended
+call. Land the hermetic part, then hold that one item for an attended round rather than recording the
+ticket blocked.
 
 ## Experience
 
@@ -111,11 +141,17 @@ declared write path walks a stored `Let` node.
 - A declaration still cannot read outside its own driver's surface: whatever binds a lookup source is
   confined and re-checked the way a G4 fan-out target is, so the host-confinement guarantee at the
   head of every declaration file survives.
+- A declared write against a form-parameter REST API commits. Concretely, the `INSERT` printed in
+  `docs/cookbook/chatwork.md` succeeds and the message appears in the room — so the cookbook stops
+  teaching a statement that always answers 400.
+- What `ENCODE form` does with a nested or bytes field is stated, not implicit: an unencodable field
+  is refused with a structured error rather than silently flattened or dropped.
 
 ## Acceptance
 
 - [ ] The five typed CALL maps are effect-equivalent to the compiled CALLs on fixtures (#20260724014100-slack-call-maps-effect-equivalent.md)
 - [ ] driver-slack is deleted per the shared retirement steps with docs/skills regenerated and the plugin minor-bumped in all four fields (#20260724014200-retire-the-compiled-slack-driver.md)
+- [ ] A declared write can produce a form-urlencoded body, the shipped Chatwork INSERT commits against the live API, and the cookbook teaches the working statement (#20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md)
 
 ## Changelog
 
@@ -123,3 +159,4 @@ declared write path walks a stored `Let` node.
 - 2026-07-27 — reframed from the predecessor's inherited body: the wall is a reverse lookup, not per-row fan-out, and `let` already expresses it — the gap is that a map body parses as `inner_statement`, which excludes `let_binding` — mission.md
 - 2026-07-27 — strategy linked — integrations-are-declared-not-compiled
 - 2026-07-27 — `drive_authorized` deliberately left unset: the spelling ruling above is a genuine design fork and the three unverified spike questions must be answered before a ticket set can be written — mission.md
+- 2026-07-28 — ticket added - routed from the root queue by developer ruling 2026-07-28; the mission's Goal widened from name resolution to the general property that a declared write can express what the API requires — 20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md
