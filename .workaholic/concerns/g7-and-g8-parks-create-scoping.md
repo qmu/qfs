@@ -10,7 +10,7 @@ origin_branch: work-20260722-084646
 origin_commit: f52592b
 created_at: 2026-07-24T00:40:59+09:00
 first_seen: 2026-07-24T00:40:59+09:00
-last_seen: 2026-07-28T12:51:29+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 severity: moderate
 status: active
 resolved_by_pr: 
@@ -21,7 +21,7 @@ resolved_by_commit:
 
 ## Description
 
-G7 and G8 are still parks in the blueprint with no follow-up mission names and no trigger conditions, so a fresh session cannot detect their absence (see [f52592b](https://github.com/qmu/qfs/commit/f52592b)).
+G7 and G8 remain named parks with no follow-up mission names or trigger conditions (see [f52592b](https://github.com/qmu/qfs/commit/f52592b)).
 
 ## How to Fix
 

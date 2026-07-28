@@ -97,6 +97,8 @@ cannot expand, codec errors name post-decode columns, and `describe`'s pushdown 
 - 2026-07-25 — run recorded (+1.37h) — 20260725-101714
 - 2026-07-25 — story reported — work-20260724-011029.md
 
+- 2026-07-28 — concern deferred (stuck) — the-cookbook-ratchet-only-parses-so.md
+- 2026-07-28 — concern deferred (stuck) — select-on-an-unknown-column-is.md
 ## Reflection
 
 ### 2026-07-25 run 20260725-101714

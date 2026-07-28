@@ -9,7 +9,7 @@ origin_branch: work-20260716-152000
 origin_commit: 974c72d
 created_at: 2026-07-16T16:14:56+09:00
 first_seen: 2026-07-16T16:14:56+09:00
-last_seen: 2026-07-28T12:51:29+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,7 +20,7 @@ resolved_by_commit:
 
 ## Description
 
-Explicitly deferred to the Managed Team (M9) work, which has not returned (see [974c72d](https://github.com/qmu/qfs/commit/974c72d)).
+Both registries are still defined in the Project DB schema with no re-homing migration; M9 territory (see [974c72d](https://github.com/qmu/qfs/commit/974c72d)).
 
 ## How to Fix
 

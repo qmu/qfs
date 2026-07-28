@@ -10,7 +10,7 @@ origin_branch: work-20260722-084645
 origin_commit: 8bc902d
 created_at: 2026-07-24T00:48:25+09:00
 first_seen: 2026-07-24T00:48:25+09:00
-last_seen: 2026-07-28T12:51:29+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 severity: moderate
 status: active
 resolved_by_pr: 
@@ -21,7 +21,7 @@ resolved_by_commit:
 
 ## Description
 
-A standing process gap in how per-crate runs are scoped (see [8bc902d](https://github.com/qmu/qfs/commit/8bc902d)). This branch's own verification was a full `cargo test --workspace`, which is the mitigation the concern prescribes, but the underlying gap is untouched.
+Nothing here changes the test-runner topology or adds a golden-crate trigger to per-crate runs (see [8bc902d](https://github.com/qmu/qfs/commit/8bc902d)).
 
 ## How to Fix
 

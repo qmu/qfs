@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/33
 origin_branch: work-20260711-121525
 origin_commit: f1a3d21
 created_at: 2026-07-12T01:52:23+09:00
-last_seen: 2026-07-28T12:51:29+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 first_seen: 2026-07-12T01:52:23+09:00
 concern_id: declared-model-and-scheduling-follow-ups
 severity: low
@@ -20,7 +20,7 @@ resolved_by_commit:
 
 ## Description
 
-Live Chatwork-encoding verification, OAuth-app plumbing and Slack threading are all untouched (see [f1a3d21](https://github.com/qmu/qfs/commit/f1a3d21)).
+Live Chatwork-encoding verification, OAuth-app plumbing and Slack threading are untouched (see [f1a3d21](https://github.com/qmu/qfs/commit/f1a3d21)).
 
 ## How to Fix
 

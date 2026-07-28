@@ -10,7 +10,7 @@ origin_branch: work-20260722-084646
 origin_commit: f52592b
 created_at: 2026-07-24T00:40:59+09:00
 first_seen: 2026-07-24T00:40:59+09:00
-last_seen: 2026-07-28T12:51:29+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 severity: moderate
 status: active
 resolved_by_pr: 
@@ -21,9 +21,9 @@ resolved_by_commit:
 
 ## Description
 
-The blueprint text recording the pipe-stage refinement predates the concern and does not spell out the AST-churn rationale the fix asks for; the larger process half has no trigger condition (see [f52592b](https://github.com/qmu/qfs/commit/f52592b)).
+The ask is a blueprint §13.1 rationale note; no docs change on this branch addressed it (see [f52592b](https://github.com/qmu/qfs/commit/f52592b)).
 
 ## How to Fix
 
-Record the AST-churn rationale in the blueprint and give the process directive a trigger condition.
+Record the AST-churn rationale in the blueprint and give the process directive a trigger.
 

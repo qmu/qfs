@@ -10,7 +10,7 @@ origin_branch: work-20260719-101118
 origin_commit: 9241270
 created_at: 2026-07-24T01:02:01+09:00
 first_seen: 2026-07-24T01:02:01+09:00
-last_seen: 2026-07-28T12:51:29+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 severity: moderate
 status: active
 resolved_by_pr: 
@@ -21,7 +21,7 @@ resolved_by_commit:
 
 ## Description
 
-Blocked on host disk, which no code change on this branch clears; the container re-run is still owed (see [9241270](https://github.com/qmu/qfs/commit/9241270)).
+Resource contention, not code; nothing on this branch frees host disk or re-runs the container round (see [9241270](https://github.com/qmu/qfs/commit/9241270)).
 
 ## How to Fix
 

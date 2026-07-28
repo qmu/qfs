@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-28T12:51:29+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,7 +20,7 @@ resolved_by_commit:
 
 ## Description
 
-Bare `/slack` still errors in `SlackPath::parse` before any cd gate, and driver-sys describes only its named tables, not the root node (see [7752cb3](https://github.com/qmu/qfs/commit/7752cb3)).
+`node_for_path` strips a required `/sys/` prefix so a bare `/sys` yields `None`, and `SlackPath::parse` likewise rejects the bare root (see [7752cb3](https://github.com/qmu/qfs/commit/7752cb3)).
 
 ## How to Fix
 

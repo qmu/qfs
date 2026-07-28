@@ -13,8 +13,8 @@ first_seen: 2026-07-28T12:51:29+09:00
 last_seen: 2026-07-28T12:51:29+09:00
 severity: moderate
 status: active
-resolved_by_pr:
-resolved_by_commit:
+resolved_by_pr: 
+resolved_by_commit: 
 ---
 
 # The statement bridge's read leg is ungated
