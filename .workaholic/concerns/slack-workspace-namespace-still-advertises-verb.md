@@ -9,7 +9,7 @@ origin_branch: work-20260713-233938
 origin_commit: 3dae249
 created_at: 2026-07-14T01:07:13+09:00
 first_seen: 2026-07-14T01:07:13+09:00
-last_seen: 2026-07-24T01:08:52+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-The Slack Files namespace still advertises the grammar-less Verb::Rm; driver-slack was not touched on this branch
+`SlackNode::Files` still lists `Verb::Rm` while the taught delete form is `Verb::Remove` on the single-file node (see [3dae249](https://github.com/qmu/qfs/commit/3dae249)).
 
 ## How to Fix
 
-Add query grammar for the Slack Files Verb::Rm or stop advertising it
+Drop the namespace-level advertisement, or give it a grammar.
 

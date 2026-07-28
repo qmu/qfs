@@ -95,9 +95,11 @@ const MY_DRIVE_ROOT: &str = "root";
 /// Read a `/drive/...` folder listing into [`FileMeta`] rows: resolve the addressed folder to its
 /// Drive **file id** by walking parent pointers name-by-name, then list that folder's children.
 ///
-/// The pushed `predicate` narrows Drive's `q` search; the engine still re-applies the exact `WHERE`
-/// locally (over-fetch then filter, blueprint §7), so a lossy Drive term (`contains`) never returns wrong
-/// rows. Trashed files are excluded from a listing unless the predicate asks for them.
+/// The pushed `predicate` narrows Drive's `q` search; the rows come back as a **superset** of what
+/// the predicate selects, and the caller re-applies [`crate::query::unpushed_residual`] over them
+/// (over-fetch then filter, blueprint §7) so a lossy Drive term (`contains`) — or a predicate Drive
+/// cannot express at all, such as `id == '<x>'` — never returns wrong rows. Trashed files are
+/// excluded from a listing unless the predicate asks for them.
 ///
 /// # Errors
 /// [`DriveError`] when the path is not a `/drive` address, a path segment names no child, a Shared

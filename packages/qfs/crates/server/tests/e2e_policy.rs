@@ -758,8 +758,8 @@ fn scenario10_fixtures_boot_with_attached_policies() {
     let s = rt.snapshot();
     assert_eq!(
         s.policies.len(),
-        1,
-        "server_boot carries its leastpriv policy"
+        2,
+        "server_boot carries its leastpriv write policy and its publicread SELECT grant"
     );
     let leastpriv = s.policies.get("leastpriv").expect("leastpriv policy");
 
@@ -796,15 +796,20 @@ fn scenario10_fixtures_boot_with_attached_policies() {
     );
     let _ = policy; // the rehydrated policy mirrors the table entry (sanity-built above).
 
-    // watchtower.qfs boots with its two policies and three triggers (each carrying a grant).
+    // watchtower.qfs boots with its three policies and three triggers (each carrying a grant).
     let mut rt2 = Runtime::new();
     rt2.boot(&fixture("watchtower.qfs"))
         .expect("watchtower.qfs boots");
     let w = rt2.snapshot();
     assert_eq!(
         w.policies.len(),
-        2,
-        "watchtower carries watch_insert + server_admin"
+        3,
+        "watchtower carries watch_insert + server_admin + the publicread read grant"
+    );
+    assert_eq!(
+        w.endpoints.get("recent").unwrap().policy.as_deref(),
+        Some("publicread"),
+        "the read-only ENDPOINT carries its SELECT grant — default-deny gates reads too"
     );
     assert_eq!(
         w.triggers.len(),

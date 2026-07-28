@@ -355,6 +355,14 @@ impl ReadDriver for MountReadDriver {
     async fn scan(&self, scan: &ScanNode, ctx: &RequestContext) -> Result<RowBatch, CfsError> {
         self.inner.scan(&self.remap.scan_in(scan), ctx).await
     }
+
+    /// Delegate the pushed-`WHERE` declaration inward: the remap rewrites paths, not predicates, so
+    /// the wrapped facet's enforcement (or lack of it) is what the executor must honor. Answering
+    /// for it here would either double-filter a projection-narrowing facet's rows or silently trust
+    /// one that enforces nothing.
+    fn honors_pushed_filter(&self) -> bool {
+        self.inner.honors_pushed_filter()
+    }
 }
 
 /// An [`ApplyDriver`] re-mounted under a custom segment: rewrites every effect's target and

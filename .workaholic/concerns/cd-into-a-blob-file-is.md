@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-24T01:08:52+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-driver-local's pure describe still answers BlobNamespace for every path; the branch did not touch driver-local
+driver-local's describe ignores its path argument entirely and returns `BlobNamespace` for every path, so no describe-time gate refuses a `cd` into a blob file (see [7752cb3](https://github.com/qmu/qfs/commit/7752cb3)).
 
 ## How to Fix
 
-Add a describe-time gate to refuse namespace=BlobNamespace at cd time
+Refuse `namespace=BlobNamespace` at `cd` time in describe.
 

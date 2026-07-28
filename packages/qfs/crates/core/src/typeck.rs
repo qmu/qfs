@@ -134,9 +134,19 @@ pub fn check_expr(
         Expr::Lit(lit) => Ok(Ty::Prim(literal_type(lit))),
         // A bare identifier is a lambda parameter (env), a `true`/`false`/`null` literal word
         // the lexer surfaces lowercase as an identifier, or a column resolved against the
-        // schema. An unresolved column stays late-bound (`Unknown`) rather than erroring here
-        // — projection is where an unknown column is a hard error (t05); a `WHERE` over an
-        // undescribable column degrades to late-bound, preserving the pre-t75 leniency.
+        // schema. An unresolved column stays late-bound (`Unknown`) rather than erroring here: a
+        // `WHERE` over an undescribable column degrades to late-bound, preserving the pre-t75
+        // leniency.
+        //
+        // **Where the hard refusal actually lives (corrected 2026-07-25, ticket 20260717180100).**
+        // This comment used to justify the leniency by pointing at projection — "an unknown column
+        // is a hard error there (t05)". Measured, it is not: the executed read path's `project`
+        // DROPS unknown columns silently (`qfs-engine`'s `eval::project`), so `|> select nosuchcol`
+        // returns rows with an empty schema at exit 0. The refusal that does fire is the ENGINE's
+        // `where` check (`eval::filter_checked`), which runs against the rows a driver actually
+        // delivered — the only schema that is certainly the relation's, where THIS fold sees only
+        // the driver root and must stay lenient. Whether projection should refuse too is an open,
+        // separate decision; the leniency here no longer rests on a claim about it.
         Expr::Col(name) => {
             if let Some(ty) = env.get(name) {
                 return Ok(ty.clone());

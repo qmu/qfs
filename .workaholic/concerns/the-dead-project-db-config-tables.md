@@ -9,7 +9,7 @@ origin_branch: work-20260716-152000
 origin_commit: 974c72d
 created_at: 2026-07-16T16:14:56+09:00
 first_seen: 2026-07-16T16:14:56+09:00
-last_seen: 2026-07-24T01:08:52+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-`path_binding` and `connection_consent` remain physically present (but dead) in the Project DB after [ada28be](https://github.com/qmu/qfs/commit/ada28be) — deliberately: the drop is a later Project-DB migration that must not be able to run before a release containing the boot copy has shipped (data-safety sequencing, not a compatibility period)
+`path_binding` and `connection_consent` are still physically created in the Project DB schema; only `project_drop_active_account.sql` exists (see [974c72d](https://github.com/qmu/qfs/commit/974c72d)).
 
 ## How to Fix
 
-After this release ships and the operator's live box has booted the copy, file the Project-DB migration that drops both dead tables
+File the drop migration once a release containing the boot copy has booted live.
 

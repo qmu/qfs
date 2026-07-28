@@ -7,7 +7,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/32
 origin_branch: work-20260709-023822
 origin_commit: 22c61e4
 created_at: 2026-07-11T04:39:49+09:00
-last_seen: 2026-07-24T01:08:52+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 first_seen: 2026-07-11T04:39:49+09:00
 concern_id: qfs-runtime-span-buffer-test-flakes
 severity: low
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-The qfs-runtime shared-span-buffer test-isolation flake is unaddressed; the runtime crate was not modified on this branch
+No test-isolation work landed on the shared span buffer; the runtime crate is absent from this branch's diff (see [22c61e4](https://github.com/qmu/qfs/commit/22c61e4)).
 
 ## How to Fix
 
-Add test isolation for the shared span buffer to prevent flakes in parallel test runs
+Isolate the span buffer per test.
 

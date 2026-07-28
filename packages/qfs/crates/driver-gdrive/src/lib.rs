@@ -31,6 +31,12 @@
 //! cheap **pre-filter** and the exact predicate is **kept as the local residual** so the engine
 //! re-applies exact filtering — over-fetch then filter, never wrong rows (blueprint §7).
 //!
+//! The residual is only truthful if somebody applies it: [`read_rows`] narrows through the Drive
+//! `q` and returns the fetched rows, so the **read facet** re-applies
+//! [`query::unpushed_residual`] over them. Until that was wired, `read_rows` computed the residual
+//! and dropped it, and a `/drive/<folder> |> where id == '<absent>'` answered with the complete
+//! unfiltered listing at exit 0.
+//!
 //! ## Trash, not delete (blueprint §8)
 //! `REMOVE` defaults to **trash** (recoverable). A permanent, irreversible delete requires an
 //! explicit `hard_delete` flag column on the effect; both legs are flagged irreversible so the

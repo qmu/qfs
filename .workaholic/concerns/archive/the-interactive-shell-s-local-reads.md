@@ -12,8 +12,8 @@ first_seen: 2026-07-15T16:35:34+09:00
 last_seen: 2026-07-24T01:08:52+09:00
 severity: moderate
 status: resolved
-resolved_by_pr: 731fbc3
-resolved_by_commit: 
+resolved_by_pr: 11
+resolved_by_commit: 731fbc3
 ---
 
 # The interactive shell's `/local` reads from the cwd but writes to the filesystem root

@@ -120,7 +120,83 @@ fn regex_lite(s: &str, p: &str) -> bool {
     }
 }
 
-/// Filter a batch by a predicate.
+/// A column a stage named that the relation does not carry — the structured refusal that replaces
+/// "resolve to `None`, so the row does not match" for a **described** schema.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct MissingColumn {
+    /// The column the query named.
+    pub name: Name,
+    /// The columns the relation actually carries, in order.
+    pub available: Vec<Name>,
+}
+
+/// Refuse a predicate that names a column absent from a **described** schema.
+///
+/// `resolve` maps two different situations onto the same `None` — *this column is not in the
+/// schema* and *this value is null / this dotted path is unnavigable* — and `eval_predicate` turns
+/// both into "the row does not match". For the second that is right (a total predicate); for the
+/// first it made a typo indistinguishable from an honest empty result, at exit 0.
+///
+/// Only the **head** of each column reference is checked, and only against a NON-EMPTY schema:
+///
+/// - a dotted path (`meta.title`) navigates a `Json`/`Struct` value whose inner fields are
+///   late-bound by design, so only `meta` has to exist;
+/// - an EMPTY schema means the relation is undescribable (a driver that does not describe its
+///   columns, or a relation whose shape is only known after a codec), and late-binding stays —
+///   refusing there would false-reject a column that really is present at runtime.
+///
+/// `also_accepted` widens the described schema with names the SOURCE understands even though no
+/// row carries them: a backend **search pseudo-column** (Drive's `fullText`, Gmail's `label`) is a
+/// legitimate thing to filter on, so a facet passes its own list and the rest still refuses.
+pub(crate) fn check_predicate_columns(
+    schema: &Schema,
+    p: &Predicate,
+    also_accepted: &[&str],
+) -> Result<(), MissingColumn> {
+    if schema.columns.is_empty() {
+        return Ok(());
+    }
+    let mut refs: Vec<&ColRef> = Vec::new();
+    collect_col_refs(p, &mut refs);
+    for col in refs {
+        let Some(head) = col.path.first() else {
+            continue;
+        };
+        if schema.column(head).is_none() && !also_accepted.contains(&head.as_str()) {
+            let mut available = schema.column_names();
+            available.extend(also_accepted.iter().map(|n| (*n).to_string()));
+            return Err(MissingColumn {
+                name: head.clone(),
+                available,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Every column reference a predicate resolves, in evaluation order — `Cmp`, `In`, `Between` and
+/// `Like` alike, through the whole boolean structure. All four take the same `resolve` path, so all
+/// four are checked (a `NOT`/`OR` arm hides a typo just as well as a bare comparison).
+fn collect_col_refs<'p>(p: &'p Predicate, out: &mut Vec<&'p ColRef>) {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            collect_col_refs(a, out);
+            collect_col_refs(b, out);
+        }
+        Predicate::Not(inner) => collect_col_refs(inner, out),
+        Predicate::Cmp(col, _, _)
+        | Predicate::In(col, _)
+        | Predicate::Between(col, _, _)
+        | Predicate::Like(col, _) => out.push(col),
+    }
+}
+
+/// Filter a batch by a predicate. Total: an unresolvable comparison drops the row.
+///
+/// This is the **driver-residual** form — the predicate a driver reports it could not express
+/// exactly. Such a residual may legitimately name a backend **search pseudo-column** the described
+/// schema does not carry (Drive's `fullText`, Gmail's `to`), so it is evaluated, never refused.
+/// The caller-written `WHERE` goes through [`filter_checked`].
 #[must_use]
 pub(crate) fn filter(batch: RowBatch, p: &Predicate) -> RowBatch {
     let schema = batch.schema.clone();
@@ -130,6 +206,16 @@ pub(crate) fn filter(batch: RowBatch, p: &Predicate) -> RowBatch {
         .filter(|r| eval_predicate(p, &schema, r))
         .collect();
     RowBatch::new(schema, rows)
+}
+
+/// [`filter`] for a **caller-written `WHERE`**: refuse an unknown column against a described
+/// schema instead of answering the empty relation a typo would otherwise produce.
+///
+/// # Errors
+/// [`MissingColumn`] when the predicate names a column the (non-empty) schema does not carry.
+pub(crate) fn filter_checked(batch: RowBatch, p: &Predicate) -> Result<RowBatch, MissingColumn> {
+    check_predicate_columns(&batch.schema, p, &[])?;
+    Ok(filter(batch, p))
 }
 
 /// Project a batch to a column list (`*`/empty is identity). Unknown columns are dropped.
@@ -473,16 +559,63 @@ fn fold_extreme(vals: &[&Value], want: Ordering) -> Value {
     best.cloned().unwrap_or(Value::Null)
 }
 
+/// What `EXPAND` refuses (ticket 20260717180200): the two errors [`Schema::expand`] has always
+/// documented and the executed path used to swallow — one discarded by `unwrap_or`, the other
+/// short-circuited before the check ever ran.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ExpandError {
+    /// The named column is not in the (described) schema.
+    Unknown(MissingColumn),
+    /// The column is present but is not a collection — a scalar or a `Json` blob.
+    NotExpandable {
+        /// The column `EXPAND` named.
+        field: Name,
+        /// Its declared type, rendered.
+        ty: String,
+    },
+}
+
 /// `EXPAND <field>` — explode a nested collection column into rows (blueprint §4). An `Array`
 /// of structs flattens each element's fields; an `Array` of scalars yields one row per
-/// element; a `Struct` flattens one level. Non-collection fields pass the row through.
-#[must_use]
-pub(crate) fn expand(batch: RowBatch, field: &Name) -> RowBatch {
+/// element; a `Struct` flattens one level.
+///
+/// **A column it cannot explode is refused, not passed through.** Before, an absent column returned
+/// the batch unchanged, and a `Json`/scalar column had [`Schema::expand`]'s `NotExpandable`
+/// discarded by an `unwrap_or` — so the stage produced output byte-identical to its input at exit 0
+/// and the caller could not tell it had done nothing.
+///
+/// The one late-bound case that still passes through is a column typed `Unknown`: that means "not
+/// known yet" (an `EXTEND`-computed column, an aggregate output, a relation whose shape only
+/// resolves at runtime), not "known to be a scalar", so refusing it would reject a value that
+/// really is an array in the rows. An EMPTY schema — an undescribable relation — is the same case
+/// and is likewise never refused.
+///
+/// # Errors
+/// [`ExpandError`] for an absent column or a non-collection one.
+pub(crate) fn expand(batch: RowBatch, field: &Name) -> Result<RowBatch, ExpandError> {
+    // An undescribable relation stays late-bound: nothing here is known to be wrong.
+    if batch.schema.columns.is_empty() {
+        return Ok(batch);
+    }
     let Some(idx) = batch.schema.columns.iter().position(|c| &c.name == field) else {
-        return batch;
+        return Err(ExpandError::Unknown(MissingColumn {
+            name: field.clone(),
+            available: batch.schema.column_names(),
+        }));
     };
-    // Output schema: replace the field column per the type model's `expand`.
-    let schema = batch.schema.expand(field).unwrap_or(batch.schema.clone());
+    // Output schema: replace the field column per the type model's `expand`. A late-bound
+    // (`Unknown`) column keeps the schema as-is; anything else propagates `NotExpandable`.
+    let schema = if matches!(batch.schema.columns[idx].ty, ColumnType::Unknown) {
+        batch.schema.clone()
+    } else {
+        batch
+            .schema
+            .expand(field)
+            .map_err(|_| ExpandError::NotExpandable {
+                field: field.clone(),
+                ty: render_type(&batch.schema.columns[idx].ty),
+            })?
+    };
     let mut out_rows = Vec::new();
     for row in batch.rows {
         let target = row.values.get(idx).cloned().unwrap_or(Value::Null);
@@ -495,11 +628,23 @@ pub(crate) fn expand(batch: RowBatch, field: &Name) -> RowBatch {
             Value::Struct(fields) => {
                 out_rows.push(splice_row(&row, idx, fields.into_values()));
             }
-            // A scalar/Null field is not expandable: keep the row unchanged.
+            // A Null / late-bound value in an expandable column: keep the row unchanged. (A
+            // genuinely non-collection COLUMN was refused above, against the schema.)
             other => out_rows.push(splice_row(&row, idx, vec![other])),
         }
     }
-    RowBatch::new(schema, out_rows)
+    Ok(RowBatch::new(schema, out_rows))
+}
+
+/// A short, stable rendering of a column type for a refusal message (`json`, `text`, `array`, …).
+fn render_type(ty: &ColumnType) -> String {
+    match ty {
+        ColumnType::Array(_) => "an array".to_string(),
+        ColumnType::Struct(_) => "a struct".to_string(),
+        ColumnType::Json => "a json value".to_string(),
+        ColumnType::Unknown => "late-bound".to_string(),
+        other => format!("a scalar ({other:?})").to_lowercase(),
+    }
 }
 
 /// Flatten one expanded element into the row's replacement values.

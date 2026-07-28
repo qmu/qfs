@@ -4,7 +4,7 @@ origin_pr_url: https://github.com/qmu/qfs/pull/11
 origin_branch: work-20260629-110121
 origin_commit: 3c6f995
 created_at: 2026-07-02T01:21:00+09:00
-last_seen: 2026-07-24T01:08:52+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 first_seen: 2026-07-02T01:21:00+09:00
 concern_id: local-write-materialization-is-narrow
 severity: low
@@ -18,9 +18,9 @@ mission:
 
 ## Description
 
-Multi-column /local payloads without a named blob column still error (intentional narrow fallback); commit/effect content-blob threading not touched here
+driver-local's applier still materializes a single blob under `CONTENT_COL`; this branch changed only the read path (see [3c6f995](https://github.com/qmu/qfs/commit/3c6f995)).
 
 ## How to Fix
 
-Extend /local write materialization to support multi-column payloads without explicit blob columns
+Widen the local write surface to carry a multi-column payload.
 

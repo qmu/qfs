@@ -239,8 +239,12 @@ content
   name: alpha
 ```
 
-Codecs are final stages — a relational stage after a codec is an error, because once you've encoded
-to bytes there are no columns left to query.
+Codecs are normally the last stages of a pipeline. A codec's output schema is **not known at plan
+time** — a `decode` produces whatever columns the bytes turn out to carry — so a relational stage
+written after one is *not* rejected up front: it is checked at run time against the columns the
+decode actually produced. So `… |> decode json |> where k == 1` works, and
+`… |> decode json |> where nosuchcol == 1` fails at run time naming the real post-decode columns,
+never the pre-decode blob columns.
 
 ## 6. Administration is paths too (`/sys`)
 

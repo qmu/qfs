@@ -85,6 +85,27 @@ pub enum EngineError {
         /// Which column violated the membership (missing or undeclared).
         column: String,
     },
+    /// A stage named a column the relation does not carry, checked against a **described**
+    /// (non-empty) schema. Refusing is the point: an unresolvable column used to make every row
+    /// fail the predicate, so a typo and an honest "nothing matched" were the same empty relation
+    /// at exit 0. An undescribable (empty) schema stays late-bound and is never refused here.
+    UnknownColumn {
+        /// The stage that named it (`where`, `expand`) — so the message points at the pipe op.
+        stage: &'static str,
+        /// The column the query named.
+        name: String,
+        /// The columns the relation actually carries, in order.
+        available: Vec<String>,
+    },
+    /// `EXPAND` was handed a column that is not a collection (a scalar or a `Json` blob). Only an
+    /// `Array` or a `Struct` has anything to explode; anything else used to pass the rows through
+    /// unchanged, so the stage silently meant nothing.
+    NotExpandable {
+        /// The column `EXPAND` named.
+        field: String,
+        /// Its declared type, rendered.
+        ty: String,
+    },
 }
 
 impl EngineError {
@@ -97,6 +118,17 @@ impl EngineError {
             EngineError::TransformNoExecutor { .. } => "transform_no_executor",
             EngineError::TransformFailed { .. } => "transform_failed",
             EngineError::TransformOutputMismatch { .. } => "transform_output_mismatch",
+            EngineError::UnknownColumn { .. } => "unknown_column",
+            EngineError::NotExpandable { .. } => "not_expandable",
+        }
+    }
+
+    /// The refusal for a stage that named a column the relation does not carry.
+    pub(crate) fn unknown_column(stage: &'static str, missing: crate::eval::MissingColumn) -> Self {
+        EngineError::UnknownColumn {
+            stage,
+            name: missing.name,
+            available: missing.available,
         }
     }
 }
@@ -122,6 +154,20 @@ impl std::fmt::Display for EngineError {
                 f,
                 "transform '{name}' returned rows violating its declared OUTPUT schema \
                  at column '{column}'"
+            ),
+            EngineError::UnknownColumn {
+                stage,
+                name,
+                available,
+            } => write!(
+                f,
+                "`{stage}` names column '{name}', which this relation does not carry; \
+                 available: [{}]",
+                available.join(", ")
+            ),
+            EngineError::NotExpandable { field, ty } => write!(
+                f,
+                "`expand` cannot explode column '{field}': it is {ty}, not an array or a struct"
             ),
         }
     }
@@ -207,7 +253,11 @@ fn eval_combine(
 ) -> Result<RowBatch, EngineError> {
     match op {
         // Unary ops: one input.
-        CombineOp::Filter(p) => Ok(eval::filter(unary(inputs, cursor, transform)?, p)),
+        // The caller-written residual `WHERE`: an unknown column is REFUSED here (against the rows
+        // the driver actually delivered — the only schema that is certainly the relation's), not
+        // turned into an empty result.
+        CombineOp::Filter(p) => eval::filter_checked(unary(inputs, cursor, transform)?, p)
+            .map_err(|missing| EngineError::unknown_column("where", missing)),
         CombineOp::Project(cols) => Ok(eval::project(unary(inputs, cursor, transform)?, cols)),
         CombineOp::ProjectExpr(terms) => {
             Ok(eval::project_expr(unary(inputs, cursor, transform)?, terms))
@@ -224,7 +274,18 @@ fn eval_combine(
             group_by,
             aggregates,
         )),
-        CombineOp::Expand(field) => Ok(eval::expand(unary(inputs, cursor, transform)?, field)),
+        // `EXPAND` refuses what it cannot explode (ticket 20260717180200): an absent column, or a
+        // scalar/`Json` one. It used to return the input unchanged at exit 0 in both cases.
+        CombineOp::Expand(field) => {
+            eval::expand(unary(inputs, cursor, transform)?, field).map_err(|e| match e {
+                eval::ExpandError::Unknown(missing) => {
+                    EngineError::unknown_column("expand", missing)
+                }
+                eval::ExpandError::NotExpandable { field, ty } => {
+                    EngineError::NotExpandable { field, ty }
+                }
+            })
+        }
         // Binary ops: two inputs.
         CombineOp::HashJoin(on) => {
             let (l, r) = binary(inputs, cursor, "HashJoin", transform)?;

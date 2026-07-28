@@ -9,8 +9,8 @@ first_seen: 2026-07-02T01:21:00+09:00
 concern_id: cf-live-203090-unimplemented-cf-and
 severity: low
 status: resolved
-resolved_by_pr: 0277d9f
-resolved_by_commit: 
+resolved_by_pr: 17
+resolved_by_commit: ff2085d
 mission: declared-drivers-are-the-normal-way-to-add-a-service
 ---
 

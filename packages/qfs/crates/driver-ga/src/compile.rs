@@ -241,7 +241,7 @@ pub const DATE_COL: &str = "date";
 ///
 /// # Errors
 /// - [`GaError::EmptyProjection`] if no dimension/metric is projected.
-/// - [`GaError::UnknownField`] if a projected/ordered name is not in the catalog.
+/// - [`GaError::UnknownField`] if a projected/ordered/filtered name is not in the catalog.
 /// - [`GaError::MissingDateRange`] if a **core** report carries no `date` predicate (a realtime
 ///   report needs none — it is the last ~30 minutes).
 pub fn compile(
@@ -267,6 +267,25 @@ pub fn compile(
                 name: name.clone(),
                 reason: "not a dimension or metric in the property catalog",
             });
+        }
+    }
+
+    // Validate the WHERE against the catalog, for the same reason the projection above and the
+    // ORDER BY below are validated: an unknown name there is a structured error, so it must not be
+    // silent here. Before this check a `WHERE nosuchdim = 'x'` fell through into the RESIDUAL, the
+    // engine evaluated it over rows that carry no such column, every row failed, and the report
+    // answered `rows: []` at exit 0 — a typo and an empty report were the same answer (ticket
+    // 20260717180100). `date` is the report's own window coordinate, not a catalog field.
+    if let Some(p) = &spec.predicate {
+        let mut named = Vec::new();
+        predicate_fields(p, &mut named);
+        for name in named {
+            if name != DATE_COL && !catalog.is_dimension(&name) && !catalog.is_metric(&name) {
+                return Err(GaError::UnknownField {
+                    name,
+                    reason: "not a dimension or metric in the property catalog (WHERE)",
+                });
+            }
         }
     }
 
@@ -512,6 +531,30 @@ fn field_of(col: &ColRef) -> Option<&str> {
     match col.path.as_slice() {
         [one] => Some(one.as_str()),
         _ => None,
+    }
+}
+
+/// The **top-level** field names a `WHERE` reads (deduped, in encounter order) — every column
+/// reference through the whole boolean structure, so a name hidden inside an `OR`/`NOT` arm is
+/// validated too. A dotted path contributes only its head (what it indexes into is late-bound).
+fn predicate_fields(p: &Predicate, out: &mut Vec<String>) {
+    match p {
+        Predicate::Cmp(col, _, _)
+        | Predicate::In(col, _)
+        | Predicate::Between(col, _, _)
+        | Predicate::Like(col, _) => {
+            if let Some(head) = col.path.first() {
+                let name = head.as_str().to_string();
+                if !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+        }
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            predicate_fields(a, out);
+            predicate_fields(b, out);
+        }
+        Predicate::Not(inner) => predicate_fields(inner, out),
     }
 }
 

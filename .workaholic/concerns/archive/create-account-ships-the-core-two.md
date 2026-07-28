@@ -10,8 +10,8 @@ first_seen: 2026-07-06T00:00:00+09:00
 concern_id: create-account-ships-the-core-two
 severity: low
 status: resolved
-resolved_by_pr: 845f2eb
-resolved_by_commit: 
+resolved_by_pr: 17
+resolved_by_commit: 845f2eb
 mission: declared-drivers-are-the-normal-way-to-add-a-service
 ---
 

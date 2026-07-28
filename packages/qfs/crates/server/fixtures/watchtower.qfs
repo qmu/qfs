@@ -12,6 +12,10 @@
 CREATE POLICY watch_insert ALLOW INSERT;
 CREATE POLICY server_admin ALLOW INSERT,UPSERT;
 
+# A read grant. Default-deny is the law for READS too, so a served ENDPOINT needs its own SELECT
+# grant — this one is unscoped (`FOR anyone`), the public-read shape.
+CREATE POLICY publicread ALLOW SELECT;
+
 # A notify TRIGGER whose DO body INSERTs into /log. It attaches watch_insert, so its fired plan
 # is allowed under least privilege.
 CREATE TRIGGER notify ON inbox DO INSERT INTO /log VALUES ('fired') POLICY watch_insert;
@@ -24,5 +28,7 @@ CREATE TRIGGER reconfigure ON ctl DO UPSERT INTO /server/jobs VALUES (name, ever
 # A WHERE-guarded TRIGGER (t34 predicate) that also INSERTs, attaching watch_insert.
 CREATE TRIGGER guarded ON inbox DO INSERT INTO /log VALUES ('guarded') WHERE priority > 5 POLICY watch_insert;
 
-# A read-only ENDPOINT — a pure READ produces no commit plan, so it needs no POLICY.
-CREATE ENDPOINT recent ON 'GET /recent' AS /mail/inbox |> LIMIT 5;
+# A read-only ENDPOINT. A pure READ produces no commit plan, but the read path has its own gate:
+# the served SELECT is evaluated against this attached POLICY under the request's resolved
+# principal, so the endpoint attaches `publicread` or it serves nothing.
+CREATE ENDPOINT recent ON 'GET /recent' POLICY publicread AS /mail/inbox |> LIMIT 5;

@@ -101,6 +101,20 @@ pub async fn execute_read_with(
             .scan(scan, ctx)
             .await
             .map_err(|e| ExecError::from_qfs(&e))?;
+        // 2b. Enforce the pushed `WHERE` over what the facet returned. The pushed predicate is a
+        //     narrowing HINT the driver may honor natively, partially, or not at all — it is never
+        //     a delegation of correctness. Re-applying it here is idempotent where the backend
+        //     already narrowed, and it is what makes "a predicate is honored or refused, never
+        //     dropped" structural: a facet that ignores it over-returns instead of answering the
+        //     unfiltered relation at exit 0. Skipped only for the facets that declare they enforce
+        //     it themselves (`honors_pushed_filter` — those that narrow to a pushed projection or
+        //     accept backend search pseudo-columns, and apply their own truthful residual).
+        let batch = match &scan.pushed.filter {
+            Some(predicate) if !driver.honors_pushed_filter() => {
+                qfs_engine::apply_where(batch, predicate).map_err(map_engine_error)?
+            }
+            _ => batch,
+        };
         batches.push(batch);
     }
 
@@ -124,6 +138,50 @@ pub async fn execute_read_with(
     Ok(RowSet::from_batch(out))
 }
 
+/// One read target the read path will scan: the source/driver id plus the addressed VFS path the
+/// `FROM` named. Owned and vendor-free — a plain description of *what would be read*, carrying no
+/// predicate values, no rows, and no credentials.
+///
+/// This exists because a pure read has **no effect plan** to read coordinates off (`build_plan`
+/// returns [`Plan::pure`] for a `SELECT`). The serve seam needs the read's subjects BEFORE any scan
+/// runs so its policy gate can adjudicate them; [`scan_targets`] derives them from the very same
+/// physical plan [`execute_read`] executes, so the gate can never adjudicate a different set of
+/// paths than the one the driver is then asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanTarget {
+    /// The source/driver id that would execute the scan (`mock`, `mail`, `sql`).
+    pub source: String,
+    /// The full addressed VFS path the scan reads. Empty for a synthetic source (`(values)`).
+    pub path: String,
+}
+
+/// The [`ScanTarget`]s the read path would scan for `stmt` — planning only, **no I/O and no scan**.
+///
+/// Mirrors [`execute_read_with`]'s planning steps exactly (strip the codec tail, then `plan_query`
+/// through the live mounts) and collects the resulting physical plan's scan leaves. Because it
+/// shares those steps rather than re-deriving them, the targets are the authoritative answer to
+/// "which paths is this statement about to read".
+///
+/// # Errors
+/// [`ExecError`] if resolution / planning fails — the same error `execute_read` would raise for the
+/// same statement.
+pub fn scan_targets(
+    stmt: &Statement,
+    mounts: &MountRegistry,
+) -> Result<Vec<ScanTarget>, ExecError> {
+    let plan_owned = crate::codec::stmt_without_codec_tail(stmt);
+    let plan_stmt: &Statement = plan_owned.as_ref().unwrap_or(stmt);
+    let physical = plan_query(plan_stmt, mounts).map_err(map_pushdown_error)?;
+    Ok(physical
+        .scans()
+        .into_iter()
+        .map(|scan| ScanTarget {
+            source: scan.source.as_str().to_string(),
+            path: scan.path.clone(),
+        })
+        .collect())
+}
+
 /// The plan id for a pushdown [`SourceId`] string — the executor keys the [`ReadRegistry`] on
 /// the same owned [`DriverId`] the planner tagged each scan with.
 fn id_of(source: &str) -> qfs_core::DriverId {
@@ -140,6 +198,10 @@ fn map_engine_error(err: qfs_engine::EngineError) -> ExecError {
         EngineError::TransformNoExecutor { .. }
         | EngineError::TransformFailed { .. }
         | EngineError::TransformOutputMismatch { .. } => ErrorKind::CommitFailed,
+        // A stage naming a column the relation does not carry, or asking `expand` to explode a
+        // scalar/`Json`, is a malformed QUERY — the author fixes it, so it is a usage-class
+        // refusal (exit 2), distinguishable from the empty relation an honest miss returns.
+        EngineError::UnknownColumn { .. } | EngineError::NotExpandable { .. } => ErrorKind::Usage,
         _ => ErrorKind::Internal,
     };
     ExecError::new(kind, err.code(), err.to_string())

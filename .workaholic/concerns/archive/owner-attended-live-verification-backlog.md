@@ -11,10 +11,11 @@ created_at: 2026-07-16T21:18:59+09:00
 first_seen: 2026-07-05T01:25:53+09:00
 last_seen: 2026-07-24T01:08:52+09:00
 severity: moderate
-status: active
+status: superseded
 compound: true
 resolved_by_pr: 
 resolved_by_commit: 
+superseded_by: one-coarse-api-policy-row-for
 ---
 
 # Owner-attended live verification backlog

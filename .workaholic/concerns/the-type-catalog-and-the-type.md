@@ -9,7 +9,7 @@ origin_branch: work-20260714-111817
 origin_commit: 7752cb3
 created_at: 2026-07-15T16:35:34+09:00
 first_seen: 2026-07-15T16:35:34+09:00
-last_seen: 2026-07-24T01:08:52+09:00
+last_seen: 2026-07-28T12:55:39+09:00
 severity: low
 status: active
 resolved_by_pr: 
@@ -20,9 +20,9 @@ resolved_by_commit:
 
 ## Description
 
-The path-form vs reference-name translation boundary for sys_drivers kind='type' rows still stands as a live encoding rule for any future surface; this branch only rewrote a stale comment in type_catalog.rs, it did not remove the divergence
+`type_catalog.rs` reads registry rows by kind while driver-type resolves types by reference name; the divergence stands as an unwritten encoding rule (see [7752cb3](https://github.com/qmu/qfs/commit/7752cb3)).
 
 ## How to Fix
 
-Unify path-form and reference-name translation for type catalog keys
+Write the encoding rule down and unify it across catalog and resolver.
 

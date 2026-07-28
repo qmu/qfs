@@ -371,9 +371,12 @@ of customer` vocabulary generalised, never a transform special case:
   inline anonymous structural literal, the §5.2 column-list production) — asserts the relation's
   type at that point. The `transform triage |> of (…)` twin is exactly this stage following a
   transform: `of` is its own `PipeOp` (the 20th, §5.3a), never a transform-coupled suffix.
-  **Checked at plan time** against the stage's computed schema (§5.3's rules make the schema known
-  at every seam): a mismatch is a plan-time structured error (`of_assertion_failed`) naming the
-  differing columns — the missing, the unexpected, and the type-mismatched. A named type is resolved
+  **Checked at plan time** against the stage's computed schema: a mismatch is a plan-time
+  structured error (`of_assertion_failed`) naming the differing columns — the missing, the
+  unexpected, and the type-mismatched. §5.3's rules make the schema known at every seam **except
+  one**: a codec seam deliberately reports `Schema::empty()` (a decode's columns are undescribable
+  until the bytes are read), so `… |> decode <fmt> |> of <type>` is compared against an empty
+  schema and there is nothing plan time can honestly prove there. A named type is resolved
   from the plan-time declared-type registry (the `transform_defs` twin; the pure planner cannot read
   the System DB), so an unknown name is a structured `of_type_unresolved`. Where the asserted type
   carries a refinement, the structural half is plan-checked and the predicate half is membership at
@@ -578,10 +581,22 @@ endpoint (§10), and the viewer's trail (§14b) — so per-face permission drift
 structurally. Authorization is IAM-shaped: **PBAC** (the shipped path-scoped `CREATE POLICY … ALLOW
 … FOR … AT …` grants below) combined with **RBAC** (roles bundle subjects). *RBAC as a grant stays
 blueprint*: a role today is an invitation label, deliberately **not** a grant — which role, if any,
-confers admin is an open product decision, so the who-axis wiring (carrying the request actor down
-`ReadDriver::scan` to the policy's who-axis) and role-derived grants are a named seam, not shipped.
-**Open** — the finer policy semantics: explicit-deny precedence, the evaluation point when a trail
-crosses a derived reverse edge, and the permissions of the management paths themselves.
+confers admin is an open product decision, so **role-derived grants** remain a named seam, not
+shipped.
+
+**The who-axis wiring is shipped for the serve read face** *(2026-07-25)*: the HTTP endpoint handler
+resolves the request's principal, resolves the endpoint's bound policy **by its own `policy:` ref**
+fail-closed (absent or dangling ⇒ default-deny), and adjudicates every scan target the bound
+statement would read as a `SELECT` under that actor — the `FOR`, `AT` and `WHERE` axes all bite on
+reads — **before** any driver runs. A read the policy does not grant is a `403` structured refusal,
+never an empty relation at `200`. Still open on this axis: (a) the gate runs *ahead of* the scan, so
+adjudication is **whole-path** — `ReadDriver::scan` does carry a `RequestContext` (the M2 principal
+seam), but no driver consults it to narrow rows at the source, so there is no row-level who-axis
+*inside* a driver; (b) the statement bridge's read leg (`POST /api/run` with `mode: read`) is a
+second serve face that resolves no policy at all and still hardcodes an anonymous principal, so one
+policy does not yet govern *every* face reached through the serve seam; (c) role-derived grants,
+above. **Open** — the finer policy semantics: explicit-deny precedence, the evaluation point when a
+trail crosses a derived reverse edge, and the permissions of the management paths themselves.
 
 **Policy grants are path-aware** *(implemented 2026-07-04, ticket 20260704110923)*:
 
@@ -1659,14 +1674,15 @@ column-rendering choice over one engine, not a second product. The write-approva
 invented: qfs's PREVIEW renders as the scene and COMMIT is the approval — rows highlighted in order,
 approval requested last is the drawing of the data-plane safety model.
 
-**The viewer's first column — *open*.** The strip's first column cannot be derived from the request
-principal today: roles and sessions exist, but no seam carries the request's actor down the query
-path (`ReadDriver::scan` takes no principal), so no caller passes an actor to a policy's who-axis.
-Until that seam lands (an independent qfs mission — §8's named seam), the first column derives from
-what qfs declares now: `/sys/paths` (`{path, driver, account}` — the connected query paths) and
-`/sys/connections` (`{driver, connection}` — the admin view), two axes kept distinct. The *Admin*
-preset column waits on the same seam — qfs deliberately has not ruled which role grants admin, so
-the viewer must not invent that distinction.
+**The viewer's first column — *open*, now for a narrower reason.** The who-axis itself is no longer
+missing: as of 2026-07-25 the serve read face resolves the request's principal and passes it to a
+policy's who-axis, gating every scan target as a `SELECT` before the driver runs (§8). What the
+first column still cannot derive is a **grant from a role** — a role remains an invitation label,
+not a grant, so nothing yet answers *which* role may see an admin face. So the first column keeps
+deriving from what qfs declares now: `/sys/paths` (`{path, driver, account}` — the connected query
+paths) and `/sys/connections` (`{driver, connection}` — the admin view), two axes kept distinct. The
+*Admin* preset column waits on that role-grant decision — qfs deliberately has not ruled which role
+grants admin, so the viewer must not invent that distinction.
 
 *(This design corpus is authored **here** now: qfs's design — the path model, the address/trail,
 access control, the qfs-viewer UI integration — lives in this blueprint, not in the qmu.app plan
@@ -1986,9 +2002,11 @@ names which definition made it.
 
 **Plan shape — local, non-pushable, schema-transforming, impure.** No driver executes
 `transform` natively; the planner always places it in the local segment (pushdown proceeds
-normally upstream; everything downstream runs locally over the declared output schema). Unlike
-the pass-through codecs, `transform` rewrites the schema at plan time — the type checker uses
-the declaration, not inference. And unlike every query stage, it is an **effect**: a statement
+normally upstream; everything downstream runs locally over the declared output schema). The
+codecs also reshape the relation, but their result is **undescribable at plan time** — a codec
+seam reports `Schema::empty()` and everything downstream stays late-bound until the bytes are
+decoded. `transform` is the opposite: it rewrites the schema **at plan time**, because the type
+checker reads the declaration rather than inferring from data. And unlike every query stage, it is an **effect**: a statement
 containing `transform` is never a pure read — it evaluates to a Plan carrying a model-call
 effect node. The pure/wasm engine only *plans* it; the call itself is performed by an **async
 applier the binary injects** (the `driver-claude` template: pure declaration crate, runtime
