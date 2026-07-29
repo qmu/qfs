@@ -8,6 +8,7 @@ commit_hash:
 category: Changed
 depends_on:
 mission:
+claim: work-20260729-145625
 ---
 
 # A declared driver is undiscoverable through `describe`, so the documented agent loop cannot be run against one
