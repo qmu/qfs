@@ -182,7 +182,7 @@ ticket blocked.
 
 - [ ] The five typed CALL maps are effect-equivalent to the compiled CALLs on fixtures (#20260724014100-slack-call-maps-effect-equivalent.md)
 - [ ] driver-slack is deleted per the shared retirement steps with docs/skills regenerated and the plugin minor-bumped in all four fields (#20260724014200-retire-the-compiled-slack-driver.md)
-- [x] A declared write can produce a form-urlencoded body, the shipped Chatwork INSERT commits against the live API, and the cookbook teaches the working statement (#20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md)
+- [ ] A declared write can produce a form-urlencoded body, the shipped Chatwork INSERT commits against the live API, and the cookbook teaches the working statement (#20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md) — **hermetic half landed 2026-08-01 (branch `work-20260801-044839`); the LIVE commit is the attended item this Scope reserved, so the criterion stays open until that round runs**
 
 ## Changelog
 
@@ -204,3 +204,14 @@ ticket blocked.
   product-wide. Ticket 20260724014100's unprovable "fail at PREVIEW" bar corrected to "before the
   effect leg fires". Six tickets bound to the mission — design-brief-reverse-lookup.md
 - 2026-08-01 — ticket archived — 20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md
+- 2026-08-01 — **the form-codec axis landed hermetically, and its acceptance criterion is deliberately
+  left UNCHECKED.** `ENCODE form` exists, the applier picks it, the shipped `chatwork.qfs` message map
+  and the cookbook statement both use it, and an end-to-end test drives the exact cookbook `INSERT`
+  through the full commit stack asserting the `application/x-www-form-urlencoded` POST body. What is
+  NOT done is the one thing the criterion also names: the live commit appearing in the room. This
+  Scope reserved that as the attended item, so the box stays open rather than claiming a live
+  confirmation that did not happen. The ticket's related-observation half split in two: the `204 No
+  Content` read decoding as zero rows landed here, and the `force=1` question — whether the shipped
+  messages view should read latest rather than unread-only — is a declaration-semantics ruling and was
+  filed as its own ticket. Remaining on the mission: the two Slack-twin criteria and this live round —
+  20260801061500-chatwork-messages-view-returns-unread-only.md
