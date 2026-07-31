@@ -8,6 +8,7 @@ commit_hash:
 category: Changed
 depends_on:
 mission: a-declared-write-resolves-a-name-the-way-a-query-does
+claim: work-20260801-044839
 ---
 
 # Declared REST drivers cannot POST form-encoded bodies, so the shipped Chatwork message INSERT always fails with 400
