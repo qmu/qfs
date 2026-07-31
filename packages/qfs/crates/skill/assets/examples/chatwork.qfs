@@ -54,8 +54,14 @@ CREATE VIEW /chatwork/rooms/{room}/files OF chatwork/file AS
 
 -- A write: post a message to a room. An ordinary reversible INSERT (a message can be deleted); the
 -- token stays in the account layer.
+--
+-- `|> ENCODE form` is REQUIRED here, not decoration. Chatwork's message endpoint — like most
+-- plain-REST APIs of its generation — accepts parameters only as `application/x-www-form-urlencoded`
+-- and answers a JSON body with 400. Without the form encoder this declaration is readable but not
+-- writable (ticket 20260727214856); the generic encoder renders the row struct's scalar fields as
+-- percent-encoded `k=v&k=v` and sets the content type.
 CREATE MAP INSERT /chatwork/rooms/{room}/messages AS
-  INSERT INTO /http/chatwork/rooms/{room}/messages VALUES (row);
+  INSERT INTO /http/chatwork/rooms/{room}/messages |> ENCODE form VALUES (row);
 
 -- ── FILE TRANSFER (ticket 20260711121526, primitives shipped 2026-07-12) ────────────────────────
 --

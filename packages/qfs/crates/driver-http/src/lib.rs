@@ -44,6 +44,7 @@ pub mod client;
 pub mod config;
 mod effect;
 mod error;
+pub mod form;
 pub mod multipart;
 pub mod request;
 
@@ -63,6 +64,7 @@ pub use config::{
 };
 pub use effect::{HttpEffect, BODY_COL, HEADER_COL_PREFIX, URL_COL};
 pub use error::HttpError;
+pub use form::{encode_form, http_form_args, FormBody, FORM_CONTENT_TYPE};
 pub use multipart::{encode_multipart, http_multipart_args, MultipartBody};
 pub use request::{HttpMethod, HttpRequest, HttpResponse, SENSITIVE_HEADERS};
 

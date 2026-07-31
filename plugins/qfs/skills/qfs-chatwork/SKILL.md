@@ -1,6 +1,6 @@
 ---
 name: qfs-chatwork
-description: Use when a task needs Chatwork through qfs — installing and querying the DECLARED /chatwork driver (rooms, room messages, room file listings, file download, and file upload) written in the query language itself, and posting a message to a room. Covers installing the chatwork.qfs declaration, connecting it to a stored Chatwork API token, reading, posting, downloading a file's bytes via the FOLLOW stage, and uploading via ENCODE multipart.
+description: Use when a task needs Chatwork through qfs — installing and querying the DECLARED /chatwork driver (rooms, room messages, room file listings, file download, and file upload) written in the query language itself, and posting a message to a room. Covers installing the chatwork.qfs declaration, connecting it to a stored Chatwork API token, reading, posting a message via ENCODE form, downloading a file's bytes via the FOLLOW stage, and uploading via ENCODE multipart.
 ---
 
 # Chatwork (declared driver)
@@ -64,8 +64,14 @@ CREATE VIEW /chatwork/rooms/{room}/messages OF chatwork/message AS
 
 ```qfs
 CREATE MAP INSERT /chatwork/rooms/{room}/messages AS
-  INSERT INTO /http/chatwork/rooms/{room}/messages VALUES (row)
+  INSERT INTO /http/chatwork/rooms/{room}/messages |> ENCODE form VALUES (row)
 ```
+
+`ENCODE form` is load-bearing on that last map. Chatwork's message endpoint — like most plain-REST
+APIs of its generation — accepts parameters only as `application/x-www-form-urlencoded` and answers
+a JSON request body with `400`. The generic form encoder renders the row struct's scalar fields as
+percent-encoded `k=v&k=v` and sets the content type, so the declaration needs no Chatwork-specific
+code.
 
 ### 2. Connect the token
 
@@ -104,6 +110,13 @@ An `INSERT` appends to the room. Like every write it previews first and sends on
 ```qfs
 insert into /chatwork/rooms/123456/messages values (body) ('Deploy shipped ✅')
 ```
+
+The declared map's `ENCODE form` turns that row into the form body the endpoint requires. What the
+encoder does with each field is stated, not implicit: scalar fields (text, int, float, bool,
+timestamp) are percent-encoded in declaration order; a `NULL` field is **omitted** rather than sent
+empty; and a bytes, array, or nested-struct field is **refused** with a structured error naming the
+reason — a form body has no binary or nested encoding, so an upload belongs in `ENCODE multipart`
+(below) instead of being silently flattened onto the wire.
 
 ## Download a file's bytes
 
