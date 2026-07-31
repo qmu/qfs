@@ -50,7 +50,10 @@ pub mod request;
 use std::sync::Arc;
 
 use qfs_codec::{value_to_json, Codec, Row, RowBatch, Value};
-use qfs_driver::{Archetype, Capabilities, Driver, NodeDesc, Path, ProcSig, PushdownProfile, Verb};
+use qfs_driver::{
+    Archetype, Capabilities, ChildNode, Driver, NodeDesc, Path, ProcSig, PushdownProfile,
+    SchemaContract, Verb,
+};
 use qfs_plan::{EffectKind, EffectNode, NodeId, PlanApplier, Target, VfsPath};
 use qfs_runtime::PlanApplierBridge;
 use qfs_secrets::Secrets;
@@ -78,6 +81,62 @@ pub struct RestDriver {
     applier: RestApplier,
     pushdown: PushdownProfile,
     procs: Vec<ProcSig>,
+    nodes: Vec<DeclaredNodeDesc>,
+}
+
+/// One **declared node** this mount serves (blueprint §13): its path template in the driver's own
+/// `/rest/<api>/…` namespace, the outward row contract it delivers, and the verbs its declarations
+/// map onto it.
+///
+/// A compiled `/rest` mount declares none of these and keeps the open-JSON behaviour below; a
+/// DECLARED driver lifts its `CREATE VIEW`/`CREATE MAP` rows onto this list, exactly as
+/// [`RestDriver::with_procs`] lifts its `CREATE MAP CALL` signatures. That lift is what lets
+/// `DESCRIBE` answer with the same columns `run` delivers instead of a synthetic `value: Json`.
+#[derive(Debug, Clone)]
+pub struct DeclaredNodeDesc {
+    /// The node's path template, e.g. `/rest/chatwork/rooms/{room}/messages`. A `{param}` segment
+    /// matches any single concrete segment when a caller describes a real path.
+    pub template: String,
+    /// The declared `OF <type>` contract, when the node declares one. `None` is an honest
+    /// "this view states no row type" — reported as [`SchemaContract::Undeclared`], never guessed.
+    pub of: Option<DeclaredNodeType>,
+    /// The universal verbs this node's declarations map onto it (`SELECT` from a view, the mapped
+    /// write verb from a `CREATE MAP`). Per NODE, so a node only ever advertises the verbs its own
+    /// declarations gave it.
+    pub verbs: Vec<Verb>,
+}
+
+/// The outward row contract a declared node delivers `OF` — the declared type's name and the
+/// typed columns `run` shapes every delivered row to.
+#[derive(Debug, Clone)]
+pub struct DeclaredNodeType {
+    /// The declared type's name, e.g. `chatwork/room`.
+    pub name: String,
+    /// The type's columns, in declaration order — the order `run`'s projection uses.
+    pub schema: Schema,
+    /// The type's `PRIMARY KEY` column(s), if any: the node's child address.
+    pub key_columns: Vec<String>,
+}
+
+/// Split a path into its non-empty segments (`/rest/chatwork/rooms` → `["rest","chatwork","rooms"]`).
+fn segments(path: &str) -> Vec<&str> {
+    path.split('/').filter(|s| !s.is_empty()).collect()
+}
+
+/// Whether a template segment matches a concrete one: equal, or a `{param}` wildcard. A caller may
+/// also describe the template spelling itself (`/chatwork/rooms/{room}`), which matches by equality.
+fn segment_matches(template: &str, actual: &str) -> bool {
+    template == actual || (template.starts_with('{') && template.ends_with('}'))
+}
+
+/// Whether `template`'s leading segments match `path`'s in full — i.e. `path` names this node or an
+/// interior above it.
+fn template_covers(template: &[&str], path: &[&str]) -> bool {
+    path.len() <= template.len()
+        && path
+            .iter()
+            .zip(template)
+            .all(|(actual, t)| segment_matches(t, actual))
 }
 
 impl RestDriver {
@@ -113,7 +172,46 @@ impl RestDriver {
                 group_by: false,
             },
             procs: Vec::new(),
+            nodes: Vec::new(),
         }
+    }
+
+    /// Builder: declare the nodes this mount serves (blueprint §13). A DECLARED driver lifts its
+    /// `CREATE VIEW`/`CREATE MAP` rows here, so `DESCRIBE` reports the node's real columns, verbs,
+    /// and child paths. Empty (the default) keeps a compiled `/rest` mount's open-JSON describe.
+    #[must_use]
+    pub fn with_declared_nodes(mut self, nodes: Vec<DeclaredNodeDesc>) -> Self {
+        self.nodes = nodes;
+        self
+    }
+
+    /// The declared node `path` names exactly, if any (`{param}` segments match a concrete value).
+    fn declared_node(&self, path: &str) -> Option<&DeclaredNodeDesc> {
+        let actual = segments(path);
+        self.nodes.iter().find(|n| {
+            let template = segments(&n.template);
+            template.len() == actual.len() && template_covers(&template, &actual)
+        })
+    }
+
+    /// The declared child locations one segment beneath `path`, in declaration order, deduplicated.
+    /// Empty for a mount that declares no nodes (a compiled `/rest`), which is the honest answer:
+    /// its children are wire resources nobody declared.
+    fn declared_children(&self, path: &str) -> Vec<ChildNode> {
+        let actual = segments(path);
+        let mut out: Vec<ChildNode> = Vec::new();
+        for node in &self.nodes {
+            let template = segments(&node.template);
+            // Strictly BELOW `path`, and reachable through it.
+            if template.len() <= actual.len() || !template_covers(&template, &actual) {
+                continue;
+            }
+            let child = ChildNode::new(path, template[actual.len()]);
+            if !out.iter().any(|c| c.segment == child.segment) {
+                out.push(child);
+            }
+        }
+        out
     }
 
     /// Builder: declare the procedures this mount answers (§13.1 **G5**). A declared
@@ -158,18 +256,60 @@ impl Driver for RestDriver {
     }
 
     fn describe(&self, path: &Path) -> Result<NodeDesc, qfs_driver::CfsError> {
-        // A REST resource is a relational table whose JSON rows are weakly typed: describe
-        // returns an OPEN struct archetype (a single `json` column) rather than inventing
-        // column types (blueprint §4 — irregular JSON stays a struct/json column). Pure: no I/O.
+        // A DECLARED node (blueprint §13) answers from its own declaration: the `OF` type's typed
+        // columns — the same columns `run` shapes its rows to — or an explicit "no row type stated"
+        // when the view declares none. Pure: no I/O.
+        let children = self.declared_children(path.as_str());
+        if let Some(node) = self.declared_node(path.as_str()) {
+            let desc = match &node.of {
+                Some(of) => NodeDesc::new(Archetype::RelationalTable, of.schema.clone())
+                    .schema_contract(SchemaContract::Declared {
+                        of_type: of.name.clone(),
+                    })
+                    .child_key(of.key_columns.clone()),
+                // No `OF`: state that, rather than a synthetic `value: Json` a caller would read
+                // as the schema. The columns are whatever the wire delivers — run it to see them.
+                None => NodeDesc::new(Archetype::RelationalTable, Schema::new(Vec::new()))
+                    .schema_contract(SchemaContract::Undeclared),
+            };
+            return Ok(desc.navigable(!children.is_empty()));
+        }
+        // An INTERIOR of the declared surface (the mount root, or any segment above a node): it
+        // bears no rows of its own, but it is enterable and its children point the way down.
+        if !children.is_empty() {
+            return Ok(
+                NodeDesc::new(Archetype::RelationalTable, Schema::new(Vec::new()))
+                    .schema_contract(SchemaContract::Undeclared)
+                    .navigable(true),
+            );
+        }
+        // A compiled `/rest/<api>` mount declares no nodes. Its JSON rows are weakly typed, so
+        // describe returns an OPEN struct archetype (a single `json` column) rather than inventing
+        // column types (blueprint §4 — irregular JSON stays a struct/json column).
         let _ = applier::resource_segment_of(path.as_str());
         Ok(NodeDesc::new(
             Archetype::RelationalTable,
             Schema::new(vec![Column::new("value", ColumnType::Json, true)]),
-        ))
+        )
+        .schema_contract(SchemaContract::Undeclared))
     }
 
+    /// A DECLARED node advertises exactly the verbs ITS OWN declarations gave it, so `/chatwork/rooms`
+    /// (a view) no longer claims the `INSERT` that belongs to `/chatwork/rooms/{room}/messages`
+    /// (a map) merely because both hang under the `rooms` resource segment. A mount that declares no
+    /// nodes keeps the per-resource-segment config gate.
     fn capabilities(&self, path: &Path) -> Capabilities {
-        self.caps_for(path)
+        if self.nodes.is_empty() {
+            return self.caps_for(path);
+        }
+        match self.declared_node(path.as_str()) {
+            Some(node) => Capabilities::from_verbs(&node.verbs),
+            None => Capabilities::none(),
+        }
+    }
+
+    fn children(&self, path: &Path) -> Vec<ChildNode> {
+        self.declared_children(path.as_str())
     }
 
     fn procedures(&self) -> &[ProcSig] {

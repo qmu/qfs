@@ -153,6 +153,9 @@ pub(crate) fn register_defined_paths_where(
     // §13 two-source registry: the declared drivers (`/sys/drivers` rows) join the compiled set.
     let declared = crate::declared_driver::load_declared_drivers();
     report_shadowed_declared(&declared);
+    // The declared `OF` types each declared node reports its columns from — read ONCE for the whole
+    // registry rather than per mount (a pure local `/sys/drivers` read either way).
+    let declared_types = crate::declared_driver::load_declared_type_defs();
     // Full connects first, so an alias's target mount already exists when the alias is processed.
     for b in bindings
         .iter()
@@ -170,7 +173,11 @@ pub(crate) fn register_defined_paths_where(
                 let _ = reg.register(Arc::new(wrapped));
             }
         } else if let Some(d) = declared.iter().find(|d| d.name == id) {
-            if let Some(wrapped) = crate::declared_driver::declared_describe_mount(&b.path, d) {
+            if let Some(wrapped) = crate::declared_driver::declared_describe_mount_with_types(
+                &b.path,
+                d,
+                &declared_types,
+            ) {
                 let _ = reg.register(Arc::new(wrapped));
             }
         }
@@ -482,8 +489,12 @@ mod tests {
             cred_free_driver("chatwork").is_none(),
             "chatwork is not compiled"
         );
-        let mount = crate::declared_driver::declared_describe_mount("/chatwork", &declared[1])
-            .expect("declared chatwork mounts");
+        let mount = crate::declared_driver::declared_describe_mount_with_types(
+            "/chatwork",
+            &declared[1],
+            &qfs_core::DeclaredTypeDefs::new(),
+        )
+        .expect("declared chatwork mounts");
         assert_eq!(mount.mount(), "/chatwork");
 
         // The collision is reported (never silent).
