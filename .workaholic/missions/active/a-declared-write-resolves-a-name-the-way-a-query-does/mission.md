@@ -182,7 +182,7 @@ ticket blocked.
 
 - [ ] The five typed CALL maps are effect-equivalent to the compiled CALLs on fixtures (#20260724014100-slack-call-maps-effect-equivalent.md)
 - [ ] driver-slack is deleted per the shared retirement steps with docs/skills regenerated and the plugin minor-bumped in all four fields (#20260724014200-retire-the-compiled-slack-driver.md)
-- [ ] A declared write can produce a form-urlencoded body, the shipped Chatwork INSERT commits against the live API, and the cookbook teaches the working statement (#20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md)
+- [x] A declared write can produce a form-urlencoded body, the shipped Chatwork INSERT commits against the live API, and the cookbook teaches the working statement (#20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md)
 
 ## Changelog
 
@@ -203,3 +203,4 @@ ticket blocked.
   top, and resolving at PREVIEW deferred to its own mission because it re-rules what PREVIEW means
   product-wide. Ticket 20260724014100's unprovable "fail at PREVIEW" bar corrected to "before the
   effect leg fires". Six tickets bound to the mission — design-brief-reverse-lookup.md
+- 2026-08-01 — ticket archived — 20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md
