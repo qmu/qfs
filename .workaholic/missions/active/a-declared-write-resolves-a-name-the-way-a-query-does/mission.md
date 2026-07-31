@@ -215,3 +215,4 @@ ticket blocked.
   messages view should read latest rather than unread-only — is a declaration-semantics ruling and was
   filed as its own ticket. Remaining on the mission: the two Slack-twin criteria and this live round —
   20260801061500-chatwork-messages-view-returns-unread-only.md
+- 2026-08-01 — story reported — work-20260801-044839.md
