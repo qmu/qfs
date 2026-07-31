@@ -2,14 +2,21 @@
 type: Mission
 title: A declared write resolves a name the way a query does
 slug: a-declared-write-resolves-a-name-the-way-a-query-does
-status: draft
+status: approved
 created_at: 2026-07-27T13:55:01+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
 strategy: integrations-are-declared-not-compiled
+drive_authorized: true
 predicted_hours:
 actual_hours:
-tickets: []
+tickets:
+  - 20260725103000-declared-expand-must-splice-by-field-name.md
+  - 20260726090000-map-body-expressions-can-reference-path-params.md
+  - 20260726190000-declared-reverse-lookup-for-write-path-name-resolution.md
+  - 20260724014100-slack-call-maps-effect-equivalent.md
+  - 20260724014200-retire-the-compiled-slack-driver.md
+  - 20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md
 stories: []
 concerns: []
 gate_type:
@@ -81,31 +88,56 @@ Chatwork INSERT actually commits, the five Slack CALL maps are effect-equivalent
 on the shared fixtures, and the compiled `driver-slack` crate is deleted per the shared retirement
 steps.
 
-**The two axes are independent and can be driven in either order.** The form codec has no open design
-ruling blocking it — its shape is settled in its own ticket — so it is drivable now, while the name
-resolution waits on the spelling ruling below. Do not let the blocked axis hold the unblocked one.
+**The two axes are independent and can be driven in either order.** The form codec never had an open
+design ruling blocking it, and the name-resolution axis is now ruled below, so both are drivable.
+Neither may hold the other.
 
-**The one open ruling, and it is what blocks `drive_authorized`.** How the reverse lookup is spelled
-is not yet decided. Three candidates were written out with real code on 2026-07-27:
+**The ruling is made (developer, 2026-08-01), and `drive_authorized` is stamped.** The spike this
+Scope required ran first; its findings and the full option analysis are in
+`design-brief-reverse-lookup.md` beside this file. Answers to the three questions it was to settle:
 
-- **Open the map body to `let`** — parse the body as `program_seq`, and confine the `let` source to
-  the driver's own declared surface the way G4 confines fan-out targets. Zero new keywords; reuses
-  the already-declared `/slack/{ws}/channels` view, so that view's cursor paging and
-  `OF slack/channel` contract apply without restatement; composes with the already-ruled "map body
-  reaches its path `{param}`" ticket. Its cost is a new confinement rule and a decision about what a
-  relation-valued `let` means where a scalar is expected. **Recommended.**
-- **A new `LOOKUP` stage** — one stage, one meaning. But it needs the same map-body structural change
-  *plus* new syntax, it addresses the raw wire endpoint so it must re-express
-  `DECODE json |> EXPAND channels`, and it re-opens the paging question the declared view already
-  answers.
-- **A selector on `FOLLOW … INTO`** — one name covers both directions, but the same clause then means
-  substitution or search depending on whether the target carries a `{param}`, which a reader cannot
-  tell without inspecting the URL.
+1. **Parsing the body as `program_seq` works** — `create_map_stmt` uses `inner_statement`
+   (`crates/parser/src/grammar.rs:2445`), and `program_seq` (`:3576`) is the sole `let_binding` call
+   site, so the change is one word. `body_to_json` (`:2048`) is a plain serde serialization, so a
+   `Statement::Let` round-trips unchanged.
+2. **Per-row evaluation exists, but the lookup cannot use it.** `eval_map_body`
+   (`crates/exec/src/declared.rs:518`) lowers one `VALUES` expression to a per-row scalar and runs it
+   through `eval_value` — a **pure evaluator with no wire access**, as the function's own doc states
+   ("Purity holds: … the caller's confined applier performs the I/O at COMMIT").
+3. **The declared write path does NOT walk a `Let` node** — `declared.rs:534` requires
+   `Statement::Effect` on the first line and rejects anything else.
 
-**Unverified, and to be settled by a throwaway spike before the ruling is applied:** whether parsing
-the body as `program_seq` actually works end to end, whether the body-level `let` evaluates **per
-row** (each row may name a different channel, so once-only evaluation is useless), and whether the
-declared write path walks a stored `Let` node.
+**The finding that corrects this mission's own framing:** the sentence above calling the gap "a
+parser wiring decision, not a limit of the language" is true of the parser and **false of the
+runtime**. The map body is pure by contract and a name lookup is I/O. A third run that flipped the
+parser and stopped would have hit the same wall one layer deeper, for the third time.
+
+So the ruling settles two axes, not one:
+
+- **Spelling — `let` in the map body**, as recommended above, with the source confined to the
+  driver's own declared surface the way G4 confines fan-out targets. Chosen because it adds no
+  vocabulary and reuses the already-declared `/slack/{ws}/channels` view, whose cursor paging and
+  `OF slack/channel` contract then apply without restatement. The `LOOKUP` stage and the
+  `FOLLOW … INTO` selector are both declined.
+- **Where it runs — COMMIT, in the confined applier** (`crates/qfs/src/apply_facets.rs:69`, already
+  `async`, already the confinement boundary), immediately before the effect leg. This is the moment
+  the compiled oracle resolves, so equivalence is provable on the shared fixtures rather than merely
+  asserted. `eval_map_body` stays pure: resolved values are bound as extra columns before the per-row
+  evaluator runs.
+- **PREVIEW additionally refuses a malformed reference** — one that is neither a legal name nor a
+  legal id shape — with no I/O.
+
+**Resolving at PREVIEW is deliberately NOT taken, and is deferred to its own mission.**
+`crates/exec/src/lib.rs:331` records that "PREVIEW structurally cannot reach the executor"; making it
+resolve would make preview perform a network read for every name-addressed write — a product-wide
+re-ruling of what PREVIEW means, which must land on the compiled side simultaneously or the twin is
+not a twin.
+
+**A consequence to carry into the work:** ticket `20260724014100` stated the contract to reproduce as
+"unresolvable names fail at PREVIEW time". The compiled driver resolves at commit
+(`driver-slack/src/path.rs:45`, `:66`) and PREVIEW prints the **unresolved** `#general`
+(`path.rs:54`), so that bar was unprovable — the equivalence tests could not both pass and prove
+equivalence. Its wording is corrected to "before the effect leg fires" as part of this ruling.
 
 **Out of scope:**
 
@@ -159,3 +191,15 @@ ticket blocked.
 - 2026-07-27 — strategy linked — integrations-are-declared-not-compiled
 - 2026-07-27 — `drive_authorized` deliberately left unset: the spelling ruling above is a genuine design fork and the three unverified spike questions must be answered before a ticket set can be written — mission.md
 - 2026-07-28 — ticket added - routed from the root queue by developer ruling 2026-07-28; the mission's Goal widened from name resolution to the general property that a declared write can express what the API requires — 20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md
+- 2026-08-01 — **spike run, ruling made, mission approved and `drive_authorized` stamped.** The three
+  questions this Scope held open were answered by reading the source at 4b485df: parsing the map body
+  as `program_seq` is a one-word change and a stored `Let` round-trips through the plain-serde
+  `body_to_json`; per-row evaluation already exists but runs on a **pure** evaluator with no wire
+  access; and the write path rejects a `Let` node on its first line. The load-bearing finding is that
+  this mission's own framing was incomplete — the map body is pure by contract and a name lookup is
+  I/O, so the gap is a runtime one, not only a parser one, and a third run that flipped the parser
+  alone would have failed the same way one layer deeper. Ruled: `let` in the map body as the
+  spelling, COMMIT-time resolution in the confined applier as the site, a preview-time shape check on
+  top, and resolving at PREVIEW deferred to its own mission because it re-rules what PREVIEW means
+  product-wide. Ticket 20260724014100's unprovable "fail at PREVIEW" bar corrected to "before the
+  effect leg fires". Six tickets bound to the mission — design-brief-reverse-lookup.md

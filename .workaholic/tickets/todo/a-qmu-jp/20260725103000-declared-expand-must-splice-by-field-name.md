@@ -7,7 +7,7 @@ effort:
 commit_hash:
 category: Changed
 depends_on:
-mission: the-declared-slack-twin-retires-the-compiled-driver
+mission: a-declared-write-resolves-a-name-the-way-a-query-does
 ---
 
 # Declared EXPAND must splice by field NAME, and empty text must fold like the DTOs

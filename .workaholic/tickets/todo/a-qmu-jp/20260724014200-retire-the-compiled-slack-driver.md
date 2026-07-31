@@ -7,7 +7,7 @@ effort:
 commit_hash:
 category: Removed
 depends_on: [20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md, 20260724014100-slack-call-maps-effect-equivalent.md]
-mission: the-declared-slack-twin-retires-the-compiled-driver
+mission: a-declared-write-resolves-a-name-the-way-a-query-does
 ---
 
 # Retire the compiled slack driver

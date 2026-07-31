@@ -7,7 +7,7 @@ effort:
 commit_hash:
 category: Added
 depends_on: [20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md, 20260725124400-declared-follow-into-per-row-fan-out-g4.md, 20260726190000-declared-reverse-lookup-for-write-path-name-resolution.md]
-mission: the-declared-slack-twin-retires-the-compiled-driver
+mission: a-declared-write-resolves-a-name-the-way-a-query-does
 ---
 
 # Slack CALL maps effect-equivalent
@@ -20,13 +20,24 @@ ruling (typed CALL signatures, blueprint §13.1), each effect-equivalent to its 
 counterpart on hermetic wire fixtures.
 
 The v0.0.89 compiled-driver behavior is the contract to reproduce: every ID-requiring call routes
-through channel-name→id resolution (one address, one meaning), and unresolvable names fail at
-PREVIEW time as usage errors, never as garbage ids at commit.
+through channel-name→id resolution (one address, one meaning), and an unresolvable name fails as a
+usage error **before the effect leg fires**, never as a garbage id on the wire.
+
+**Corrected 2026-08-01 (developer ruling).** This paragraph previously read "unresolvable names fail
+at PREVIEW time". The compiled driver does not do that, so the bar was unprovable: `driver-slack/src/
+path.rs:45` describes a symbolic `#name` as "needing a `conversations.list` lookup **at commit**",
+`path.rs:66` says the `@name`→id resolution "is I/O performed by the applier **at commit**", and what
+PREVIEW prints is `ChannelRef::symbolic()` (`path.rs:54`) — the **unresolved** `#general`. Held as
+written, these tests could not both pass and prove equivalence. The ruling and its reasoning are in
+`design-brief-reverse-lookup.md` beside the mission; resolving at PREVIEW is deliberately deferred to
+its own mission because it changes what PREVIEW means for every driver at once.
 
 ## Policies
 
 - workaholic:design / 「推測するな、宣言して拒否せよ」 — an unresolvable channel/user reference is
-  refused at preview, exactly as the compiled driver does since v0.0.89.
+  refused before the effect leg fires, exactly as the compiled driver does since v0.0.89; a
+  malformed reference (neither a legal name nor a legal id shape) is refused at PREVIEW with no wire
+  request at all.
 - Blueprint §13.1 G5 — CALL signatures are typed; a wrong-shaped argument is a parse/typecheck
   error, not a wire error.
 - workaholic:development / hermetic gates — no live Slack tokens; fixtures only.
@@ -35,8 +46,11 @@ PREVIEW time as usage errors, never as garbage ids at commit.
 
 1. Each of the five CALL maps produces the same wire request as the compiled CALL on the shared
    fixtures (method, endpoint, resolved channel id, payload) — five effect-equivalence tests.
-2. The name→id resolution behavior matches: a fixture case proves a name-addressed channel
-   resolves before the effect fires, and an unresolvable name is a structured preview-time error.
+2. The name→id resolution behavior matches: a fixture case proves a name-addressed channel resolves
+   before the effect fires, and an unresolvable name is a structured refusal issued **before the
+   effect leg** — asserted by the absence of the effect request on the recorded wire, for both the
+   declared map and the compiled oracle. Separately, a malformed reference is refused at PREVIEW with
+   zero recorded requests.
 3. Typed signatures reject a malformed argument at typecheck (one negative case per distinct
    signature shape).
 4. Workspace gates green: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`,
