@@ -2,12 +2,11 @@
 type: Mission
 title: A declared write resolves a name the way a query does
 slug: a-declared-write-resolves-a-name-the-way-a-query-does
-status: active
+status: draft
 created_at: 2026-07-27T13:55:01+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
 strategy: integrations-are-declared-not-compiled
-drive_authorized:
 predicted_hours:
 actual_hours:
 tickets: []

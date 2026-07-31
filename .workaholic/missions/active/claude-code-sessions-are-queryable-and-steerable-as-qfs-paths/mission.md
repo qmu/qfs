@@ -2,12 +2,11 @@
 type: Mission
 title: Claude Code sessions are queryable and steerable as qfs paths
 slug: claude-code-sessions-are-queryable-and-steerable-as-qfs-paths
-status: active
+status: approved
 created_at: 2026-07-16T01:50:14+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
 strategy: ai-sessions-are-ordinary-qfs-surfaces
-drive_authorized: true
 tickets:
   - 20260717010100-claude-real-store-reader.md
   - 20260717010200-claude-mount-registration-and-e2e-guard.md
