@@ -182,7 +182,7 @@ ticket blocked.
 
 - [ ] The five typed CALL maps are effect-equivalent to the compiled CALLs on fixtures (#20260724014100-slack-call-maps-effect-equivalent.md)
 - [ ] driver-slack is deleted per the shared retirement steps with docs/skills regenerated and the plugin minor-bumped in all four fields (#20260724014200-retire-the-compiled-slack-driver.md)
-- [ ] A declared write can produce a form-urlencoded body, the shipped Chatwork INSERT commits against the live API, and the cookbook teaches the working statement (#20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md) — **hermetic half landed 2026-08-01 (branch `work-20260801-044839`); the LIVE commit is the attended item this Scope reserved, so the criterion stays open until that round runs**
+- [x] A declared write can produce a form-urlencoded body, the shipped Chatwork INSERT commits against the live API, and the cookbook teaches the working statement (#20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md) — **fully met 2026-08-01: hermetic on branch `work-20260801-044839`, then confirmed live in an attended round (message `2135330710482190336` delivered and read back byte-intact)**
 
 ## Changelog
 
@@ -216,3 +216,14 @@ ticket blocked.
   filed as its own ticket. Remaining on the mission: the two Slack-twin criteria and this live round —
   20260801061500-chatwork-messages-view-returns-unread-only.md
 - 2026-08-01 — story reported — work-20260801-044839.md
+- 2026-08-01 — **the attended live round ran, and the form-codec criterion is now fully met.** With the
+  developer present, the updated declaration was installed locally and
+  `insert into /chatwork/rooms/25496268/messages values (body) ('qfs v0.0.93 ENCODE form 動作確認 ✅ a&b=c')`
+  committed against the live API — `committed: true`, no 400 — into the operator's own My Chat, the one
+  room no one else can see. Reading the room back returned the body **byte-intact**: Japanese, the
+  emoji, `&`, `=` and the spaces all survived the percent-encode/decode round trip (message
+  `2135330710482190336`). The `204` fix was confirmed in the same round by an A/B against the released
+  binary: a second read of the same view answers 0 rows on `0.0.93` and `invalid_path … http_decode` on
+  the shipped `0.0.80`. The blueprint §13 counter-example this mission carried is closed on the form
+  axis: a form-parameter REST API is now writable through a declaration, proven on the wire and not
+  only on fixtures. Remaining: the two Slack-twin criteria — mission.md
