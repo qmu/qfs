@@ -3,7 +3,7 @@ created_at: 2026-08-01T06:15:00+09:00
 author: a@qmu.jp
 type: bugfix
 layer: [Domain]
-effort:
+effort: 1h
 commit_hash:
 category: Changed
 depends_on:
@@ -83,3 +83,33 @@ Three shapes, in order of preference to be ruled:
 
 Split out of `20260727214856` on 2026-08-01 while driving that ticket's form-codec fix. The `204`
 half of the same observation shipped with that PR-unit; this is the remainder.
+
+## Final Report
+
+Ruled **shape 2** — two declared views. `/chatwork/rooms/{room}/messages` now asks the API with
+`force=1` (the room's latest messages, on every read), and `/chatwork/rooms/{room}/messages/unread`
+keeps the API's cheap unread-only default under a name that says so.
+
+The ruling turns on qfs being filesystem-shaped: a path names a place, so reading it twice has to
+answer the same question. The old declaration made `…/messages` a *consuming* read dressed as a
+listing. Shape 1 fixes that but deletes the unread reading with no spelling left to recover it, and
+shape 3 makes the article honest while leaving the path itself misleading. Shape 2 costs one extra
+`CREATE VIEW` line in a config asset — the asymmetry between "one line" and "a lost capability" or
+"a lying path name" is what decided it.
+
+### Discovered Insights
+
+- **Insight**: A declared view's `OF` type must resolve against the declared-type list passed to
+  `declared_eval::view_specs`, or the view is refused *loudly* at read time — `of_columns` becomes
+  `Some(vec![])` rather than falling back to passthrough (deliberate, ticket 20260712005100).
+  **Context**: A hermetic test that builds a `DeclaredDriver` by hand and passes `&[]` for types
+  must therefore set `of_type: None`, even when the shipped declaration carries an `OF` clause. The
+  test then pins the wire address rather than the delivered contract, which has to be said out loud
+  or the next reader will assume the omission is an oversight.
+
+- **Insight**: Three shipped-asset tests in `declared_driver.rs` each carried their own inline copy
+  of the install-splitter (strip `--`/`#` comments, split on `;`). The two Chatwork tests now share
+  a `shipped_statements` helper; the cloudflare and github_account copies remain.
+  **Context**: The splitter has to stay identical to the config install path, and four independent
+  copies is four places for it to drift away from that path. Folding the remaining two in is a
+  mechanical follow-up nobody has needed yet.
