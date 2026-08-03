@@ -347,6 +347,66 @@ pub enum ChildAddress {
     None,
 }
 
+/// Where a node's `DESCRIBE` columns come from — so an agent can tell a **stated contract** from
+/// **"nobody has said"**, instead of reading a synthetic placeholder column as if it were the schema.
+///
+/// `ChildAddress` already draws this distinction for containment; this draws it for the schema.
+/// The failure it exists to prevent: a declared REST node reported one open `value: Json` column
+/// while `run` on the same path returned four typed ones, so `DESCRIBE` — the documented first step
+/// of the agent loop — could not be used to write the next statement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SchemaContract {
+    /// The columns are the driver's own compiled knowledge of the node (the common case).
+    Compiled,
+    /// The columns are a **declared outward contract** — a `CREATE VIEW … OF <type>` row type.
+    /// `run` shapes the delivered rows to exactly these columns, so `DESCRIBE` and `run` agree.
+    Declared {
+        /// The declared type this node delivers `OF`, e.g. `chatwork/room`.
+        of_type: String,
+    },
+    /// The node states no column contract: its columns are whatever the wire delivers, and the
+    /// driver will not invent them. An honest "unknown until you run it" — never a placeholder.
+    Undeclared,
+}
+
+/// One **child location** beneath a node: the next segment an agent can walk to, and the full path
+/// it walks to. This is what makes a mount root answerable — `DESCRIBE /chatwork` says `rooms` is
+/// beneath it, `DESCRIBE /chatwork/rooms` says a `{room}` parameter is, and so on down to a leaf.
+///
+/// A parameterised segment is legible **as** a parameter ([`Self::parameter`]), because the caller
+/// has to know a room id goes there rather than a literal `{room}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct ChildNode {
+    /// The path segment itself, e.g. `rooms`, or `{room}` for a parameterised child.
+    pub segment: String,
+    /// The full child path, e.g. `/chatwork/rooms` or `/chatwork/rooms/{room}`.
+    pub path: String,
+    /// The parameter name when this child is a `{param}` segment (`room`), `None` for a fixed one.
+    /// A caller substitutes a real value for the segment iff this is `Some`.
+    pub parameter: Option<String>,
+}
+
+impl ChildNode {
+    /// Build a child from its parent path and segment, deriving [`Self::parameter`] from the
+    /// `{name}` spelling so the two can never disagree.
+    #[must_use]
+    pub fn new(parent: &str, segment: &str) -> Self {
+        let parameter = segment
+            .strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .map(str::to_string);
+        let parent = parent.trim_end_matches('/');
+        Self {
+            segment: segment.to_string(),
+            path: format!("{parent}/{segment}"),
+            parameter,
+        }
+    }
+}
+
 /// The archetype + typed [`Schema`] of a node — the output of `DESCRIBE` (blueprint §6).
 ///
 /// This is the reconciliation point between the driver contract and the canonical type
@@ -378,6 +438,9 @@ pub struct NodeDesc {
     /// [`NodeDesc::child_entry_name`]; defaults to [`ChildAddress::None`] ("no child" is
     /// a declared, valid answer — not every table is a tree).
     pub child_address: ChildAddress,
+    /// Where [`Self::schema`]'s columns come from. Set by [`NodeDesc::schema_contract`]; defaults
+    /// to [`SchemaContract::Compiled`], which is what every compiled driver's stated schema is.
+    pub schema_contract: SchemaContract,
 }
 
 /// Whether an archetype's nodes are navigable **by default** — the value [`NodeDesc::new`] starts
@@ -410,7 +473,17 @@ impl NodeDesc {
             navigable: navigable_by_default(archetype),
             category: NodeCategory::Data,
             child_address: ChildAddress::None,
+            schema_contract: SchemaContract::Compiled,
         }
+    }
+
+    /// State where this node's columns come from ([`SchemaContract`]). A driver serving a
+    /// **declared** node says so here, so an agent can tell a stated row contract from a node that
+    /// has none — the difference `value: Json` used to hide.
+    #[must_use]
+    pub fn schema_contract(mut self, contract: SchemaContract) -> Self {
+        self.schema_contract = contract;
+        self
     }
 
     /// State which of §5.5's two categories this node's rows are. Only the definition catalogs
@@ -756,6 +829,18 @@ pub trait Driver: Send + Sync {
     /// The capability set for a node — used to gate verbs at parse time (§5). Pure.
     /// Path-keyed: a driver narrows the archetype's default verbs per sub-path.
     fn capabilities(&self, path: &Path) -> Capabilities;
+
+    /// The **child locations** beneath a node — the next segments an agent can walk to. Pure: a
+    /// declaration the driver already holds, never an enumeration of live rows (no I/O).
+    ///
+    /// This is what makes a mount root answerable: without it, "the driver is mounted" leads
+    /// nowhere and the only route to its surface is reading its source. Empty is the honest
+    /// default — a driver whose child paths are data (a mail label, a bucket key), not
+    /// declarations, states nothing here and its rows carry the addresses instead
+    /// ([`NodeDesc::child_address`]).
+    fn children(&self, _path: &Path) -> Vec<ChildNode> {
+        Vec::new()
+    }
 
     /// The `CALL` targets this driver declares (blueprint §3). Pure: returns owned data.
     fn procedures(&self) -> &[ProcSig];
@@ -1200,6 +1285,9 @@ mod tests {
   "category": "data",
   "child_address": {
     "kind": "none"
+  },
+  "schema_contract": {
+    "kind": "compiled"
   }
 }"#
         );

@@ -1731,6 +1731,9 @@ fn describe_json_snapshot_is_stable_per_archetype() {
     "columns": [
       "ts"
     ]
+  },
+  "schema_contract": {
+    "kind": "compiled"
   }
 }"#
     );
