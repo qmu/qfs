@@ -35,4 +35,5 @@
 * [Honor or refuse a where predicate, never drop it silently](work-20260724-011029.md)
 * [Enforce policy on the serve read path so a principal sees only what a grant allows](work-20260724-011032.md)
 * [Prove the declared Slack twin and retire the compiled /cf queue pull](work-20260724-011034.md)
+* [ENCODE form makes a form-parameter REST API writable through a declaration etc](work-20260801-044839.md)
 <!-- okf:generated:end -->
