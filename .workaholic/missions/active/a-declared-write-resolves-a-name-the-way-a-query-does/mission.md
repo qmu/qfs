@@ -230,3 +230,4 @@ ticket blocked.
 - 2026-08-03 — concern deferred (stuck) — 20260803210019-the-shipped-chatwork-messages-view-still.md
 - 2026-08-03 — concern deferred (stuck) — 20260803210019-an-archived-ticket-auto-ticks-a.md
 - 2026-08-03 — ticket archived — 20260726190000-declared-reverse-lookup-for-write-path-name-resolution.md
+- 2026-08-03 — story reported — work-20260803-213737.md
