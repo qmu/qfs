@@ -385,6 +385,42 @@ fn response_body_decodes_to_rows_via_the_json_codec() {
     assert_eq!(out.affected, 2);
 }
 
+/// A `204 No Content` read is a successful EMPTY result, never a decode failure (ticket
+/// 20260727214856). Handing the empty body to the JSON codec surfaced `invalid_path … http_decode`,
+/// which sends the reader hunting for a typo in a path that is correct. The reported instance is the
+/// declared Chatwork messages view: the endpoint answers `204` once nothing is unread.
+#[test]
+fn a_204_no_content_read_is_zero_rows_not_a_decode_error() {
+    let mock = Arc::new(MockHttpClient::new().with_response(HttpResponse::new(204, Vec::new())));
+    let d = driver_from_mock(things_config(), Arc::clone(&mock), empty_secrets());
+    let node = EffectNode::new(
+        NodeId(0),
+        EffectKind::Read,
+        rest_target("/rest/example/things"),
+    );
+    let out = d.rest_applier().apply_shared(&node).unwrap();
+    assert_eq!(
+        out.affected, 0,
+        "204 means zero rows, and zero rows is a SUCCESS"
+    );
+}
+
+/// A 2xx body that is genuinely malformed is still a decode error — the 204 carve-out above is
+/// exactly one status wide and does not blanket-swallow bad payloads.
+#[test]
+fn a_200_with_a_malformed_body_is_still_a_decode_error() {
+    let mock = Arc::new(
+        MockHttpClient::new().with_response(HttpResponse::new(200, b"{not json".to_vec())),
+    );
+    let d = driver_from_mock(things_config(), Arc::clone(&mock), empty_secrets());
+    let node = EffectNode::new(
+        NodeId(0),
+        EffectKind::Read,
+        rest_target("/rest/example/things"),
+    );
+    assert!(d.rest_applier().apply_shared(&node).is_err());
+}
+
 // ---------------------------------------------------------------------------
 // Error responses → structured errors + retry classification
 // ---------------------------------------------------------------------------

@@ -285,7 +285,18 @@ impl RestApplier {
     }
 
     /// Decode a response body to rows through the configured codec.
+    ///
+    /// A `204 No Content` is a **successful empty result**, not a decode failure: the service
+    /// answered, and what it said is "nothing". Handing an empty body to a JSON codec produced
+    /// `invalid_path … http_decode` (ticket 20260727214856), which sends the reader hunting for a
+    /// typo in a path that is correct — the misleading-surface defect, not a real one. Chatwork's
+    /// unread-messages read is the reported instance: it answers `204` once nothing is unread.
+    /// A 2xx with a body still decodes normally, so a genuinely malformed payload is still a
+    /// decode error.
     fn decode(&self, resp: &HttpResponse) -> Result<RowBatch, HttpError> {
+        if resp.status == 204 {
+            return Ok(RowBatch::default());
+        }
         self.codec.decode(&resp.body).map_err(|e| match e {
             qfs_codec::CfsError::Decode { fmt, detail } => HttpError::Decode { fmt, detail },
             other => HttpError::Decode {

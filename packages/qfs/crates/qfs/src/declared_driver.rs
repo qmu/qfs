@@ -3843,6 +3843,107 @@ mod tests {
         assert!(body.ends_with(&format!("--{boundary}--\r\n")));
     }
 
+    #[tokio::test]
+    async fn declared_form_write_posts_urlencoded_through_the_full_commit_stack() {
+        // Ticket 20260727214856 — the Chatwork 400, hermetically. The SHIPPED
+        // `INSERT INTO /chatwork/rooms/{room}/messages` sent a JSON body to an endpoint that takes
+        // only `application/x-www-form-urlencoded`, so every commit answered 400. This is the same
+        // statement the cookbook prints, driven through the FULL commit stack (interpreter → mount
+        // remap → write facet → confined applier): the map's declared `ENCODE form` must put
+        // `body=<percent-encoded>` on the wire under the form content type.
+        use qfs_core::{
+            Column, ColumnType, DriverId, EffectKind, EffectNode, NodeId, PlanBuilder, Row,
+            RowBatch, Schema, Target, Value, VfsPath,
+        };
+        use qfs_runtime::{CapabilitySet, DriverRegistry, Interpreter};
+
+        let map_body = serde_json::to_string(
+            &qfs_exec::parse(
+                "INSERT INTO /http/chatwork/rooms/{room}/messages |> ENCODE form VALUES (row)",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let d = DeclaredDriver {
+            name: "chatwork".into(),
+            base_url: "https://api.chatwork.com/v2".into(),
+            auth: r#"{"kind":"none"}"#.into(),
+            pagination: None,
+            pushdown: None,
+            views: vec![],
+            maps: vec![DeclaredMap {
+                path: "/chatwork/rooms/{room}/messages".into(),
+                verb: "INSERT".into(),
+                body: map_body,
+                irreversible: false,
+            }],
+        };
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"{"message_id":"1234"}"#.to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let secrets: Arc<dyn qfs_secrets::Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
+        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+
+        let remap = declared_remap("/chatwork", "chatwork").expect("remap");
+        let bridge = qfs_driver_http::rest_apply_driver(&driver);
+        let facet = crate::apply_facets::RestApplyDriver::new(
+            Arc::new(bridge),
+            "chatwork".to_string(),
+            crate::declared_eval::map_specs(&d),
+        );
+        let registry = DriverRegistry::new().with(
+            remap.outer_id(),
+            Arc::new(crate::mount_adapter::MountApplyDriver::new(
+                remap,
+                Arc::new(facet),
+            )),
+        );
+        let interp = Interpreter::with_defaults(registry);
+
+        let incoming = RowBatch::new(
+            Schema::new(vec![Column::new("body", ColumnType::Text, false)]),
+            vec![Row::new(vec![Value::Text("Deploy shipped ✅".into())])],
+        );
+        let mut b = PlanBuilder::new();
+        b.push(
+            EffectNode::new(
+                NodeId(0),
+                EffectKind::Insert,
+                Target::new(
+                    DriverId::new("chatwork"),
+                    VfsPath::new("/chatwork/rooms/42/messages"),
+                ),
+            )
+            .with_args(incoming),
+        );
+        let caps = CapabilitySet::none().grant(DriverId::new("chatwork"), &EffectKind::Insert);
+        let outcome = interp.commit(b.build(), &caps).await.expect("post commits");
+        assert!(outcome.is_complete(), "the form POST applied: {outcome:?}");
+
+        let post = &mock.recorded()[0];
+        assert_eq!(post.method, qfs_driver_http::HttpMethod::Post);
+        assert_eq!(post.url, "https://api.chatwork.com/v2/rooms/42/messages");
+        let content_type = post
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.clone())
+            .expect("the POST carries a Content-Type");
+        assert_eq!(
+            content_type,
+            qfs_driver_http::FORM_CONTENT_TYPE,
+            "the content type the 400 was missing"
+        );
+        let body = String::from_utf8(post.body.clone().expect("a POST body")).expect("ascii form");
+        assert_eq!(
+            body, "body=Deploy%20shipped%20%E2%9C%85",
+            "the row's scalar field is one percent-encoded form parameter, multi-byte per UTF-8 byte"
+        );
+    }
+
     // ---------------------------------------------------------------------------
     // Ticket 20260708023259 — the SHIPPED declared /cloudflare driver
     // ---------------------------------------------------------------------------

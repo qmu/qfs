@@ -1,0 +1,29 @@
+---
+type: Feedback
+title: G7 and G8 parks create scoping risk for downstream conversions
+kind: concern
+source: development
+created_at: 2026-07-24T00:40:59+09:00
+author: a@qmu.jp
+supersedes:
+severity: moderate
+concern_id: g7-and-g8-parks-create-scoping
+owner: a@qmu.jp
+mission: [the-declared-driver-dsl-covers-the-compiled-drivers-concisely]
+tickets: [20260722091100-coverage-inventory-of-compiled-driver-surfaces.md, 20260722091200-rule-the-semantic-gaps-in-blueprint-13.md, 20260722091300-ship-read-over-post-hermetically.md, 20260722091400-conciseness-bar-stated-and-measured.md, 20260722091500-conversion-playbook-and-honest-tiering.md]
+origin_pr: 21
+origin_pr_url: https://github.com/qmu/qfs/pull/21
+origin_branch: work-20260722-084646
+origin_commit: f52592b
+last_seen: 2026-07-28T13:09:57+09:00
+---
+
+# G7 and G8 parks create scoping risk for downstream conversions
+
+## Description
+
+G7 carries a reopen mechanism but no mission name, and G8 has no trigger at all; the §13.3 ledger references the parks but names no successor mission (see [f52592b](https://github.com/qmu/qfs/commit/f52592b)).
+
+## How to Fix
+
+Name the follow-up mission for each park, or record the trigger that reopens it.

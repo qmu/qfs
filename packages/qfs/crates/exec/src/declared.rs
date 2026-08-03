@@ -1721,6 +1721,33 @@ mod tests {
         assert_eq!(write.encoding, None);
     }
 
+    /// The §13 form-parameter shape (ticket 20260727214856): `|> ENCODE form VALUES (row)` parses
+    /// onto the same pipeline body as the multipart arm and surfaces `form` as the encoding, so the
+    /// applier can pick the form encoder. This is the parse leg of the Chatwork-400 fix — the
+    /// shipped `INSERT INTO /chatwork/rooms/{room}/messages` sends a JSON body to an endpoint that
+    /// takes only `application/x-www-form-urlencoded`.
+    #[test]
+    fn eval_map_body_carries_the_declared_encode_form() {
+        let body = serde_json::to_string(
+            &qfs_parser::parse_statement(
+                "INSERT INTO /http/chatwork/rooms/{room}/messages |> ENCODE form VALUES (row)",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let write = eval_map_body(
+            &body,
+            "chatwork",
+            "/chatwork/rooms/7/messages",
+            &[("room".to_string(), "7".to_string())],
+            &incoming(&[("body", "hello")]),
+        )
+        .expect("evals");
+        assert_eq!(write.rest_path, "/rest/chatwork/rooms/7/messages");
+        assert_eq!(write.encoding.as_deref(), Some("form"));
+        assert_eq!(write.bodies.len(), 1);
+    }
+
     #[test]
     fn eval_map_body_rejects_a_foreign_target() {
         // §13 confinement (write side): a map body writing to a FOREIGN `/http/<other>` host is the

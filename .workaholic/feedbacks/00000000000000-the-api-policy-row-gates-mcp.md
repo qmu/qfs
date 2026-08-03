@@ -1,0 +1,36 @@
+---
+type: Feedback
+title: The `api` policy row gates MCP, dashboard, and reconcile alike
+kind: concern
+source: development
+created_at: 
+author: a@qmu.jp
+supersedes:
+severity: moderate
+concern_id: the-api-policy-row-gates-mcp
+owner: 
+mission: 
+tickets: []
+origin_pr: 30
+origin_pr_url: https://github.com/qmu/qfs/pull/30
+origin_branch: work-20260707-180554
+origin_commit: e7e44ee
+last_seen: 2026-07-24T01:08:52+09:00
+closed: superseded
+---
+
+# The `api` policy row gates MCP, dashboard, and reconcile alike
+
+## Description
+
+The single 'api' policy row still grants MCP, dashboard and reconcile alike; no per-client gate split was made on this branch
+
+## How to Fix
+
+Split the api policy row into per-client gates if the access-control review requires it
+
+
+## Re-grade (2026-07-25T11:42:07+09:00)
+
+- severity: low -> moderate
+- rationale: Commit 4ce511e established that the statement bridge read leg resolves no policy at all and runs under a hardcoded anonymous principal, while the endpoint face is now fail-closed. The per-face permission drift this concern names is demonstrated rather than suspected, and the asymmetry is easy to mistake for coverage.

@@ -111,8 +111,10 @@ impl ApplyDriver for RestApplyDriver {
         // the pre-encoded body under `__http_body` and to target the wire resource the body named.
         // The map's declared `ENCODE <fmt>` picks the encoder: `multipart` (the §13 upload
         // primitive — the args also carry the boundary-bearing Content-Type header override),
-        // no encoding = the default JSON object. An unknown name is a terminal refusal, never a
-        // silent JSON.
+        // `form` (the §13 form-parameter primitive for a plain-REST API that takes only
+        // `application/x-www-form-urlencoded` and answers a JSON body with 400, ticket
+        // 20260727214856), no encoding = the default JSON object. An unknown name is a terminal
+        // refusal, never a silent JSON.
         let mut affected = 0u64;
         for body in &write.bodies {
             let mut wire = effect.clone();
@@ -126,9 +128,13 @@ impl ApplyDriver for RestApplyDriver {
                 Some("multipart") => {
                     qfs_driver_http::http_multipart_args(body).map_err(EffectError::terminal)?
                 }
+                Some("form") => {
+                    qfs_driver_http::http_form_args(body).map_err(EffectError::terminal)?
+                }
                 Some(other) => {
                     return Err(EffectError::terminal(format!(
-                        "declared map names unknown wire encoding `{other}` (supported: multipart)"
+                        "declared map names unknown wire encoding `{other}` \
+                         (supported: multipart, form)"
                     )))
                 }
             };
