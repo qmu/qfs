@@ -405,10 +405,16 @@ fn live_registry(local_root: &Path) -> DriverRegistry {
                     );
                     let driver = crate::declared_driver::live_rest_driver(&d, client, secrets)?;
                     let bridge = qfs_driver_http::rest_apply_driver(&driver);
+                    // The declared views ride along so a §13.1 G9 `LET` lookup can search the
+                    // driver's own read surface at commit time; the applier is the confined one the
+                    // read facet uses, so the lookup inherits its auth, host pin and pagination.
+                    let types = crate::declared_driver::load_declared_types();
                     let facet = crate::apply_facets::RestApplyDriver::new(
                         Arc::new(bridge),
                         d.name.clone(),
                         crate::declared_eval::map_specs(&d),
+                        crate::declared_eval::view_specs(&d, &types),
+                        driver.rest_applier().clone(),
                     );
                     let remap = crate::declared_driver::declared_remap(&path, &d.name)?;
                     Some(Arc::new(crate::mount_adapter::MountApplyDriver::new(

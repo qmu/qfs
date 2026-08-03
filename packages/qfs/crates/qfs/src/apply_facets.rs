@@ -46,21 +46,107 @@ pub struct RestApplyDriver {
     driver_name: String,
     /// The declared write mappings (mount-path template + stored `VALUES (<expr>)` body).
     maps: Vec<MapSpec>,
+    /// The driver's declared READ views — the only surface a §13.1 G9 `LET` lookup may search. A map
+    /// body's reverse lookup names one of these mount paths, so the view's own cursor paging and
+    /// `OF <type>` contract apply to the lookup without being restated.
+    views: Vec<qfs_exec::declared::ViewSpec>,
+    /// The confined REST applier the lookup fetch rides — the same one the read facet uses, so a
+    /// lookup gets the driver's auth, its host pin, and its pagination for free.
+    applier: qfs_driver_http::RestApplier,
 }
 
 impl RestApplyDriver {
-    /// Build the write facet over the stock apply bridge plus the driver's resolved map specs.
+    /// Build the write facet over the stock apply bridge plus the driver's resolved map specs, its
+    /// declared views (the §13.1 G9 lookup surface), and the confined applier the lookup fetch rides.
     #[must_use]
     pub(crate) fn new(
         inner: Arc<dyn ApplyDriver>,
         driver_name: String,
         maps: Vec<MapSpec>,
+        views: Vec<qfs_exec::declared::ViewSpec>,
+        applier: qfs_driver_http::RestApplier,
     ) -> Self {
         Self {
             inner,
             driver_name,
             maps,
+            views,
+            applier,
         }
+    }
+
+    /// Fetch one §13.1 G9 lookup's collection — **once per statement**, through the driver's own
+    /// declared read view, so the wire shape is exactly the compiled oracle's (one collection GET,
+    /// then a local scan) and the view's declared cursor paging carries the lookup past page one.
+    ///
+    /// The read is blocking (the shared reqwest transport drives its own `block_on`), so it runs on a
+    /// dedicated OS thread carrying no tokio context — calling it inline would nest runtimes and
+    /// panic, exactly as the read facet documents.
+    fn fetch_lookup(
+        &self,
+        lookup: &qfs_exec::declared::MapLookup,
+    ) -> Result<qfs_core::RowBatch, EffectError> {
+        let (spec, params) = self
+            .views
+            .iter()
+            .find_map(|v| {
+                qfs_exec::declared::match_template(&v.template, &lookup.source_path)
+                    .map(|params| (v, params))
+            })
+            .ok_or_else(|| {
+                EffectError::terminal(format!(
+                    "declared map LET names {:?}, which is not a declared view of this driver",
+                    lookup.source_path
+                ))
+            })?;
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                qfs_exec::declared::eval_view_body(
+                    &spec.body,
+                    &self.driver_name,
+                    &lookup.source_path,
+                    spec.of_columns.as_deref(),
+                    spec.of_refinement.as_ref(),
+                    &params,
+                    &[],
+                    |rest_path, post_body| {
+                        let result = match post_body {
+                            Some(body) => qfs_driver_http::rest_read_rows_post(
+                                &self.applier,
+                                rest_path,
+                                &body,
+                            ),
+                            None => qfs_driver_http::rest_read_rows(&self.applier, rest_path),
+                        };
+                        result.map_err(|e| qfs_core::CfsError::InvalidPath {
+                            path: rest_path.to_string(),
+                            reason: e.code(),
+                        })
+                    },
+                    |url| {
+                        self.applier.follow_bytes(url).map_err(|e| {
+                            qfs_core::CfsError::InvalidPath {
+                                path: lookup.source_path.clone(),
+                                reason: e.code(),
+                            }
+                        })
+                    },
+                )
+            })
+            .join()
+        })
+        .unwrap_or_else(|_| {
+            Err(qfs_core::CfsError::InvalidPath {
+                path: lookup.source_path.clone(),
+                reason: "declared_lookup_panicked",
+            })
+        })
+        .map_err(|e| {
+            EffectError::terminal(format!(
+                "declared map LET could not read its collection: {}",
+                e.code()
+            ))
+        })
     }
 }
 
@@ -94,14 +180,36 @@ impl ApplyDriver for RestApplyDriver {
             return self.inner.apply_one(effect, cx).await;
         }
 
+        // §13.1 G9: resolve the body's `LET` reverse lookups BEFORE the effect leg. Each collection
+        // is fetched once here — this is the I/O the evaluator must not do — and the per-row match
+        // (and its refusals) happens inside the pure evaluator below. A body with no `LET` yields an
+        // empty list and costs nothing, which is every shipped declaration today.
+        let lookups = qfs_exec::declared::map_body_lookups(
+            &spec.body,
+            &self.driver_name,
+            &mount_path,
+            &params,
+        )
+        .map_err(|e| {
+            EffectError::terminal(format!("declared map LET is not usable: {}", e.code()))
+        })?;
+        let mut resolved = Vec::with_capacity(lookups.len());
+        for lookup in lookups {
+            let collection = self.fetch_lookup(&lookup)?;
+            resolved.push((lookup, collection));
+        }
+
         // Evaluate the map body per incoming row → the confined `/rest/<name>/<resource>` path and
-        // one wire body each. A body that cannot be evaluated is a terminal effect error.
+        // one wire body each. A body that cannot be evaluated is a terminal effect error — including
+        // a name that resolved to zero or to several rows, which is refused here, before any wire
+        // write is issued.
         let write = qfs_exec::declared::eval_map_body(
             &spec.body,
             &self.driver_name,
             &mount_path,
             &params,
             &effect.args,
+            &resolved,
         )
         .map_err(|e| {
             EffectError::terminal(format!("declared map body did not evaluate: {}", e.code()))

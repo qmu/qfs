@@ -22,7 +22,7 @@ use qfs_core::{
     CfsError, Column, ColumnType, Fields, PushdownProfile, Row, RowBatch, Schema, Value,
 };
 use qfs_engine::{eval_value, CombineEngine, MiniEvaluator, ScanResults};
-use qfs_parser::{EffectBody, Expr, PipeOp, Pipeline, Source, Statement};
+use qfs_parser::{EffectBody, Expr, Op, PipeOp, Pipeline, Projection, Source, Statement};
 use qfs_pushdown::{lower_query, lower_scalar, partition_by_source, SourceId, SourceRegistry};
 
 /// The single column a `FOLLOW <field>` stage delivers: the followed URL's raw response bytes.
@@ -112,6 +112,227 @@ pub struct MapWrite {
     /// services — so the caller stamps this onto the wire effect and the CALL is issued as exactly
     /// the write its body names.
     pub wire_kind: qfs_core::EffectKind,
+}
+
+/// One declared **reverse lookup** a map body binds ahead of its effect (blueprint §13.1 **G9**):
+///
+/// ```text
+/// LET cid = /slack/{ws}/channels |> WHERE name == row.channel |> SELECT id
+/// ```
+///
+/// The descriptor is what [`map_body_lookups`] extracts **purely** from the stored body; the caller's
+/// confined applier fetches `source_path` **once per statement** and hands the rows back to
+/// [`eval_map_body`], which matches them **locally per row**. That split is what keeps the evaluator
+/// pure and makes the shape identical to the compiled oracle's (one `conversations.list`, then a
+/// local scan), so equivalence is provable on shared fixtures rather than asserted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapLookup {
+    /// The bound name the effect body references (`cid`).
+    pub name: String,
+    /// The mount path of the collection to search — **on the declaring driver's own surface**, with
+    /// the map's `{param}`s already substituted (`/slack/T1/channels`). Confinement is checked at
+    /// extraction: a foreign source never reaches the caller.
+    pub source_path: String,
+    /// The collection column compared against the incoming row (`name`).
+    pub match_col: String,
+    /// The incoming-row field it is compared to (`channel`, from `row.channel`).
+    pub row_field: String,
+    /// The collection column whose value is bound (`id`).
+    pub select_col: String,
+}
+
+/// Extract the declared reverse lookups a stored map body binds ahead of its effect — **pure**, no
+/// I/O, blueprint §13.1 G9. Returns them in binding order; a body with no `LET` returns an empty vec,
+/// which is the shape every shipped declaration has today.
+///
+/// The accepted binding is deliberately **one narrow shape** —
+/// `LET <name> = <own-mount-path> |> WHERE <col> == row.<field> |> SELECT <col>` — and anything else
+/// is a structured refusal rather than a best-effort interpretation. That is the predicate-honesty
+/// law applied to a declaration: a lookup the runtime cannot perform exactly must not be accepted and
+/// then approximated.
+///
+/// **Confinement (§13, the write-side twin of the read side's host pin).** `source_path`'s first
+/// segment must be the declaring driver's own mount. A body naming another driver's surface — or the
+/// raw `/http/…` wire — is refused here, so a declaration can never read outside its own driver to
+/// build a write.
+///
+/// # Errors
+/// [`CfsError::InvalidPath`] when the body is not rehydratable, a binding is not the accepted shape,
+/// or a binding names a source outside the driver's own mount.
+pub fn map_body_lookups(
+    body_json: &str,
+    driver_name: &str,
+    map_path: &str,
+    params: &[(String, String)],
+) -> Result<Vec<MapLookup>, CfsError> {
+    let invalid = |reason: &'static str| CfsError::InvalidPath {
+        path: map_path.to_string(),
+        reason,
+    };
+    let stmt: Statement = serde_json::from_str(body_json)
+        .map_err(|_| invalid("declared map body is not rehydratable"))?;
+
+    let mut lookups = Vec::new();
+    let mut cursor = &stmt;
+    while let Statement::Let { name, value, body } = cursor {
+        lookups.push(lookup_of_binding(
+            name,
+            value,
+            driver_name,
+            params,
+            &invalid,
+        )?);
+        cursor = body;
+    }
+    Ok(lookups)
+}
+
+/// Destructure one `LET` binding into a [`MapLookup`], enforcing the accepted shape and the §13
+/// confinement. Split out so [`map_body_lookups`] stays a readable peel of the let-in nesting.
+fn lookup_of_binding(
+    name: &str,
+    value: &Statement,
+    driver_name: &str,
+    params: &[(String, String)],
+    invalid: &impl Fn(&'static str) -> CfsError,
+) -> Result<MapLookup, CfsError> {
+    let Statement::Query(pipeline) = value else {
+        return Err(invalid("declared map LET must bind a read pipeline"));
+    };
+    let Source::Path(path) = &pipeline.source else {
+        return Err(invalid(
+            "declared map LET source must be a path on the driver's own mount",
+        ));
+    };
+    // §13 confinement: the collection must live on THIS driver's mount. A foreign mount (or the raw
+    // `/http` wire) is refused before the caller ever sees the descriptor.
+    if path.segments.first().map(|s| s.name.as_str()) != Some(driver_name) {
+        return Err(invalid(
+            "declared map LET reads outside its own driver (§13 confinement)",
+        ));
+    }
+    let source_path = render_source_path(&path.segments, params);
+
+    let (match_col, row_field, select_col) = match pipeline.ops.as_slice() {
+        [PipeOp::Where(pred), PipeOp::Select(projections)] => {
+            let (match_col, row_field) = eq_against_row_field(pred, invalid)?;
+            (
+                match_col,
+                row_field,
+                single_projected_column(projections, invalid)?,
+            )
+        }
+        _ => {
+            return Err(invalid(
+                "declared map LET must be `|> WHERE <col> == row.<field> |> SELECT <col>`",
+            ))
+        }
+    };
+
+    Ok(MapLookup {
+        name: name.to_string(),
+        source_path,
+        match_col,
+        row_field,
+        select_col,
+    })
+}
+
+/// The `WHERE <col> == row.<field>` predicate, as `(collection column, incoming-row field)`.
+fn eq_against_row_field(
+    pred: &Expr,
+    invalid: &impl Fn(&'static str) -> CfsError,
+) -> Result<(String, String), CfsError> {
+    let Expr::Binary {
+        op: Op::Eq,
+        lhs,
+        rhs,
+    } = pred
+    else {
+        return Err(invalid(
+            "declared map LET predicate must be `<col> == row.<field>`",
+        ));
+    };
+    let Expr::Col(col) = lhs.as_ref() else {
+        return Err(invalid(
+            "declared map LET predicate must compare a collection column",
+        ));
+    };
+    match rhs.as_ref() {
+        Expr::Path(segments) if segments.len() == 2 && segments[0].as_str() == "row" => {
+            Ok((col.to_string(), segments[1].to_string()))
+        }
+        _ => Err(invalid(
+            "declared map LET predicate must compare against `row.<field>`",
+        )),
+    }
+}
+
+/// The single bare column a lookup's `SELECT` projects.
+fn single_projected_column(
+    projections: &[Projection],
+    invalid: &impl Fn(&'static str) -> CfsError,
+) -> Result<String, CfsError> {
+    match projections {
+        [Projection::Expr {
+            expr: Expr::Col(col),
+            ..
+        }] => Ok(col.to_string()),
+        _ => Err(invalid(
+            "declared map LET must SELECT exactly one bare column",
+        )),
+    }
+}
+
+/// Resolve one lookup for one incoming row against the collection the applier fetched — the local
+/// half of G9, and the half that carries the refusals.
+///
+/// Exactly one match binds. **Zero** is `unresolvable` and **more than one** is `ambiguous`; both are
+/// structured refusals raised before the effect leg is constructed, so the wire write is never issued
+/// with a guessed or missing id. That is the predicate-honesty law applied to a write: the alternative
+/// — picking the first match — is a silent wrong answer that looks like success.
+fn resolve_lookup(
+    lookup: &MapLookup,
+    collection: &RowBatch,
+    incoming: &RowBatch,
+    row: &Row,
+    invalid: &impl Fn(&'static str) -> CfsError,
+) -> Result<Value, CfsError> {
+    let wanted = incoming
+        .schema
+        .columns
+        .iter()
+        .position(|c| c.name == lookup.row_field)
+        .and_then(|i| row.values.get(i))
+        .ok_or_else(|| invalid("the declared map LET names a field the incoming row lacks"))?;
+
+    let match_idx = collection
+        .schema
+        .columns
+        .iter()
+        .position(|c| c.name == lookup.match_col)
+        .ok_or_else(|| invalid("the lookup collection has no column the LET matches on"))?;
+    let select_idx = collection
+        .schema
+        .columns
+        .iter()
+        .position(|c| c.name == lookup.select_col)
+        .ok_or_else(|| invalid("the lookup collection has no column the LET selects"))?;
+
+    let mut hit: Option<&Value> = None;
+    for candidate in &collection.rows {
+        if candidate.values.get(match_idx) == Some(wanted) {
+            if hit.is_some() {
+                return Err(invalid(
+                    "the declared map LET matched more than one row — refusing rather than picking",
+                ));
+            }
+            hit = candidate.values.get(select_idx);
+        }
+    }
+    hit.cloned().ok_or_else(|| {
+        invalid("the declared map LET resolved no row — the name does not exist in the collection")
+    })
 }
 
 /// Match a concrete mount path against a view-path template, binding `{param}` segments. Returns the
@@ -521,6 +742,7 @@ pub fn eval_map_body(
     map_path: &str,
     params: &[(String, String)],
     incoming: &RowBatch,
+    lookups: &[(MapLookup, RowBatch)],
 ) -> Result<MapWrite, CfsError> {
     let invalid = |reason: &'static str| CfsError::InvalidPath {
         path: map_path.to_string(),
@@ -528,10 +750,17 @@ pub fn eval_map_body(
     };
 
     // 1. Rehydrate the stored body (serde, no re-parse). A map body is a single-row `VALUES (<expr>)`
-    //    write effect (one wire body per incoming row; the row list is the write's own — not here).
+    //    write effect (one wire body per incoming row; the row list is the write's own — not here),
+    //    optionally preceded by `LET` bindings (§13.1 G9 — the reverse lookup). The bindings were
+    //    extracted and FETCHED by the caller; here they are only walked past to reach the effect,
+    //    which is what keeps this function pure.
     let stmt: Statement = serde_json::from_str(body_json)
         .map_err(|_| invalid("declared map body is not rehydratable"))?;
-    let Statement::Effect(effect) = stmt else {
+    let mut cursor = stmt;
+    while let Statement::Let { body, .. } = cursor {
+        cursor = *body;
+    }
+    let Statement::Effect(effect) = cursor else {
         return Err(invalid("declared map body is not a write effect"));
     };
     // The body is a `VALUES` write, either bare or wrapped in the `|> ENCODE <fmt>` upload form
@@ -580,26 +809,38 @@ pub fn eval_map_body(
     let scalar =
         lower_scalar(expr).map_err(|_| invalid("declared map body is not a per-row expression"))?;
 
-    // 4. Evaluate per incoming row: bind the row as a single `row` struct column, then run the
-    //    scalar through the SHIPPED per-row evaluator. `row` passthrough yields the whole struct; a
-    //    `{f: row.col}` literal navigates its fields — the wire body the applier encodes + POSTs.
-    let schema = Schema::new(vec![Column::new("row", ColumnType::Unknown, true)]);
-    let bodies = incoming
-        .rows
-        .iter()
-        .map(|r| {
-            let row_struct = Value::Struct(Fields::new(
-                incoming
-                    .schema
-                    .columns
-                    .iter()
-                    .zip(&r.values)
-                    .map(|(c, v)| (c.name.clone(), v.clone()))
-                    .collect(),
-            ));
-            eval_value(&scalar, &schema, &Row::new(vec![row_struct]))
-        })
-        .collect();
+    // 4. Evaluate per incoming row: bind the row as a single `row` struct column — plus one column
+    //    per resolved §13.1 G9 lookup, so the effect body references `cid` exactly as it is written —
+    //    then run the scalar through the SHIPPED per-row evaluator. `row` passthrough yields the
+    //    whole struct; a `{f: row.col}` literal navigates its fields — the wire body the applier
+    //    encodes + POSTs.
+    //
+    //    The lookup collections were fetched ONCE by the caller; the match runs here, per row, over
+    //    those rows. A row whose name resolves to zero or to several is a refusal that aborts the
+    //    whole evaluation, so no effect leg is constructed for ANY row of a statement that contains
+    //    an unresolvable one — the wire never sees a guessed id.
+    let mut schema_columns = vec![Column::new("row", ColumnType::Unknown, true)];
+    for (lookup, _) in lookups {
+        schema_columns.push(Column::new(&lookup.name, ColumnType::Unknown, true));
+    }
+    let schema = Schema::new(schema_columns);
+    let mut bodies = Vec::with_capacity(incoming.rows.len());
+    for r in &incoming.rows {
+        let row_struct = Value::Struct(Fields::new(
+            incoming
+                .schema
+                .columns
+                .iter()
+                .zip(&r.values)
+                .map(|(c, v)| (c.name.clone(), v.clone()))
+                .collect(),
+        ));
+        let mut values = vec![row_struct];
+        for (lookup, collection) in lookups {
+            values.push(resolve_lookup(lookup, collection, incoming, r, &invalid)?);
+        }
+        bodies.push(eval_value(&scalar, &schema, &Row::new(values)));
+    }
 
     Ok(MapWrite {
         rest_path,
@@ -1329,6 +1570,7 @@ mod tests {
             "/slack/post",
             &[],
             &incoming(&[("channel", "C1"), ("text", "hi")]),
+            &[],
         )
         .expect("evals");
 
@@ -1359,6 +1601,7 @@ mod tests {
             "/slack/post",
             &[],
             &incoming(&[("channel", "C9"), ("text", "yo")]),
+            &[],
         )
         .expect("evals");
         match &write.bodies[0] {
@@ -1700,6 +1943,7 @@ mod tests {
             "/chatwork/rooms/1/files",
             &[("room".to_string(), "1".to_string())],
             &incoming(&[("filename", "a.txt"), ("message", "hi")]),
+            &[],
         )
         .expect("evals");
         assert_eq!(write.rest_path, "/rest/chatwork/rooms/1/files");
@@ -1716,9 +1960,212 @@ mod tests {
             "/chatwork/rooms",
             &[],
             &incoming(&[("x", "1")]),
+            &[],
         )
         .expect("evals");
         assert_eq!(write.encoding, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // §13.1 G9 — the declared reverse lookup (`LET` in a map body)
+    // -----------------------------------------------------------------------
+
+    /// Store a `CREATE MAP … AS …` body the way the parser does (serde over the parsed statement).
+    fn stored(src: &str) -> String {
+        serde_json::to_string(&qfs_parser::parse_statement(src).unwrap()).unwrap()
+    }
+
+    /// A lookup collection: a two-column `(name, id)` relation standing in for the driver's own
+    /// declared channels view.
+    fn channels(rows: &[(&str, &str)]) -> RowBatch {
+        RowBatch::new(
+            Schema::new(vec![
+                Column::new("name", ColumnType::Text, false),
+                Column::new("id", ColumnType::Text, false),
+            ]),
+            rows.iter()
+                .map(|(n, i)| {
+                    Row::new(vec![
+                        Value::Text((*n).to_string()),
+                        Value::Text((*i).to_string()),
+                    ])
+                })
+                .collect(),
+        )
+    }
+
+    /// Two incoming rows naming two different channels — the per-row case (QG5).
+    fn incoming_rows(field: &str, values: &[&str]) -> RowBatch {
+        RowBatch::new(
+            Schema::new(vec![Column::new(field, ColumnType::Text, false)]),
+            values
+                .iter()
+                .map(|v| Row::new(vec![Value::Text((*v).to_string())]))
+                .collect(),
+        )
+    }
+
+    const LOOKUP_MAP: &str =
+        "CREATE MAP CALL slack.delete ( channel text ) /slack/{ws}/messages AS \
+         LET cid = /slack/{ws}/channels |> WHERE name == row.channel |> SELECT id \
+         INSERT INTO /http/slack/chat.delete VALUES ({channel: cid})";
+
+    /// The stored body of a `CREATE MAP` — the `body` column of the `/sys/drivers` row it desugars to.
+    fn map_body_of(create_map: &str) -> String {
+        let Statement::Effect(e) = qfs_parser::parse_statement(create_map).unwrap() else {
+            panic!("CREATE MAP desugars to an INSERT");
+        };
+        let EffectBody::Values(values) = &e.body else {
+            panic!("expected the /sys/drivers row");
+        };
+        let idx = values
+            .columns
+            .as_ref()
+            .unwrap()
+            .iter()
+            .position(|c| c.as_str() == "body")
+            .unwrap();
+        match &values.rows[0][idx] {
+            Expr::Lit(qfs_parser::Literal::Str(s)) => s.clone(),
+            other => panic!("body column is a text literal, got {other:?}"),
+        }
+    }
+
+    /// The accepted shape is extracted with its `{param}` substituted — and the extraction is PURE,
+    /// so nothing here touches the wire.
+    #[test]
+    fn map_body_lookups_extracts_the_declared_reverse_lookup() {
+        let body = map_body_of(LOOKUP_MAP);
+        let found = map_body_lookups(
+            &body,
+            "slack",
+            "/slack/T1/messages",
+            &[("ws".to_string(), "T1".to_string())],
+        )
+        .expect("the accepted shape extracts");
+        assert_eq!(
+            found,
+            vec![MapLookup {
+                name: "cid".into(),
+                source_path: "/slack/T1/channels".into(),
+                match_col: "name".into(),
+                row_field: "channel".into(),
+                select_col: "id".into(),
+            }]
+        );
+    }
+
+    /// QG3 — §13 confinement on the WRITE side: a `LET` naming ANOTHER driver's surface is refused,
+    /// so a declaration can never read outside its own driver to build a write.
+    #[test]
+    fn a_let_reading_a_foreign_driver_is_refused() {
+        let body = map_body_of(
+            "CREATE MAP CALL slack.delete ( channel text ) /slack/{ws}/messages AS \
+             LET cid = /github/repos |> WHERE name == row.channel |> SELECT id \
+             INSERT INTO /http/slack/chat.delete VALUES ({channel: cid})",
+        );
+        let err = map_body_lookups(&body, "slack", "/slack/T1/messages", &[])
+            .expect_err("a foreign lookup source is refused");
+        assert_eq!(err.code(), "invalid_path");
+    }
+
+    /// A binding that is not the one accepted shape is refused rather than approximated.
+    #[test]
+    fn a_let_of_an_unsupported_shape_is_refused_not_approximated() {
+        let body = map_body_of(
+            "CREATE MAP CALL slack.delete ( channel text ) /slack/{ws}/messages AS \
+             LET cid = /slack/{ws}/channels |> LIMIT 1 \
+             INSERT INTO /http/slack/chat.delete VALUES ({channel: cid})",
+        );
+        assert!(map_body_lookups(&body, "slack", "/slack/T1/messages", &[]).is_err());
+    }
+
+    /// A body with no `LET` yields no lookups — the shape every shipped declaration has today.
+    #[test]
+    fn a_body_without_a_let_yields_no_lookups() {
+        let body = stored("INSERT INTO /http/slack/chat.postMessage VALUES (row)");
+        assert!(map_body_lookups(&body, "slack", "/slack/post", &[])
+            .expect("no LET is not an error")
+            .is_empty());
+    }
+
+    /// QG5 — the binding evaluates PER ROW: two rows naming two channels produce two effect bodies
+    /// carrying two different resolved ids, from ONE fetched collection.
+    #[test]
+    fn a_lookup_resolves_per_row_from_one_fetched_collection() {
+        let body = map_body_of(LOOKUP_MAP);
+        let lookups = map_body_lookups(
+            &body,
+            "slack",
+            "/slack/T1/messages",
+            &[("ws".to_string(), "T1".to_string())],
+        )
+        .unwrap();
+        let collection = channels(&[("general", "C_GEN"), ("random", "C_RND")]);
+        let write = eval_map_body(
+            &body,
+            "slack",
+            "/slack/T1/messages",
+            &[("ws".to_string(), "T1".to_string())],
+            &incoming_rows("channel", &["general", "random"]),
+            &[(lookups[0].clone(), collection)],
+        )
+        .expect("both rows resolve");
+        assert_eq!(write.rest_path, "/rest/slack/chat.delete");
+        let ids: Vec<String> = write
+            .bodies
+            .iter()
+            .map(|b| match b {
+                Value::Struct(f) => match &f.entries[0].1 {
+                    Value::Text(s) => s.clone(),
+                    other => panic!("expected the resolved id, got {other:?}"),
+                },
+                other => panic!("expected a struct wire body, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["C_GEN".to_string(), "C_RND".to_string()],
+            "each row resolved against the SAME collection, independently"
+        );
+    }
+
+    /// QG6 — a name that matches nothing is a structured refusal, and because the refusal aborts the
+    /// evaluation NO wire body is produced for any row: the effect leg cannot fire with a missing id.
+    #[test]
+    fn an_unresolvable_name_is_refused_and_no_body_is_built() {
+        let body = map_body_of(LOOKUP_MAP);
+        let lookups = map_body_lookups(&body, "slack", "/slack/T1/messages", &[]).unwrap();
+        let err = eval_map_body(
+            &body,
+            "slack",
+            "/slack/T1/messages",
+            &[],
+            &incoming_rows("channel", &["general", "nope"]),
+            &[(lookups[0].clone(), channels(&[("general", "C_GEN")]))],
+        )
+        .expect_err("an unresolvable name refuses the whole write");
+        assert_eq!(err.code(), "invalid_path");
+    }
+
+    /// QG7 — an ambiguous name is a refusal, never a pick. Taking the first match would be a silent
+    /// wrong answer that looks like success.
+    #[test]
+    fn an_ambiguous_name_is_refused_rather_than_picked() {
+        let body = map_body_of(LOOKUP_MAP);
+        let lookups = map_body_lookups(&body, "slack", "/slack/T1/messages", &[]).unwrap();
+        assert!(eval_map_body(
+            &body,
+            "slack",
+            "/slack/T1/messages",
+            &[],
+            &incoming_rows("channel", &["general"]),
+            &[(
+                lookups[0].clone(),
+                channels(&[("general", "C_ONE"), ("general", "C_TWO")])
+            )],
+        )
+        .is_err());
     }
 
     /// The §13 form-parameter shape (ticket 20260727214856): `|> ENCODE form VALUES (row)` parses
@@ -1741,6 +2188,7 @@ mod tests {
             "/chatwork/rooms/7/messages",
             &[("room".to_string(), "7".to_string())],
             &incoming(&[("body", "hello")]),
+            &[],
         )
         .expect("evals");
         assert_eq!(write.rest_path, "/rest/chatwork/rooms/7/messages");
@@ -1756,8 +2204,15 @@ mod tests {
             &qfs_parser::parse_statement("INSERT INTO /http/evil/steal VALUES (row)").unwrap(),
         )
         .unwrap();
-        let err = eval_map_body(&body, "slack", "/slack/post", &[], &incoming(&[("x", "1")]))
-            .unwrap_err();
+        let err = eval_map_body(
+            &body,
+            "slack",
+            "/slack/post",
+            &[],
+            &incoming(&[("x", "1")]),
+            &[],
+        )
+        .unwrap_err();
         match err {
             CfsError::InvalidPath { reason, .. } => {
                 assert!(

@@ -1524,6 +1524,70 @@ fn insert_with_encode_stage_desugars_to_a_values_pipeline_body() {
 }
 
 #[test]
+fn a_map_body_parses_a_let_binding_ahead_of_its_effect() {
+    // Blueprint §13.1 G9 — the reverse lookup a name-addressed declared write needs. `let_binding`'s
+    // ONLY call site is `program_seq`, so a body parsed with `inner_statement` structurally could not
+    // reach one; `create_map_stmt` now parses with `program_seq`. The map desugars to the usual
+    // `/sys/drivers` INSERT, so what this asserts is that the stored body is a `Statement::Let`
+    // wrapping the effect.
+    let stored = stored_map_body(
+        "CREATE MAP CALL slack.delete ( channel text, ts text ) /slack/{ws}/{channel}/messages AS \
+         LET cid = /slack/{ws}/channels |> WHERE name == row.channel |> SELECT id \
+         INSERT INTO /http/slack/chat.delete VALUES ({channel: cid, ts: row.ts})",
+    );
+    let body: Statement = serde_json::from_str(&stored).expect("a stored map body rehydrates");
+    let Statement::Let { name, value, body } = body else {
+        panic!("expected the body to be a LET binding, got {body:?}");
+    };
+    assert_eq!(name, "cid");
+    assert!(
+        matches!(value.as_ref(), Statement::Query(_)),
+        "the bound value is the lookup pipeline"
+    );
+    assert!(
+        matches!(body.as_ref(), Statement::Effect(_)),
+        "the LET body is the wire effect the map issues"
+    );
+}
+
+#[test]
+fn a_map_body_without_a_let_is_unchanged_by_the_program_seq_switch() {
+    // The one-word parser change must not disturb the shape every shipped declaration already uses.
+    let stored = stored_map_body(
+        "CREATE MAP INSERT /chatwork/rooms/{room}/messages AS \
+         INSERT INTO /http/chatwork/rooms/{room}/messages |> ENCODE form VALUES (row)",
+    );
+    let body: Statement = serde_json::from_str(&stored).expect("a stored map body rehydrates");
+    assert!(
+        matches!(body, Statement::Effect(_)),
+        "a LET-free body is still a bare effect, not wrapped"
+    );
+}
+
+/// Parse a `CREATE MAP …` and return the stored `body` column of the `/sys/drivers` row it desugars
+/// to — the exact JSON the exec layer rehydrates.
+fn stored_map_body(src: &str) -> String {
+    let Statement::Effect(e) = parse_ok(src) else {
+        panic!("CREATE MAP desugars to an INSERT effect");
+    };
+    let EffectBody::Values(values) = &e.body else {
+        panic!("expected the /sys/drivers VALUES row");
+    };
+    let columns = values
+        .columns
+        .as_ref()
+        .expect("the desugared row names its columns");
+    let idx = columns
+        .iter()
+        .position(|c| c.as_str() == "body")
+        .expect("the driver row carries a body column");
+    match &values.rows[0][idx] {
+        Expr::Lit(Literal::Str(s)) => s.clone(),
+        other => panic!("the body column is a text literal, got {other:?}"),
+    }
+}
+
+#[test]
 fn full_chatwork_script_parses_statement_for_statement() {
     // Blueprint §13's fenced example: every statement parses and desugars to a `/sys/drivers` row.
     for src in [

@@ -1145,7 +1145,52 @@ fallback, and on a column-name collision the spliced **detail** wins. The fan-ou
 rows — the same budget declared cursor pagination spends — and **refuses rather than truncates**.
 **Named limit:** G4 substitutes a value *into* an address; it does **not** answer a reverse lookup
 against a collection (Slack's channel-name→id), which is why the slack retirement did not fire —
-see §13.3.)*
+see §13.3 and **G9** below.)*
+
+**G9 — a declared write resolves a name against a collection with `LET`** *(ruled 2026-08-01,
+mission `a-declared-write-resolves-a-name-the-way-a-query-does`; the design brief beside that mission
+carries the full option analysis)*. The gap G4's *Named limit* names is closed with **no new
+vocabulary**: `LET` already binds a pipeline and a let-bound name is already a legal source, so a map
+body says the reverse lookup the same way the shell does.
+
+```qfs
+CREATE MAP CALL slack.delete ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
+  LET cid = /slack/{ws}/channels |> WHERE name == row.channel |> SELECT id
+  INSERT INTO /http/slack/chat.delete VALUES ({channel: cid, ts: row.ts})
+```
+
+Three things are ruled, and each rules out an alternative that looked equivalent:
+
+- **Spelling — `LET` in the map body, not a `LOOKUP` stage and not a `FOLLOW … INTO` selector.**
+  `create_map_stmt` parses its body with `program_seq` (the parser's own `LET`-then-statement
+  production) instead of `inner_statement`, which is the whole parser cost; `body_to_json` is a plain
+  serde serialization, so a stored `Statement::Let` round-trips untouched. A `LOOKUP` stage would add
+  a keyword *and* address the raw wire endpoint, forcing every declaration to re-express
+  `DECODE json |> EXPAND …` and re-open the paging question. A selector on `FOLLOW … INTO` would make
+  one clause mean substitution or search depending on whether the target carries a `{param}` — a
+  reader cannot tell which without opening the URL.
+- **Source — the driver's OWN declared read view, confined exactly as a G4 fan-out target is.** The
+  `LET` source is a mount path on the declaring driver's surface; a body naming a foreign source is
+  refused **at declaration time**. Reusing the declared view is what settles paging without
+  restating it: the view's cursor pagination and its `OF <type>` contract apply as written, so a
+  match on page two resolves rather than reporting "not found".
+- **Time — COMMIT, in the confined applier, immediately before the effect leg; PREVIEW additionally
+  refuses a *malformed* reference with no I/O.** The collection is fetched **once per statement** and
+  matched **locally per row** — the compiled oracle's own shape, which is what makes equivalence
+  provable on shared fixtures rather than merely asserted. A name matching nothing, or matching more
+  than one row, is a structured refusal **before the effect leg fires**; the effect leg is never
+  issued.
+
+Purity is preserved rather than traded away: the evaluator stays a pure function of its inputs, the
+applier performs the one fetch, and the resolved values are bound as **additional columns** before
+the per-row scalar evaluator runs.
+
+*(**Deliberately not taken: resolving at PREVIEW.** §6 records that PREVIEW structurally cannot reach
+the executor — it renders the plan and nothing else. Making it resolve would make preview perform a
+network read for every name-addressed write, which re-rules what PREVIEW means for every driver and
+would have to land on the compiled side simultaneously or a twin is not a twin. That is its own
+mission. The consequence is stated where it bites: what PREVIEW prints for a name-addressed write is
+the **unresolved** name, on the declared and compiled sides alike.)*
 
 **G5 — a declared `CALL` grows a typed signature.** `CREATE MAP CALL <drv>.<action>` is redefined to
 take an **optional typed parameter list** — `CREATE MAP CALL <drv>.<action> ( <param> <type>, … )

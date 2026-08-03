@@ -2718,6 +2718,8 @@ mod tests {
             Arc::new(qfs_driver_http::rest_apply_driver(&driver)),
             "slack".to_string(),
             crate::declared_eval::map_specs(&d),
+            crate::declared_eval::view_specs(&d, &[]),
+            driver.rest_applier().clone(),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -3404,9 +3406,15 @@ mod tests {
                 qfs_core::Value::Text("ship it".into()),
             ])],
         );
-        let write =
-            qfs_exec::declared::eval_map_body(&map_body, "slack", "/slack/post", &[], &incoming)
-                .expect("map evaluates");
+        let write = qfs_exec::declared::eval_map_body(
+            &map_body,
+            "slack",
+            "/slack/post",
+            &[],
+            &incoming,
+            &[],
+        )
+        .expect("map evaluates");
         assert_eq!(write.rest_path, "/rest/slack/chat.postMessage");
 
         // Drive the evaluated body through the confined applier and assert the POSTed wire body.
@@ -3573,6 +3581,8 @@ mod tests {
             Arc::new(bridge),
             "slack".to_string(),
             crate::declared_eval::map_specs(&d),
+            crate::declared_eval::view_specs(&d, &[]),
+            driver.rest_applier().clone(),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -3777,6 +3787,8 @@ mod tests {
             Arc::new(bridge),
             "chatwork".to_string(),
             crate::declared_eval::map_specs(&d),
+            crate::declared_eval::view_specs(&d, &[]),
+            driver.rest_applier().clone(),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -3893,6 +3905,8 @@ mod tests {
             Arc::new(bridge),
             "chatwork".to_string(),
             crate::declared_eval::map_specs(&d),
+            crate::declared_eval::view_specs(&d, &[]),
+            driver.rest_applier().clone(),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -3941,6 +3955,231 @@ mod tests {
         assert_eq!(
             body, "body=Deploy%20shipped%20%E2%9C%85",
             "the row's scalar field is one percent-encoded form parameter, multi-byte per UTF-8 byte"
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_let_lookup_resolves_a_name_then_issues_the_effect_leg() {
+        // Blueprint §13.1 G9 / ticket 20260726190000 QG4 — the reverse lookup end to end, through the
+        // FULL commit stack. TWO wire requests must be recorded, IN ORDER: the lookup GET against the
+        // driver's own declared collection view, then the effect POST carrying the RESOLVED id. This
+        // is the compiled oracle's own shape (`conversations.list`, then the call), which is what
+        // makes the declared twin's equivalence provable rather than asserted.
+        use qfs_core::{
+            Column, ColumnType, DriverId, EffectKind, EffectNode, NodeId, PlanBuilder, Row,
+            RowBatch, Schema, Target, Value, VfsPath,
+        };
+        use qfs_runtime::{CapabilitySet, DriverRegistry, Interpreter};
+
+        let map_body = serde_json::to_string(
+            &qfs_exec::parse(
+                "LET cid = /slack/{ws}/channels |> WHERE name == row.channel |> SELECT id \
+                 INSERT INTO /http/slack/chat.delete VALUES ({channel: cid, ts: row.ts})",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let view_body = serde_json::to_string(
+            &qfs_exec::parse("/http/slack/conversations.list |> DECODE json").unwrap(),
+        )
+        .unwrap();
+        let d = DeclaredDriver {
+            name: "slack".into(),
+            base_url: "https://slack.com/api".into(),
+            auth: r#"{"kind":"none"}"#.into(),
+            pagination: None,
+            pushdown: None,
+            views: vec![DeclaredNode {
+                path: "/slack/{ws}/channels".into(),
+                of_type: None,
+                body: view_body,
+                pushdown: None,
+            }],
+            maps: vec![DeclaredMap {
+                path: "/slack/{ws}/messages".into(),
+                verb: "INSERT".into(),
+                body: map_body,
+                irreversible: false,
+            }],
+        };
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        // 1st: the collection the LET searches. 2nd: the effect leg's response.
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"[{"name":"general","id":"C_GEN"},{"name":"random","id":"C_RND"}]"#.to_vec(),
+        ));
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"{"ok":true}"#.to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let secrets: Arc<dyn qfs_secrets::Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
+        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+
+        let remap = declared_remap("/slack", "slack").expect("remap");
+        let facet = crate::apply_facets::RestApplyDriver::new(
+            Arc::new(qfs_driver_http::rest_apply_driver(&driver)),
+            "slack".to_string(),
+            crate::declared_eval::map_specs(&d),
+            crate::declared_eval::view_specs(&d, &[]),
+            driver.rest_applier().clone(),
+        );
+        let registry = DriverRegistry::new().with(
+            remap.outer_id(),
+            Arc::new(crate::mount_adapter::MountApplyDriver::new(
+                remap,
+                Arc::new(facet),
+            )),
+        );
+        let interp = Interpreter::with_defaults(registry);
+
+        let incoming = RowBatch::new(
+            Schema::new(vec![
+                Column::new("channel", ColumnType::Text, false),
+                Column::new("ts", ColumnType::Text, false),
+            ]),
+            vec![Row::new(vec![
+                Value::Text("random".into()),
+                Value::Text("1700.1".into()),
+            ])],
+        );
+        let mut b = PlanBuilder::new();
+        b.push(
+            EffectNode::new(
+                NodeId(0),
+                EffectKind::Insert,
+                Target::new(DriverId::new("slack"), VfsPath::new("/slack/T1/messages")),
+            )
+            .with_args(incoming),
+        );
+        let caps = CapabilitySet::none().grant(DriverId::new("slack"), &EffectKind::Insert);
+        let outcome = interp
+            .commit(b.build(), &caps)
+            .await
+            .expect("the resolved write commits");
+        assert!(outcome.is_complete(), "the effect leg applied: {outcome:?}");
+
+        let recorded = mock.recorded();
+        assert_eq!(
+            recorded.len(),
+            2,
+            "exactly one lookup then one effect leg — the collection is fetched ONCE per statement: {recorded:?}"
+        );
+        assert_eq!(recorded[0].method, qfs_driver_http::HttpMethod::Get);
+        assert_eq!(
+            recorded[0].url, "https://slack.com/api/conversations.list",
+            "the lookup reads the driver's OWN declared collection view"
+        );
+        assert_eq!(recorded[1].method, qfs_driver_http::HttpMethod::Post);
+        assert_eq!(recorded[1].url, "https://slack.com/api/chat.delete");
+        let body = String::from_utf8(recorded[1].body.clone().expect("a POST body")).unwrap();
+        assert!(
+            body.contains("C_RND"),
+            "the effect leg carries the RESOLVED id, not the name: {body}"
+        );
+        assert!(
+            !body.contains("random"),
+            "the unresolved name never reaches the wire: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_let_lookup_refuses_an_unknown_name_before_the_effect_leg() {
+        // QG6 — the refusal is asserted by the ABSENCE of the second request: an unresolvable name
+        // must never reach the wire as a garbage id, and must never fire a silent no-op write.
+        use qfs_core::{
+            Column, ColumnType, DriverId, EffectKind, EffectNode, NodeId, PlanBuilder, Row,
+            RowBatch, Schema, Target, Value, VfsPath,
+        };
+        use qfs_runtime::{CapabilitySet, DriverRegistry, Interpreter};
+
+        let map_body = serde_json::to_string(
+            &qfs_exec::parse(
+                "LET cid = /slack/{ws}/channels |> WHERE name == row.channel |> SELECT id \
+                 INSERT INTO /http/slack/chat.delete VALUES ({channel: cid, ts: row.ts})",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let view_body = serde_json::to_string(
+            &qfs_exec::parse("/http/slack/conversations.list |> DECODE json").unwrap(),
+        )
+        .unwrap();
+        let d = DeclaredDriver {
+            name: "slack".into(),
+            base_url: "https://slack.com/api".into(),
+            auth: r#"{"kind":"none"}"#.into(),
+            pagination: None,
+            pushdown: None,
+            views: vec![DeclaredNode {
+                path: "/slack/{ws}/channels".into(),
+                of_type: None,
+                body: view_body,
+                pushdown: None,
+            }],
+            maps: vec![DeclaredMap {
+                path: "/slack/{ws}/messages".into(),
+                verb: "INSERT".into(),
+                body: map_body,
+                irreversible: false,
+            }],
+        };
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"[{"name":"general","id":"C_GEN"}]"#.to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let secrets: Arc<dyn qfs_secrets::Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
+        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+        let remap = declared_remap("/slack", "slack").expect("remap");
+        let facet = crate::apply_facets::RestApplyDriver::new(
+            Arc::new(qfs_driver_http::rest_apply_driver(&driver)),
+            "slack".to_string(),
+            crate::declared_eval::map_specs(&d),
+            crate::declared_eval::view_specs(&d, &[]),
+            driver.rest_applier().clone(),
+        );
+        let registry = DriverRegistry::new().with(
+            remap.outer_id(),
+            Arc::new(crate::mount_adapter::MountApplyDriver::new(
+                remap,
+                Arc::new(facet),
+            )),
+        );
+        let interp = Interpreter::with_defaults(registry);
+
+        let incoming = RowBatch::new(
+            Schema::new(vec![
+                Column::new("channel", ColumnType::Text, false),
+                Column::new("ts", ColumnType::Text, false),
+            ]),
+            vec![Row::new(vec![
+                Value::Text("does-not-exist".into()),
+                Value::Text("1700.1".into()),
+            ])],
+        );
+        let mut b = PlanBuilder::new();
+        b.push(
+            EffectNode::new(
+                NodeId(0),
+                EffectKind::Insert,
+                Target::new(DriverId::new("slack"), VfsPath::new("/slack/T1/messages")),
+            )
+            .with_args(incoming),
+        );
+        let caps = CapabilitySet::none().grant(DriverId::new("slack"), &EffectKind::Insert);
+        let outcome = interp.commit(b.build(), &caps).await;
+        let refused = match outcome {
+            Err(_) => true,
+            Ok(o) => !o.is_complete(),
+        };
+        assert!(refused, "an unresolvable name must not commit");
+        let recorded = mock.recorded();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "only the lookup was issued — the effect leg never fired: {recorded:?}"
         );
     }
 
