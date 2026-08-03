@@ -76,4 +76,7 @@
 * [`select` on an unknown column is still silently dropped](20260728125539-select-on-an-unknown-column-is.md)
 * [The cookbook ratchet only parses, so it cannot catch a fabricated column](20260728125539-the-cookbook-ratchet-only-parses-so.md)
 * [The §13.2 calibration table was mis-measured, and the first real conversion lands at the bar rather than under it](20260728130957-the-13-2-calibration-table-was.md)
+* [An archived ticket auto-ticks a criterion it only half meets](20260803210019-an-archived-ticket-auto-ticks-a.md)
+* [The shipped Chatwork messages view still reads unread-only](20260803210019-the-shipped-chatwork-messages-view-still.md)
+* [merge-pr.sh returns the branch head, not the merge commit, so a release-on-tag ship tags off the base line](20260803212935-merge-pr-sh-returns-the-branch-head-not-the-merge-commit-so-a-release-on-tag-ship-tags-off-the-base-line.md)
 <!-- okf:generated:end -->
