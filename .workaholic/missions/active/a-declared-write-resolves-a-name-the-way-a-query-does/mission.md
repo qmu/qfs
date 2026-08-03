@@ -22,6 +22,7 @@ gate_type:
 gate_target:
 gate_assert:
 carried_from: the-declared-slack-twin-retires-the-compiled-driver
+claim: work-20260803-213737
 ---
 
 # A declared write resolves a name the way a query does
