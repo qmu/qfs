@@ -2,12 +2,11 @@
 type: Mission
 title: A declared write resolves a name the way a query does
 slug: a-declared-write-resolves-a-name-the-way-a-query-does
-status: approved
+status: active
 created_at: 2026-07-27T13:55:01+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
 strategy: integrations-are-declared-not-compiled
-drive_authorized: true
 predicted_hours:
 actual_hours:
 tickets:
@@ -227,3 +226,5 @@ ticket blocked.
   the shipped `0.0.80`. The blueprint §13 counter-example this mission carried is closed on the form
   axis: a form-parameter REST API is now writable through a declaration, proven on the wire and not
   only on fixtures. Remaining: the two Slack-twin criteria — mission.md
+- 2026-08-03 — concern deferred (stuck) — 20260803210019-the-shipped-chatwork-messages-view-still.md
+- 2026-08-03 — concern deferred (stuck) — 20260803210019-an-archived-ticket-auto-ticks-a.md
