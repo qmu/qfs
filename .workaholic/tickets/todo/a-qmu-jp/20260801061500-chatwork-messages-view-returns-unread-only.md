@@ -8,6 +8,7 @@ commit_hash:
 category: Changed
 depends_on:
 mission:
+claim: work-20260803-221340
 ---
 
 # The shipped Chatwork messages view reads UNREAD-only, so a second read of the same room is empty
