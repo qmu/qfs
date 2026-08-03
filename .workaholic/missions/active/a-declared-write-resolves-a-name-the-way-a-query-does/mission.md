@@ -8,7 +8,7 @@ author: a@qmu.jp
 assignee: a@qmu.jp
 strategy: integrations-are-declared-not-compiled
 predicted_hours:
-actual_hours:
+actual_hours: 2
 tickets:
   - 20260725103000-declared-expand-must-splice-by-field-name.md
   - 20260726090000-map-body-expressions-can-reference-path-params.md
@@ -231,3 +231,4 @@ ticket blocked.
 - 2026-08-03 — concern deferred (stuck) — 20260803210019-an-archived-ticket-auto-ticks-a.md
 - 2026-08-03 — ticket archived — 20260726190000-declared-reverse-lookup-for-write-path-name-resolution.md
 - 2026-08-03 — story reported — work-20260803-213737.md
+- 2026-08-03 — run recorded (+2h) — 20260803-213737
