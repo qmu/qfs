@@ -73,9 +73,14 @@ CREATE VIEW /slack/{ws}/users OF slack/user AS
   /http/slack/users.list |> DECODE json |> EXPAND members;
 
 -- A write: post a message. An ordinary reversible INSERT (a message can be deleted). The wire body
--- is the exact `{channel, text}` `chat.postMessage` expects, built from the incoming row.
+-- is the exact `{channel, text}` `chat.postMessage` expects.
+--
+-- `path.channel` is the map's OWN `{channel}` segment (ticket 20260726090000). The destination is
+-- named once, in the address, instead of once here and again on every inserted row. `path.<name>`
+-- and `row.<name>` are separate namespaces, so a path parameter and a column sharing a name is not
+-- an ambiguity to resolve — the two are simply different expressions.
 CREATE MAP INSERT /slack/{ws}/{channel}/messages AS
-  INSERT INTO /http/slack/chat.postMessage VALUES ({channel: row.channel, text: row.text});
+  INSERT INTO /http/slack/chat.postMessage VALUES ({channel: path.channel, text: row.text});
 
 -- The five CALL procedures (§13.1 G5 — a declared CALL carries a TYPED signature, so DESCRIBE
 -- reports `react(channel: Text, ts: Text, emoji: Text)` exactly as the compiled registry did, and a

@@ -819,11 +819,37 @@ pub fn eval_map_body(
     //    those rows. A row whose name resolves to zero or to several is a refusal that aborts the
     //    whole evaluation, so no effect leg is constructed for ANY row of a statement that contains
     //    an unresolvable one — the wire never sees a guessed id.
-    let mut schema_columns = vec![Column::new("row", ColumnType::Unknown, true)];
+    //    The map's own `{param}` bindings ride alongside as a second struct, `path` (ticket
+    //    20260726090000), so a body can say what its address already says — `path.channel` on a map
+    //    mounted at `/slack/{ws}/{channel}/messages` — instead of making the caller name the
+    //    destination twice, once in the path and again in the payload.
+    //
+    //    **The two namespaces are separate on purpose, so there is no precedence rule to learn.**
+    //    `row.channel` and `path.channel` are different expressions, and a `{param}` that shares a
+    //    name with an incoming column can never silently win or lose — the ambiguity is designed out
+    //    rather than adjudicated, which is what `workaholic:design` / 「推測するな、宣言して拒否せよ」
+    //    asks for. The one collision that remains possible IS refused: a §13.1 G9 `LET` binding named
+    //    `row` or `path` would shadow one of the two, and shadowing is exactly the quiet wrong answer.
+    let mut schema_columns = vec![
+        Column::new("row", ColumnType::Unknown, true),
+        Column::new("path", ColumnType::Unknown, true),
+    ];
     for (lookup, _) in lookups {
+        if lookup.name == "row" || lookup.name == "path" {
+            return Err(invalid(
+                "a declared LET binding may not be named `row` or `path` — the map body binds both",
+            ));
+        }
         schema_columns.push(Column::new(&lookup.name, ColumnType::Unknown, true));
     }
     let schema = Schema::new(schema_columns);
+    // Row-invariant: the path bindings are the same for every row of one statement.
+    let path_struct = Value::Struct(Fields::new(
+        params
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::Text(v.clone())))
+            .collect(),
+    ));
     let mut bodies = Vec::with_capacity(incoming.rows.len());
     for r in &incoming.rows {
         let row_struct = Value::Struct(Fields::new(
@@ -835,7 +861,7 @@ pub fn eval_map_body(
                 .map(|(c, v)| (c.name.clone(), v.clone()))
                 .collect(),
         ));
-        let mut values = vec![row_struct];
+        let mut values = vec![row_struct, path_struct.clone()];
         for (lookup, collection) in lookups {
             values.push(resolve_lookup(lookup, collection, incoming, r, &invalid)?);
         }
@@ -1581,6 +1607,86 @@ mod tests {
             Value::Struct(fields) => {
                 assert_eq!(fields.get("channel"), Some(&Value::Text("C1".to_string())));
                 assert_eq!(fields.get("text"), Some(&Value::Text("hi".to_string())));
+            }
+            other => panic!("expected a struct wire body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eval_map_body_reads_the_maps_own_path_parameters() {
+        // Ticket 20260726090000. A map mounted at `/slack/{ws}/{channel}/messages` names its
+        // destination in its address; the body reads it back as `path.channel` instead of making the
+        // caller repeat it on every inserted row.
+        let body = serde_json::to_string(
+            &qfs_parser::parse_statement(
+                "INSERT INTO /http/slack/chat.postMessage \
+                 VALUES ({channel: path.channel, text: row.text, ws: path.ws})",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let write = eval_map_body(
+            &body,
+            "slack",
+            "/slack/{ws}/{channel}/messages",
+            &[
+                ("ws".to_string(), "acme".to_string()),
+                ("channel".to_string(), "C1".to_string()),
+            ],
+            &incoming(&[("text", "hi")]),
+            &[],
+        )
+        .expect("evals");
+
+        assert_eq!(write.bodies.len(), 1);
+        match &write.bodies[0] {
+            Value::Struct(fields) => {
+                assert_eq!(
+                    fields.get("channel"),
+                    Some(&Value::Text("C1".to_string())),
+                    "the body read the path's own {{channel}} binding"
+                );
+                assert_eq!(fields.get("ws"), Some(&Value::Text("acme".to_string())));
+                assert_eq!(fields.get("text"), Some(&Value::Text("hi".to_string())));
+            }
+            other => panic!("expected a struct wire body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_path_parameter_and_a_row_column_of_the_same_name_stay_separate() {
+        // The collision question, settled by construction rather than by precedence: `path.channel`
+        // and `row.channel` are DIFFERENT expressions, so a `{param}` sharing a name with an incoming
+        // column can never silently win or lose. This test fails if the two namespaces are ever
+        // merged behind one bare name, whichever way the precedence would then fall.
+        let body = serde_json::to_string(
+            &qfs_parser::parse_statement(
+                "INSERT INTO /http/slack/chat.postMessage \
+                 VALUES ({from_path: path.channel, from_row: row.channel})",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let write = eval_map_body(
+            &body,
+            "slack",
+            "/slack/{ws}/{channel}/messages",
+            &[("channel".to_string(), "C-from-path".to_string())],
+            &incoming(&[("channel", "C-from-row")]),
+            &[],
+        )
+        .expect("evals");
+
+        match &write.bodies[0] {
+            Value::Struct(fields) => {
+                assert_eq!(
+                    fields.get("from_path"),
+                    Some(&Value::Text("C-from-path".to_string()))
+                );
+                assert_eq!(
+                    fields.get("from_row"),
+                    Some(&Value::Text("C-from-row".to_string()))
+                );
             }
             other => panic!("expected a struct wire body, got {other:?}"),
         }

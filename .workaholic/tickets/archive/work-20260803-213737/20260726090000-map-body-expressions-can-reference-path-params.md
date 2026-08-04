@@ -3,7 +3,7 @@ created_at: 2026-07-26T09:00:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Domain]
-effort:
+effort: 1h
 commit_hash:
 category: Changed
 depends_on:
@@ -91,3 +91,40 @@ its own address already says.
 4. Workspace gates green: `cargo test --workspace`, `cargo clippy --workspace --all-targets --
    -D warnings`, `cargo fmt --all --check`, `cargo run -p xtask -- gen-docs --check`,
    `cargo run -p xtask -- gen-skills --check`.
+
+## Final Report
+
+A map body now binds a second struct, `path`, carrying the `{param}` segments its own address
+already resolved for the wire target. The shipped Slack post map reads `path.channel` and no longer
+takes the destination from a column on the inserted row.
+
+**The collision question was designed out rather than adjudicated.** The ticket asked for a
+precedence rule between a `{param}` and a row column of the same name. A precedence rule is the
+wrong shape of answer here: whichever way it falls, one of the two references silently resolves to
+something the author may not have meant, which is the quiet wrong answer the mission's own law
+forbids. Separate namespaces (`path.channel` vs `row.channel`) mean the two are simply different
+expressions and nothing is ever guessed. The test that would have pinned a precedence instead pins
+that the two stay separate — it fails if they are ever merged behind one bare name, whichever
+direction the merge favours.
+
+One collision does remain possible and is refused: a §13.1 G9 `LET` binding named `row` or `path`
+would shadow one of the two names the body itself binds, so it is rejected at evaluation.
+
+No taught surface moved — `slack_driver.qfs` is not shown in any cookbook article, and the two
+articles that do print a `CREATE MAP` body (chatwork, cloudflare) use `VALUES (row)` with no path
+reference. `gen-skills --check` and `gen-docs --check` both report in sync, so no plugin version
+bump is owed by this ticket.
+
+### Discovered Insights
+
+- **Insight**: `eval_map_body` already received the path bindings as its `params` argument — they
+  were rendered into the wire target on the line above and then dropped. The body could not see them
+  not because they were unavailable but because nothing bound them into the per-row schema.
+  **Context**: The "row-closed" constraint recorded by the overnight run of 2026-07-25 reads like a
+  design boundary and was actually a missing two-line binding. Worth remembering when a recorded
+  constraint is phrased as a property of the language rather than of a specific function.
+
+- **Insight**: The path struct is row-invariant, so it is built once outside the per-row loop. Every
+  other binding in that function varies per row, which is why the loop is shaped the way it is.
+  **Context**: A future binding that is also statement-scoped (a connection attribute, a mount
+  coordinate) belongs in the same place rather than inside the loop.

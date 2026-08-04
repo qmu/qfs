@@ -233,3 +233,4 @@ ticket blocked.
 - 2026-08-03 — story reported — work-20260803-213737.md
 - 2026-08-03 — run recorded (+2h) — 20260803-213737
 - 2026-08-04 — ticket archived — 20260725103000-declared-expand-must-splice-by-field-name.md
+- 2026-08-04 — ticket archived — 20260726090000-map-body-expressions-can-reference-path-params.md
