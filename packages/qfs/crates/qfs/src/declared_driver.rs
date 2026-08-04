@@ -2183,15 +2183,24 @@ mod tests {
     #[test]
     fn slack_twin_message_read_is_row_equivalent() {
         // `<#channel>/messages` — the headline node. Same `{ok, messages}` envelope into both sides.
-        // HOMOGENEOUS, FULLY-POPULATED elements. Two recorded declared-side gaps make this the
-        // honest shared fixture rather than a convenience: (1) Slack omits absent optional keys and
-        // tier-2 `EXPAND` splices a struct's values POSITIONALLY, so a ragged array shifts columns;
-        // (2) the compiled DTO folds an EMPTY string to `Null` while the declaration delivers it
-        // verbatim. Both are filed as their own ticket
-        // (20260725103000-declared-expand-must-splice-by-field-name), not papered over here.
+        // RAGGED elements, which is what Slack actually returns: the second message omits both
+        // optional keys. That fixture used to be impossible — tier-2 `EXPAND` spliced a struct's
+        // values POSITIONALLY, so the envelope's own `ok` slid into the `ts` column — and it is the
+        // bar ticket 20260725103000 raised the operator to meet. Both sides deliver `Null` for an
+        // omitted key: the declaration because `EXPAND` now splices by NAME, the compiled driver
+        // because serde defaults the absent field to `""` and its DTO folds that to `Null`.
+        //
+        // A present-but-EMPTY optional value is deliberately NOT in this shared fixture. The two
+        // sides genuinely disagree there and only one of them is expressible: `MessageDto.subtype`
+        // is a `String` whose empty value IS its "absent" sentinel, so the compiled driver cannot
+        // represent `"subtype": ""` at all, while the declaration delivers `Text("")`. The ruling
+        // (ticket 20260725103000) is that the DECLARATION is right — absent and empty are different
+        // wire facts and the survivor must not conflate them — so the case is pinned declared-side
+        // in `declared_of_shaping_keeps_an_empty_string_distinct_from_an_absent_field` instead of
+        // refactoring a crate this same mission deletes (20260724014200).
         const FIXTURE: &str = r#"{"ok":true,"messages":[
             {"ts":"1","user":"U1","text":"hi","thread_ts":"1","subtype":"bot_message"},
-            {"ts":"2","user":"U2","text":"yo","thread_ts":"2","subtype":"thread_broadcast"}]}"#;
+            {"ts":"2","user":"U2","text":"yo"}]}"#;
         let (declared, wire) = declared_slack_read(
             "/slack/{ws}/{channel}/messages",
             "/slack/acme/general/messages",
@@ -2211,6 +2220,56 @@ mod tests {
                 .contains("conversations.history?channel=general"),
             "the declared body names the dotted wire method and binds {{channel}}: {}",
             wire[0].url
+        );
+    }
+
+    #[test]
+    fn declared_of_shaping_keeps_an_empty_string_distinct_from_an_absent_field() {
+        // Ticket 20260725103000's third gate item, ruled: a declared read delivers what the wire
+        // sent. An OMITTED optional key is `Null` (the field is not there); a key present with an
+        // EMPTY string is `Text("")` (the service said "empty", which is a different fact). The
+        // compiled `MessageDto` cannot make this distinction — its fields are `String` and the empty
+        // value doubles as the absent sentinel — so this bar is declared-side only, and it becomes
+        // the whole story once `driver-slack` is deleted (20260724014200).
+        const FIXTURE: &str = r#"{"ok":true,"messages":[
+            {"ts":"1","user":"U1","text":"hi","subtype":""},
+            {"ts":"2","user":"U2","text":"yo"}]}"#;
+        let (declared, _) = declared_slack_read(
+            "/slack/{ws}/{channel}/messages",
+            "/slack/acme/general/messages",
+            "/type/slack/message",
+            &["ts", "user", "text", "thread_ts", "subtype"],
+            "/http/slack/conversations.history?channel={channel} |> DECODE json |> EXPAND messages",
+            FIXTURE,
+            &[],
+        );
+        let subtype = declared
+            .schema
+            .columns
+            .iter()
+            .position(|c| c.name == "subtype")
+            .expect("the OF type declares subtype");
+        assert_eq!(
+            declared.rows[0].values[subtype],
+            qfs_core::Value::Text(String::new()),
+            "a present-but-empty value is delivered as the empty string, not folded to Null"
+        );
+        assert_eq!(
+            declared.rows[1].values[subtype],
+            qfs_core::Value::Null,
+            "an omitted key is Null — and does not shift the columns after it"
+        );
+        // The ragged element's other columns are untouched, which is the positional-splice defect
+        // this ruling rides on top of.
+        let ts = declared
+            .schema
+            .columns
+            .iter()
+            .position(|c| c.name == "ts")
+            .expect("the OF type declares ts");
+        assert_eq!(
+            declared.rows[1].values[ts],
+            qfs_core::Value::Text("2".into())
         );
     }
 

@@ -294,6 +294,142 @@ fn residual_expand_explodes_array_of_struct() {
     assert_eq!(out.rows.len(), 2);
 }
 
+#[test]
+fn residual_expand_splices_a_ragged_array_by_field_name() {
+    // Ticket 20260725103000. Elements with DIFFERENT key sets — what every real optional-field API
+    // returns. Splicing positionally shifted every later column silently; each element's fields must
+    // land under their own names, and a key an element omits must be `Null` in that element's row.
+    let inner = Schema::new(vec![
+        Column::new("ts", ColumnType::Text, false),
+        Column::new("user", ColumnType::Text, true),
+        Column::new("subtype", ColumnType::Text, true),
+    ]);
+    let schema = Schema::new(vec![
+        Column::new("ok", ColumnType::Bool, false),
+        Column::new(
+            "messages",
+            ColumnType::Array(Box::new(ColumnType::Struct(inner))),
+            false,
+        ),
+    ]);
+    let row = Row::new(vec![
+        Value::Bool(true),
+        Value::Array(vec![
+            // Fully populated, and deliberately NOT in the declared column order.
+            Value::Struct(Fields::new(vec![
+                ("subtype".into(), Value::Text("bot_message".into())),
+                ("ts".into(), Value::Text("1".into())),
+                ("user".into(), Value::Text("U1".into())),
+            ])),
+            // Omits `subtype` entirely — the ragged case.
+            Value::Struct(Fields::new(vec![
+                ("ts".into(), Value::Text("2".into())),
+                ("user".into(), Value::Text("U2".into())),
+            ])),
+            // Carries `subtype` present-but-EMPTY, which is a different fact from omitting it.
+            Value::Struct(Fields::new(vec![
+                ("ts".into(), Value::Text("3".into())),
+                ("user".into(), Value::Text("U3".into())),
+                ("subtype".into(), Value::Text(String::new())),
+            ])),
+        ]),
+    ]);
+    let batch = RowBatch::new(schema.clone(), vec![row]);
+    let plan = LogicalPlan::Expand {
+        input: Box::new(LogicalPlan::scan(SourceId::new("api"), schema)),
+        field: "messages".into(),
+    };
+    let reg = SourceRegistry::new().with(SourceId::new("api"), none());
+    let phys = partition_by_source(&plan, &reg).unwrap();
+    let out = MiniEvaluator::new()
+        .execute(&phys, ScanResults::new(vec![batch]))
+        .unwrap();
+
+    assert_eq!(
+        out.schema.column_names(),
+        vec!["ok", "ts", "user", "subtype"],
+        "the declared element type supplies the replacement columns, in its own order"
+    );
+    assert_eq!(
+        out.rows
+            .iter()
+            .map(|r| r.values.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            vec![
+                Value::Bool(true),
+                Value::Text("1".into()),
+                Value::Text("U1".into()),
+                Value::Text("bot_message".into()),
+            ],
+            vec![
+                Value::Bool(true),
+                Value::Text("2".into()),
+                Value::Text("U2".into()),
+                // Omitted by this element — not the next column's value slid over.
+                Value::Null,
+            ],
+            vec![
+                Value::Bool(true),
+                Value::Text("3".into()),
+                Value::Text("U3".into()),
+                // Present-but-empty stays empty: absent and "" are different wire facts.
+                Value::Text(String::new()),
+            ],
+        ]
+    );
+}
+
+#[test]
+fn residual_expand_of_a_late_bound_column_takes_the_union_of_observed_fields() {
+    // No declared element type (an `Unknown` column — a decoded body, an EXTEND output). The
+    // replacement columns are the UNION of the field names the rows actually carry, in first-seen
+    // order, so a ragged late-bound array is spliced by name too.
+    let schema = Schema::new(vec![
+        Column::new("id", ColumnType::Int, false),
+        Column::new("items", ColumnType::Unknown, true),
+    ]);
+    let rows = vec![
+        Row::new(vec![
+            Value::Int(1),
+            Value::Array(vec![Value::Struct(Fields::new(vec![
+                ("a".into(), Value::Int(10)),
+                ("b".into(), Value::Int(20)),
+            ]))]),
+        ]),
+        Row::new(vec![
+            Value::Int(2),
+            // Introduces `c` and omits `b`.
+            Value::Array(vec![Value::Struct(Fields::new(vec![
+                ("a".into(), Value::Int(30)),
+                ("c".into(), Value::Int(40)),
+            ]))]),
+        ]),
+    ];
+    let batch = RowBatch::new(schema.clone(), rows);
+    let plan = LogicalPlan::Expand {
+        input: Box::new(LogicalPlan::scan(SourceId::new("api"), schema)),
+        field: "items".into(),
+    };
+    let reg = SourceRegistry::new().with(SourceId::new("api"), none());
+    let phys = partition_by_source(&plan, &reg).unwrap();
+    let out = MiniEvaluator::new()
+        .execute(&phys, ScanResults::new(vec![batch]))
+        .unwrap();
+
+    assert_eq!(out.schema.column_names(), vec!["id", "a", "b", "c"]);
+    assert_eq!(
+        out.rows
+            .iter()
+            .map(|r| r.values.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            vec![Value::Int(1), Value::Int(10), Value::Int(20), Value::Null],
+            vec![Value::Int(2), Value::Int(30), Value::Null, Value::Int(40)],
+        ]
+    );
+}
+
 // ---- Cross-source federation: hash join over two in-memory scans ----
 
 #[test]
