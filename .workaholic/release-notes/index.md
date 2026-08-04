@@ -36,5 +36,6 @@
 * [Enforce policy on the serve read path so a principal sees only what a grant allows](work-20260724-011032.md)
 * [Prove the declared Slack twin and retire the compiled /cf queue pull](work-20260724-011034.md)
 * [ENCODE form makes a form-parameter REST API writable through a declaration etc](work-20260801-044839.md)
+* [A declared write resolves a name, and the compiled Slack driver is retired](work-20260803-213737.md)
 * [The Chatwork room-messages readings each get their own name](work-20260803-221340.md)
 <!-- okf:generated:end -->
