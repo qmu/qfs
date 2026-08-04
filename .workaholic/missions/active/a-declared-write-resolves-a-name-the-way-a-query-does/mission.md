@@ -8,7 +8,7 @@ author: a@qmu.jp
 assignee: a@qmu.jp
 strategy: integrations-are-declared-not-compiled
 predicted_hours:
-actual_hours: 2
+actual_hours: 8
 tickets:
   - 20260725103000-declared-expand-must-splice-by-field-name.md
   - 20260726090000-map-body-expressions-can-reference-path-params.md
@@ -236,3 +236,4 @@ ticket blocked.
 - 2026-08-04 — ticket archived — 20260726090000-map-body-expressions-can-reference-path-params.md
 - 2026-08-04 — ticket archived — 20260724014100-slack-call-maps-effect-equivalent.md
 - 2026-08-04 — ticket archived — 20260724014200-retire-the-compiled-slack-driver.md
+- 2026-08-04 — run recorded (+6h) — 20260804-165500
