@@ -86,17 +86,34 @@ CREATE MAP INSERT /slack/{ws}/{channel}/messages AS
 -- reports `react(channel: Text, ts: Text, emoji: Text)` exactly as the compiled registry did, and a
 -- wrong-shaped argument is a typecheck error rather than a wire error). Each maps onto its POST
 -- method; `pin` and `delete` are IRREVERSIBLE, so they ride the standard gate.
+-- Every ID-requiring CALL resolves its channel argument the same way, with the §13.1 G9 reverse
+-- lookup: search this driver's OWN `/slack/{ws}/channels` view for a row whose `name` OR whose `id`
+-- equals the given reference, and bind that row's `id`.
+--
+-- The disjunction is what makes one binding accept a reference given either way round. A
+-- human-readable `general` matches on `name`; an already-resolved `C0123` matches on `id` and
+-- therefore resolves to itself. Neither arm asks the runtime to recognise the SHAPE of a Slack id —
+-- both are exact matches against data the workspace itself returned, which is why this reproduces
+-- the compiled driver's behavior without reproducing its `C`/`G`/`D` prefix heuristic.
+--
+-- A reference matching no row is a structured refusal BEFORE the effect leg fires, and one matching
+-- several is refused rather than picked — so a guessed id never reaches the wire.
 CREATE MAP CALL slack.react ( channel text, ts text, emoji text ) /slack/{ws}/{channel}/messages AS
-  INSERT INTO /http/slack/reactions.add VALUES ({channel: row.channel, timestamp: row.ts, name: row.emoji});
+  let cid = /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id
+  INSERT INTO /http/slack/reactions.add VALUES ({channel: cid, timestamp: row.ts, name: row.emoji});
 
 CREATE MAP CALL slack.pin ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
-  INSERT INTO /http/slack/pins.add VALUES ({channel: row.channel, timestamp: row.ts}) IRREVERSIBLE;
+  let cid = /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id
+  INSERT INTO /http/slack/pins.add VALUES ({channel: cid, timestamp: row.ts}) IRREVERSIBLE;
 
 CREATE MAP CALL slack.unpin ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
-  INSERT INTO /http/slack/pins.remove VALUES ({channel: row.channel, timestamp: row.ts});
+  let cid = /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id
+  INSERT INTO /http/slack/pins.remove VALUES ({channel: cid, timestamp: row.ts});
 
 CREATE MAP CALL slack.update ( channel text, ts text, text text ) /slack/{ws}/{channel}/messages AS
-  INSERT INTO /http/slack/chat.update VALUES ({channel: row.channel, ts: row.ts, text: row.text});
+  let cid = /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id
+  INSERT INTO /http/slack/chat.update VALUES ({channel: cid, ts: row.ts, text: row.text});
 
 CREATE MAP CALL slack.delete ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
-  INSERT INTO /http/slack/chat.delete VALUES ({channel: row.channel, ts: row.ts}) IRREVERSIBLE;
+  let cid = /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id
+  INSERT INTO /http/slack/chat.delete VALUES ({channel: cid, ts: row.ts}) IRREVERSIBLE;

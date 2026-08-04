@@ -133,8 +133,13 @@ pub struct MapLookup {
     /// the map's `{param}`s already substituted (`/slack/T1/channels`). Confinement is checked at
     /// extraction: a foreign source never reaches the caller.
     pub source_path: String,
-    /// The collection column compared against the incoming row (`name`).
-    pub match_col: String,
+    /// The collection columns compared against the incoming row (`name`, or `name` and `id`). More
+    /// than one means the binding was written as a disjunction — `WHERE name == row.channel OR id ==
+    /// row.channel` — and a row matching on ANY of them is a hit. That is what lets one lookup accept
+    /// a reference given either way round: a human-readable name resolves to the selected column, and
+    /// a value that is ALREADY that column's value resolves to itself, without the runtime knowing
+    /// anything about the shape of either (ticket 20260724014100).
+    pub match_cols: Vec<String>,
     /// The incoming-row field it is compared to (`channel`, from `row.channel`).
     pub row_field: String,
     /// The collection column whose value is bound (`id`).
@@ -213,11 +218,11 @@ fn lookup_of_binding(
     }
     let source_path = render_source_path(&path.segments, params);
 
-    let (match_col, row_field, select_col) = match pipeline.ops.as_slice() {
+    let (match_cols, row_field, select_col) = match pipeline.ops.as_slice() {
         [PipeOp::Where(pred), PipeOp::Select(projections)] => {
-            let (match_col, row_field) = eq_against_row_field(pred, invalid)?;
+            let (match_cols, row_field) = eq_against_row_field(pred, invalid)?;
             (
-                match_col,
+                match_cols,
                 row_field,
                 single_projected_column(projections, invalid)?,
             )
@@ -232,7 +237,7 @@ fn lookup_of_binding(
     Ok(MapLookup {
         name: name.to_string(),
         source_path,
-        match_col,
+        match_cols,
         row_field,
         select_col,
     })
@@ -242,7 +247,38 @@ fn lookup_of_binding(
 fn eq_against_row_field(
     pred: &Expr,
     invalid: &impl Fn(&'static str) -> CfsError,
-) -> Result<(String, String), CfsError> {
+) -> Result<(Vec<String>, String), CfsError> {
+    let mut cols = Vec::new();
+    let mut field: Option<String> = None;
+    collect_eq_terms(pred, &mut cols, &mut field, invalid)?;
+    let row_field = field
+        .ok_or_else(|| invalid("declared map LET predicate must compare against `row.<field>`"))?;
+    Ok((cols, row_field))
+}
+
+/// Flatten a `<col> == row.<f> [OR <col> == row.<f>]…` predicate into its collection columns,
+/// requiring every term to compare against the SAME `row.<field>`.
+///
+/// **A disjunction is accepted; every other shape is still refused.** Widening the accepted form is
+/// additive and testable, which is what the narrow original shape was chosen to keep possible. What a
+/// disjunction may NOT do is compare against two different row fields: that would be two questions in
+/// one binding, and which one a hit answered would depend on the collection's contents rather than on
+/// the declaration — the silent-approximation failure this shape exists to prevent.
+fn collect_eq_terms(
+    pred: &Expr,
+    cols: &mut Vec<String>,
+    field: &mut Option<String>,
+    invalid: &impl Fn(&'static str) -> CfsError,
+) -> Result<(), CfsError> {
+    if let Expr::Binary {
+        op: Op::Or,
+        lhs,
+        rhs,
+    } = pred
+    {
+        collect_eq_terms(lhs, cols, field, invalid)?;
+        return collect_eq_terms(rhs, cols, field, invalid);
+    }
     let Expr::Binary {
         op: Op::Eq,
         lhs,
@@ -250,7 +286,7 @@ fn eq_against_row_field(
     } = pred
     else {
         return Err(invalid(
-            "declared map LET predicate must be `<col> == row.<field>`",
+            "declared map LET predicate must be `<col> == row.<field>`, optionally OR-ed",
         ));
     };
     let Expr::Col(col) = lhs.as_ref() else {
@@ -258,14 +294,26 @@ fn eq_against_row_field(
             "declared map LET predicate must compare a collection column",
         ));
     };
-    match rhs.as_ref() {
-        Expr::Path(segments) if segments.len() == 2 && segments[0].as_str() == "row" => {
-            Ok((col.to_string(), segments[1].to_string()))
-        }
-        _ => Err(invalid(
+    let Expr::Path(segments) = rhs.as_ref() else {
+        return Err(invalid(
             "declared map LET predicate must compare against `row.<field>`",
-        )),
+        ));
+    };
+    if segments.len() != 2 || segments[0].as_str() != "row" {
+        return Err(invalid(
+            "declared map LET predicate must compare against `row.<field>`",
+        ));
     }
+    let this_field = segments[1].to_string();
+    match field {
+        Some(seen) if *seen != this_field => return Err(invalid(
+            "declared map LET disjunction must compare every term against the same `row.<field>`",
+        )),
+        Some(_) => {}
+        None => *field = Some(this_field),
+    }
+    cols.push(col.to_string());
+    Ok(())
 }
 
 /// The single bare column a lookup's `SELECT` projects.
@@ -306,12 +354,17 @@ fn resolve_lookup(
         .and_then(|i| row.values.get(i))
         .ok_or_else(|| invalid("the declared map LET names a field the incoming row lacks"))?;
 
-    let match_idx = collection
-        .schema
-        .columns
-        .iter()
-        .position(|c| c.name == lookup.match_col)
-        .ok_or_else(|| invalid("the lookup collection has no column the LET matches on"))?;
+    let mut match_idxs = Vec::with_capacity(lookup.match_cols.len());
+    for col in &lookup.match_cols {
+        match_idxs.push(
+            collection
+                .schema
+                .columns
+                .iter()
+                .position(|c| &c.name == col)
+                .ok_or_else(|| invalid("the lookup collection has no column the LET matches on"))?,
+        );
+    }
     let select_idx = collection
         .schema
         .columns
@@ -319,9 +372,15 @@ fn resolve_lookup(
         .position(|c| c.name == lookup.select_col)
         .ok_or_else(|| invalid("the lookup collection has no column the LET selects"))?;
 
+    // Ambiguity is counted in ROWS, not in matching columns: a disjunction whose terms both hit the
+    // same row (`name == X OR id == X` where a channel is called by its own id) is one answer, not
+    // two, and refusing it would make a lookup fail on data that names exactly one thing.
     let mut hit: Option<&Value> = None;
     for candidate in &collection.rows {
-        if candidate.values.get(match_idx) == Some(wanted) {
+        let matches = match_idxs
+            .iter()
+            .any(|&i| candidate.values.get(i) == Some(wanted));
+        if matches {
             if hit.is_some() {
                 return Err(invalid(
                     "the declared map LET matched more than one row — refusing rather than picking",
@@ -2154,11 +2213,49 @@ mod tests {
             vec![MapLookup {
                 name: "cid".into(),
                 source_path: "/slack/T1/channels".into(),
-                match_col: "name".into(),
+                match_cols: vec!["name".into()],
                 row_field: "channel".into(),
                 select_col: "id".into(),
             }]
         );
+    }
+
+    /// The widened arm (ticket 20260724014100): a disjunction of equality terms against the SAME
+    /// `row.<field>` extracts as several match columns, which is what lets one binding accept a
+    /// reference given either as a name or as the id it resolves to.
+    #[test]
+    fn map_body_lookups_extracts_a_disjunction_as_several_match_columns() {
+        let body = map_body_of(
+            "CREATE MAP CALL slack.delete ( channel text ) /slack/{ws}/messages AS \
+             LET cid = /slack/{ws}/channels \
+               |> WHERE name == row.channel OR id == row.channel |> SELECT id \
+             INSERT INTO /http/slack/chat.delete VALUES ({channel: cid})",
+        );
+        let found = map_body_lookups(
+            &body,
+            "slack",
+            "/slack/T1/messages",
+            &[("ws".to_string(), "T1".to_string())],
+        )
+        .expect("a disjunction over one row field extracts");
+        assert_eq!(found[0].match_cols, vec!["name", "id"]);
+        assert_eq!(found[0].row_field, "channel");
+    }
+
+    /// The one disjunction shape that is REFUSED: terms comparing against two different row fields.
+    /// Which question a hit answered would then depend on the collection's contents rather than on
+    /// the declaration, which is the silent approximation this shape exists to prevent.
+    #[test]
+    fn a_disjunction_over_two_different_row_fields_is_refused() {
+        let body = map_body_of(
+            "CREATE MAP CALL slack.delete ( channel text, ts text ) /slack/{ws}/messages AS \
+             LET cid = /slack/{ws}/channels \
+               |> WHERE name == row.channel OR id == row.ts |> SELECT id \
+             INSERT INTO /http/slack/chat.delete VALUES ({channel: cid})",
+        );
+        let err = map_body_lookups(&body, "slack", "/slack/T1/messages", &[])
+            .expect_err("two row fields in one binding is refused");
+        assert_eq!(err.code(), "invalid_path");
     }
 
     /// QG3 — §13 confinement on the WRITE side: a `LET` naming ANOTHER driver's surface is refused,
