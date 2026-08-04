@@ -83,4 +83,9 @@
 * [A declared driver has no upgrade path, so a shipped declaration fix does not reach a live mount](20260804205042-a-declared-driver-has-no-upgrade.md)
 * [The live confirmation this change is really about has not been run](20260804205042-the-live-confirmation-this-change-is.md)
 * [The shipped-asset install-splitter is still copy-pasted across tests](20260804205042-the-shipped-asset-install-splitter-is.md)
+* [A declared lookup cannot be shared across maps, so the §13.2 conciseness bar moved](20260804212551-c-d90ea764.md)
+* [The preview-time malformed-reference refusal was declined, not implemented](20260804212551-the-preview-time-malformed-reference-refusal.md)
+* [The Slack webhook surface went with the crate](20260804212551-the-slack-webhook-surface-went-with.md)
+* [Two commits exceed the branch-safety size threshold](20260804212551-two-commits-exceed-the-branch-safety.md)
+* [Two tests used Slack as an example of a general property](20260804212551-two-tests-used-slack-as-an.md)
 <!-- okf:generated:end -->

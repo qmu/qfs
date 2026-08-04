@@ -238,3 +238,8 @@ ticket blocked.
 - 2026-08-04 — ticket archived — 20260724014100-slack-call-maps-effect-equivalent.md
 - 2026-08-04 — ticket archived — 20260724014200-retire-the-compiled-slack-driver.md
 - 2026-08-04 — run recorded (+6h) — 20260804-165500
+- 2026-08-04 — concern deferred (stuck) — 20260804212551-c-d90ea764.md
+- 2026-08-04 — concern deferred (stuck) — 20260804212551-the-preview-time-malformed-reference-refusal.md
+- 2026-08-04 — concern deferred (stuck) — 20260804212551-the-slack-webhook-surface-went-with.md
+- 2026-08-04 — concern deferred (stuck) — 20260804212551-two-tests-used-slack-as-an.md
+- 2026-08-04 — concern deferred (stuck) — 20260804212551-two-commits-exceed-the-branch-safety.md
