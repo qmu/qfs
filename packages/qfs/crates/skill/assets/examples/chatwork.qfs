@@ -46,7 +46,16 @@ CREATE TYPE chatwork/file (
 CREATE VIEW /chatwork/rooms OF chatwork/room AS
   /http/chatwork/rooms |> DECODE json;
 
+-- Chatwork's `GET /rooms/{room}/messages` defaults to UNREAD-ONLY: without `force`, the first read
+-- of a room returns rows and every later read returns nothing until someone posts again. That is a
+-- consuming read, and a path that answers a different question each time it is read is not a place.
+-- So the two readings get two names instead of one path silently picking one: `…/messages` asks for
+-- the room's latest messages on every read (`force=1`), and `…/messages/unread` is the cheap default
+-- call, named for what it actually returns.
 CREATE VIEW /chatwork/rooms/{room}/messages OF chatwork/message AS
+  /http/chatwork/rooms/{room}/messages?force=1 |> DECODE json;
+
+CREATE VIEW /chatwork/rooms/{room}/messages/unread OF chatwork/message AS
   /http/chatwork/rooms/{room}/messages |> DECODE json;
 
 CREATE VIEW /chatwork/rooms/{room}/files OF chatwork/file AS

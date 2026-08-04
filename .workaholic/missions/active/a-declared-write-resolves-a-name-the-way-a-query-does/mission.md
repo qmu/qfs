@@ -228,3 +228,4 @@ ticket blocked.
   only on fixtures. Remaining: the two Slack-twin criteria — mission.md
 - 2026-08-03 — concern deferred (stuck) — 20260803210019-the-shipped-chatwork-messages-view-still.md
 - 2026-08-03 — concern deferred (stuck) — 20260803210019-an-archived-ticket-auto-ticks-a.md
+- 2026-08-03 — concern resolved (unstuck) — 20260803210019-the-shipped-chatwork-messages-view-still.md

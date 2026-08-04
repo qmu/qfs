@@ -79,4 +79,5 @@
 * [An archived ticket auto-ticks a criterion it only half meets](20260803210019-an-archived-ticket-auto-ticks-a.md)
 * [The shipped Chatwork messages view still reads unread-only](20260803210019-the-shipped-chatwork-messages-view-still.md)
 * [merge-pr.sh returns the branch head, not the merge commit, so a release-on-tag ship tags off the base line](20260803212935-merge-pr-sh-returns-the-branch-head-not-the-merge-commit-so-a-release-on-tag-ship-tags-off-the-base-line.md)
+* [Resolved: The shipped Chatwork messages view still reads unread-only](20260803223450-resolved-the-shipped-chatwork-messages-view-still.md)
 <!-- okf:generated:end -->
