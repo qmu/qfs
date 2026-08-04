@@ -1145,7 +1145,52 @@ fallback, and on a column-name collision the spliced **detail** wins. The fan-ou
 rows — the same budget declared cursor pagination spends — and **refuses rather than truncates**.
 **Named limit:** G4 substitutes a value *into* an address; it does **not** answer a reverse lookup
 against a collection (Slack's channel-name→id), which is why the slack retirement did not fire —
-see §13.3.)*
+see §13.3 and **G9** below.)*
+
+**G9 — a declared write resolves a name against a collection with `LET`** *(ruled 2026-08-01,
+mission `a-declared-write-resolves-a-name-the-way-a-query-does`; the design brief beside that mission
+carries the full option analysis)*. The gap G4's *Named limit* names is closed with **no new
+vocabulary**: `LET` already binds a pipeline and a let-bound name is already a legal source, so a map
+body says the reverse lookup the same way the shell does.
+
+```qfs
+CREATE MAP CALL slack.delete ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
+  LET cid = /slack/{ws}/channels |> WHERE name == row.channel |> SELECT id
+  INSERT INTO /http/slack/chat.delete VALUES ({channel: cid, ts: row.ts})
+```
+
+Three things are ruled, and each rules out an alternative that looked equivalent:
+
+- **Spelling — `LET` in the map body, not a `LOOKUP` stage and not a `FOLLOW … INTO` selector.**
+  `create_map_stmt` parses its body with `program_seq` (the parser's own `LET`-then-statement
+  production) instead of `inner_statement`, which is the whole parser cost; `body_to_json` is a plain
+  serde serialization, so a stored `Statement::Let` round-trips untouched. A `LOOKUP` stage would add
+  a keyword *and* address the raw wire endpoint, forcing every declaration to re-express
+  `DECODE json |> EXPAND …` and re-open the paging question. A selector on `FOLLOW … INTO` would make
+  one clause mean substitution or search depending on whether the target carries a `{param}` — a
+  reader cannot tell which without opening the URL.
+- **Source — the driver's OWN declared read view, confined exactly as a G4 fan-out target is.** The
+  `LET` source is a mount path on the declaring driver's surface; a body naming a foreign source is
+  refused **at declaration time**. Reusing the declared view is what settles paging without
+  restating it: the view's cursor pagination and its `OF <type>` contract apply as written, so a
+  match on page two resolves rather than reporting "not found".
+- **Time — COMMIT, in the confined applier, immediately before the effect leg; PREVIEW additionally
+  refuses a *malformed* reference with no I/O.** The collection is fetched **once per statement** and
+  matched **locally per row** — the compiled oracle's own shape, which is what makes equivalence
+  provable on shared fixtures rather than merely asserted. A name matching nothing, or matching more
+  than one row, is a structured refusal **before the effect leg fires**; the effect leg is never
+  issued.
+
+Purity is preserved rather than traded away: the evaluator stays a pure function of its inputs, the
+applier performs the one fetch, and the resolved values are bound as **additional columns** before
+the per-row scalar evaluator runs.
+
+*(**Deliberately not taken: resolving at PREVIEW.** §6 records that PREVIEW structurally cannot reach
+the executor — it renders the plan and nothing else. Making it resolve would make preview perform a
+network read for every name-addressed write, which re-rules what PREVIEW means for every driver and
+would have to land on the compiled side simultaneously or a twin is not a twin. That is its own
+mission. The consequence is stated where it bites: what PREVIEW prints for a name-addressed write is
+the **unresolved** name, on the declared and compiled sides alike.)*
 
 **G5 — a declared `CALL` grows a typed signature.** `CREATE MAP CALL <drv>.<action>` is redefined to
 take an **optional typed parameter list** — `CREATE MAP CALL <drv>.<action> ( <param> <type>, … )
@@ -1234,7 +1279,7 @@ column by 5–9 per file; the statement-lines column was and is correct.)*
 | `github_account.qfs` | 18 | 5 | read-only `/ghdecl` slice (proves `AUTH ACCOUNT`) |
 | `chatwork.qfs` | **32** | 10 | **full tier-1 service + file transfer — the calibration point** |
 | `cloudflare.qfs` | 49 | 16 | zones + DNS + KV get/put + queue push + **queue pull (the G1 read-over-POST view + its `queue_message` type)** + D1 SQL arm |
-| `slack_driver.qfs` | **40** | 21 | **full tier-1 twin — 5 types + 9 read views (DM over G1 `\|> POST`) + driver-level G2 `PUSHDOWN` + a post map + 5 typed G5 CALL maps** |
+| `slack_driver.qfs` | **45** | 21 | **full twin — 5 types + 9 read views (DM over G1 `\|> POST`) + driver-level G2 `PUSHDOWN` + a post map + 5 typed G5 CALL maps, each resolving its channel through a G9 lookup**. Was 40 before the five lookups; the five added lines are *one* binding written five times, which a declaration cannot yet share (ticket 20260804173000). |
 
 The per-family measurements of the inventory's *expressible today* dispositions — and the projected
 full-twin statement-line counts for slack/github/drive/mail — live **next to the dispositions** in
@@ -1328,7 +1373,7 @@ retirement steps (per every twin, done only after equivalence holds):
 
 | # | Mission | Entry condition — §13.1 rulings it needs landed | Row-equivalence bar |
 |---|---------|--------------------------------------------------|---------------------|
-| 1 | **slack twin** — mission `the-declared-slack-twin-retires-the-compiled-driver`, **ran and closed `carried` 2026-07-27**; continues as `a-declared-write-resolves-a-name-the-way-a-query-does` | **G1** (read-over-POST — DM `conversations.open`), **G2** (pushdown `oldest`/`latest`/`limit`), **G5** (typed CALL sigs for react/pin/unpin/update/delete) — **all four now shipped** (G1 in v0.0.85; G2 + G5 + G4 in this mission). | reads **met**: `slack_driver.qfs` is row-equivalent to `driver-slack` on the shared message/thread/reaction/file/user fixtures, DM read included. Effect-equivalence for the 5 CALL maps is **open**, and `driver-slack` is therefore **not deleted** — see the note below. |
+| 1 | **slack twin** — mission `the-declared-slack-twin-retires-the-compiled-driver`, closed `carried` 2026-07-27; continued and **completed** as `a-declared-write-resolves-a-name-the-way-a-query-does` | **G1** (read-over-POST — DM `conversations.open`), **G2** (pushdown `oldest`/`latest`/`limit`), **G5** (typed CALL sigs for react/pin/unpin/update/delete), **G4** (fan-out) and **G9** (reverse lookup) — all shipped. | **MET, and the ratchet fired**: reads row-equivalent and the 5 CALL maps effect-equivalent, name resolution included. **`driver-slack` is deleted** (v0.0.95, plugin 0.19.0, ticket 20260724014200); its answers survive as recorded goldens in the twin's regression suite. |
 | 2 | **github twin** *(to be created)* | **G2** (pushdown `state`/`labels`/`assignee`/`per_page`), **G5** (merge/dispatch/review sigs). (No G1 — GitHub REST is GET-shaped; GraphQL stays a park.) | declared reads row-equivalent to `driver-github` on the 8-namespace + object + sub-collection fixtures; merge/dispatch/review effect-equivalent (merge stays `IRREVERSIBLE`). |
 | 3 | **drive twin** *(to be created)* | **G2** (Drive `q=` translation), **G4** (path→id parent-pointer resolution), **G5** (`copy` sig). **G7** (blob-namespace ergonomics) is **parked** — the twin exposes the ops as views/maps, not the `cp`/`ls`/`mv`/`rm` shell archetype. | declared reads row-equivalent to `driver-gdrive` on the folder/file/id/export fixtures; upload/update/trash/move/copy effect-equivalent. |
 | 4 | **mail twin** *(to be created)* | **G3** (`ENCODE message` MIME for send/draft), **G4** (list→detail hydration), **G2** (Gmail `q=`), **G5** (send/reply sigs), **G6** (`SEND` alias, optional). Gmail last precisely because G3/G4 must exist — they do. | declared reads row-equivalent to `driver-gmail` on the label/message/thread/attachment fixtures; draft/send/reply effect-equivalent (send stays `IRREVERSIBLE`); `batch` and push/`watch` remain parks. |
@@ -1346,8 +1391,15 @@ queue-pull twin followed the full ratchet and the compiled pull was **deleted** 
 table below). A lexer fix on the way made `slack.update`/`slack.delete` **callable** — the compiled
 registry had advertised them since v0.0.89 while no statement could spell them.
 
-*Did not fire: the retirement.* **`driver-slack` is still compiled and still registered.** The
-retirement steps above were not run, because acceptance stopped one item short of them.
+*The retirement fired on 2026-08-04* (successor mission
+`a-declared-write-resolves-a-name-the-way-a-query-does`, ticket 20260724014200). **`driver-slack` is
+deleted** and its registration is gone; `/slack` is served by the declaration alone. The wall
+described below was cleared by **G9** (a declared reverse lookup on the write path, ticket
+20260726190000) plus the disjunctive match that lets one binding accept a channel given either as a
+name or as the id it resolves to. The equivalence tests stayed in the tree as the twin's regression
+suite, with the compiled driver's rows and wire requests **recorded as goldens** in the same commit
+that deleted it — the last commit in which both implementations existed. What follows is the
+historical account of why it took three missions.
 
 *The wall, stated precisely so it is not re-derived.* A declared **write** cannot turn `#general`
 into `C0123ABCD`. Slack's Web API offers no name-addressed channel endpoint, so the compiled driver

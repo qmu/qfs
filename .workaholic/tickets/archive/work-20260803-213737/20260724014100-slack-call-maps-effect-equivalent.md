@@ -3,9 +3,9 @@ created_at: 2026-07-24T01:41:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Domain]
-effort:
+effort: 4h
 commit_hash:
-category: Added
+category: Changed
 depends_on: [20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md, 20260725124400-declared-follow-into-per-row-fan-out-g4.md, 20260726190000-declared-reverse-lookup-for-write-path-name-resolution.md]
 mission: a-declared-write-resolves-a-name-the-way-a-query-does
 ---
@@ -210,3 +210,81 @@ depends on. **No acceptance item was added to the mission** — the agreed plan 
 `20260724014200-retire-the-compiled-slack-driver.md` therefore stays blocked behind this ticket for
 the same reason as before: `driver-slack` is the oracle the outstanding proof compares against, and
 deleting it now would run the ratchet backwards.
+
+## Final Report
+
+QG2 is closed. The five CALL maps resolve their channel argument through the §13.1 G9 reverse lookup
+that `20260726190000` shipped, and both arms are proven against the compiled oracle.
+
+**The design question this ticket really had to answer was not "how do we resolve a name" — the
+mechanism already existed — but "how does one binding accept a reference given either as a name or
+as the id it resolves to".** The compiled driver answers it with a SHAPE heuristic: `ChannelRef::
+is_id()` returns true for a `C`/`G`/`D` prefix followed by alphanumerics, and only a non-id goes
+through `conversations.list`. Reproducing that would have put Slack's id convention inside a generic
+engine, which is exactly the driver-specific knowledge a declared driver exists to remove.
+
+So the answer is a **disjunction against data**:
+
+```qfs
+let cid = /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id
+```
+
+A human-readable `general` matches on `name`; an already-resolved `C0EQUIV` matches on `id` and
+resolves to itself. Both arms are exact matches against rows the workspace itself returned — no shape
+rule, no prefix knowledge, nothing guessed. The accepted `LET` shape widened from one equality term
+to a disjunction of them, which the shape's own author noted would be "additive and testable"; the
+one disjunction that stays refused is terms comparing against two *different* row fields, since which
+question a hit answered would then depend on the collection rather than on the declaration.
+
+Gate status:
+
+1. **QG1 — still met, and now stronger.** The five equivalence cases run unchanged, and the
+   already-resolved id they address now travels through the lookup's `id` arm rather than around it.
+2. **QG2 — met, both halves, both sides.**
+   `declared_call_resolves_a_channel_name_exactly_as_the_compiled_driver_does` drives `general`
+   through the declared twin and through the compiled oracle and asserts both read
+   `conversations.list` first and then POST the same payload carrying `C0EQUIV`.
+   `declared_call_refuses_an_unresolvable_channel_before_the_effect_leg` asserts the refusal by the
+   ABSENCE of the effect request on both sides.
+3. **QG3 — untouched and still met.**
+4. **Gates green**: `cargo test --workspace`, `clippy -D warnings`, `fmt --all --check`,
+   `gen-docs --check`, `gen-skills --check`, all exit 0.
+
+### Two deviations, both deliberate and both for the developer to confirm
+
+**1. The preview-time "malformed reference" refusal is declined, not deferred by accident.** The
+mission's 2026-08-01 ruling included "PREVIEW additionally refuses a malformed reference — one that
+is neither a legal name nor a legal id shape — with no I/O". That clause presupposes the shape-based
+design this implementation deliberately does not have: resolving against data means *any* string is a
+candidate name, so there is no malformed-versus-unknown line to draw without importing Slack's id
+convention into the engine. What IS asserted, and is the honest part of the clause, is that PREVIEW
+performs **zero** I/O for a name-addressed CALL
+(`preview_of_a_name_addressed_call_performs_no_io_at_all`) — resolution stays commit-time as ruled.
+
+**2. The §13.2 conciseness bar moved from 40 to 45 statement-lines.** The five added `let` lines are
+one binding written five times, because the language cannot share a lookup across maps that mount at
+the same path. That is a finding about the declared model rather than about this file, so it is minted
+as `20260804173000-a-declared-lookup-cannot-be-shared-across-maps.md` rather than absorbed by
+shrinking the declaration elsewhere. The bar remains a ratchet at its measured figure. Whether ~40 is
+still the right §13.2 claim is the open concern `the-13-2-calibration-table-was`, and it should be
+answered together with the minted ticket.
+
+**The tracked concern `slack-workspace-namespace-still-advertises-verb` is still NOT resolved here** —
+the twin's honest verb set settles with the retirement ticket (`20260724014200`), which this ticket
+now unblocks.
+
+### Discovered Insights
+
+- **Insight**: A declared view's `OF` type must resolve against the type list handed to
+  `declared_eval::view_specs`, or the read is refused at delivery — an unresolved type yields
+  `Some(vec![])`, never a passthrough. The CALL test harness built its driver with `views: vec![]`
+  and no types at all, which was invisible until a `LET` lookup needed to actually read one.
+  **Context**: Any test that exercises the write facet's lookup path needs the shipped views AND the
+  shipped types, both read from the asset. A harness that omits them fails with `invalid_path` from
+  inside the lookup, which reads like a confinement error and is not one.
+
+- **Insight**: Ambiguity in a disjunctive lookup has to be counted in ROWS, not in matching columns.
+  `name == X OR id == X` hits the same row twice whenever a channel is addressed by its own id, and
+  counting column hits would refuse exactly the case the disjunction was added to serve.
+  **Context**: The refusal is "matched more than one row — refusing rather than picking", and it must
+  keep meaning that literally as the accepted shape widens.

@@ -2243,7 +2243,8 @@ fn paginate_link_clause(input: &mut Stream<'_>) -> ModalResult<String> {
 /// AND keep the exact predicate as the local residual — over-fetch then filter, never wrong rows).
 /// `EXACT` is the default when neither word is given.
 ///
-/// This lifts the compiled pushdown modules' own discipline (`driver-slack/pushdown.rs` et al.) to
+/// This lifts the compiled pushdown modules' own discipline (the retired compiled
+/// `driver-slack`'s `pushdown.rs` et al.) to
 /// declaration data: residual truthfulness becomes a declared property the evaluator enforces, not a
 /// per-driver Rust routine. A view with NO `PUSHDOWN` clause is honest-but-chatty (everything
 /// residual) — the clause is opt-in optimization, never a correctness prerequisite.
@@ -2432,9 +2433,16 @@ fn create_declared_view_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
     Ok(insert_sys_drivers(values, create))
 }
 
-/// `CREATE MAP <verb|CALL <driver>.<action>> /<node> AS <effect> [IRREVERSIBLE]` — a declared write
-/// or CALL mapping from a universal verb on a declared node to a wire effect. Desugars to `INSERT
-/// INTO /sys/drivers` with `kind='map'`.
+/// `CREATE MAP <verb|CALL <driver>.<action>> /<node> AS [LET … ] <effect> [IRREVERSIBLE]` — a
+/// declared write or CALL mapping from a universal verb on a declared node to a wire effect.
+/// Desugars to `INSERT INTO /sys/drivers` with `kind='map'`.
+///
+/// The body parses with [`program_seq`], not `inner_statement`, so a `LET` binding is legal ahead of
+/// the effect — blueprint §13.1 **G9**, the reverse lookup a name-addressed declared write needs
+/// (`LET cid = /slack/{ws}/channels |> WHERE name == row.channel |> SELECT id`). `let_binding`'s only
+/// call site is `program_seq`, which is precisely why `inner_statement` could not reach one. Nothing
+/// else changes: [`body_to_json`] is a plain serde serialization, so a `Statement::Let` round-trips
+/// into and out of the stored driver row untouched, and the exec layer already walks the node.
 fn create_map_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
     let create = kw(Keyword::Create).parse_next(input)?;
     let _ = word("MAP").parse_next(input)?;
@@ -2442,7 +2450,7 @@ fn create_map_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
     let node = cut_err(path_expr).parse_next(input)?;
     validate_template_path(&node)?;
     let _ = cut_err(kw(Keyword::As)).parse_next(input)?;
-    let body = cut_err(inner_statement).parse_next(input)?;
+    let body = cut_err(program_seq).parse_next(input)?;
     let irreversible = opt(word("IRREVERSIBLE")).parse_next(input)?.is_some();
     let body_json = body_to_json(&body)?;
     let name = canonical_path(&node);

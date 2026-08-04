@@ -590,6 +590,12 @@ pub(crate) enum ExpandError {
 /// really is an array in the rows. An EMPTY schema — an undescribable relation — is the same case
 /// and is likewise never refused.
 ///
+/// **A struct element splices BY FIELD NAME, never positionally** (ticket 20260725103000). Before,
+/// each element contributed `fields.into_values()` — an ordered value list with no reference to the
+/// names — so an array whose elements carry DIFFERENT key sets (exactly what a real API returns:
+/// Slack omits `thread_ts` and `subtype` on messages that have none) shifted every later column,
+/// silently, with no diagnostic. A field a given element omits is now `Null` in that element's row.
+///
 /// # Errors
 /// [`ExpandError`] for an absent column or a non-collection one.
 pub(crate) fn expand(batch: RowBatch, field: &Name) -> Result<RowBatch, ExpandError> {
@@ -604,36 +610,109 @@ pub(crate) fn expand(batch: RowBatch, field: &Name) -> Result<RowBatch, ExpandEr
         }));
     };
     // Output schema: replace the field column per the type model's `expand`. A late-bound
-    // (`Unknown`) column keeps the schema as-is; anything else propagates `NotExpandable`.
-    let schema = if matches!(batch.schema.columns[idx].ty, ColumnType::Unknown) {
-        batch.schema.clone()
+    // (`Unknown`) column has no declared element type, so the replacement columns are the UNION of
+    // the field names the rows actually carry; anything else propagates `NotExpandable`.
+    let (schema, splice_names) = if matches!(batch.schema.columns[idx].ty, ColumnType::Unknown) {
+        match observed_struct_fields(&batch.rows, idx) {
+            Some(names) => (
+                replace_column(&batch.schema, idx, &names),
+                Some(names.clone()),
+            ),
+            None => (batch.schema.clone(), None),
+        }
     } else {
-        batch
+        let schema = batch
             .schema
             .expand(field)
             .map_err(|_| ExpandError::NotExpandable {
                 field: field.clone(),
                 ty: render_type(&batch.schema.columns[idx].ty),
-            })?
+            })?;
+        // Only a struct flattening splices by name. An array of SCALARS replaces the column with
+        // one column of the same name, where a struct element's field lookup would be meaningless.
+        let flattens_struct = match &batch.schema.columns[idx].ty {
+            ColumnType::Struct(_) => true,
+            ColumnType::Array(elem) => matches!(elem.as_ref(), ColumnType::Struct(_)),
+            _ => false,
+        };
+        let names = flattens_struct.then(|| {
+            let width = schema.columns.len() + 1 - batch.schema.columns.len();
+            schema.columns[idx..idx + width]
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<Name>>()
+        });
+        (schema, names)
     };
+    let names = splice_names.as_deref();
     let mut out_rows = Vec::new();
     for row in batch.rows {
         let target = row.values.get(idx).cloned().unwrap_or(Value::Null);
         match target {
             Value::Array(items) => {
                 for item in items {
-                    out_rows.push(splice_row(&row, idx, expand_item(item)));
+                    out_rows.push(splice_row(&row, idx, expand_item(item, names)));
                 }
             }
-            Value::Struct(fields) => {
-                out_rows.push(splice_row(&row, idx, fields.into_values()));
+            item @ Value::Struct(_) => {
+                out_rows.push(splice_row(&row, idx, expand_item(item, names)));
             }
-            // A Null / late-bound value in an expandable column: keep the row unchanged. (A
-            // genuinely non-collection COLUMN was refused above, against the schema.)
-            other => out_rows.push(splice_row(&row, idx, vec![other])),
+            // A Null / late-bound value in an expandable column: keep the row unchanged, widened to
+            // the replacement columns so every row still matches the schema. (A genuinely
+            // non-collection COLUMN was refused above, against the schema.)
+            other => out_rows.push(splice_row(&row, idx, expand_item(other, names))),
         }
     }
     Ok(RowBatch::new(schema, out_rows))
+}
+
+/// The union of the field names the struct values at column `idx` carry, in first-seen order — the
+/// replacement columns for expanding a late-bound (`Unknown`) column, where no declared element type
+/// says what the shape is. `None` when no row carries a struct there, which is the array-of-scalars
+/// (or genuinely-empty) case the caller keeps late-bound.
+fn observed_struct_fields(rows: &[Row], idx: usize) -> Option<Vec<Name>> {
+    let mut names: Vec<Name> = Vec::new();
+    let mut saw_struct = false;
+    for row in rows {
+        match row.values.get(idx) {
+            Some(Value::Struct(fields)) => {
+                saw_struct = true;
+                note_field_names(fields, &mut names);
+            }
+            Some(Value::Array(items)) => {
+                for item in items {
+                    if let Value::Struct(fields) = item {
+                        saw_struct = true;
+                        note_field_names(fields, &mut names);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    saw_struct.then_some(names)
+}
+
+/// Append `fields`' names to `names`, skipping any already seen (first-seen order is the schema's).
+fn note_field_names(fields: &Fields, names: &mut Vec<Name>) {
+    for (n, _) in fields.iter() {
+        if !names.iter().any(|seen| seen == n) {
+            names.push(n.clone());
+        }
+    }
+}
+
+/// Replace column `idx` of `schema` with one late-bound, nullable column per name in `names`.
+fn replace_column(schema: &Schema, idx: usize, names: &[Name]) -> Schema {
+    let mut out = Vec::with_capacity(schema.columns.len() + names.len());
+    out.extend_from_slice(&schema.columns[..idx]);
+    out.extend(
+        names
+            .iter()
+            .map(|n| Column::new(n.clone(), ColumnType::Unknown, true)),
+    );
+    out.extend_from_slice(&schema.columns[idx + 1..]);
+    Schema::new(out)
 }
 
 /// A short, stable rendering of a column type for a refusal message (`json`, `text`, `array`, …).
@@ -648,10 +727,21 @@ fn render_type(ty: &ColumnType) -> String {
 }
 
 /// Flatten one expanded element into the row's replacement values.
-fn expand_item(item: Value) -> Vec<Value> {
-    match item {
-        Value::Struct(fields) => fields.into_values(),
-        other => vec![other],
+///
+/// With `names` (the replacement columns' names) the element's fields are read **by name**, so an
+/// element that omits an optional key contributes `Null` in that column instead of shifting every
+/// later one. Without them the column expands to a single value and the element rides through whole.
+fn expand_item(item: Value, names: Option<&[Name]>) -> Vec<Value> {
+    match (item, names) {
+        (Value::Struct(fields), Some(names)) => names
+            .iter()
+            .map(|n| fields.get(n).cloned().unwrap_or(Value::Null))
+            .collect(),
+        (Value::Struct(fields), None) => fields.into_values(),
+        // A non-struct value where struct columns were expected (a `Null` element, or a ragged
+        // array carrying a scalar): every replacement column is absent for this element.
+        (_, Some(names)) => vec![Value::Null; names.len()],
+        (other, None) => vec![other],
     }
 }
 

@@ -3,9 +3,9 @@ created_at: 2026-07-24T01:42:00+09:00
 author: a@qmu.jp
 type: housekeeping
 layer: [Domain, Infrastructure]
-effort:
+effort: 4h
 commit_hash:
-category: Removed
+category: Changed
 depends_on: [20260724014000-declare-the-slack-twin-and-prove-read-equivalence.md, 20260724014100-slack-call-maps-effect-equivalent.md]
 mission: a-declared-write-resolves-a-name-the-way-a-query-does
 ---
@@ -94,3 +94,69 @@ second ruled primitive (a declared reverse lookup on the write path, minted as
 This ticket's own first line remains the gate — *"gated on BOTH equivalence tickets green"* — and it
 is not. `driver-slack` is still the oracle the outstanding proof compares against; deleting it now
 destroys the evidence. Nothing in the four retirement steps needs revising.
+
+## Final Report
+
+The ratchet fired. Both prerequisite tickets went green in this same unit, so the four retirement
+steps ran unchanged, exactly as this ticket said they would.
+
+1. **`crates/driver-slack` is deleted** (16 files), along with every registration and wiring point:
+   `clients.rs`, `commit.rs`, `describe.rs`, `read_facets.rs`, `shell.rs`, `transport.rs`, the
+   `skill` golden corpus registration, and the dependency lines in two `Cargo.toml`s. The
+   crate-enumerating tests (`dep_direction.rs`, `wasm_gating.rs`) dropped their slack entries.
+2. **Docs and skills regenerated** — the compiled `/slack` entry is out of `docs/drivers.md`;
+   `gen-docs --check` and `gen-skills --check` both report in sync.
+3. **Plugin bumped MINOR in all four fields**, 0.18.1 → **0.19.0** (a taught-surface break).
+4. **Binary bumped**, 0.0.94 → **0.0.95**.
+
+Blueprint §13.3's entry-#1 row now records the retirement, and the §13.2 line-count row records 45
+with the reason it moved.
+
+**The equivalence suite survived the deletion, which was the ticket's real risk.** Rather than
+deleting the tests along with the oracle, every compiled answer was **captured as a golden in the
+same commit that deleted the crate** — the last commit in which both implementations existed:
+
+- the delivered rows for messages, replies, reactions, files, users and DMs;
+- the five CALL maps' wire requests (method, endpoint, JSON payload);
+- the compiled registry's typed procedure signatures;
+- the two-request shape of a name-addressed CALL, and the one-request shape of a refused one.
+
+So the twin still regresses against the driver it replaced rather than against itself. The goldens
+were *captured by running the oracle*, never hand-written, which matters: two of my first attempts at
+writing them by hand were wrong, and the tests caught both.
+
+### Deviations and judgment calls
+
+- **Two tests had to be re-pointed rather than merely edited**, because they used Slack as an example
+  of something that no longer exists. `describe.rs`'s compiled-versus-declared shadowing test now
+  uses `github` as the colliding compiled name and `slack` as the declared-only mount — the reverse
+  of what it asserted before, which is the new reality. `golden_corpus.rs`'s unsupported-verb test
+  moved from `/slack/…/messages` to `/mail/drafts`, which has the same append-log shape.
+- **`shell.rs`'s `connect_hint("slack")` was kept.** It is keyed on mount kind rather than on a
+  compiled driver, and `docs/cookbook/slack.md` still teaches `qfs account add slack`. If declared
+  CONNECT ever uses a different flow, that hint needs revisiting.
+- **The Slack webhook/event surface went with the crate.** `parse_event`/`verify_signature` verified
+  `X-Slack-Signature` over HMAC-SHA256, and **nothing outside the crate called them** — confirmed by
+  grep before deleting. No wired feature was lost, but if inbound Slack events are ever wanted, that
+  code is in git history and is not replaced by the declaration.
+- **A version collision to be aware of at ship time.** This branch bumps to 0.0.95; PR #32
+  (`work-20260803-221340`, the Chatwork messages-view ruling) is open at 0.0.94 and plugin 0.18.2.
+  The two do not conflict as written, but whichever merges second should be checked rather than
+  assumed.
+
+### Discovered Insights
+
+- **Insight**: The deletion's hard part was not removing the crate — that is mechanical and the
+  compiler finds every site. It was that the equivalence tests *were the reason the deletion was
+  allowed*, and deleting the oracle destroys the evidence unless it is frozen first. Capture the
+  goldens by running the oracle, in the same commit, before the crate goes.
+  **Context**: This generalizes to every twin-and-retire the playbook has left (github, drive, mail).
+  The step "re-point the compiled side of the harness at recorded expected rows" is the whole risk of
+  the retirement step, and it belongs before the `rm`, not after.
+
+- **Insight**: Three tests referenced the compiled Slack driver only as a convenient *example* of a
+  general property (a compiled/declared name collision, an append log that refuses UPDATE), not
+  because they were testing Slack.
+  **Context**: An example chosen from a component scheduled for deletion silently couples an
+  unrelated test to that deletion. Worth preferring a stable example when a component is on a
+  retirement path.

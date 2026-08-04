@@ -1,10 +1,10 @@
 //! The carried wasm-gating mechanical guard (t38; the precedent carried since t25/t33).
 //!
-//! Each wasm-gated leaf — `qfs-watchtower` (`native`), `qfs-host` (`host-daemon`),
-//! `qfs-driver-slack` (`runtime`) — gates its non-wasm-clean deps (above all
+//! Each wasm-gated leaf — `qfs-watchtower` (`native`), `qfs-host` (`host-daemon`) — gates its
+//! non-wasm-clean deps (above all
 //! **tokio**) behind an *optional* feature, so that with `--no-default-features` only the pure
 //! core compiles and it builds for `wasm32-unknown-unknown`. The load-bearing fence is the
-//! **absence** of that feature (the deps are `optional`), not any marker (the t25/slack lesson).
+//! **absence** of that feature (the deps are `optional`), not any marker (the t25 lesson).
 //!
 //! This guard makes the fence MECHANICAL rather than conventional: for each gated leaf it
 //! computes the `--no-default-features` dependency closure (the package's own deps minus the
@@ -25,10 +25,10 @@ use std::process::Command;
 /// With that feature OFF (the `--no-default-features` wasm invocation), the closure must be
 /// tokio-free.
 const GATED_LEAVES: &[(&str, &str)] = &[
-    // t65: qfs-cron (the retired internal scheduler) is gone; the surviving gated leaves remain.
+    // t65: qfs-cron (the retired internal scheduler) is gone, as is the compiled `driver-slack`
+    // (replaced by the declared `/slack` driver); the surviving gated leaves remain.
     ("qfs-watchtower", "native"),
     ("qfs-host", "host-daemon"),
-    ("qfs-driver-slack", "runtime"),
 ];
 
 /// Crate-name substrings that betray a non-wasm-clean (async-runtime / socket) dependency.

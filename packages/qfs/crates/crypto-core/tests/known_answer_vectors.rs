@@ -1,7 +1,8 @@
 //! t34 single-sourcing guard: pin the cross-crate crypto vectors at the shared leaf so the three
-//! former copies (objstore SigV4, slack signature, cron run-id) cannot drift after being
-//! re-pointed here. These are the canonical FIPS 180-4 + RFC 4231 known-answer vectors plus the
-//! end-to-end shapes each former consumer relied on.
+//! former copies (objstore SigV4, the retired compiled `driver-slack`'s signature verification,
+//! the retired cron run-id) cannot drift after being re-pointed here. These are the canonical
+//! FIPS 180-4 + RFC 4231 known-answer vectors plus the end-to-end shapes each former consumer
+//! relied on.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -25,9 +26,9 @@ fn sha256_fips_180_4_vectors() {
 
 #[test]
 fn hmac_sha256_rfc4231_test_case_2() {
-    // The vector both objstore and slack pinned: key = "Jefe", data = "what do ya want for
-    // nothing?". This is what the slack `X-Slack-Signature` verification and the SigV4 key
-    // derivation both ultimately exercise.
+    // The vector both objstore and the retired compiled `driver-slack` pinned: key = "Jefe",
+    // data = "what do ya want for nothing?". This is what that driver's `X-Slack-Signature`
+    // verification and the SigV4 key derivation both ultimately exercise.
     let tag = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
     assert_eq!(
         hex_lower(&tag),
@@ -42,8 +43,9 @@ fn sha256_returns_32_bytes() {
 
 #[test]
 fn constant_time_eq_replay_defense_shape() {
-    // The slack signature compare shape (`v0=<hex>` against the recomputed tag): equal, byte
-    // mismatch, and length mismatch must all be handled, the latter two as `false`.
+    // The webhook-signature compare shape (`v0=<hex>` against the recomputed tag, as the retired
+    // compiled `driver-slack` used it): equal, byte mismatch, and length mismatch must all be
+    // handled, the latter two as `false`.
     assert!(constant_time_eq(b"v0=abcd", b"v0=abcd"));
     assert!(!constant_time_eq(b"v0=abcd", b"v0=abce"));
     assert!(!constant_time_eq(b"v0=abcd", b"v0=abc"));

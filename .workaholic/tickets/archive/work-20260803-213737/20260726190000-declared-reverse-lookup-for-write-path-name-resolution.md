@@ -3,8 +3,9 @@ created_at: 2026-07-26T19:00:00+09:00
 author: a@qmu.jp
 type: enhancement
 layer: [Domain]
-effort:
+effort: 4h
 commit_hash:
+category: Changed
 depends_on: [20260725124400-declared-follow-into-per-row-fan-out-g4.md]
 mission: a-declared-write-resolves-a-name-the-way-a-query-does
 ---
@@ -171,3 +172,57 @@ the equivalence tests could not both pass and prove equivalence. That ticket's Q
 - The `Uxxxx` → `Dxxxx` DM arm is a pure G4 substitution (`conversations.open?users={channel}`) and is
   already expressible. Do not route it through the new `LET` path for symmetry's sake; QG9 asks that
   both arms be provable, not that both use one mechanism.
+
+## Final Report
+
+Development completed as planned. Blueprint §13.1 records the ruling as **G9**; the parser opens the
+map body to `LET`; the confined applier fetches each lookup's collection once per statement; and the
+pure evaluator matches it per row, binding the result as an additional column.
+
+Quality Gate — 9 of 10 met here, the tenth by construction:
+
+1. **Met.** Blueprint §13.1 **G9** records the spelling, the source rule, the commit-time site and the
+   deliberately-not-taken PREVIEW resolution, landed ahead of the implementation.
+2. **Met.** `create_map_stmt` parses with `program_seq`; `a_map_body_parses_a_let_binding_ahead_of_its_effect`
+   pins the stored body rehydrating as `Statement::Let` wrapping the effect, and
+   `a_map_body_without_a_let_is_unchanged_by_the_program_seq_switch` pins that the one-word change
+   disturbs nothing already shipped.
+3. **Met.** `map_body_lookups` refuses a source outside the driver's own mount
+   (`a_let_reading_a_foreign_driver_is_refused`), and refuses an unsupported binding shape rather than
+   approximating it (`a_let_of_an_unsupported_shape_is_refused_not_approximated`).
+4. **Met.** `declared_let_lookup_resolves_a_name_then_issues_the_effect_leg` drives the full commit
+   stack and asserts BOTH recorded requests in order: `GET conversations.list`, then
+   `POST chat.delete` carrying `C_RND` — and asserts the unresolved name never appears on the wire.
+5. **Met.** `a_lookup_resolves_per_row_from_one_fetched_collection` resolves two rows naming two
+   channels from ONE collection; the e2e test asserts `recorded.len() == 2`, i.e. one lookup request,
+   not one per row.
+6. **Met.** `an_unresolvable_name_is_refused_and_no_body_is_built` (pure) and
+   `declared_let_lookup_refuses_an_unknown_name_before_the_effect_leg` (wire), the latter asserting the
+   refusal by the ABSENCE of the second request.
+7. **Met.** `an_ambiguous_name_is_refused_rather_than_picked`.
+8. **Met.** `eval_map_body` performs no I/O: it walks past the `LET` chain to the effect and matches
+   against collections the caller fetched. Its purity doc comment is still true verbatim.
+9. **Not met here — it belongs to the ticket it names.** Rewiring the five Slack CALL maps onto this
+   mechanism and proving both arms is `20260724014100`, which this ticket unblocks rather than does.
+10. **Met.** `cargo test --workspace`, `clippy --workspace --all-targets -D warnings`,
+    `fmt --all --check`, `gen-docs --check`, `gen-skills --check` all clean.
+
+### Discovered Insights
+
+- **Insight**: The accepted `LET` shape is deliberately ONE narrow form —
+  `<own-mount-path> |> WHERE <col> == row.<field> |> SELECT <col>` — and everything else is a
+  structured refusal.
+  **Context**: The alternative (accept any pipeline and interpret what one can) would make the
+  runtime's behaviour depend on how much of a pipeline the resolver happened to implement, which is
+  the silent-approximation failure this mission's sibling closed on the read side. Widening the shape
+  later is additive and testable; narrowing it after declarations exist is a break.
+- **Insight**: The lookup fetch had to go through the driver's own DECLARED VIEW, not a raw
+  `/http/…` address, and that choice is what settles pagination.
+  **Context**: `RestApplyDriver` therefore needs the view specs and the confined `RestApplier` — the
+  write facet now holds read machinery, which looks redundant until you notice the alternative is
+  re-declaring the collection endpoint (and its cursor paging, and its `OF` contract) inside every map
+  body that searches it.
+- **Insight**: The lookup read is blocking and `apply_one` is async, so it runs inside
+  `std::thread::scope` exactly as `read_facets::read_off_runtime` does.
+  **Context**: Calling the shared reqwest transport inline from the async applier nests tokio runtimes
+  and panics. Any future commit-time read added to this facet needs the same guard.

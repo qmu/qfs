@@ -8,7 +8,7 @@ author: a@qmu.jp
 assignee: a@qmu.jp
 strategy: integrations-are-declared-not-compiled
 predicted_hours:
-actual_hours:
+actual_hours: 8
 tickets:
   - 20260725103000-declared-expand-must-splice-by-field-name.md
   - 20260726090000-map-body-expressions-can-reference-path-params.md
@@ -22,6 +22,7 @@ gate_type:
 gate_target:
 gate_assert:
 carried_from: the-declared-slack-twin-retires-the-compiled-driver
+claim: work-20260803-213737
 ---
 
 # A declared write resolves a name the way a query does
@@ -179,8 +180,8 @@ ticket blocked.
 
 ## Acceptance
 
-- [ ] The five typed CALL maps are effect-equivalent to the compiled CALLs on fixtures (#20260724014100-slack-call-maps-effect-equivalent.md)
-- [ ] driver-slack is deleted per the shared retirement steps with docs/skills regenerated and the plugin minor-bumped in all four fields (#20260724014200-retire-the-compiled-slack-driver.md)
+- [x] The five typed CALL maps are effect-equivalent to the compiled CALLs on fixtures (#20260724014100-slack-call-maps-effect-equivalent.md)
+- [x] driver-slack is deleted per the shared retirement steps with docs/skills regenerated and the plugin minor-bumped in all four fields (#20260724014200-retire-the-compiled-slack-driver.md)
 - [x] A declared write can produce a form-urlencoded body, the shipped Chatwork INSERT commits against the live API, and the cookbook teaches the working statement (#20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md) — **fully met 2026-08-01: hermetic on branch `work-20260801-044839`, then confirmed live in an attended round (message `2135330710482190336` delivered and read back byte-intact)**
 
 ## Changelog
@@ -229,3 +230,11 @@ ticket blocked.
 - 2026-08-03 — concern deferred (stuck) — 20260803210019-the-shipped-chatwork-messages-view-still.md
 - 2026-08-03 — concern deferred (stuck) — 20260803210019-an-archived-ticket-auto-ticks-a.md
 - 2026-08-03 — concern resolved (unstuck) — 20260803210019-the-shipped-chatwork-messages-view-still.md
+- 2026-08-03 — ticket archived — 20260726190000-declared-reverse-lookup-for-write-path-name-resolution.md
+- 2026-08-03 — story reported — work-20260803-213737.md
+- 2026-08-03 — run recorded (+2h) — 20260803-213737
+- 2026-08-04 — ticket archived — 20260725103000-declared-expand-must-splice-by-field-name.md
+- 2026-08-04 — ticket archived — 20260726090000-map-body-expressions-can-reference-path-params.md
+- 2026-08-04 — ticket archived — 20260724014100-slack-call-maps-effect-equivalent.md
+- 2026-08-04 — ticket archived — 20260724014200-retire-the-compiled-slack-driver.md
+- 2026-08-04 — run recorded (+6h) — 20260804-165500

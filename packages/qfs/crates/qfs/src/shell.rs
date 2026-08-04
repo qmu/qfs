@@ -258,7 +258,7 @@ fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> Re
     // t100040 (the CONNECT model): NOTHING third-party is pre-mounted. Only the minimal system set
     // (`/local`, wired by `local_engine_and_reads`, plus `/sys`, `/transform`, `/type` and the
     // local credential-free `/claude` facade below) is always present; every third-party driver
-    // (gmail/gdrive/ga/github/slack/s3/r2/cf/rest/fs) is reachable ONLY
+    // (gmail/gdrive/ga/github/s3/r2/cf/rest/fs) is reachable ONLY
     // after a `CONNECT`, mounted at its user path from the project DB `path_binding` registry. The
     // read + apply facets stay keyed by canonical driver id (`commit.rs`, the reads below), so THIS
     // path-keyed planning registry is the gate: an un-CONNECTed path simply does not resolve.
@@ -630,10 +630,6 @@ fn cloud_read_facet(
         "github" => {
             let client = crate::clients::live_github_client(connection)?;
             Some(Arc::new(crate::read_facets::GitHubReadDriver::new(client)))
-        }
-        "slack" => {
-            let client = crate::clients::live_slack_client(connection)?;
-            Some(Arc::new(crate::read_facets::SlackReadDriver::new(client)))
         }
         "s3" => {
             let driver =

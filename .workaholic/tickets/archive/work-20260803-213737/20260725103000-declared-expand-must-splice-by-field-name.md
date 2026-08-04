@@ -3,7 +3,7 @@ created_at: 2026-07-25T10:30:00+09:00
 author: a@qmu.jp
 type: bugfix
 layer: [Domain]
-effort:
+effort: 2h
 commit_hash:
 category: Changed
 depends_on:
@@ -66,3 +66,43 @@ twin's equivalence bar cannot cover the empty-value case until one rule is chose
   comment naming this ticket and pinning the fully-populated fixtures; relax them here.
 - `crates/engine/src/eval.rs::expand` + `Schema::expand` are the two places the positional
   assumption lives.
+
+## Final Report
+
+Both halves landed, and the second one is a recorded ruling rather than a code change on both sides.
+
+**1. `EXPAND` splices by field name.** `qfs_engine::eval::expand` now derives the replacement column
+names once and reads each element's fields by name, so a key an element omits is `Null` in that
+element's row instead of shifting every later column. Two sources for those names: the declared
+element type where the column has one, and — for a late-bound (`Unknown`) column, which is what a
+`DECODE json` body produces — the union of the field names the rows actually carry, in first-seen
+order. A non-struct value where struct columns were expected now widens to the right number of
+`Null`s, which the old code got wrong in a way that produced rows narrower than their own schema.
+
+**2. Empty text: the declaration is right, and the compiled side cannot follow it.** An omitted key
+is `Null`; a key present with `""` is `Text("")`. These are different facts on the wire and the
+surviving side must not conflate them. The compiled `MessageDto` cannot express the distinction at
+all — its fields are `String`, so the empty value doubles as the absent sentinel — and making it
+express it means changing the DTOs to `Option<String>` and re-cutting every golden, in a crate this
+same mission deletes two tickets later (20260724014200). So the shared equivalence fixture was
+relaxed to the RAGGED case both sides can agree on (omitted optional keys → `Null` on both), and the
+present-but-empty case is pinned declared-side in
+`declared_of_shaping_keeps_an_empty_string_distinct_from_an_absent_field`.
+
+### Discovered Insights
+
+- **Insight**: The shared Slack equivalence fixture was homogeneous and fully populated not by
+  convenience but because the positional splice made anything else fail — the fixture's own comment
+  said so and named this ticket. Relaxing it was therefore the actual proof the fix works end to
+  end, through the real tier-2 evaluator against the compiled driver, and it is worth more than the
+  unit test.
+  **Context**: When a test fixture carries a comment explaining what it cannot contain, that comment
+  is a defect report. The fixture is the bar, and a bar written down to what the code can currently
+  do stops measuring anything.
+
+- **Insight**: `EXPAND` over a late-bound column had no notion of a replacement schema at all — it
+  kept the input schema and spliced values in, so a struct element silently produced rows wider than
+  the schema. The union-of-observed-fields path is new behavior, not a repair of existing behavior.
+  **Context**: Every declared driver reads through `DECODE json`, which produces exactly this
+  late-bound shape, so this path — not the declared-element-type one — is what a declared view
+  actually exercises.

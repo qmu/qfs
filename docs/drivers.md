@@ -274,39 +274,6 @@ Prelude aliases: _none_
 
 Pushdown: where=true project=true limit=true order=false join=false aggregate=false distinct=false group_by=false
 
-### `/slack` — AppendLog
-
-- example node: `/slack/ws/#general/messages`
-- native verbs: SELECT(tail) INSERT(append) REMOVE
-
-Universal verbs (✓ supported / ✗ rejected at parse time):
-
-| verb | supported |
-|------|-----------|
-| `select` | ✓ |
-| `insert` | ✓ |
-| `upsert` | ✗ |
-| `update` | ✗ |
-| `remove` | ✓ |
-| `ls` | ✗ |
-| `cp` | ✗ |
-| `mv` | ✗ |
-| `rm` | ✗ |
-
-Procedures (`call slack.action(..)`):
-
-| procedure | params | irreversible |
-|-----------|--------|--------------|
-| `react` | channel: Text, ts: Text, emoji: Text | no |
-| `pin` | channel: Text, ts: Text | yes |
-| `unpin` | channel: Text, ts: Text | no |
-| `update` | channel: Text, ts: Text, text: Text | no |
-| `delete` | channel: Text, ts: Text | yes |
-
-Prelude aliases: `POST` → `slack.post`
-
-Pushdown: where=true project=false limit=true order=false join=false aggregate=false distinct=false group_by=false
-
 ### `/sys` — RelationalTable
 
 - example node: `/sys/users`
