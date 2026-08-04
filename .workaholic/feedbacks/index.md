@@ -80,4 +80,7 @@
 * [The shipped Chatwork messages view still reads unread-only](20260803210019-the-shipped-chatwork-messages-view-still.md)
 * [merge-pr.sh returns the branch head, not the merge commit, so a release-on-tag ship tags off the base line](20260803212935-merge-pr-sh-returns-the-branch-head-not-the-merge-commit-so-a-release-on-tag-ship-tags-off-the-base-line.md)
 * [Resolved: The shipped Chatwork messages view still reads unread-only](20260803223450-resolved-the-shipped-chatwork-messages-view-still.md)
+* [A declared driver has no upgrade path, so a shipped declaration fix does not reach a live mount](20260804205042-a-declared-driver-has-no-upgrade.md)
+* [The live confirmation this change is really about has not been run](20260804205042-the-live-confirmation-this-change-is.md)
+* [The shipped-asset install-splitter is still copy-pasted across tests](20260804205042-the-shipped-asset-install-splitter-is.md)
 <!-- okf:generated:end -->
