@@ -2261,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "qfs"
-version = "0.0.94"
+version = "0.0.95"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2284,7 +2284,6 @@ dependencies = [
  "qfs-driver-http",
  "qfs-driver-local",
  "qfs-driver-objstore",
- "qfs-driver-slack",
  "qfs-driver-sql",
  "qfs-driver-sys",
  "qfs-driver-transform",
@@ -2552,24 +2551,6 @@ dependencies = [
 
 [[package]]
 name = "qfs-driver-objstore"
-version = "0.0.0"
-dependencies = [
- "qfs-crypto-core",
- "qfs-driver",
- "qfs-http-core",
- "qfs-plan",
- "qfs-runtime",
- "qfs-secrets",
- "qfs-types",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "qfs-driver-slack"
 version = "0.0.0"
 dependencies = [
  "qfs-crypto-core",
@@ -2857,7 +2838,6 @@ dependencies = [
  "qfs-driver-github",
  "qfs-driver-gmail",
  "qfs-driver-local",
- "qfs-driver-slack",
  "qfs-driver-sql",
  "qfs-parser",
  "qfs-test",

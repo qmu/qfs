@@ -5,14 +5,19 @@
 //! ## Why this crate exists (the t34 single-sourcing)
 //! Before it, an identical SHA-256 (and, in two cases, HMAC-SHA256 / constant_time_eq) was
 //! independently vendored THREE times:
-//!   * `qfs-driver-objstore::sha256` — SigV4 request signing,
-//!   * `qfs-driver-slack::hmac` — `X-Slack-Signature` verification (+ `constant_time_eq`),
-//!   * `qfs-cron::hash` — the deterministic `hash(job, scheduled_for)` run-id.
+//!   * `qfs-driver-objstore::sha256` — SigV4 request signing (the one surviving consumer of the
+//!     former copies; it depends on this leaf now),
+//!   * the retired compiled `driver-slack`'s `hmac` — `X-Slack-Signature` verification
+//!     (+ `constant_time_eq`); that crate is gone, replaced by the declared `/slack` driver,
+//!   * `qfs-cron::hash` — the deterministic `hash(job, scheduled_for)` run-id; retired with the
+//!     scheduler in t65.
 //!
 //! No shared crypto leaf existed, and depending on any of those crates would have pulled a
-//! runtime/driver coupling into the consumer (each is a `qfs-runtime` leaf or a binding crate),
+//! runtime/driver coupling into the consumer (each was a `qfs-runtime` leaf or a binding crate),
 //! so each crate re-vendored the routine. t34's webhook HMAC verification would have been a
-//! FOURTH copy; instead this crate is created first so all four share ONE pinned implementation.
+//! FOURTH copy; instead this crate is created first so all of them share ONE pinned
+//! implementation. Today's consumers are `qfs-driver-objstore`, `qfs-identity`, `qfs-oauth`,
+//! `qfs-session`, `qfs-store`, `qfs-watchtower`, and the `qfs` binary.
 //!
 //! ## Why pure-std + hand-rolled (a recorded engineering choice, inherited from t22/t25/t33)
 //! The trip host's cargo cache does not carry `sha2`/`hmac`/`ring`, and the **wasm32 target must
@@ -31,7 +36,7 @@
 //! ## Constant-time discipline
 //! SHA-256 / HMAC-SHA256 here are NOT constant-time and must be used ONLY to compute a digest or
 //! signature over (public) material, never to *compare* secret bytes directly. The one secret
-//! comparison the workspace performs — verifying an inbound webhook/Slack signature — MUST route
+//! comparison the workspace performs — verifying an inbound webhook signature — MUST route
 //! through [`constant_time_eq`], which never short-circuits on the first mismatching byte (blueprint §8
 //! replay defense).
 

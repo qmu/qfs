@@ -2243,7 +2243,8 @@ fn paginate_link_clause(input: &mut Stream<'_>) -> ModalResult<String> {
 /// AND keep the exact predicate as the local residual — over-fetch then filter, never wrong rows).
 /// `EXACT` is the default when neither word is given.
 ///
-/// This lifts the compiled pushdown modules' own discipline (`driver-slack/pushdown.rs` et al.) to
+/// This lifts the compiled pushdown modules' own discipline (the retired compiled
+/// `driver-slack`'s `pushdown.rs` et al.) to
 /// declaration data: residual truthfulness becomes a declared property the evaluator enforces, not a
 /// per-driver Rust routine. A view with NO `PUSHDOWN` clause is honest-but-chatty (everything
 /// residual) — the clause is opt-in optimization, never a correctness prerequisite.

@@ -255,9 +255,9 @@ fn now_rfc3339() -> String {
 ///   through its `LocalApplier`. The root is the caller's — `/` for the one-shot/job/server
 ///   contexts, the session cwd for an interactive shell — because it must match the root that
 ///   context's READ facet planned against.
-/// - **github** + **slack** (credentialed HTTP): the real [`reqwest`](crate::transport)
-///   transport + the encrypted credential store. Always registered so a `/github` or `/slack`
-///   commit leg routes; the PAT / bot token is resolved **lazily at request time**, so a missing
+/// - **github** (credentialed HTTP): the real [`reqwest`](crate::transport)
+///   transport + the encrypted credential store. Always registered so a `/github`
+///   commit leg routes; the PAT is resolved **lazily at request time**, so a missing
 ///   credential surfaces as a clear per-leg auth error (never a panic, never a silent no-op).
 ///
 /// Credentialed Google / SQL / object-store drivers register here as their production clients
@@ -363,7 +363,7 @@ fn live_registry(local_root: &Path) -> DriverRegistry {
     }
 
     // Cloud mounts (ADR 0008 §4 — mount-bound accounts): every connect-created cloud mount
-    // (gmail/gdrive/drive/ga/github/slack/s3/r2) registers its OWN apply driver under the mount's
+    // (gmail/gdrive/drive/ga/github/s3/r2) registers its OWN apply driver under the mount's
     // segment id, bound to the MOUNT's account — never a process-global selection. N mounts of
     // one kind coexist as N registered drivers. FAIL CLOSED per mount: no account on a cloud
     // mount, an unconfigured operator app, a refused t54 sign-in/consent gate, or an
@@ -612,7 +612,7 @@ fn register_cloud_mounts(
 /// Build the live apply driver for one cloud mount, bound to the mount's account — or `None`
 /// (fail closed, secret-free debug log) when the mount cannot bind. The account/credential
 /// resolution is the mount's row alone: a Google mount's `account` is the email whose refresh
-/// token the stack reads; a github/slack/s3/r2 mount's `account` is the credential label the
+/// token the stack reads; a github/s3/r2 mount's `account` is the credential label the
 /// token was sealed under (defaulting to `default`).
 fn cloud_apply_driver(
     mount: &crate::cloud_mounts::CloudMount,
@@ -647,11 +647,6 @@ fn cloud_apply_driver(
             let client = crate::clients::live_github_client(mount_connection(mount))?;
             let driver = qfs_driver_github::GitHubDriver::new(client);
             Some(Arc::new(qfs_driver_github::github_apply_driver(&driver)))
-        }
-        "slack" => {
-            let client = crate::clients::live_slack_client(mount_connection(mount))?;
-            let driver = qfs_driver_slack::SlackDriver::new(client);
-            Some(Arc::new(qfs_driver_slack::slack_apply_driver(&driver)))
         }
         "s3" => {
             let cfg = crate::objstore::s3_config()?;
@@ -813,7 +808,7 @@ pub(crate) fn cloud_bind_allowed(driver: &str, connection: &str) -> bool {
         Ok(()) => true,
         Err(e) => {
             // DEBUG, not WARN: the registry is built once per run with EVERY cloud driver, so a
-            // WARN here fired for github/slack/gmail/… on every `qfs run` — even a pure `/local`
+            // WARN here fired for github/gmail/… on every `qfs run` — even a pure `/local`
             // ls or a `create trigger` — reading like a credential failure on an unrelated command
             // (the t8 noise). The operator's actionable signal arrives when they actually TARGET an
             // unbound driver: the read/commit errors (`unknown_source`, or the t5 "connect your
@@ -966,7 +961,7 @@ mod tests {
     #[test]
     fn no_cloud_mounts_registers_no_cloud_drivers() {
         let reg = register_cloud_mounts(DriverRegistry::new(), &[]);
-        for id in ["mail", "drive", "ga", "github", "slack", "s3", "r2", "cf"] {
+        for id in ["mail", "drive", "ga", "github", "s3", "r2", "cf"] {
             assert!(
                 reg.get(&DriverId::new(id)).is_none(),
                 "/{id} must be unregistered with nothing connected (fail closed)"

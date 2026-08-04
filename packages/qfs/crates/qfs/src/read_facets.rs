@@ -1,6 +1,6 @@
 //! The **networked read adapters** — the read counterparts of [`crate::shell::LocalReadDriver`],
 //! hosted in the `qfs` binary crate. Each wraps a credentialed driver client behind the async
-//! [`qfs_exec::ReadDriver`] seam so a `FROM /github/.../pulls` (or `FROM /slack/<ws>/users`)
+//! [`qfs_exec::ReadDriver`] seam so a `FROM /github/.../pulls`
 //! executes through the read executor, the same way `LocalReadDriver` services `FROM /local/...`.
 //!
 //! ## Why the adapters live in the BINARY (the same CO-t29-4 topology as the local read facet)
@@ -10,7 +10,7 @@
 //! runtime consumer AND a terminal sink, so the adapter that bridges the driver's pure
 //! `read_rows` into the async `ReadDriver` lives here — exactly like `LocalReadDriver`,
 //! `SysReadDriver`, and `ClaudeReadDriver`. The path→plan→fetch→decode logic itself lives INSIDE
-//! each driver crate (`qfs_driver_github::read_rows` / `qfs_driver_slack::read_rows`), so this
+//! each driver crate (`qfs_driver_github::read_rows`), so this
 //! adapter only owns the async boundary + the error mapping; it never re-derives the read logic.
 //!
 //! ## Fail closed (the ticket's honesty bar)
@@ -34,7 +34,6 @@ use qfs_driver_git::{blobfs, relational, GitDriver, GitNode, GitPath};
 use qfs_driver_github::GitHubClient;
 use qfs_driver_gmail::GmailClient;
 use qfs_driver_objstore::{object_listing_schema, ObjDriver, ObjNode};
-use qfs_driver_slack::SlackClient;
 use qfs_driver_sql::{QuerySpec, SqlDriver};
 use qfs_exec::ReadDriver;
 use qfs_pushdown::{PushedQuery, ScanNode};
@@ -46,7 +45,7 @@ use qfs_pushdown::{PushedQuery, ScanNode};
 /// (via [`std::thread::scope`], so it may borrow the client + scan by reference), and reduce a panic
 /// on that thread to a structured, secret-free [`CfsError`] rather than tearing down the process.
 /// (Objstore has an equivalent inline guard in [`ObjReadDriver::scan`]; this is the shared form for
-/// the gmail/gdrive/ga/github/slack facets, which all reach the same transport when run LIVE.)
+/// the gmail/gdrive/ga/github facets, which all reach the same transport when run LIVE.)
 fn read_off_runtime<F>(
     err_path: &str,
     panic_reason: &'static str,
@@ -107,8 +106,8 @@ fn refuse_unknown_where_column(
 }
 
 /// Apply the WHOLE pushed `WHERE` over a facet's returned rows — the eager form for a backend that
-/// expresses no part of it and whose every predicate column is a real, described column (`/github`,
-/// `/slack`). The read executor applies the same predicate again for these facets (they do not
+/// expresses no part of it and whose every predicate column is a real, described column
+/// (`/github`). The read executor applies the same predicate again for these facets (they do not
 /// declare [`qfs_exec::ReadDriver::honors_pushed_filter`]), so this narrows at the seam that knows
 /// the fetch while the executor remains the guarantee. Idempotent; a `None` predicate is a no-op.
 fn apply_pushed_filter(batch: RowBatch, predicate: Option<&qfs_types::Predicate>) -> RowBatch {
@@ -159,70 +158,6 @@ impl ReadDriver for GitHubReadDriver {
             // call narrows eagerly, at the seam that knows the fetch.
             Ok(apply_pushed_filter(batch, predicate))
         })
-    }
-}
-
-/// The Slack read facet: adapts [`qfs_driver_slack::read_rows`] to qfs-exec's async [`ReadDriver`]
-/// seam. The structural twin of [`GitHubReadDriver`], over the credentialed [`SlackClient`].
-pub struct SlackReadDriver {
-    client: Arc<dyn SlackClient>,
-}
-
-impl SlackReadDriver {
-    /// Build the read adapter over an injected credentialed client.
-    #[must_use]
-    pub fn new(client: Arc<dyn SlackClient>) -> Self {
-        Self { client }
-    }
-}
-
-#[async_trait::async_trait]
-impl ReadDriver for SlackReadDriver {
-    async fn scan(&self, scan: &ScanNode, _ctx: &RequestContext) -> Result<RowBatch, CfsError> {
-        let predicate = scan.pushed.filter.as_ref();
-        read_off_runtime(&scan.path, "slack_read_panicked", || {
-            let batch = qfs_driver_slack::read_rows(self.client.as_ref(), &scan.path, predicate)
-                .map_err(|e| CfsError::InvalidPath {
-                    path: scan.path.clone(),
-                    reason: slack_read_reason(&e),
-                })?;
-            // The Slack backend filters only the message log (`oldest`/`latest`); `users`, `files`
-            // and the rest have no query-param filter, so the driver over-returns the whole
-            // collection. Every predicate column is a real, described column, so applying the WHOLE
-            // pushed predicate here is exact (the round-3 `/users` defect: a `where` that returned
-            // ALL workspace users). The read executor re-applies it too — this facet does not
-            // declare `honors_pushed_filter` — so the guarantee no longer rests on this call alone.
-            Ok(apply_pushed_filter(batch, predicate))
-        })
-    }
-}
-
-fn slack_read_reason(err: &qfs_driver_slack::SlackError) -> &'static str {
-    match err {
-        qfs_driver_slack::SlackError::Body { code, .. } => {
-            let code = code.as_str();
-            // The driver's channel-name resolver reports the miss as `channel_name_not_found:<name>`
-            // (the `<name>` varies per query) — map the whole family to one stable, secret-free
-            // reason rather than one hardcoded channel.
-            if code.starts_with("channel_name_not_found:") {
-                return "slack_channel_name_not_found";
-            }
-            match code {
-                "missing_scope" => "slack_missing_scope",
-                "channel_not_found" => "slack_channel_not_found",
-                "not_in_channel" => "slack_not_in_channel",
-                "invalid_arguments" => "slack_invalid_arguments",
-                "user_not_found" => "slack_user_not_found",
-                "not_allowed_token_type" => "slack_not_allowed_token_type",
-                "method_not_supported_for_channel_type" => {
-                    "slack_method_not_supported_for_channel_type"
-                }
-                "invalid_auth" => "slack_invalid_auth",
-                "account_inactive" => "slack_account_inactive",
-                _ => "slack_body_error",
-            }
-        }
-        _ => err.code(),
     }
 }
 
@@ -1097,7 +1032,6 @@ mod tests {
     use super::*;
     use qfs_driver_github::{MockGitHubClient, RestGitHubClient, TransportError};
     use qfs_driver_http::{HttpRequest, HttpResponse};
-    use qfs_driver_slack::MockSlackClient;
     use qfs_pushdown::PushedQuery;
     use qfs_secrets::{ConnectionId, CredentialKey, InMemoryStore, Secrets};
     use qfs_types::{Schema, Value};
@@ -1138,75 +1072,6 @@ mod tests {
             .unwrap();
         assert_eq!(batch.rows.len(), 1);
         assert_eq!(batch.rows[0].values[0], Value::Int(7));
-    }
-
-    /// Seed a two-user Slack directory (one human, one bot) into a mock client.
-    fn slack_users_client() -> MockSlackClient {
-        MockSlackClient::new().with_list(serde_json::json!({
-            "members": [
-                { "id": "U1", "name": "alice", "real_name": "Alice", "is_bot": false,
-                  "deleted": false },
-                { "id": "U2", "name": "bot", "real_name": "Bot", "is_bot": true, "deleted": false },
-            ]
-        }))
-    }
-
-    fn slack_users_scan(filter: qfs_types::Predicate) -> ScanNode {
-        ScanNode {
-            source: qfs_pushdown::SourceId::new("slack"),
-            path: "/slack/acme/users".to_string(),
-            pushed: PushedQuery {
-                filter: Some(filter),
-                ..PushedQuery::default()
-            },
-            schema: Schema::new(Vec::new()),
-            materialize_content: false,
-        }
-    }
-
-    #[tokio::test]
-    async fn slack_users_facet_applies_a_text_where_not_the_whole_directory() {
-        // Round-3 defect: `users.list` has no server-side filter, so `|> where id == 'U1'` returned
-        // ALL workspace users. The facet now enforces the pushed WHERE at the seam.
-        use qfs_types::{CmpOp, ColRef, Literal, Predicate, Value};
-        let driver = SlackReadDriver::new(Arc::new(slack_users_client()));
-        let scan = slack_users_scan(Predicate::Cmp(
-            ColRef::col("id"),
-            CmpOp::Eq,
-            Literal::Text("U1".to_string()),
-        ));
-        let batch = driver
-            .scan(&scan, &RequestContext::anonymous())
-            .await
-            .unwrap();
-        assert_eq!(
-            batch.rows.len(),
-            1,
-            "WHERE id == 'U1' keeps exactly one user, not the whole directory"
-        );
-        assert_eq!(batch.rows[0].values[0], Value::Text("U1".to_string()));
-    }
-
-    #[tokio::test]
-    async fn slack_users_facet_applies_a_bool_where() {
-        // The bool-literal filter type the cookbook teaches (`where is_bot == true`).
-        use qfs_types::{CmpOp, ColRef, Literal, Predicate, Value};
-        let driver = SlackReadDriver::new(Arc::new(slack_users_client()));
-        let scan = slack_users_scan(Predicate::Cmp(
-            ColRef::col("is_bot"),
-            CmpOp::Eq,
-            Literal::Bool(true),
-        ));
-        let batch = driver
-            .scan(&scan, &RequestContext::anonymous())
-            .await
-            .unwrap();
-        assert_eq!(
-            batch.rows.len(),
-            1,
-            "WHERE is_bot == true keeps only the bot"
-        );
-        assert_eq!(batch.rows[0].values[0], Value::Text("U2".to_string()));
     }
 
     #[tokio::test]
@@ -1392,21 +1257,6 @@ mod tests {
             matches!(missing, Err(CfsError::InvalidPath { .. })),
             "a missing blob path is a structured invalid_path, got {missing:?}"
         );
-    }
-
-    #[tokio::test]
-    async fn slack_adapter_reads_the_users_directory_through_the_mock_client() {
-        let client = MockSlackClient::new().with_list(serde_json::json!({
-            "members": [{ "id": "U1", "name": "alice", "real_name": "Alice", "is_bot": false,
-                          "deleted": false }]
-        }));
-        let driver = SlackReadDriver::new(Arc::new(client));
-        let batch = driver
-            .scan(&scan_for("/slack/acme/users"), &RequestContext::anonymous())
-            .await
-            .unwrap();
-        assert_eq!(batch.rows.len(), 1);
-        assert_eq!(batch.rows[0].values[0], Value::Text("U1".to_string()));
     }
 
     #[tokio::test]

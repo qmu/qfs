@@ -13,7 +13,7 @@
 //! invoked — building a plan never reaches the applier seam.
 //!
 //! ## Coverage (one worked example per required driver)
-//! - **mail / drive / slack / git** — full PREVIEW-plan goldens via `assert_plan` (an effect
+//! - **mail / drive / git** — full PREVIEW-plan goldens via `assert_plan` (an effect
 //!   statement evaluates to a `Plan` whose canonical-JSON PREVIEW is the golden).
 //! - **github** — both the write-plan golden (`INSERT INTO …/issues`) AND a check that a terminal
 //!   `… |> CALL github.merge(method => 'squash')` lowers to a `Call` EFFECT plan (github.merge is
@@ -36,7 +36,7 @@ use qfs_parser::parse_statement;
 use qfs_test::{assert_plan, preview_handler};
 
 /// Build a write-capable registry holding the cred-free mock-client drivers (local, mail, drive,
-/// github, slack). These give REAL capabilities + procedures, so `assert_plan` builds a real
+/// github). These give REAL capabilities + procedures, so `assert_plan` builds a real
 /// effect `Plan` with no creds and no I/O.
 fn service_registry() -> MountRegistry {
     let mut reg = MountRegistry::new();
@@ -50,9 +50,6 @@ fn service_registry() -> MountRegistry {
         ))),
         Arc::new(qfs_driver_github::GitHubDriver::new(Arc::new(
             qfs_driver_github::MockGitHubClient::default(),
-        ))),
-        Arc::new(qfs_driver_slack::SlackDriver::new(Arc::new(
-            qfs_driver_slack::MockSlackClient::default(),
         ))),
     ];
     for d in drivers {
@@ -152,23 +149,6 @@ fn github_merge_call_lowers_to_an_irreversible_call_effect() {
     let driver = reg.resolve("/github").unwrap();
     let merge = qfs_core::resolve_proc(driver.as_ref(), "merge").unwrap();
     assert!(merge.irreversible, "github.merge is declared irreversible");
-}
-
-// ---------------------------------------------------------------------------
-// slack — append_log (INSERT INTO /slack/<ws>/<channel>/messages; a bare channel name is a valid
-// ChannelRef resolved at commit — PREVIEW shows the symbolic channel, never an id lookup).
-// ---------------------------------------------------------------------------
-
-#[test]
-fn slack_insert_message_previews_reversible_append() {
-    assert_plan(
-        "INSERT INTO /slack/acme/general/messages VALUES ('Deploy finished')",
-        &service_registry(),
-    )
-    .nodes(&[EffectKind::Insert])
-    .irreversible(0)
-    .no_io_performed()
-    .snapshot("plan_slack_insert");
 }
 
 // ---------------------------------------------------------------------------
@@ -342,11 +322,11 @@ fn server_trigger_previews_single_config_write() {
 
 #[test]
 fn negative_unsupported_verb_fails_structurally() {
-    // A Slack channel message log is an APPEND log: it supports INSERT(append) but NOT UPDATE.
+    // The Gmail drafts collection is an APPEND log: it supports INSERT(append) but NOT UPDATE.
     // Planning an UPDATE must fail at resolve time with the structured `unsupported_verb` error
     // (blueprint §6) — the agent-legible failure path — BEFORE any plan or I/O exists.
     let reg = service_registry();
-    let stmt = parse_statement("UPDATE /slack/acme/general/messages SET text = 'x' WHERE id == 1")
+    let stmt = parse_statement("UPDATE /mail/drafts SET subject = 'x' WHERE id == 1")
         .expect("the statement parses (UPDATE is closed-core; the NODE rejects it)");
     let err = Evaluator::new(&reg)
         .eval(&stmt)
@@ -359,7 +339,7 @@ fn negative_unsupported_verb_fails_structurally() {
     // The error is genuinely AGENT-LEGIBLE (blueprint §6) WITHOUT string-parsing: its structured fields
     // name the rejected verb AND carry the `supported` set the agent picks a valid verb from (the
     // SKILL.md quick-ref promise "Unsupported verb = structured error … pick from it"). UPDATE is
-    // rejected on the slack append-log node; INSERT is offered as a supported alternative.
+    // rejected on the drafts append-log node; INSERT is offered as a supported alternative.
     let EvalError::Resolve(ResolveError::UnsupportedVerb {
         verb, supported, ..
     }) = &err

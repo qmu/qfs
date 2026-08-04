@@ -1952,22 +1952,26 @@ mod tests {
     }
 
     #[test]
-    fn slack_twin_read_is_row_equivalent_to_the_compiled_driver() {
-        // The tier-2 acceptance bar (blueprint §13): the DECLARED slack twin's read delivers rows
-        // ROW-EQUIVALENT to the COMPILED driver's on the SAME two-page envelope fixture — closing the
-        // five tier-1 parity parks (envelope unwrap, nested cursor, weak typing, dotted mount, body
-        // shape). What tier 1 could only RECORD as a gap now holds as an equality. Three homogeneous
-        // messages arrive across TWO pages via Slack's nested `response_metadata.next_cursor`.
-        let msg = |ts: &str, user: &str, text: &str| serde_json::json!({ "ts": ts, "user": user, "text": text });
-
-        // Compiled driver: the MockSlackClient returns the merged messages envelope.
-        let compiled = {
-            let client = qfs_driver_slack::MockSlackClient::new().with_list(serde_json::json!({
-                "messages": [msg("1", "U1", "hi"), msg("2", "U2", "yo"), msg("3", "U3", "hey")]
-            }));
-            qfs_driver_slack::read_rows(&client, "/slack/acme/#general/messages", None)
-                .expect("compiled reads")
-        };
+    fn slack_twin_read_delivers_the_recorded_compiled_rows() {
+        // The tier-2 acceptance bar (blueprint §13): the DECLARED slack twin's read delivers the rows
+        // the COMPILED driver delivered on the SAME two-page envelope fixture — closing the five
+        // tier-1 parity parks (envelope unwrap, nested cursor, weak typing, dotted mount, body
+        // shape). Three homogeneous messages arrive across TWO pages via Slack's nested
+        // `response_metadata.next_cursor`.
+        //
+        // The compiled side is now RECORDED rather than re-run: `driver-slack` was deleted by ticket
+        // 20260724014200 once this equality held, and the oracle's answers were frozen in that same
+        // commit — the last one in which both implementations existed. The test keeps its full force
+        // as the declared twin's regression suite, which is what the §13 ratchet says it becomes.
+        let null = qfs_core::Value::Null;
+        let compiled = recorded_compiled_rows(
+            &["ts", "user", "text", "thread_ts", "subtype"],
+            vec![
+                vec![t("1"), t("U1"), t("hi"), null.clone(), null.clone()],
+                vec![t("2"), t("U2"), t("yo"), null.clone(), null.clone()],
+                vec![t("3"), t("U3"), t("hey"), null.clone(), null.clone()],
+            ],
+        );
 
         // Declared twin: the tier-2 view (`… |> DECODE json |> EXPAND messages`) over a real
         // two-page envelope, driven through the reconstructed applier (which follows the nested
@@ -2042,34 +2046,18 @@ mod tests {
             mock.recorded()[1].url
         );
 
-        // ROW EQUIVALENCE: same delivered column NAMES + same row VALUES (sorted by ts). Compare
-        // names + values ONLY, not type/nullability metadata — the compiled schema pins types while
-        // the declared `OF` shaping late-binds them (Unknown/nullable); the tier-2 bar is the
-        // DELIVERED ROWS being equal, and homogeneous `{ts,user,text}` messages make thread_ts /
-        // subtype `Null` in BOTH (compiled: empty→Null; declared: absent col→Null).
-        let names = |b: &qfs_core::RowBatch| {
-            b.schema
-                .columns
-                .iter()
-                .map(|c| c.name.clone())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            names(&declared),
-            names(&compiled),
-            "same delivered column names"
-        );
-        let sorted = |b: &qfs_core::RowBatch| {
-            let mut rows: Vec<Vec<qfs_core::Value>> =
-                b.rows.iter().map(|r| r.values.clone()).collect();
-            rows.sort_by(|a, z| format!("{:?}", a.first()).cmp(&format!("{:?}", z.first())));
-            rows
-        };
+        // ROW EQUIVALENCE: same delivered column NAMES + same row VALUES (sorted by ts). Names and
+        // values ONLY, not type/nullability metadata — the compiled schema pinned types while the
+        // declared `OF` shaping late-binds them; the tier-2 bar is the DELIVERED ROWS being equal,
+        // and homogeneous `{ts,user,text}` messages make thread_ts / subtype `Null` in both.
+        let mut declared_shape = shape_of(&declared);
+        declared_shape
+            .1
+            .sort_by(|a, z| format!("{:?}", a.first()).cmp(&format!("{:?}", z.first())));
         assert_eq!(declared.rows.len(), 3, "three messages across two pages");
         assert_eq!(
-            sorted(&declared),
-            sorted(&compiled),
-            "the declared twin's rows are row-equivalent to the compiled driver's"
+            declared_shape, compiled,
+            "the declared twin's rows match the compiled driver's recorded answer"
         );
     }
 
@@ -2164,7 +2152,7 @@ mod tests {
     }
 
     /// The `(column names, row values)` pair row equivalence compares — names + values ONLY, not
-    /// type/nullability metadata: the compiled schema pins types while the declared `OF` shaping
+    /// type/nullability metadata: the compiled schema pinned types while the declared `OF` shaping
     /// late-binds them, and the tier-2 bar is the DELIVERED ROWS being equal.
     fn shape_of(b: &qfs_core::RowBatch) -> (Vec<String>, Vec<Vec<qfs_core::Value>>) {
         (
@@ -2173,11 +2161,21 @@ mod tests {
         )
     }
 
-    /// Read one node through the COMPILED `driver-slack` over the same fixture.
-    fn compiled_slack_read(path: &str, fixture: &str) -> qfs_core::RowBatch {
-        let value: serde_json::Value = serde_json::from_str(fixture).unwrap();
-        let client = qfs_driver_slack::MockSlackClient::new().with_list(value);
-        qfs_driver_slack::read_rows(&client, path, None).expect("the compiled driver reads")
+    /// What the COMPILED `driver-slack` delivered for a node, RECORDED. The crate was deleted by
+    /// ticket 20260724014200 after every equivalence test below was green against it, and these are
+    /// the answers it gave in that last commit — the oracle frozen at the moment the ratchet
+    /// authorized removing it, so the twin keeps a real bar to regress against rather than an
+    /// assertion that it equals itself.
+    fn recorded_compiled_rows(
+        cols: &[&str],
+        rows: Vec<Vec<qfs_core::Value>>,
+    ) -> (Vec<String>, Vec<Vec<qfs_core::Value>>) {
+        (cols.iter().map(|c| (*c).to_string()).collect(), rows)
+    }
+
+    /// `Value::Text` shorthand, so a recorded row reads as the data it is.
+    fn t(v: &str) -> qfs_core::Value {
+        qfs_core::Value::Text(v.to_string())
     }
 
     #[test]
@@ -2210,8 +2208,17 @@ mod tests {
             FIXTURE,
             &[],
         );
-        let compiled = compiled_slack_read("/slack/acme/#general/messages", FIXTURE);
-        assert_eq!(shape_of(&declared), shape_of(&compiled));
+        let null = qfs_core::Value::Null;
+        assert_eq!(
+            shape_of(&declared),
+            recorded_compiled_rows(
+                &["ts", "user", "text", "thread_ts", "subtype"],
+                vec![
+                    vec![t("1"), t("U1"), t("hi"), t("1"), t("bot_message")],
+                    vec![t("2"), t("U2"), t("yo"), null.clone(), null.clone()],
+                ],
+            )
+        );
         // The `{channel}` template segment bound into the wire query — the same `channel=` param the
         // compiled read pushes.
         assert!(
@@ -2289,11 +2296,17 @@ mod tests {
         );
         assert_eq!(
             shape_of(&d),
-            shape_of(&compiled_slack_read(
-                "/slack/acme/#general/messages/1/replies",
-                REPLIES
-            )),
-            "thread replies are row-equivalent"
+            recorded_compiled_rows(
+                &["ts", "user", "text", "thread_ts", "subtype"],
+                vec![vec![
+                    t("1.1"),
+                    t("U1"),
+                    t("re"),
+                    t("1"),
+                    t("thread_broadcast")
+                ]],
+            ),
+            "thread replies match the recorded compiled rows"
         );
 
         const REACTIONS: &str = r#"{"ok":true,"reactions":[{"name":"tada","count":3}]}"#;
@@ -2309,11 +2322,11 @@ mod tests {
         );
         assert_eq!(
             shape_of(&d),
-            shape_of(&compiled_slack_read(
-                "/slack/acme/#general/messages/1/reactions",
-                REACTIONS
-            )),
-            "reactions are row-equivalent"
+            recorded_compiled_rows(
+                &["name", "count"],
+                vec![vec![t("tada"), qfs_core::Value::Int(3)]]
+            ),
+            "reactions match the recorded compiled rows"
         );
 
         const FILES: &str = r#"{"ok":true,"files":[
@@ -2331,9 +2344,18 @@ mod tests {
         // HONEST DIFFERENCE, recorded not papered over: the compiled `FileDto` multiplies `created`
         // by 1000 (seconds → millis) while the declaration delivers Slack's field verbatim. Compare
         // the column names and every column EXCEPT `created`, and assert the scale relation itself.
-        let compiled = compiled_slack_read("/slack/acme/files", FILES);
         let (dn, dr) = shape_of(&d);
-        let (cn, cr) = shape_of(&compiled);
+        let (cn, cr) = recorded_compiled_rows(
+            &["id", "name", "mimetype", "size", "created", "user"],
+            vec![vec![
+                t("F1"),
+                t("a.pdf"),
+                t("application/pdf"),
+                qfs_core::Value::Int(10),
+                qfs_core::Value::Timestamp(1_700_000),
+                t("U1"),
+            ]],
+        );
         assert_eq!(dn, cn, "the file listing delivers the same columns");
         let drop_created = |rows: &Vec<Vec<qfs_core::Value>>| -> Vec<Vec<qfs_core::Value>> {
             rows.iter()
@@ -2370,8 +2392,26 @@ mod tests {
         );
         assert_eq!(
             shape_of(&d),
-            shape_of(&compiled_slack_read("/slack/acme/users", USERS)),
-            "the user directory is row-equivalent"
+            recorded_compiled_rows(
+                &["id", "name", "real_name", "is_bot", "deleted"],
+                vec![
+                    vec![
+                        t("U1"),
+                        t("alice"),
+                        t("Alice"),
+                        qfs_core::Value::Bool(false),
+                        qfs_core::Value::Bool(false)
+                    ],
+                    vec![
+                        t("U2"),
+                        t("bot"),
+                        t("Bot"),
+                        qfs_core::Value::Bool(true),
+                        qfs_core::Value::Bool(false)
+                    ],
+                ],
+            ),
+            "the user directory matches the recorded compiled rows"
         );
     }
 
@@ -2424,11 +2464,17 @@ mod tests {
         );
         assert_eq!(
             shape_of(&d),
-            shape_of(&compiled_slack_read(
-                "/slack/acme/dms/U07ALICE/messages",
-                DM
-            )),
-            "the DM message log is row-equivalent"
+            recorded_compiled_rows(
+                &["ts", "user", "text", "thread_ts", "subtype"],
+                vec![vec![
+                    t("9"),
+                    t("U07ALICE"),
+                    t("ping"),
+                    t("9"),
+                    t("me_message"),
+                ]],
+            ),
+            "the DM message log matches the recorded compiled rows"
         );
     }
 
@@ -2627,12 +2673,29 @@ mod tests {
             .collect(),
         };
         let declared = d.procedures();
-        // The compiled registry, read through the driver contract (no private module access).
-        use qfs_core::Driver as _;
-        let compiled_driver = qfs_driver_slack::SlackDriver::new(std::sync::Arc::new(
-            qfs_driver_slack::MockSlackClient::new(),
-        ));
-        let compiled = compiled_driver.procedures().to_vec();
+        // The COMPILED registry's signature list, RECORDED before `driver-slack` was deleted
+        // (ticket 20260724014200) — the contract half of the equivalence bar, frozen at the last
+        // commit in which both registries existed.
+        let compiled: Vec<RecordedProcSig> = [
+            ("react", vec!["channel", "ts", "emoji"], false),
+            ("pin", vec!["channel", "ts"], true),
+            ("unpin", vec!["channel", "ts"], false),
+            ("update", vec!["channel", "ts", "text"], false),
+            ("delete", vec!["channel", "ts"], true),
+        ]
+        .into_iter()
+        .map(|(n, params, irr)| {
+            (
+                n.to_string(),
+                params
+                    .into_iter()
+                    // Every compiled Slack CALL parameter was `text`.
+                    .map(|a| (a.to_string(), qfs_core::ColumnType::Text))
+                    .collect(),
+                irr,
+            )
+        })
+        .collect();
         let render = |p: &qfs_core::ProcSig| {
             (
                 p.name.clone(),
@@ -2645,8 +2708,8 @@ mod tests {
         };
         assert_eq!(
             declared.iter().map(render).collect::<Vec<_>>(),
-            compiled.iter().map(render).collect::<Vec<_>>(),
-            "the declared typed CALL signatures match the compiled registry's"
+            compiled,
+            "the declared typed CALL signatures match the compiled registry's recorded list"
         );
 
         // The SHIPPED asset declares exactly those five, with their signatures.
@@ -2829,14 +2892,13 @@ mod tests {
     /// One CALL argument as the evaluator lowers it: the declared parameter name and its value.
     type CallArg = (&'static str, String);
 
-    /// One equivalence case: the declared action, its arguments, the COMPILED effect twin, and the
-    /// Slack Web-API method the oracle must hit.
-    type CallEquivalenceCase = (
-        &'static str,
-        Vec<CallArg>,
-        qfs_driver_slack::SlackEffect,
-        &'static str,
-    );
+    /// One recorded compiled procedure signature: its name, its `(parameter, type)` list, and
+    /// whether the compiled registry marked it irreversible.
+    type RecordedProcSig = (String, Vec<(String, qfs_core::ColumnType)>, bool);
+
+    /// One equivalence case: the declared action, its arguments, and the wire request the COMPILED
+    /// driver recorded for it — the endpoint it hit and the JSON body it sent.
+    type CallEquivalenceCase = (&'static str, Vec<CallArg>, &'static str, serde_json::Value);
 
     /// Drive ONE declared `CALL slack.<action>` through the FULL commit stack (interpreter → mount
     /// remap → the §13 write facet → the confined applier) and return the recorded wire request.
@@ -2933,62 +2995,6 @@ mod tests {
         recorded[1].clone()
     }
 
-    /// A recording Slack transport (no socket): records every request, answers from a FIFO queue.
-    /// The compiled oracle's wire seam — the same `qfs-http-core` DTOs the declared side records.
-    struct RecordingSlackTransport {
-        responses: std::sync::Mutex<std::collections::VecDeque<qfs_driver_http::HttpResponse>>,
-        recorded: std::sync::Mutex<Vec<qfs_driver_http::HttpRequest>>,
-    }
-
-    impl qfs_driver_slack::HttpTransport for RecordingSlackTransport {
-        fn send(
-            &self,
-            req: &qfs_driver_http::HttpRequest,
-        ) -> Result<qfs_driver_http::HttpResponse, qfs_driver_slack::TransportError> {
-            self.recorded.lock().unwrap().push(req.clone());
-            self.responses.lock().unwrap().pop_front().ok_or_else(|| {
-                qfs_driver_slack::TransportError {
-                    reason: "mock transport exhausted".to_string(),
-                }
-            })
-        }
-    }
-
-    /// Drive ONE compiled [`SlackEffect`] through the REAL `RestSlackClient` and return the
-    /// recorded wire request — the oracle every declared CALL is compared against.
-    fn compiled_slack_call_request(
-        effect: &qfs_driver_slack::SlackEffect,
-    ) -> qfs_driver_http::HttpRequest {
-        use qfs_driver_slack::SlackClient as _;
-        let transport = Arc::new(RecordingSlackTransport {
-            responses: std::sync::Mutex::new(
-                vec![qfs_driver_http::HttpResponse::new(
-                    200,
-                    br#"{"ok":true}"#.to_vec(),
-                )]
-                .into(),
-            ),
-            recorded: std::sync::Mutex::new(Vec::new()),
-        });
-        let client = qfs_driver_slack::RestSlackClient::new(
-            transport.clone(),
-            seeded_slack_secrets(),
-            qfs_secrets::CredentialKey::new(
-                qfs_secrets::DriverId::new("slack"),
-                qfs_secrets::ConnectionId::new("default").unwrap(),
-            ),
-            qfs_driver_slack::BodyErrorRule::On,
-        );
-        client.apply(effect).expect("the compiled CALL applies");
-        let recorded = transport.recorded.lock().unwrap().clone();
-        assert_eq!(
-            recorded.len(),
-            1,
-            "an id-addressed channel needs no resolution round-trip"
-        );
-        recorded[0].clone()
-    }
-
     /// Drive one declared CALL through the full commit stack over a GIVEN channels fixture, and
     /// return whether it completed plus every recorded wire request. The refusal arms of QG2 need
     /// the failure case, which [`declared_slack_call_request`] asserts away.
@@ -3062,38 +3068,6 @@ mod tests {
         (outcome.is_complete(), mock.recorded())
     }
 
-    /// The compiled oracle over a NAME-addressed channel: its client resolves through
-    /// `conversations.list` at commit, so the transport is queued with the channels fixture first.
-    /// Returns every recorded request, so a refusal is observable as the ABSENCE of the effect leg.
-    fn compiled_slack_call_by_name(
-        effect: &qfs_driver_slack::SlackEffect,
-        channels: &str,
-    ) -> (bool, Vec<qfs_driver_http::HttpRequest>) {
-        use qfs_driver_slack::SlackClient as _;
-        let transport = Arc::new(RecordingSlackTransport {
-            responses: std::sync::Mutex::new(
-                vec![
-                    qfs_driver_http::HttpResponse::new(200, channels.as_bytes().to_vec()),
-                    qfs_driver_http::HttpResponse::new(200, br#"{"ok":true}"#.to_vec()),
-                ]
-                .into(),
-            ),
-            recorded: std::sync::Mutex::new(Vec::new()),
-        });
-        let client = qfs_driver_slack::RestSlackClient::new(
-            transport.clone(),
-            seeded_slack_secrets(),
-            qfs_secrets::CredentialKey::new(
-                qfs_secrets::DriverId::new("slack"),
-                qfs_secrets::ConnectionId::new("default").unwrap(),
-            ),
-            qfs_driver_slack::BodyErrorRule::On,
-        );
-        let ok = client.apply(effect).is_ok();
-        let recorded = transport.recorded.lock().unwrap().clone();
-        (ok, recorded)
-    }
-
     #[tokio::test]
     async fn declared_call_resolves_a_channel_name_exactly_as_the_compiled_driver_does() {
         // Ticket 20260724014100 QG2, first half. A NAME-addressed channel resolves before the effect
@@ -3110,34 +3084,18 @@ mod tests {
         )
         .await;
         assert!(declared_ok, "the declared CALL committed");
-        let (compiled_ok, compiled) = compiled_slack_call_by_name(
-            &qfs_driver_slack::SlackEffect::DeleteMessage {
-                channel: "general".into(),
-                ts: ts.clone(),
-            },
-            SLACK_CHANNELS_FIXTURE,
-        );
-        assert!(compiled_ok, "the compiled CALL applied");
-
+        // The COMPILED oracle's answer, RECORDED before `driver-slack` was deleted: it read
+        // `conversations.list` first and then POSTed `chat.delete` carrying the RESOLVED id — the
+        // same two requests, in the same order, with the same payload.
+        assert_eq!(declared.len(), 2, "a lookup read, then the effect leg");
         assert!(declared[0].url.contains("conversations.list"));
-        assert!(compiled[0].url.contains("conversations.list"));
+        assert_eq!(declared[1].url, "https://slack.com/api/chat.delete");
+        let body: serde_json::Value =
+            serde_json::from_slice(declared[1].body.as_deref().expect("a POST body"))
+                .expect("valid JSON");
         assert_eq!(
-            declared[1].url, compiled[1].url,
-            "same wire ENDPOINT for the effect leg"
-        );
-        let body_of = |req: &qfs_driver_http::HttpRequest| -> serde_json::Value {
-            serde_json::from_slice(req.body.as_deref().expect("a POST body")).expect("valid JSON")
-        };
-        assert_eq!(
-            body_of(&declared[1]),
-            body_of(&compiled[1]),
-            "same wire PAYLOAD, including the resolved channel id"
-        );
-        assert_eq!(
-            body_of(&declared[1])
-                .get("channel")
-                .and_then(|c| c.as_str()),
-            Some("C0EQUIV"),
+            body,
+            serde_json::json!({"channel": "C0EQUIV", "ts": ts}),
             "`general` resolved to its id, and the unresolved name never reached the wire"
         );
     }
@@ -3233,30 +3191,22 @@ mod tests {
             "only the lookup ran — no effect leg was issued: {declared:?}"
         );
         assert!(declared[0].url.contains("conversations.list"));
-
-        let (compiled_ok, compiled) = compiled_slack_call_by_name(
-            &qfs_driver_slack::SlackEffect::DeleteMessage {
-                channel: "nosuch".into(),
-                ts,
-            },
-            SLACK_CHANNELS_FIXTURE,
-        );
-        assert!(!compiled_ok, "the compiled CALL refused too");
-        assert_eq!(
-            compiled.len(),
-            1,
-            "the oracle also stopped after its resolution read: {compiled:?}"
-        );
+        // The compiled oracle stopped in exactly the same place — it too issued only its resolution
+        // read and never the effect leg. Asserted against the live crate before ticket
+        // 20260724014200 deleted it; recorded here, since the crate is gone.
+        let _ = ts;
     }
 
     #[tokio::test]
-    async fn shipped_slack_call_maps_are_wire_equivalent_to_the_compiled_calls() {
+    async fn shipped_slack_call_maps_match_the_recorded_compiled_wire_requests() {
         // Ticket 20260724014100 QG1 — the EFFECT half of the equivalence bar (the contract half is
-        // `shipped_slack_call_maps_carry_typed_g5_signatures`). Each of the five shipped CALL maps
-        // and its COMPILED `SlackEffect` twin are driven to a recorded wire request, and the two
-        // requests must agree on METHOD, ENDPOINT and PAYLOAD — including the channel id, which
-        // both sides must carry through untouched. The channel is addressed by its ALREADY-RESOLVED
-        // `Cxxxx` id: name→id resolution is the ticket's open QG2 (blueprint §13.1 G4).
+        // `shipped_slack_call_maps_carry_typed_g5_signatures`). Each of the five shipped CALL maps is
+        // driven to a recorded wire request and must match what the COMPILED `SlackEffect` twin sent:
+        // same METHOD, ENDPOINT and PAYLOAD, with the channel id carried through untouched.
+        //
+        // The compiled requests are RECORDED. `driver-slack` was deleted by ticket 20260724014200
+        // once these matched, and these are the bytes it put on the wire in that last commit — so the
+        // twin still regresses against the driver it replaced rather than against itself.
         const CHANNEL: &str = "C0EQUIV";
         let ts = "1719000000.000100".to_string();
         let cases: Vec<CallEquivalenceCase> = vec![
@@ -3267,30 +3217,20 @@ mod tests {
                     ("ts", ts.clone()),
                     ("emoji", "eyes".to_string()),
                 ],
-                qfs_driver_slack::SlackEffect::AddReaction {
-                    channel: CHANNEL.into(),
-                    ts: ts.clone(),
-                    emoji: "eyes".into(),
-                },
-                "/reactions.add",
+                "https://slack.com/api/reactions.add",
+                serde_json::json!({"channel": CHANNEL, "name": "eyes", "timestamp": ts}),
             ),
             (
                 "pin",
                 vec![("channel", CHANNEL.to_string()), ("ts", ts.clone())],
-                qfs_driver_slack::SlackEffect::Pin {
-                    channel: CHANNEL.into(),
-                    ts: ts.clone(),
-                },
-                "/pins.add",
+                "https://slack.com/api/pins.add",
+                serde_json::json!({"channel": CHANNEL, "timestamp": ts}),
             ),
             (
                 "unpin",
                 vec![("channel", CHANNEL.to_string()), ("ts", ts.clone())],
-                qfs_driver_slack::SlackEffect::Unpin {
-                    channel: CHANNEL.into(),
-                    ts: ts.clone(),
-                },
-                "/pins.remove",
+                "https://slack.com/api/pins.remove",
+                serde_json::json!({"channel": CHANNEL, "timestamp": ts}),
             ),
             (
                 "update",
@@ -3299,21 +3239,14 @@ mod tests {
                     ("ts", ts.clone()),
                     ("text", "edited".to_string()),
                 ],
-                qfs_driver_slack::SlackEffect::UpdateMessage {
-                    channel: CHANNEL.into(),
-                    ts: ts.clone(),
-                    text: "edited".into(),
-                },
-                "/chat.update",
+                "https://slack.com/api/chat.update",
+                serde_json::json!({"channel": CHANNEL, "text": "edited", "ts": ts}),
             ),
             (
                 "delete",
                 vec![("channel", CHANNEL.to_string()), ("ts", ts.clone())],
-                qfs_driver_slack::SlackEffect::DeleteMessage {
-                    channel: CHANNEL.into(),
-                    ts: ts.clone(),
-                },
-                "/chat.delete",
+                "https://slack.com/api/chat.delete",
+                serde_json::json!({"channel": CHANNEL, "ts": ts}),
             ),
         ];
         let irreversible: std::collections::HashMap<String, bool> = shipped_slack_maps()
@@ -3323,32 +3256,22 @@ mod tests {
             })
             .collect();
 
-        for (action, args, compiled_effect, endpoint) in cases {
+        for (action, args, url, body) in cases {
             let irr = *irreversible
                 .get(action)
                 .expect("the shipped asset declares this CALL");
             let declared = declared_slack_call_request(action, &args, irr).await;
-            let compiled = compiled_slack_call_request(&compiled_effect);
 
             assert_eq!(
-                declared.method, compiled.method,
-                "`{action}`: same wire METHOD"
+                declared.method,
+                qfs_driver_http::HttpMethod::Post,
+                "`{action}`: the recorded wire METHOD"
             );
-            assert_eq!(declared.url, compiled.url, "`{action}`: same wire ENDPOINT");
-            assert!(
-                compiled.url.ends_with(endpoint),
-                "`{action}`: the oracle really hit {endpoint}: {}",
-                compiled.url
-            );
-            let body_of = |req: &qfs_driver_http::HttpRequest| -> serde_json::Value {
-                serde_json::from_slice(req.body.as_deref().expect("a POST body"))
-                    .expect("valid JSON")
-            };
-            let (declared_body, compiled_body) = (body_of(&declared), body_of(&compiled));
-            assert_eq!(
-                declared_body, compiled_body,
-                "`{action}`: same wire PAYLOAD"
-            );
+            assert_eq!(declared.url, url, "`{action}`: the recorded wire ENDPOINT");
+            let declared_body: serde_json::Value =
+                serde_json::from_slice(declared.body.as_deref().expect("a POST body"))
+                    .expect("valid JSON");
+            assert_eq!(declared_body, body, "`{action}`: the recorded wire PAYLOAD");
             assert_eq!(
                 declared_body.get("channel").and_then(|c| c.as_str()),
                 Some(CHANNEL),

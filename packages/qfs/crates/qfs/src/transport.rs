@@ -1,14 +1,14 @@
 //! The real `reqwest` HTTP transport, hosted in the **`qfs` binary crate** — the one production
-//! impl of the per-driver `HttpTransport` seams (github / slack, blueprint §11 boundary B3).
+//! impl of the per-driver `HttpTransport` seam (github, blueprint §11 boundary B3).
 //!
 //! ## Why it lives here (not in the driver crates)
-//! `qfs-driver-github` / `qfs-driver-slack` are deliberately **transport-agnostic**: each declares
+//! `qfs-driver-github` is deliberately **transport-agnostic**: it declares
 //! its own thin `HttpTransport` trait (`send(&HttpRequest) -> Result<HttpResponse, TransportError>`)
-//! over the **shared `qfs-http-core` DTOs** and never links `reqwest` — so the drivers stay pure +
+//! over the **shared `qfs-http-core` DTOs** and never links `reqwest` — so the driver stays pure +
 //! mockable. The single real wire client (`reqwest`) already lives **confined** in
-//! `qfs-driver-http` as [`ReqwestClient`]. This adapter bridges that one client onto both drivers'
-//! transport traits, in the terminal binary (the allowlisted runtime/reqwest leaf — tokio + reqwest
-//! dead-end here, exactly like the commit interpreter). One adapter serves both drivers because
+//! `qfs-driver-http` as [`ReqwestClient`]. This adapter bridges that one client onto the driver's
+//! transport trait, in the terminal binary (the allowlisted runtime/reqwest leaf — tokio + reqwest
+//! dead-end here, exactly like the commit interpreter). One adapter serves every seam because
 //! their `HttpRequest`/`HttpResponse` are the *same* `qfs-http-core` types — so `send` is a pure
 //! delegate + an error-class remap (no DTO conversion).
 //!
@@ -26,9 +26,9 @@ use qfs_driver_http::{HttpClient, HttpError, HttpRequest, HttpResponse, ReqwestC
 /// genuinely hung backend fails closed as a transport timeout rather than blocking the commit.
 const TIMEOUT_SECS: u64 = 30;
 
-/// The real `reqwest`-backed transport shared by the github + slack apply drivers. Holds the one
-/// confined [`ReqwestClient`]; `Send + Sync` so an `Arc<Self>` is shareable as either driver's
-/// `Arc<dyn HttpTransport>`.
+/// The real `reqwest`-backed transport shared by the github apply driver and the other HTTP
+/// seams. Holds the one confined [`ReqwestClient`]; `Send + Sync` so an `Arc<Self>` is shareable
+/// as a driver's `Arc<dyn HttpTransport>`.
 pub struct ReqwestTransport {
     inner: ReqwestClient,
 }
@@ -64,14 +64,6 @@ impl qfs_driver_github::HttpTransport for ReqwestTransport {
     }
 }
 
-impl qfs_driver_slack::HttpTransport for ReqwestTransport {
-    fn send(&self, req: &HttpRequest) -> Result<HttpResponse, qfs_driver_slack::TransportError> {
-        self.inner
-            .send(req)
-            .map_err(|e| qfs_driver_slack::TransportError { reason: reason(&e) })
-    }
-}
-
 /// A `ReqwestTransport` as the github driver's transport.
 #[must_use]
 pub fn github_transport() -> Arc<dyn qfs_driver_github::HttpTransport> {
@@ -85,10 +77,10 @@ pub fn github_transport() -> Arc<dyn qfs_driver_github::HttpTransport> {
 /// SAME shared `qfs-http-core` DTOs, so it depends on neither `reqwest` nor `qfs-runtime` (the
 /// confinement invariant — a runtime consumer must be a leaf, and `qfs-driver-http` is one). This
 /// adapter bridges the one confined [`ReqwestClient`] onto that seam in the terminal binary, exactly
-/// like the github/slack impls above — a pure delegate (the `HttpRequest`/`HttpResponse` are the
+/// like the github impl above — a pure delegate (the `HttpRequest`/`HttpResponse` are the
 /// identical `qfs-http-core` types) plus an error-class remap.
 ///
-/// The one shape difference from the github/slack seams: `qfs_google_auth::TransportError` carries
+/// The one shape difference from the github seam: `qfs_google_auth::TransportError` carries
 /// `method` + `url` + `reason` (vs. the drivers' `reason`-only error), so the remap re-derives the
 /// secret-free request shape from `req` (the method token + the URL are never credentials — the
 /// bearer/secret rides a redacted header / form body, never the URL). The `reason` stays the
@@ -113,7 +105,7 @@ impl qfs_google_auth::HttpExchange for ReqwestTransport {
 /// over the SAME shared `qfs-http-core` DTOs, so it links neither `reqwest` nor `qfs-driver-http`
 /// (the SigV4 signer + the `HttpBackend` stay vendor-free — the `qfs-google-auth` / `qfs-driver-cf`
 /// precedent). This adapter bridges the one confined [`ReqwestClient`] onto that seam in the
-/// terminal binary, exactly like the github/slack/google impls above — a pure delegate (the
+/// terminal binary, exactly like the github/google impls above — a pure delegate (the
 /// `HttpRequest`/`HttpResponse` are the identical `qfs-http-core` types) plus an error-class remap.
 ///
 /// Like the Google seam, `qfs_driver_objstore::TransportError` carries `method` + `url` + `reason`
@@ -159,12 +151,6 @@ pub fn objstore_exchange() -> Arc<dyn qfs_driver_objstore::HttpExchange> {
 /// The shared `reqwest` transport as the Cloudflare REST backend's wire seam.
 #[must_use]
 pub fn cf_exchange() -> Arc<dyn qfs_driver_cf::HttpExchange> {
-    Arc::new(ReqwestTransport::new())
-}
-
-/// A `ReqwestTransport` as the slack driver's transport.
-#[must_use]
-pub fn slack_transport() -> Arc<dyn qfs_driver_slack::HttpTransport> {
     Arc::new(ReqwestTransport::new())
 }
 
@@ -235,7 +221,7 @@ mod tests {
     #[test]
     fn non_2xx_is_a_response_not_a_transport_error() {
         // The transport seam reports wire success/failure only — a 404 is a *response* the driver
-        // interprets, never a TransportError. This is the contract the github/slack appliers rely on.
+        // interprets, never a TransportError. This is the contract the github applier relies on.
         let url = one_shot_server(404, "not found");
         let transport = ReqwestTransport::new();
         let req = HttpRequest::new(HttpMethod::Get, url);
@@ -246,7 +232,7 @@ mod tests {
 
     #[test]
     fn google_exchange_delegates_a_real_loopback_round_trip() {
-        // The Google `HttpExchange` seam rides the SAME confined reqwest client as github/slack —
+        // The Google `HttpExchange` seam rides the SAME confined reqwest client as github —
         // prove it performs the real wire exchange over a loopback server (connect → request →
         // status + body) with NO live network, using the `qfs_google_auth` re-exported DTOs.
         use qfs_google_auth::{HttpExchange, HttpMethod as GMethod, HttpRequest as GRequest};
@@ -306,7 +292,7 @@ mod tests {
     #[test]
     fn objstore_exchange_delegates_a_real_loopback_round_trip() {
         // The object-storage `HttpExchange` seam rides the SAME confined reqwest client as
-        // github/slack/google — prove it performs the real wire exchange over a loopback server
+        // github/google — prove it performs the real wire exchange over a loopback server
         // (connect → request → status + body) with NO live network, using the `qfs_driver_objstore`
         // re-exported DTOs. This is the seam the live `/s3` + `/r2` SigV4 backends send over.
         use qfs_driver_objstore::HttpExchange;

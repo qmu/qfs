@@ -947,7 +947,8 @@ const fn wire_kind_of(verb: qfs_parser::EffectVerb) -> qfs_core::EffectKind {
 
 // ---------------------------------------------------------------------------
 // blueprint §13.1 G2 — DECLARED PUSHDOWN: a per-column predicate→wire-parameter map with residual
-// honesty. The compiled pushdown modules' own discipline (`driver-slack/pushdown.rs` et al.) lifted
+// honesty. The compiled pushdown modules' own discipline (the retired compiled `driver-slack`'s
+// `pushdown.rs` et al.) lifted
 // to declaration data: WHICH predicate pushes to WHICH wire parameter, and whether that parameter
 // means the predicate EXACTly (drop the conjunct from the residual) or is a looser PREFILTER (push
 // it AND keep the exact predicate local — over-fetch then filter, never wrong rows).

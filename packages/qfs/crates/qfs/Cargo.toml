@@ -1,6 +1,6 @@
 [package]
 name = "qfs"
-version = "0.0.94"
+version = "0.0.95"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -47,7 +47,7 @@ qfs-driver-fs = { path = "../driver-fs" }
 qfs-skill = { path = "../skill" }
 # t39 `qfs describe` composition root: the binary owns the **describe-only** driver registry the
 # subcommand consults. DESCRIBE is PURE (no creds, no I/O, no network), so each driver is built
-# with its public, cred-free mock client (gmail/gdrive/github/slack/ga) or an empty registry
+# with its public, cred-free mock client (gmail/gdrive/github/ga) or an empty registry
 # (s3/r2 ObjRegistry) — only the introspective half (describe/capabilities/procedures/prelude/
 # pushdown) is ever called. These are path-deps already in the workspace (no new external crates),
 # and the binary is the allowlisted leaf that may carry the `qfs-driver-*` edges (qfs-cmd stays off
@@ -56,7 +56,6 @@ qfs-skill = { path = "../skill" }
 qfs-driver-gmail = { path = "../driver-gmail" }
 qfs-driver-gdrive = { path = "../driver-gdrive" }
 qfs-driver-github = { path = "../driver-github" }
-qfs-driver-slack = { path = "../driver-slack" }
 qfs-driver-ga = { path = "../driver-ga" }
 qfs-driver-objstore = { path = "../driver-objstore" }
 # t58 identity-directory driver: the binary wires the `/directories/<provider>/...` surface
@@ -119,10 +118,10 @@ qfs-secrets = { path = "../secrets" }
 qfs-runtime = { path = "../runtime" }
 qfs-types = { path = "../types" }
 # t-exec networked-commit wiring: the binary owns the ONE real `reqwest` HTTP transport (in
-# src/transport.rs), bridging qfs-driver-http's confined `ReqwestClient` onto the github + slack
-# `HttpTransport` seams (they share qfs-http-core DTOs, so it is a pure delegate). reqwest dead-ends
+# src/transport.rs), bridging qfs-driver-http's confined `ReqwestClient` onto the github
+# `HttpTransport` seam (they share qfs-http-core DTOs, so it is a pure delegate). reqwest dead-ends
 # here in the terminal leaf — the driver crates stay transport-agnostic + mockable, and qfs-cmd
-# stays off both. github/slack are already linked above (describe); this only adds the wire client.
+# stays off both. github is already linked above (describe); this only adds the wire client.
 qfs-driver-http = { path = "../driver-http" }
 # The Cloudflare driver — the binary registers its cred-free planning mount so `/cf/...` statements
 # PLAN + describe (a runtime-consumer leaf, like the other driver edges; only the binary may carry it).
@@ -131,7 +130,7 @@ qfs-driver-cf = { path = "../driver-cf" }
 # qfs-google-auth's runtime-free `HttpExchange` seam (src/transport.rs) and composes the OAuth
 # client + per-account `StoredTokenSource` + authenticated `GoogleApiClient` that the gmail/gdrive/ga
 # apply drivers issue calls through (src/google.rs, registered in src/commit.rs gated like
-# github/slack). qfs-google-auth is a PURE off-runtime leaf (it shares only the qfs-http-core DTOs +
+# github). qfs-google-auth is a PURE off-runtime leaf (it shares only the qfs-http-core DTOs +
 # qfs-secrets, NEVER reqwest/qfs-runtime/qfs-driver-http — the confinement guard pins this), so the
 # edge adds no runtime coupling; the wire client + the live loopback browser consent dead-end HERE in
 # the terminal leaf. The operator's Google Desktop OAuth app id/secret come from QFS_GOOGLE_CLIENT_ID

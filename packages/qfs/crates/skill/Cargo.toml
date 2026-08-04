@@ -30,7 +30,6 @@ qfs-driver-local = { path = "../driver-local" }
 qfs-driver-gmail = { path = "../driver-gmail" }
 qfs-driver-gdrive = { path = "../driver-gdrive" }
 qfs-driver-github = { path = "../driver-github" }
-qfs-driver-slack = { path = "../driver-slack" }
 qfs-driver-sql = { path = "../driver-sql" }
 qfs-driver-git = { path = "../driver-git" }
 # The parser front door (parse_statement -> Statement) the negative golden + sql read drive.

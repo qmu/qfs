@@ -181,7 +181,7 @@ ticket blocked.
 ## Acceptance
 
 - [x] The five typed CALL maps are effect-equivalent to the compiled CALLs on fixtures (#20260724014100-slack-call-maps-effect-equivalent.md)
-- [ ] driver-slack is deleted per the shared retirement steps with docs/skills regenerated and the plugin minor-bumped in all four fields (#20260724014200-retire-the-compiled-slack-driver.md)
+- [x] driver-slack is deleted per the shared retirement steps with docs/skills regenerated and the plugin minor-bumped in all four fields (#20260724014200-retire-the-compiled-slack-driver.md)
 - [x] A declared write can produce a form-urlencoded body, the shipped Chatwork INSERT commits against the live API, and the cookbook teaches the working statement (#20260727214856-declared-rest-drivers-cannot-post-form-encoded-bodies.md) — **fully met 2026-08-01: hermetic on branch `work-20260801-044839`, then confirmed live in an attended round (message `2135330710482190336` delivered and read back byte-intact)**
 
 ## Changelog
@@ -235,3 +235,4 @@ ticket blocked.
 - 2026-08-04 — ticket archived — 20260725103000-declared-expand-must-splice-by-field-name.md
 - 2026-08-04 — ticket archived — 20260726090000-map-body-expressions-can-reference-path-params.md
 - 2026-08-04 — ticket archived — 20260724014100-slack-call-maps-effect-equivalent.md
+- 2026-08-04 — ticket archived — 20260724014200-retire-the-compiled-slack-driver.md

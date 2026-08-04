@@ -18,7 +18,7 @@
 //!
 //! ## Coverage (the LIGHT facet of the CO-t29-1 driver-registration carry-over)
 //! Registered cred-free (no backend registration needed for describe): **local, fs, mail, drive,
-//! github, slack, ga, s3, r2**. The t68 `/fs` driver describes over an EMPTY (deny-all) root
+//! github, ga, s3, r2**. The t68 `/fs` driver describes over an EMPTY (deny-all) root
 //! allowlist — its pure introspective half names no host path. **sql / git / cf** require a
 //! registered connection-catalog / repo
 //! / D1-catalog for describe to resolve a concrete node (a *registration* requirement, not a
@@ -88,9 +88,6 @@ pub(crate) fn cred_free_driver(driver_id: &str) -> Option<Arc<dyn qfs_core::Driv
         ))),
         "github" => Arc::new(qfs_driver_github::GitHubDriver::new(Arc::new(
             qfs_driver_github::MockGitHubClient::default(),
-        ))),
-        "slack" => Arc::new(qfs_driver_slack::SlackDriver::new(Arc::new(
-            qfs_driver_slack::MockSlackClient::default(),
         ))),
         "s3" => Arc::new(qfs_driver_objstore::S3Driver::new(
             crate::objstore::planning_registry(qfs_driver_objstore::Scheme::S3),
@@ -257,10 +254,6 @@ pub fn compiled_describe_registry() -> MountRegistry {
         Arc::new(qfs_driver_github::GitHubDriver::new(Arc::new(
             qfs_driver_github::MockGitHubClient::default(),
         ))),
-        // Append/object: Slack (path-keyed describe).
-        Arc::new(qfs_driver_slack::SlackDriver::new(Arc::new(
-            qfs_driver_slack::MockSlackClient::default(),
-        ))),
         // Relational: Google Analytics (path-keyed describe; schema filled at query time).
         Arc::new(qfs_driver_ga::GaDriver::new(Arc::new(
             qfs_driver_ga::MockGaClient::default(),
@@ -424,7 +417,7 @@ mod tests {
     }
 
     /// Every registered mount resolves and describes a representative node without creds — proving
-    /// the registry is genuinely cred-free across all eight drivers.
+    /// the registry is genuinely cred-free across every compiled describe driver.
     #[test]
     fn all_registered_mounts_describe_cred_free() {
         let reg = describe_registry();
@@ -435,10 +428,6 @@ mod tests {
             (
                 "/github/o/r/pulls",
                 qfs_core::Archetype::ObjectGraphWorkflow,
-            ),
-            (
-                "/slack/ws/#general/messages",
-                qfs_core::Archetype::AppendLog,
             ),
             ("/s3/bucket/key", qfs_core::Archetype::BlobNamespace),
             ("/r2/bucket/key", qfs_core::Archetype::BlobNamespace),
@@ -470,26 +459,27 @@ mod tests {
             views: Vec::<DeclaredNode>::new(),
             maps: Vec::<DeclaredMap>::new(),
         };
-        let declared = vec![decl("slack"), decl("chatwork")];
+        let declared = vec![decl("github"), decl("slack")];
 
-        // `slack` collides with a COMPILED driver → compiled wins (the compiled slack driver, mount
-        // `/slack`); the declared `slack` is never mounted.
-        assert!(cred_free_driver("slack").is_some(), "slack is compiled");
-        assert_eq!(cred_free_driver("slack").unwrap().mount(), "/slack");
-        // `chatwork` is declared-only (no compiled) → a declared describe mount resolves at the
-        // connect path via the `/rest/<name>` remap.
+        // `github` collides with a COMPILED driver → compiled wins (the compiled github driver,
+        // mount `/github`); the declared `github` is never mounted.
+        assert!(cred_free_driver("github").is_some(), "github is compiled");
+        assert_eq!(cred_free_driver("github").unwrap().mount(), "/github");
+        // `slack` is declared-only (the compiled `driver-slack` was retired in favour of the
+        // declared `/slack` driver) → a declared describe mount resolves at the connect path via
+        // the `/rest/<name>` remap.
         assert!(
-            cred_free_driver("chatwork").is_none(),
-            "chatwork is not compiled"
+            cred_free_driver("slack").is_none(),
+            "slack is no longer compiled"
         );
-        let mount = crate::declared_driver::declared_describe_mount("/chatwork", &declared[1])
-            .expect("declared chatwork mounts");
-        assert_eq!(mount.mount(), "/chatwork");
+        let mount = crate::declared_driver::declared_describe_mount("/slack", &declared[1])
+            .expect("declared slack mounts");
+        assert_eq!(mount.mount(), "/slack");
 
         // The collision is reported (never silent).
         assert_eq!(
             report_shadowed_declared(&declared),
-            vec!["slack".to_string()]
+            vec!["github".to_string()]
         );
     }
 

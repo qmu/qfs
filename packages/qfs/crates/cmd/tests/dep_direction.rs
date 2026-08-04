@@ -269,12 +269,11 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         "qfs-driver-gmail",
         "qfs-driver-gdrive",
         "qfs-driver-github",
-        "qfs-driver-slack",
         "qfs-driver-ga",
         "qfs-driver-objstore",
         // t-exec networked commit: the binary owns the ONE real reqwest HTTP transport
-        // (src/transport.rs), bridging qfs-driver-http's confined `ReqwestClient` onto the github +
-        // slack `HttpTransport` seams (a pure delegate — they share qfs-http-core DTOs). reqwest
+        // (src/transport.rs), bridging qfs-driver-http's confined `ReqwestClient` onto the github
+        // `HttpTransport` seam (a pure delegate — they share qfs-http-core DTOs). reqwest
         // dead-ends here in the terminal leaf, so the driver crates stay transport-agnostic and
         // qfs-cmd/qfs-exec stay off the wire client. qfs-driver-http is already in the
         // runtime-consumer allowlist; this is its only allowed dependent besides the driver layer.
@@ -287,7 +286,7 @@ fn binary_is_the_thin_entrypoint_plus_the_t28_shell_composition_root() {
         // commit stack (src/google.rs) over qfs-google-auth — bridging the ONE reqwest transport onto
         // its runtime-free `HttpExchange` seam, building the per-account StoredTokenSource +
         // GoogleApiClient, and registering the apply drivers in src/commit.rs (gated like
-        // github/slack). qfs-google-auth is a PURE off-runtime leaf (it shares only qfs-http-core +
+        // github). qfs-google-auth is a PURE off-runtime leaf (it shares only qfs-http-core +
         // qfs-secrets, never reqwest/qfs-runtime/qfs-driver-http — pinned by
         // `http_core_is_a_pure_leaf_single_sourcing_the_redaction_set`), so this edge adds NO runtime
         // coupling to the terminal binary; the wire client + the live loopback consent dead-end here.
@@ -655,7 +654,6 @@ fn runtime_is_confined_to_plan_and_types() {
         "qfs-driver-cf",
         "qfs-driver-objstore",
         "qfs-driver-github",
-        "qfs-driver-slack",
         "qfs-driver-git",
         // t53: the `/sys/*` administration driver bridges its SysApplier into the runtime via
         // qfs-runtime's PlanApplierBridge (like every other driver leaf). It is a leaf — only the
@@ -1182,9 +1180,10 @@ fn crypto_core_is_a_pure_leaf_single_sourcing_the_three_vendored_copies() {
     // t34: qfs-crypto-core is the SINGLE SOURCE OF TRUTH for the dependency-free, wasm-clean
     // crypto primitives — SHA-256 (FIPS 180-4), HMAC-SHA256 (RFC 4231), lowercase-hex, and a
     // constant-time byte compare. Before it, an identical SHA-256 (and in two cases HMAC /
-    // constant_time_eq) was independently vendored: qfs-driver-objstore::sha256 (SigV4) and
-    // qfs-driver-slack::hmac (signature verification) — plus the retired qfs-cron::hash (run-id),
-    // gone since t65 with the scheduler. No shared crypto leaf existed, and depending on any of
+    // constant_time_eq) was independently vendored: qfs-driver-objstore::sha256 (SigV4) — plus
+    // two retired copies, the compiled driver-slack's hmac (signature verification, gone with the
+    // crate) and qfs-cron::hash (run-id, gone since t65 with the scheduler). No shared crypto leaf
+    // existed, and depending on any of
     // those crates would have pulled a runtime/binding coupling into the consumer, so each
     // re-vendored the routine. t34's webhook HMAC verification would have been another copy; instead
     // this crate single-sources all of them. It mirrors `http_core_is_a_pure_leaf_...` but stricter:
@@ -1196,8 +1195,9 @@ fn crypto_core_is_a_pure_leaf_single_sourcing_the_three_vendored_copies() {
     //       qfs-http-core, which legitimately depends on qfs-secrets for the REDACTED marker, the
     //       crypto leaf needs no such marker — so its allowed dep set is EMPTY.)
     //   (b) the surviving former copy-holders all depend on the shared leaf now — so none keeps a
-    //       second SHA-256/HMAC copy; the leaf is the only place they are defined. (The third
-    //       former copy, qfs-cron's run-id hash, was deleted with the scheduler in t65.)
+    //       second SHA-256/HMAC copy; the leaf is the only place they are defined. (The other two
+    //       former copies are gone with their crates: qfs-cron's run-id hash with the t65
+    //       scheduler, and the compiled driver-slack's hmac with that crate's retirement.)
     let graph = load_graph();
 
     // (a) TRUE pure leaf: qfs-crypto-core has ZERO dependencies of any kind.
@@ -1213,19 +1213,20 @@ fn crypto_core_is_a_pure_leaf_single_sourcing_the_three_vendored_copies() {
          ingress. Deps were: {crypto_core_deps:?}"
     );
 
-    // (b) the surviving former vendorings all depend on the shared leaf — single source, no copy.
-    for crate_name in ["qfs-driver-objstore", "qfs-driver-slack"] {
-        let deps = graph
-            .direct_deps
-            .get(crate_name)
-            .unwrap_or_else(|| panic!("{crate_name} is a workspace package"));
-        assert!(
-            deps.iter().any(|d| d == "qfs-crypto-core"),
-            "single-source violation: {crate_name} must depend on qfs-crypto-core for the shared \
-             SHA-256/HMAC-SHA256/constant_time_eq (t34) rather than vendoring a private copy. \
-             Deps were: {deps:?}"
-        );
-    }
+    // (b) the ONE surviving former vendoring depends on the shared leaf — single source, no copy.
+    // (The other two former copy-holders are gone with their crates: qfs-cron with the t65
+    // scheduler, the compiled driver-slack with its retirement.)
+    let crate_name = "qfs-driver-objstore";
+    let deps = graph
+        .direct_deps
+        .get(crate_name)
+        .unwrap_or_else(|| panic!("{crate_name} is a workspace package"));
+    assert!(
+        deps.iter().any(|d| d == "qfs-crypto-core"),
+        "single-source violation: {crate_name} must depend on qfs-crypto-core for the shared \
+         SHA-256/HMAC-SHA256/constant_time_eq (t34) rather than vendoring a private copy. \
+         Deps were: {deps:?}"
+    );
 }
 
 #[test]
