@@ -1,6 +1,6 @@
 ---
 skill_name: qfs-chatwork
-skill_description: Use when a task needs Chatwork through qfs — installing and querying the DECLARED /chatwork driver (rooms, room messages, room file listings, file download, and file upload) written in the query language itself, and posting a message to a room. Covers installing the chatwork.qfs declaration, connecting it to a stored Chatwork API token, reading, posting a message via ENCODE form, downloading a file's bytes via the FOLLOW stage, and uploading via ENCODE multipart.
+skill_description: Use when a task needs Chatwork through qfs — installing and querying the DECLARED /chatwork driver (rooms, a room's latest messages, a room's unread messages, room file listings, file download, and file upload) written in the query language itself, and posting a message to a room. Covers installing the chatwork.qfs declaration, connecting it to a stored Chatwork API token, reading the latest messages versus the unread-only ones, posting a message via ENCODE form, downloading a file's bytes via the FOLLOW stage, and uploading via ENCODE multipart.
 ---
 
 # Chatwork (declared driver)
@@ -59,6 +59,11 @@ CREATE TYPE chatwork/message (
 
 ```qfs
 CREATE VIEW /chatwork/rooms/{room}/messages OF chatwork/message AS
+  /http/chatwork/rooms/{room}/messages?force=1 |> DECODE json
+```
+
+```qfs
+CREATE VIEW /chatwork/rooms/{room}/messages/unread OF chatwork/message AS
   /http/chatwork/rooms/{room}/messages |> DECODE json
 ```
 
@@ -94,6 +99,25 @@ Address a room by its id (from `/chatwork/rooms`), newest first:
 |> order by send_time DESC
 |> limit 20
 ```
+
+That path returns the room's most recent messages **every time it is read**. It is worth saying why
+it needs its own spelling: `GET /rooms/{id}/messages` defaults to *unread messages only*, so a view
+declared without `force=1` returns rows on the first read of a room and nothing on the next one
+until someone posts again. The shipped `…/messages` view passes `force=1` — a path names a place,
+and reading it twice has to answer the same question.
+
+## Read only what is unread in a room
+
+The unread reading is the API's cheap default call, and it keeps a name of its own:
+
+```qfs
+/chatwork/rooms/123456/messages/unread
+|> select body, send_time
+```
+
+This one **consumes**: Chatwork marks the returned messages read, so the next read of the same room
+returns only what arrived in between. Reach for it when you want "what is new since I last looked";
+reach for `…/messages` when you want the room's latest messages.
 
 ## List the files shared in a room
 

@@ -4753,13 +4753,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn shipped_chatwork_script_installs_statement_for_statement() {
-        // The SHIPPED Chatwork asset: same install-splitter as the config path (strip `--` trailing +
-        // `#` whole-line comments, split on `;`), then assert every EXECUTABLE statement parses on the
-        // shipped grammar. The recorded-findings comment block (the file download/upload gaps) rides
-        // as `--` comments, so it is stripped and never counted as a statement.
-        let script = qfs_skill::CHATWORK_DRIVER;
+    /// The install-splitter the config path uses, over a shipped asset's bytes: strip `--` trailing
+    /// and `#` whole-line comments, split on `;`. The recorded-findings comment blocks ride as `--`
+    /// comments, so they are stripped and never counted as statements.
+    fn shipped_statements(script: &str) -> Vec<String> {
         let mut stmts: Vec<String> = Vec::new();
         let mut cur = String::new();
         for raw in script.lines() {
@@ -4785,12 +4782,21 @@ mod tests {
         if !cur.trim().is_empty() {
             stmts.push(cur.trim().to_string());
         }
+        stmts
+    }
+
+    #[test]
+    fn shipped_chatwork_script_installs_statement_for_statement() {
+        // The SHIPPED Chatwork asset, split as the config path splits it, then assert every
+        // EXECUTABLE statement parses on the shipped grammar.
+        let script = qfs_skill::CHATWORK_DRIVER;
+        let stmts = shipped_statements(script);
 
         assert_eq!(
             stmts.len(),
-            10,
-            "1 driver + 3 types + 4 views (incl. the FOLLOW blob) + 2 maps (incl. the multipart \
-             upload): {stmts:?}"
+            11,
+            "1 driver + 3 types + 5 views (incl. the FOLLOW blob and the unread twin) + 2 maps \
+             (incl. the multipart upload): {stmts:?}"
         );
         for s in &stmts {
             assert!(
@@ -4798,6 +4804,21 @@ mod tests {
                 "a shipped chatwork statement must parse: {s}"
             );
         }
+        // The two message readings each have their own name (ticket 20260801061500). `…/messages`
+        // must ask for `force=1` — Chatwork's default is unread-only, so without it a second read of
+        // the same room is empty — and the unread reading keeps the bare default call.
+        assert!(
+            stmts
+                .iter()
+                .any(|s| s.contains("/http/chatwork/rooms/{room}/messages?force=1")),
+            "the latest-messages view asks the API for the room's messages, not its unread ones"
+        );
+        assert!(
+            stmts
+                .iter()
+                .any(|s| s.contains("CREATE VIEW /chatwork/rooms/{room}/messages/unread")),
+            "the unread reading keeps a name of its own"
+        );
         // The API-key auth carries only the header NAME — never a token value.
         assert!(script.contains("AUTH HEADER 'x-chatworktoken'"));
         assert!(!script.contains("Bearer "));
@@ -4807,6 +4828,106 @@ mod tests {
             script.matches("/http/").count(),
             script.matches("/http/chatwork/").count(),
             "every /http/ occurrence addresses the chatwork host"
+        );
+    }
+
+    #[tokio::test]
+    async fn shipped_chatwork_message_views_build_two_distinct_wire_urls() {
+        // Ticket 20260801061500. The built request URL is what decides which question Chatwork
+        // answers, so pin it through the REAL read facet, over the SHIPPED bodies rather than a copy
+        // of them: `…/messages` must carry `force=1` (the API's default is unread-only, so a second
+        // read of the same room would otherwise be empty), and `…/messages/unread` must not.
+        //
+        // `of_type` is left unset on purpose — this test is about the wire address, and a declared
+        // `OF` type that resolves to nothing is refused at read time by design (`declared_eval`).
+        let body_of = |mount: &str| {
+            let head = format!("CREATE VIEW {mount} OF");
+            let stmt = shipped_statements(qfs_skill::CHATWORK_DRIVER)
+                .into_iter()
+                .find(|s| s.starts_with(&head))
+                .unwrap_or_else(|| panic!("the shipped script declares {mount}"));
+            let (_, wire) = stmt.split_once(" AS").expect("a view body follows AS");
+            serde_json::to_string(&qfs_exec::parse(wire.trim()).expect("the body parses")).unwrap()
+        };
+        let d = DeclaredDriver {
+            name: "chatwork".into(),
+            base_url: "https://api.chatwork.com/v2".into(),
+            auth: r#"{"kind":"header","name":"x-chatworktoken"}"#.into(),
+            pagination: None,
+            pushdown: None,
+            views: vec![
+                DeclaredNode {
+                    path: "/chatwork/rooms/{room}/messages".into(),
+                    of_type: None,
+                    body: body_of("/chatwork/rooms/{room}/messages"),
+                    pushdown: None,
+                },
+                DeclaredNode {
+                    path: "/chatwork/rooms/{room}/messages/unread".into(),
+                    of_type: None,
+                    body: body_of("/chatwork/rooms/{room}/messages/unread"),
+                    pushdown: None,
+                },
+            ],
+            maps: vec![],
+        };
+
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        for _ in 0..2 {
+            mock.push_response(qfs_driver_http::HttpResponse::new(
+                200,
+                br#"[{"message_id":"7","body":"hi","send_time":1}]"#.to_vec(),
+            ));
+        }
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let secrets = {
+            use qfs_secrets::Secrets as _;
+            let store = qfs_secrets::InMemoryStore::new();
+            store
+                .put(
+                    &qfs_secrets::CredentialKey::new(
+                        qfs_secrets::DriverId::new("chatwork"),
+                        qfs_secrets::ConnectionId::new("default").unwrap(),
+                    ),
+                    qfs_secrets::Secret::from("cw-secret-token"),
+                )
+                .unwrap();
+            let arc: Arc<dyn qfs_secrets::Secrets> = Arc::new(store);
+            arc
+        };
+        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+        let facet = crate::read_facets::RestReadDriver::new(
+            driver.rest_applier().clone(),
+            "chatwork".to_string(),
+            crate::declared_eval::view_specs(&d, &[]),
+        );
+
+        for mount in [
+            "/rest/chatwork/rooms/1/messages",
+            "/rest/chatwork/rooms/1/messages/unread",
+        ] {
+            let scan = qfs_pushdown::ScanNode {
+                source: qfs_pushdown::SourceId::new("chatwork"),
+                path: mount.into(),
+                pushed: qfs_pushdown::PushedQuery::default(),
+                schema: qfs_core::Schema::empty(),
+                materialize_content: false,
+            };
+            qfs_exec::ReadDriver::scan(&facet, &scan, &qfs_core::RequestContext::anonymous())
+                .await
+                .unwrap_or_else(|e| panic!("{mount} reads: {e:?}"));
+        }
+
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 2, "one GET per view");
+        assert_eq!(
+            recorded[0].url, "https://api.chatwork.com/v2/rooms/1/messages?force=1",
+            "the latest-messages view forces the full listing, so every read answers the same \
+             question"
+        );
+        assert_eq!(
+            recorded[1].url, "https://api.chatwork.com/v2/rooms/1/messages",
+            "the unread view keeps the API's cheap unread-only default — that is what its name says"
         );
     }
 
