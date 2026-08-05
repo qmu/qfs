@@ -2,11 +2,11 @@
 
 ## active
 
-* [a-declared-write-resolves-a-name-the-way-a-query-does](active/a-declared-write-resolves-a-name-the-way-a-query-does/mission.md) - A declared write resolves a name the way a query does
 * [claude-code-sessions-are-queryable-and-steerable-as-qfs-paths](active/claude-code-sessions-are-queryable-and-steerable-as-qfs-paths/mission.md) - Claude Code sessions are queryable and steerable as qfs paths
 
 ## archive
 
+* [a-declared-write-resolves-a-name-the-way-a-query-does](archive/a-declared-write-resolves-a-name-the-way-a-query-does/mission.md) - A declared write resolves a name the way a query does
 * [a-file-collection-is-a-declared-set-over-any-blob-source](archive/a-file-collection-is-a-declared-set-over-any-blob-source/mission.md) - A file collection is a declared set over any blob source
 * [a-request-resolves-to-a-principal-the-query-path-can-read](archive/a-request-resolves-to-a-principal-the-query-path-can-read/mission.md) - A request resolves to a principal the query path can read
 * [a-walk-extends-one-trail-one-column-at-a-time](archive/a-walk-extends-one-trail-one-column-at-a-time/mission.md) - A walk extends one trail one column at a time

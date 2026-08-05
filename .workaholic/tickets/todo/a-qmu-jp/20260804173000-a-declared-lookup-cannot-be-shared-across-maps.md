@@ -7,7 +7,7 @@ effort:
 commit_hash:
 category: Added
 depends_on:
-mission: a-declared-write-resolves-a-name-the-way-a-query-does
+mission:
 merge_policy:
 ---
 
@@ -15,7 +15,12 @@ merge_policy:
 
 ## Overview
 
-Minted while driving `20260724014100` (Slack CALL maps effect-equivalent). Wiring the §13.1 G9
+Minted while driving `20260724014100` (Slack CALL maps effect-equivalent), under the mission
+`a-declared-write-resolves-a-name-the-way-a-query-does` — which was closed `achieved` on 2026-08-05.
+The `mission:` stamp was cleared deliberately at that close so this ticket returns to the ordinary
+backlog: `plan-units.sh` excludes any mission-stamped ticket from the backlog without checking
+whether that mission is still active, so leaving the stamp on would have made this undrivable.
+The provenance lives here in prose instead. Wiring the §13.1 G9
 channel lookup into the five Slack CALL maps meant writing the **identical** binding five times:
 
 ```qfs

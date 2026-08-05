@@ -2,7 +2,7 @@
 type: Mission
 title: A declared write resolves a name the way a query does
 slug: a-declared-write-resolves-a-name-the-way-a-query-does
-status: active
+status: achieved
 created_at: 2026-07-27T13:55:01+09:00
 author: a@qmu.jp
 assignee: a@qmu.jp
@@ -243,3 +243,4 @@ ticket blocked.
 - 2026-08-04 — concern deferred (stuck) — 20260804212551-the-slack-webhook-surface-went-with.md
 - 2026-08-04 — concern deferred (stuck) — 20260804212551-two-tests-used-slack-as-an.md
 - 2026-08-04 — concern deferred (stuck) — 20260804212551-two-commits-exceed-the-branch-safety.md
+- 2026-08-05 — mission achieved — mission.md
