@@ -18,6 +18,10 @@ tickets:
   - 20260719231005-claude-live-round-owner-attended.md
   - 20260719105527-tmux-session-teardown-must-not-kill-server.md
   - 20260721190756-slack-driver-channel-id-resolution.md
+  - 20260805113000-capture-the-teams-inbox-contract-in-a-container.md
+  - 20260805113100-append-instruction-writes-the-lead-teams-inbox.md
+  - 20260805113200-steering-live-fire-reaches-a-real-session.md
+  - 20260805113300-launch-live-fire-spawns-an-addressable-session.md
 stories: []
 concerns: []
 gate_type: live-app
@@ -150,6 +154,24 @@ constraint the remaining set IS unattended-drivable, so `drive_authorized` is st
 overnight run; anything that cannot be containerized escalates instead of running on the shared
 host.
 
+**Replan findings and rulings (2026-08-05).** Read from the host's own store, read-only, before any
+ticket was written:
+
+- **A solo session has no inbox.** Every session gets `~/.claude/teams/session-<short>/config.json`,
+  but `inboxes/` exists only for a session that formed a team — 37 team directories, **7** with
+  `inboxes/`; 1 of 6 sampled live sessions. Whether an inbox we create ourselves is drained is
+  **unknown and not knowable from a host at rest**, so it is answered by a container spike before the
+  transport is written. Item 5's reach depends on that answer, and its wording may need correcting
+  once it is known.
+- **The message schema is unobservable at rest** — all 33 inbox files are `[]`, because a running
+  session drains them. The format must be captured in flight, which is why the spike precedes the
+  implementation rather than being folded into it.
+- **Steering is lead-fixed** (developer ruling, 2026-08-05). An INSERT into
+  `.../sessions/<id>/instructions` appends to the **lead member's** inbox; members are not
+  addressable and no `.../members/<member>/...` path is added. Making members addressable was weighed
+  and declined for now — it widens the path grammar before anything has asked for it, and stays
+  available as a later, cheap addition.
+
 ## Experience
 
 What must be observable when this mission is achieved (added 2026-07-22 when the schema began
@@ -209,6 +231,13 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
       transport is deliberately NOT used: it is process-coupled and unsafe (owner ruling,
       2026-07-19). Non-process-killing by construction; the live-fire proof runs only in an isolated
       environment (see the Scope environment constraint)
+      *(replanned 2026-08-05 into three tickets: capture the inbox contract in a container
+      (#20260805113000-capture-the-teams-inbox-contract-in-a-container.md), implement the lead-inbox
+      append behind the SessionSource seam
+      (#20260805113100-append-instruction-writes-the-lead-teams-inbox.md), and the live fire that
+      closes this item (#20260805113200-steering-live-fire-reaches-a-real-session.md). The item is
+      marked with the LIVE FIRE alone, deliberately: archiving an earlier ticket must not tick a
+      criterion it only half meets)*
 - [ ] **Launching a session is designed, then shipped.** Greenfield: no grammar, no capability, no
       prior design. Needs a design brief first (what a launch *is*, whether it is irreversible and
       therefore gated, what identity it runs under, how its id becomes addressable) — closing
@@ -217,6 +246,10 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
       behind a fake, hermetic tests. The remaining live fire spawns a real `claude --bg` process, so
       it runs ONLY in an isolated environment, out of unattended scope — see the Scope environment
       constraint)*
+      *(replanned 2026-08-05: the remaining live half is
+      (#20260805113300-launch-live-fire-spawns-an-addressable-session.md), which carries no design or
+      implementation — those shipped at a73fa01 — and has no depends_on, so it runs in parallel with
+      the steering chain)*
 - [x] **`/claude`'s compiled standing is recorded, not left unnamed.** The `declared-drivers-…`
       mission names `/claude` alongside `/cf` as a compiled counter-example, with blueprint §13's
       ratchet framing as what governs it — so the rule stops reading as absolute while two
@@ -382,3 +415,8 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-07-23 — 3 tickets moved to icebox (steering rewire, session launch, live round) — the steering live-drain needs an attended multi-agent Agent Team run, so they are set aside from the unattended queue by developer approval; the launcher-id bug remains drive-ready for tonight — claude-steering-and-live-round-tickets
 - 2026-07-23 — ticket archived — 20260722213000-claude-launcher-id-capture-mismatch.md
 - 2026-07-24 — story reported — work-20260718-201117.md
+- 2026-08-05 — ticket added — 20260805113000-capture-the-teams-inbox-contract-in-a-container.md
+- 2026-08-05 — ticket added — 20260805113100-append-instruction-writes-the-lead-teams-inbox.md
+- 2026-08-05 — ticket added — 20260805113200-steering-live-fire-reaches-a-real-session.md
+- 2026-08-05 — ticket added — 20260805113300-launch-live-fire-spawns-an-addressable-session.md
+- 2026-08-05 — mission replanned — mission.md
