@@ -415,6 +415,7 @@ fn live_registry(local_root: &Path) -> DriverRegistry {
                         crate::declared_eval::map_specs(&d),
                         crate::declared_eval::view_specs(&d, &types),
                         driver.rest_applier().clone(),
+                        crate::declared_eval::shared_lookups(&d),
                     );
                     let remap = crate::declared_driver::declared_remap(&path, &d.name)?;
                     Some(Arc::new(crate::mount_adapter::MountApplyDriver::new(

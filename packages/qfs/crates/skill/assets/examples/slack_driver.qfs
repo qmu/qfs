@@ -82,13 +82,13 @@ CREATE VIEW /slack/{ws}/users OF slack/user AS
 CREATE MAP INSERT /slack/{ws}/{channel}/messages AS
   INSERT INTO /http/slack/chat.postMessage VALUES ({channel: path.channel, text: row.text});
 
--- The five CALL procedures (§13.1 G5 — a declared CALL carries a TYPED signature, so DESCRIBE
--- reports `react(channel: Text, ts: Text, emoji: Text)` exactly as the compiled registry did, and a
--- wrong-shaped argument is a typecheck error rather than a wire error). Each maps onto its POST
--- method; `pin` and `delete` are IRREVERSIBLE, so they ride the standard gate.
--- Every ID-requiring CALL resolves its channel argument the same way, with the §13.1 G9 reverse
--- lookup: search this driver's OWN `/slack/{ws}/channels` view for a row whose `name` OR whose `id`
--- equals the given reference, and bind that row's `id`.
+-- Every ID-requiring CALL below resolves its channel argument the same way, with the §13.1 G9
+-- reverse lookup: search this driver's OWN `/slack/{ws}/channels` view for a row whose `name` OR
+-- whose `id` equals the given reference, and bind that row's `id`. The §13.1 G10 shared lookup is
+-- what lets that binding be written ONCE: a map uses it by referencing the name `cid`, and a map
+-- that binds `cid` itself overrides this one — the same default-with-override shape the
+-- driver-level PAGINATE and PUSHDOWN clauses above already have. A map that never spells `cid`
+-- (the post map) performs no lookup fetch at all.
 --
 -- The disjunction is what makes one binding accept a reference given either way round. A
 -- human-readable `general` matches on `name`; an already-resolved `C0123` matches on `id` and
@@ -98,22 +98,23 @@ CREATE MAP INSERT /slack/{ws}/{channel}/messages AS
 --
 -- A reference matching no row is a structured refusal BEFORE the effect leg fires, and one matching
 -- several is refused rather than picked — so a guessed id never reaches the wire.
+CREATE LOOKUP slack/cid AS /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id;
+
+-- The five CALL procedures (§13.1 G5 — a declared CALL carries a TYPED signature, so DESCRIBE
+-- reports `react(channel: Text, ts: Text, emoji: Text)` exactly as the compiled registry did, and a
+-- wrong-shaped argument is a typecheck error rather than a wire error). Each maps onto its POST
+-- method; `pin` and `delete` are IRREVERSIBLE, so they ride the standard gate.
 CREATE MAP CALL slack.react ( channel text, ts text, emoji text ) /slack/{ws}/{channel}/messages AS
-  let cid = /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id
   INSERT INTO /http/slack/reactions.add VALUES ({channel: cid, timestamp: row.ts, name: row.emoji});
 
 CREATE MAP CALL slack.pin ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
-  let cid = /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id
   INSERT INTO /http/slack/pins.add VALUES ({channel: cid, timestamp: row.ts}) IRREVERSIBLE;
 
 CREATE MAP CALL slack.unpin ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
-  let cid = /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id
   INSERT INTO /http/slack/pins.remove VALUES ({channel: cid, timestamp: row.ts});
 
 CREATE MAP CALL slack.update ( channel text, ts text, text text ) /slack/{ws}/{channel}/messages AS
-  let cid = /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id
   INSERT INTO /http/slack/chat.update VALUES ({channel: cid, ts: row.ts, text: row.text});
 
 CREATE MAP CALL slack.delete ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
-  let cid = /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id
   INSERT INTO /http/slack/chat.delete VALUES ({channel: cid, ts: row.ts}) IRREVERSIBLE;

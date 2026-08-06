@@ -457,6 +457,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: Vec::<DeclaredNode>::new(),
+            lookups: Vec::new(),
             maps: Vec::<DeclaredMap>::new(),
         };
         let declared = vec![decl("github"), decl("slack")];

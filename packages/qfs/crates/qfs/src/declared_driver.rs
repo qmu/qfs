@@ -45,6 +45,21 @@ pub(crate) struct DeclaredDriver {
     pub views: Vec<DeclaredNode>,
     /// The declared write/CALL mappings.
     pub maps: Vec<DeclaredMap>,
+    /// The declaration-scope reverse lookups (`CREATE LOOKUP <driver>/<name>`, §13.1 G10): a
+    /// binding written once and used by every MAP body that references its name. The same
+    /// default-with-per-map-override shape `pagination`/`pushdown` have, applied to the G9 lookup.
+    pub lookups: Vec<DeclaredLookup>,
+}
+
+/// One declaration-scope reverse lookup (`kind='lookup'`): the bare name map bodies reference and
+/// the stored G9 binding pipeline (serde JSON of a parsed `Statement::Query`, validated where a
+/// local `LET` is validated — `qfs_exec::declared::map_body_lookups`).
+#[derive(Debug, Clone)]
+pub(crate) struct DeclaredLookup {
+    /// The bound name a map body spells (`cid`) — the key's tail, with the driver segment stripped.
+    pub name: String,
+    /// The stored binding pipeline JSON.
+    pub body: String,
 }
 
 /// A declared view node (`kind='view'`): its mount path, its `OF <type>` contract, and its stored
@@ -207,6 +222,7 @@ fn assemble(rows: Vec<DriverRow>) -> Vec<DeclaredDriver> {
             pushdown: r.pushdown.clone(),
             views: Vec::new(),
             maps: Vec::new(),
+            lookups: Vec::new(),
         })
         .collect();
 
@@ -240,6 +256,20 @@ fn assemble(rows: Vec<DriverRow>) -> Vec<DeclaredDriver> {
                         body: r.body.clone().unwrap_or_default(),
                         irreversible: r.irreversible,
                     });
+                }
+            }
+            // §13.1 G10: a `lookup` row attaches to the driver its KEY names (`slack/cid` →
+            // `slack`), the same leading-segment association `view`/`map` rows use. The stored key
+            // keeps the driver segment so two drivers may each declare a `cid`; the model carries
+            // only the tail, because that is what a map body spells.
+            "lookup" => {
+                if let Some((seg, name)) = r.name.split_once('/') {
+                    if let Some(d) = find_mut(&mut drivers, seg) {
+                        d.lookups.push(DeclaredLookup {
+                            name: name.to_string(),
+                            body: r.body.clone().unwrap_or_default(),
+                        });
+                    }
                 }
             }
             // `type` rows are the outward contract a view delivers `OF`; the live-eval half reads
@@ -278,6 +308,13 @@ impl DeclaredDriver {
             .iter()
             .all(|v| body_confined(&self.name, &v.body))
             && self.maps.iter().all(|m| body_confined(&self.name, &m.body))
+            // A §13.1 G10 shared lookup reads the driver's OWN mount, never `/http` — but it is a
+            // stored body like any other, so it faces the same structural check here rather than
+            // relying only on the extraction-time confinement (defense in depth, as for maps).
+            && self
+                .lookups
+                .iter()
+                .all(|l| body_confined(&self.name, &l.body))
     }
 
     /// Reconstruct the shipped [`RestApiConfig`] this driver declares — a **lift** of the
@@ -1353,6 +1390,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: Vec::new(),
+            lookups: Vec::new(),
             maps: Vec::new(),
         }
     }
@@ -1365,6 +1403,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: Vec::new(),
+            lookups: Vec::new(),
             maps: Vec::new(),
         }
     }
@@ -1377,6 +1416,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: Vec::new(),
+            lookups: Vec::new(),
             maps: Vec::new(),
         }
     }
@@ -1671,6 +1711,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: vec![],
+            lookups: Vec::new(),
             maps: vec![],
         };
         assert_eq!(d.host().as_deref(), Some("h.example"));
@@ -1692,6 +1733,7 @@ mod tests {
                 body: "{}".into(),
                 pushdown: None,
             }],
+            lookups: Vec::new(),
             maps: vec![DeclaredMap {
                 path: "/chatwork/rooms".into(),
                 verb: "INSERT".into(),
@@ -1735,6 +1777,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: vec![],
+            lookups: Vec::new(),
             maps: vec![
                 DeclaredMap {
                     path: "/slack/post".into(),
@@ -1777,6 +1820,7 @@ mod tests {
                 body: "{}".into(),
                 pushdown: None,
             }],
+            lookups: Vec::new(),
             maps: vec![],
         };
         let json = qfs_core::CodecRegistry::with_builtins()
@@ -1811,6 +1855,7 @@ mod tests {
                 body: String::new(),
                 pushdown: None,
             }],
+            lookups: Vec::new(),
             maps: vec![DeclaredMap {
                 path: "/chatwork/rooms".into(),
                 verb: "INSERT".into(),
@@ -1991,6 +2036,7 @@ mod tests {
                 body: String::new(),
                 pushdown: None,
             }],
+            lookups: Vec::new(),
             maps: vec![],
         };
         let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
@@ -2088,6 +2134,7 @@ mod tests {
                 body: String::new(),
                 pushdown: Some(SLACK_TWIN_PUSHDOWN.into()),
             }],
+            lookups: Vec::new(),
             maps: vec![],
         }
     }
@@ -2601,8 +2648,9 @@ mod tests {
         }
         assert_eq!(
             stmts.len(),
-            21,
-            "1 driver + 5 types + 9 views + 1 post map + 5 typed CALL maps: {stmts:?}"
+            22,
+            "1 driver + 5 types + 9 views + 1 post map + 1 shared LOOKUP + 5 typed CALL maps: \
+             {stmts:?}"
         );
         for s in &stmts {
             assert!(
@@ -2618,19 +2666,20 @@ mod tests {
                 !t.is_empty() && !t.starts_with("--")
             })
             .count();
-        // The bar moved from 40 to 45 when the five CALL maps gained their §13.1 G9 channel lookup
-        // (ticket 20260724014100), and the five added lines are ONE binding written five times —
-        // the language has no way to share a lookup across maps that mount at the same path. That is
-        // a finding about the declared model, not slack_driver.qfs being verbose, so it is recorded
-        // as its own ticket rather than absorbed by shrinking the declaration elsewhere. The bar is
-        // still a ratchet: it holds at the measured figure, so the next growth is deliberate too.
+        // MEASURED HISTORY of this number, because the §13.2 claim is a measurement and not a hope:
+        // 40 for the read surface + 5 typed CALL maps; 45 when those CALL maps each gained their
+        // §13.1 G9 channel lookup (ticket 20260724014100) — five copies of ONE binding; and 41 now
+        // that §13.1 G10 lets the declaration state that binding once (`CREATE LOOKUP slack/cid`,
+        // ticket 20260804173000). The device removed the five duplicate lines and cost one, so the
+        // saving is the N−1 the driver-level PAGINATE/PUSHDOWN defaults already earn.
         //
-        // DEFERRED to the developer: whether ~40 remains the right §13.2 claim now that the first
-        // complete conversion — reads, writes, typed CALLs and name resolution — measures 45. The
-        // open concern `the-13-2-calibration-table-was` already asks exactly this.
+        // 41 is still ABOVE the ~40 figure §13.2 names, and that is recorded rather than tuned
+        // away: what G10 fixed is the SLOPE (a twin no longer pays one line per ID-requiring call),
+        // not the intercept. Whether ~40 remains the right §13.2 claim for a complete twin is the
+        // open concern `the-13-2-calibration-table-was`, still the developer's to answer.
         assert!(
-            statement_lines <= 45,
-            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~45 statement-lines); \
+            statement_lines <= 41,
+            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~41 statement-lines); \
              measured {statement_lines}"
         );
         // Host-confinement floor over the shipped bytes: every /http/ reference is /http/slack/.
@@ -2656,6 +2705,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: vec![],
+            lookups: Vec::new(),
             maps: vec![
                 ("CALL slack.react(channel text, ts text, emoji text)", false),
                 ("CALL slack.pin(channel text, ts text)", true),
@@ -2834,6 +2884,40 @@ mod tests {
             .collect()
     }
 
+    /// Every `CREATE LOOKUP` the SHIPPED `slack_driver.qfs` declares, as the [`DeclaredLookup`]
+    /// rows an install writes (§13.1 G10). The five CALL maps reference `cid` instead of each
+    /// binding it, so without these rows the twin harness would drive maps whose lookup is simply
+    /// absent — which is exactly what the equivalence proofs below must NOT be allowed to do
+    /// silently.
+    fn shipped_slack_lookups() -> Vec<DeclaredLookup> {
+        let stripped: String = qfs_skill::SLACK_DRIVER
+            .lines()
+            .map(|l| l.split("--").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        stripped
+            .split(';')
+            .map(str::trim)
+            .filter(|s| s.starts_with("CREATE LOOKUP "))
+            .map(|stmt| {
+                let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
+                let (head, body_src) = stmt
+                    .split_once(" AS ")
+                    .expect("a LOOKUP declares `AS <pipeline>`");
+                let key = head.trim_start_matches("CREATE LOOKUP ").trim();
+                let (driver, name) = key.split_once('/').expect("the key is <driver>/<name>");
+                assert_eq!(driver, "slack", "the twin's lookups are the slack driver's");
+                DeclaredLookup {
+                    name: name.to_string(),
+                    body: serde_json::to_string(
+                        &qfs_exec::parse(body_src.trim()).expect("lookup body parses"),
+                    )
+                    .expect("body serializes"),
+                }
+            })
+            .collect()
+    }
+
     /// Every `CREATE TYPE` the SHIPPED `slack_driver.qfs` declares, as the [`DeclaredType`] rows an
     /// install writes. A declared view's `OF` type must resolve against these or the read is refused
     /// at delivery time (`declared_eval::view_specs` yields `Some(vec![])` for an unresolved type,
@@ -2877,6 +2961,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: shipped_slack_views(),
+            lookups: shipped_slack_lookups(),
             maps: shipped_slack_maps(),
         }
     }
@@ -2934,6 +3019,7 @@ mod tests {
             crate::declared_eval::map_specs(&d),
             crate::declared_eval::view_specs(&d, &shipped_slack_types()),
             driver.rest_applier().clone(),
+            crate::declared_eval::shared_lookups(&d),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -3029,6 +3115,7 @@ mod tests {
             crate::declared_eval::map_specs(&d),
             crate::declared_eval::view_specs(&d, &shipped_slack_types()),
             driver.rest_applier().clone(),
+            crate::declared_eval::shared_lookups(&d),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -3129,6 +3216,7 @@ mod tests {
             crate::declared_eval::map_specs(&d),
             crate::declared_eval::view_specs(&d, &shipped_slack_types()),
             driver.rest_applier().clone(),
+            crate::declared_eval::shared_lookups(&d),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -3451,6 +3539,7 @@ mod tests {
                 body: String::new(),
                 pushdown: None,
             }],
+            lookups: Vec::new(),
             maps: vec![],
         };
         // The queue-pull view: a POST-to-read. The body is a constant struct literal (a read has no
@@ -3575,6 +3664,7 @@ mod tests {
                 body: String::new(),
                 pushdown: None,
             }],
+            lookups: Vec::new(),
             maps: vec![],
         };
         // The body is the SHIPPED declaration's, parsed from the asset text itself — so the test
@@ -3766,6 +3856,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: vec![],
+            lookups: Vec::new(),
             maps: vec![DeclaredMap {
                 path: "/slack/post".into(),
                 verb: "INSERT".into(),
@@ -3899,6 +3990,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: vec![],
+            lookups: Vec::new(),
             maps: vec![DeclaredMap {
                 path: "/slack/post".into(),
                 verb: "INSERT".into(),
@@ -3924,6 +4016,7 @@ mod tests {
             crate::declared_eval::map_specs(&d),
             crate::declared_eval::view_specs(&d, &[]),
             driver.rest_applier().clone(),
+            crate::declared_eval::shared_lookups(&d),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -4004,6 +4097,7 @@ mod tests {
                 body: blob_body,
                 pushdown: None,
             }],
+            lookups: Vec::new(),
             maps: vec![],
         };
         let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
@@ -4109,6 +4203,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: vec![],
+            lookups: Vec::new(),
             maps: vec![DeclaredMap {
                 path: "/chatwork/rooms/{room}/files".into(),
                 verb: "INSERT".into(),
@@ -4130,6 +4225,7 @@ mod tests {
             crate::declared_eval::map_specs(&d),
             crate::declared_eval::view_specs(&d, &[]),
             driver.rest_applier().clone(),
+            crate::declared_eval::shared_lookups(&d),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -4224,6 +4320,7 @@ mod tests {
             pagination: None,
             pushdown: None,
             views: vec![],
+            lookups: Vec::new(),
             maps: vec![DeclaredMap {
                 path: "/chatwork/rooms/{room}/messages".into(),
                 verb: "INSERT".into(),
@@ -4248,6 +4345,7 @@ mod tests {
             crate::declared_eval::map_specs(&d),
             crate::declared_eval::view_specs(&d, &[]),
             driver.rest_applier().clone(),
+            crate::declared_eval::shared_lookups(&d),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -4336,6 +4434,7 @@ mod tests {
                 body: view_body,
                 pushdown: None,
             }],
+            lookups: Vec::new(),
             maps: vec![DeclaredMap {
                 path: "/slack/{ws}/messages".into(),
                 verb: "INSERT".into(),
@@ -4364,6 +4463,7 @@ mod tests {
             crate::declared_eval::map_specs(&d),
             crate::declared_eval::view_specs(&d, &[]),
             driver.rest_applier().clone(),
+            crate::declared_eval::shared_lookups(&d),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -4425,6 +4525,134 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_shared_lookup_resolves_the_same_write_with_no_binding_in_the_map_body() {
+        // Blueprint §13.1 G10 / ticket 20260804173000 — the SAME end-to-end proof as the G9 test
+        // above, with the binding moved out of the map body into a `CREATE LOOKUP` row. The two
+        // recorded requests must be identical: one collection GET, then the effect POST carrying
+        // the resolved id. That is the whole claim of the device — sharing changes where the
+        // binding is written, not what the write does.
+        use qfs_core::{
+            Column, ColumnType, DriverId, EffectKind, EffectNode, NodeId, PlanBuilder, Row,
+            RowBatch, Schema, Target, Value, VfsPath,
+        };
+        use qfs_runtime::{CapabilitySet, DriverRegistry, Interpreter};
+
+        // The map body carries NO `LET`: it references the shared binding by name.
+        let map_body = serde_json::to_string(
+            &qfs_exec::parse(
+                "INSERT INTO /http/slack/chat.delete VALUES ({channel: cid, ts: row.ts})",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // The shared binding, exactly as `CREATE LOOKUP slack/cid AS …` stores it.
+        let lookup_body = serde_json::to_string(
+            &qfs_exec::parse("/slack/{ws}/channels |> WHERE name == row.channel |> SELECT id")
+                .unwrap(),
+        )
+        .unwrap();
+        let view_body = serde_json::to_string(
+            &qfs_exec::parse("/http/slack/conversations.list |> DECODE json").unwrap(),
+        )
+        .unwrap();
+        let d = DeclaredDriver {
+            name: "slack".into(),
+            base_url: "https://slack.com/api".into(),
+            auth: r#"{"kind":"none"}"#.into(),
+            pagination: None,
+            pushdown: None,
+            views: vec![DeclaredNode {
+                path: "/slack/{ws}/channels".into(),
+                of_type: None,
+                body: view_body,
+                pushdown: None,
+            }],
+            lookups: vec![DeclaredLookup {
+                name: "cid".into(),
+                body: lookup_body,
+            }],
+            maps: vec![DeclaredMap {
+                path: "/slack/{ws}/messages".into(),
+                verb: "INSERT".into(),
+                body: map_body,
+                irreversible: false,
+            }],
+        };
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"[{"name":"general","id":"C_GEN"},{"name":"random","id":"C_RND"}]"#.to_vec(),
+        ));
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"{"ok":true}"#.to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let secrets: Arc<dyn qfs_secrets::Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
+        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+
+        let remap = declared_remap("/slack", "slack").expect("remap");
+        let facet = crate::apply_facets::RestApplyDriver::new(
+            Arc::new(qfs_driver_http::rest_apply_driver(&driver)),
+            "slack".to_string(),
+            crate::declared_eval::map_specs(&d),
+            crate::declared_eval::view_specs(&d, &[]),
+            driver.rest_applier().clone(),
+            crate::declared_eval::shared_lookups(&d),
+        );
+        let registry = DriverRegistry::new().with(
+            remap.outer_id(),
+            Arc::new(crate::mount_adapter::MountApplyDriver::new(
+                remap,
+                Arc::new(facet),
+            )),
+        );
+        let interp = Interpreter::with_defaults(registry);
+
+        let incoming = RowBatch::new(
+            Schema::new(vec![
+                Column::new("channel", ColumnType::Text, false),
+                Column::new("ts", ColumnType::Text, false),
+            ]),
+            vec![Row::new(vec![
+                Value::Text("random".into()),
+                Value::Text("1700.1".into()),
+            ])],
+        );
+        let mut b = PlanBuilder::new();
+        b.push(
+            EffectNode::new(
+                NodeId(0),
+                EffectKind::Insert,
+                Target::new(DriverId::new("slack"), VfsPath::new("/slack/T1/messages")),
+            )
+            .with_args(incoming),
+        );
+        let caps = CapabilitySet::none().grant(DriverId::new("slack"), &EffectKind::Insert);
+        let outcome = interp
+            .commit(b.build(), &caps)
+            .await
+            .expect("the resolved write commits");
+        assert!(outcome.is_complete(), "the effect leg applied: {outcome:?}");
+
+        let recorded = mock.recorded();
+        assert_eq!(
+            recorded.len(),
+            2,
+            "one lookup then one effect leg, exactly as the local binding produces: {recorded:?}"
+        );
+        assert_eq!(
+            recorded[0].url, "https://slack.com/api/conversations.list",
+            "the shared binding reads the driver's OWN declared collection view"
+        );
+        let body = String::from_utf8(recorded[1].body.clone().expect("a POST body")).unwrap();
+        assert!(
+            body.contains("C_RND") && !body.contains("random"),
+            "the effect leg carries the RESOLVED id, not the name: {body}"
+        );
+    }
+
+    #[tokio::test]
     async fn declared_let_lookup_refuses_an_unknown_name_before_the_effect_leg() {
         // QG6 — the refusal is asserted by the ABSENCE of the second request: an unresolvable name
         // must never reach the wire as a garbage id, and must never fire a silent no-op write.
@@ -4458,6 +4686,7 @@ mod tests {
                 body: view_body,
                 pushdown: None,
             }],
+            lookups: Vec::new(),
             maps: vec![DeclaredMap {
                 path: "/slack/{ws}/messages".into(),
                 verb: "INSERT".into(),
@@ -4480,6 +4709,7 @@ mod tests {
             crate::declared_eval::map_specs(&d),
             crate::declared_eval::view_specs(&d, &[]),
             driver.rest_applier().clone(),
+            crate::declared_eval::shared_lookups(&d),
         );
         let registry = DriverRegistry::new().with(
             remap.outer_id(),
@@ -4563,6 +4793,7 @@ mod tests {
                     pushdown: None,
                 },
             ],
+            lookups: Vec::new(),
             maps: vec![DeclaredMap {
                 path: "/cloudflare/zones/{zone}/dns_records".into(),
                 verb: "INSERT".into(),
@@ -4604,6 +4835,7 @@ mod tests {
                     pushdown: None,
                 },
             ],
+            lookups: Vec::new(),
             maps: vec![
                 DeclaredMap {
                     path:
@@ -4869,6 +5101,7 @@ mod tests {
                     pushdown: None,
                 },
             ],
+            lookups: Vec::new(),
             maps: vec![],
         };
 
@@ -5012,6 +5245,7 @@ mod tests {
                 body: "{}".into(),
                 pushdown: None,
             }],
+            lookups: Vec::new(),
             maps: vec![],
         };
         let specs = crate::declared_eval::view_specs(&d, &[]);

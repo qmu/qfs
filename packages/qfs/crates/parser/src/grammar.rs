@@ -2469,6 +2469,55 @@ fn create_map_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
     Ok(insert_sys_drivers(values, create))
 }
 
+/// `CREATE LOOKUP <driver>/<name> AS <pipeline>` — a declaration-scope reverse lookup, shared by
+/// every MAP body of that driver which references `<name>` (blueprint §13.1 **G10**).
+///
+/// The body is the SAME accepted G9 shape a map's own `LET` binds — `<own-mount-path> |> WHERE <col>
+/// == row.<field> |> SELECT <col>` — and it is validated at exactly the same seam
+/// (`qfs_exec::declared::map_body_lookups`), so a shared binding can be neither wider nor less
+/// confined than a local one. Only the *place it is written* moves: once per declaration instead of
+/// once per map.
+///
+/// **The name is a definition NAME (§5.5), not a path.** A lookup is not a readable data surface —
+/// nothing can `FROM` it — so it is referenced by name, and its stored key is the bare qualified
+/// `<driver>/<name>` (the same rule that makes `OF chatwork/message` a name). A leading `/` lexes as
+/// a `Token::Path`, so the path form simply fails to parse here.
+///
+/// Desugars to `INSERT INTO /sys/drivers` with `kind='lookup'` — one statement, one row, exactly
+/// like every other declaration; the loader attaches it to the driver named by the key's leading
+/// segment, the same association `view`/`map` rows use.
+fn create_lookup_stmt(input: &mut Stream<'_>) -> ModalResult<Statement> {
+    let create = kw(Keyword::Create).parse_next(input)?;
+    let _ = word("LOOKUP").parse_next(input)?;
+    let name = cut_err(lookup_name).parse_next(input)?;
+    let _ = cut_err(kw(Keyword::As)).parse_next(input)?;
+    let body = cut_err(inner_statement).parse_next(input)?;
+    let body_json = body_to_json(&body)?;
+    let values = driver_row_values(
+        "lookup",
+        &name,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(&body_json),
+        false,
+        None,
+    );
+    Ok(insert_sys_drivers(values, create))
+}
+
+/// A shared lookup's key: exactly `<driver>/<name>` — which driver's maps may reference it, and the
+/// name they reference it by. Two segments, no more: a lookup is bound into a map body as one bare
+/// name, so a deeper key would name something the body cannot spell.
+fn lookup_name(input: &mut Stream<'_>) -> ModalResult<String> {
+    let driver = ident(input)?;
+    let _ = punct(Token::Slash).parse_next(input)?;
+    let name = cut_err(ident).parse_next(input)?;
+    Ok(format!("{}/{}", driver.node, name.node))
+}
+
 /// One relation in a `CREATE SQL … TABLES (…)` catalog: `<name> ( <col> <type> [constraints], … )`,
 /// reusing the `CREATE TABLE`/`CREATE TYPE` column-list parser (`table_column_def`).
 struct SqlResourceTable {
@@ -3437,7 +3486,14 @@ fn inner_statement(input: &mut Stream<'_>) -> ModalResult<Statement> {
             // within winnow's alt arity. `CREATE SQL /<path> … TABLES (…)` is the declared
             // sql-resource arm — a sqlite-dialect SQL endpoint over a wire query verb (ticket
             // 20260718203326). Both backtrack cleanly when the noun after `CREATE` doesn't match.
-            alt((create_map_stmt, create_sql_resource_stmt)),
+            // §13.1 G10: `CREATE LOOKUP <driver>/<name> AS …` — the declaration-scope reverse
+            // lookup every MAP of that driver may reference. Probed with `CREATE MAP` (both are
+            // §13 declared-driver forms) and backtracks cleanly when the noun doesn't match.
+            alt((
+                create_map_stmt,
+                create_lookup_stmt,
+                create_sql_resource_stmt,
+            )),
             // `CREATE ACCOUNT <provider> '<label>'` (20260703040000): the in-language account
             // declaration, desugars to `INSERT INTO /sys/accounts`. Backtracks cleanly when the
             // noun after `CREATE` is not `ACCOUNT`.
