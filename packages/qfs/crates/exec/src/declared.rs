@@ -147,8 +147,8 @@ pub struct MapLookup {
 }
 
 /// Extract the declared reverse lookups a stored map body binds ahead of its effect — **pure**, no
-/// I/O, blueprint §13.1 G9. Returns them in binding order; a body with no `LET` returns an empty vec,
-/// which is the shape every shipped declaration has today.
+/// I/O, blueprint §13.1 G9. Returns them in binding order; a body with no `LET` and no referenced
+/// shared lookup returns an empty vec.
 ///
 /// The accepted binding is deliberately **one narrow shape** —
 /// `LET <name> = <own-mount-path> |> WHERE <col> == row.<field> |> SELECT <col>` — and anything else
@@ -156,19 +156,33 @@ pub struct MapLookup {
 /// law applied to a declaration: a lookup the runtime cannot perform exactly must not be accepted and
 /// then approximated.
 ///
+/// **Shared lookups (blueprint §13.1 G10).** `shared` carries the driver's `CREATE LOOKUP
+/// <driver>/<name>` rows as `(bound name, stored pipeline JSON)`. They are *declaration-scope*
+/// bindings with exactly the accepted shape above, and a map body uses one by **referencing its
+/// name** — the same default-with-per-map-override shape `PAGINATE`/`PUSHDOWN` already have. Two
+/// rules make that safe rather than spooky:
+///
+/// - **Demand-driven.** A shared lookup is extracted only when the map's own wire-body expression
+///   references its name, so a map that needs no lookup issues no lookup fetch. Reading the
+///   declaration tells you which maps pay for it: the ones that spell the name.
+/// - **A local `LET` shadows.** A map that binds the name itself keeps its own binding and the
+///   shared one is not extracted — the per-map override half of the device.
+///
 /// **Confinement (§13, the write-side twin of the read side's host pin).** `source_path`'s first
 /// segment must be the declaring driver's own mount. A body naming another driver's surface — or the
 /// raw `/http/…` wire — is refused here, so a declaration can never read outside its own driver to
-/// build a write.
+/// build a write. A shared lookup is checked identically, at the same seam: the row travels as
+/// unvalidated text and becomes a [`MapLookup`] only through [`lookup_of_binding`].
 ///
 /// # Errors
-/// [`CfsError::InvalidPath`] when the body is not rehydratable, a binding is not the accepted shape,
-/// or a binding names a source outside the driver's own mount.
+/// [`CfsError::InvalidPath`] when the body is not rehydratable, a binding (local or shared) is not
+/// the accepted shape, or a binding names a source outside the driver's own mount.
 pub fn map_body_lookups(
     body_json: &str,
     driver_name: &str,
     map_path: &str,
     params: &[(String, String)],
+    shared: &[(String, String)],
 ) -> Result<Vec<MapLookup>, CfsError> {
     let invalid = |reason: &'static str| CfsError::InvalidPath {
         path: map_path.to_string(),
@@ -189,7 +203,107 @@ pub fn map_body_lookups(
         )?);
         cursor = body;
     }
+    if shared.is_empty() {
+        return Ok(lookups);
+    }
+
+    // §13.1 G10: the effect's own wire-body expression is what decides which shared bindings this
+    // map uses. A bare column reference in a map body can only ever be a lookup binding — `row` and
+    // `path` are the two struct namespaces and every incoming field goes through one of them — so
+    // "referenced" is an exact question about the stored AST, not a heuristic.
+    let referenced = effect_col_refs(cursor);
+    for (name, binding_json) in shared {
+        if !referenced.contains(name.as_str()) || lookups.iter().any(|l| &l.name == name) {
+            continue;
+        }
+        let value: Statement = serde_json::from_str(binding_json)
+            .map_err(|_| invalid("declared shared LOOKUP is not rehydratable"))?;
+        lookups.push(lookup_of_binding(
+            name,
+            &value,
+            driver_name,
+            params,
+            &invalid,
+        )?);
+    }
     Ok(lookups)
+}
+
+/// The bare column names a map body's wire-body expression references — the demand half of the
+/// §13.1 G10 shared lookup. Only the `VALUES (<expr>)` payload is walked: the effect's target path
+/// carries `{param}` segments (bound from the address, never from a lookup), and a `SET … WHERE`
+/// body is not an accepted map shape at all.
+fn effect_col_refs(stmt: &Statement) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let Statement::Effect(effect) = stmt else {
+        return out;
+    };
+    let values = match &effect.body {
+        EffectBody::Values(values) => Some(values),
+        EffectBody::Pipeline(p) => match &p.source {
+            Source::Values(values) => Some(values),
+            _ => None,
+        },
+        EffectBody::SetWhere { .. } => None,
+    };
+    if let Some(values) = values {
+        for row in &values.rows {
+            for expr in row {
+                collect_col_refs(expr, &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// Walk one expression for bare column references. Exhaustive **on purpose**: a new [`Expr`] variant
+/// must decide here whether it can carry a lookup reference, rather than silently answering "no" and
+/// making a shared binding stop resolving in one corner of the grammar.
+fn collect_col_refs(expr: &Expr, out: &mut std::collections::BTreeSet<String>) {
+    match expr {
+        Expr::Col(c) => {
+            out.insert(c.to_string());
+        }
+        // A `row.x` / `path.x` navigation is its own namespace, not a binding reference; a literal
+        // carries nothing.
+        Expr::Lit(_) | Expr::Path(_) => {}
+        Expr::Fn(f) => {
+            for a in &f.args {
+                collect_col_refs(a, out);
+            }
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            collect_col_refs(lhs, out);
+            collect_col_refs(rhs, out);
+        }
+        Expr::Unary { expr, .. } => collect_col_refs(expr, out),
+        Expr::In { expr, set } | Expr::AnyOp { expr, set, .. } => {
+            collect_col_refs(expr, out);
+            for e in set {
+                collect_col_refs(e, out);
+            }
+        }
+        Expr::Between { expr, low, high } => {
+            collect_col_refs(expr, out);
+            collect_col_refs(low, out);
+            collect_col_refs(high, out);
+        }
+        Expr::Like { expr, pattern } => {
+            collect_col_refs(expr, out);
+            collect_col_refs(pattern, out);
+        }
+        Expr::Lambda { body, .. } => collect_col_refs(body, out),
+        Expr::Array(items) => {
+            for e in items {
+                collect_col_refs(e, out);
+            }
+        }
+        Expr::Struct(fields) => {
+            for (_, e) in fields {
+                collect_col_refs(e, out);
+            }
+        }
+    }
 }
 
 /// Destructure one `LET` binding into a [`MapLookup`], enforcing the accepted shape and the §13
@@ -2207,6 +2321,7 @@ mod tests {
             "slack",
             "/slack/T1/messages",
             &[("ws".to_string(), "T1".to_string())],
+            &[],
         )
         .expect("the accepted shape extracts");
         assert_eq!(
@@ -2237,6 +2352,7 @@ mod tests {
             "slack",
             "/slack/T1/messages",
             &[("ws".to_string(), "T1".to_string())],
+            &[],
         )
         .expect("a disjunction over one row field extracts");
         assert_eq!(found[0].match_cols, vec!["name", "id"]);
@@ -2254,7 +2370,7 @@ mod tests {
                |> WHERE name == row.channel OR id == row.ts |> SELECT id \
              INSERT INTO /http/slack/chat.delete VALUES ({channel: cid})",
         );
-        let err = map_body_lookups(&body, "slack", "/slack/T1/messages", &[])
+        let err = map_body_lookups(&body, "slack", "/slack/T1/messages", &[], &[])
             .expect_err("two row fields in one binding is refused");
         assert_eq!(err.code(), "invalid_path");
     }
@@ -2268,7 +2384,7 @@ mod tests {
              LET cid = /github/repos |> WHERE name == row.channel |> SELECT id \
              INSERT INTO /http/slack/chat.delete VALUES ({channel: cid})",
         );
-        let err = map_body_lookups(&body, "slack", "/slack/T1/messages", &[])
+        let err = map_body_lookups(&body, "slack", "/slack/T1/messages", &[], &[])
             .expect_err("a foreign lookup source is refused");
         assert_eq!(err.code(), "invalid_path");
     }
@@ -2281,16 +2397,134 @@ mod tests {
              LET cid = /slack/{ws}/channels |> LIMIT 1 \
              INSERT INTO /http/slack/chat.delete VALUES ({channel: cid})",
         );
-        assert!(map_body_lookups(&body, "slack", "/slack/T1/messages", &[]).is_err());
+        assert!(map_body_lookups(&body, "slack", "/slack/T1/messages", &[], &[]).is_err());
     }
 
     /// A body with no `LET` yields no lookups — the shape every shipped declaration has today.
     #[test]
     fn a_body_without_a_let_yields_no_lookups() {
         let body = stored("INSERT INTO /http/slack/chat.postMessage VALUES (row)");
-        assert!(map_body_lookups(&body, "slack", "/slack/post", &[])
+        assert!(map_body_lookups(&body, "slack", "/slack/post", &[], &[])
             .expect("no LET is not an error")
             .is_empty());
+    }
+
+    /// The stored body of a `CREATE LOOKUP` — the `body` column of the `/sys/drivers` row it
+    /// desugars to. Same extraction as [`map_body_of`], over the shared-lookup declaration.
+    fn shared_binding(name: &str, pipeline: &str) -> (String, String) {
+        let create = format!("CREATE LOOKUP slack/{name} AS {pipeline}");
+        (name.to_string(), map_body_of(&create))
+    }
+
+    /// §13.1 G10 — the shared binding is written ONCE and a map uses it by referencing its name.
+    /// What it extracts to is byte-for-byte what the same binding written locally extracts to: same
+    /// source path (own `{param}`s substituted), same match columns, same selected column.
+    #[test]
+    fn a_shared_lookup_resolves_exactly_as_the_local_binding_it_replaces() {
+        let shared = [shared_binding(
+            "cid",
+            "/slack/{ws}/channels |> WHERE name == row.channel |> SELECT id",
+        )];
+        let sharing_body = map_body_of(
+            "CREATE MAP CALL slack.delete ( channel text ) /slack/{ws}/messages AS \
+             INSERT INTO /http/slack/chat.delete VALUES ({channel: cid})",
+        );
+        let params = [("ws".to_string(), "T1".to_string())];
+
+        let via_shared = map_body_lookups(
+            &sharing_body,
+            "slack",
+            "/slack/T1/messages",
+            &params,
+            &shared,
+        )
+        .expect("a referenced shared lookup extracts");
+        let via_local = map_body_lookups(
+            &map_body_of(LOOKUP_MAP),
+            "slack",
+            "/slack/T1/messages",
+            &params,
+            &[],
+        )
+        .expect("the local binding extracts");
+        assert_eq!(
+            via_shared, via_local,
+            "sharing changes where the binding is written, not what it means"
+        );
+    }
+
+    /// The device is DEMAND-DRIVEN: a map that never spells the name performs no lookup, so the
+    /// post map does not gain a `conversations.list` fetch just because the declaration carries a
+    /// shared binding. A silent extra wire read per write is exactly the cost a terseness device
+    /// must not smuggle in.
+    #[test]
+    fn an_unreferenced_shared_lookup_is_not_extracted() {
+        let shared = [shared_binding(
+            "cid",
+            "/slack/{ws}/channels |> WHERE name == row.channel |> SELECT id",
+        )];
+        let body = stored("INSERT INTO /http/slack/chat.postMessage VALUES (row)");
+        assert!(
+            map_body_lookups(&body, "slack", "/slack/post", &[], &shared)
+                .expect("an unreferenced shared lookup is not an error")
+                .is_empty(),
+            "a map that does not spell the name pays nothing for it"
+        );
+    }
+
+    /// The per-map override half: a map that binds the name itself keeps ITS binding, and the
+    /// shared one is not extracted alongside it (two bindings of one name would be a schema
+    /// collision decided by ordering — the quiet wrong answer the shape refuses everywhere else).
+    #[test]
+    fn a_local_binding_shadows_the_shared_one() {
+        let shared = [shared_binding(
+            "cid",
+            "/slack/{ws}/channels |> WHERE name == row.channel |> SELECT id",
+        )];
+        let body = map_body_of(
+            "CREATE MAP CALL slack.delete ( channel text ) /slack/{ws}/messages AS \
+             LET cid = /slack/{ws}/users |> WHERE name == row.channel |> SELECT id \
+             INSERT INTO /http/slack/chat.delete VALUES ({channel: cid})",
+        );
+        let found = map_body_lookups(
+            &body,
+            "slack",
+            "/slack/T1/messages",
+            &[("ws".to_string(), "T1".to_string())],
+            &shared,
+        )
+        .expect("the local binding extracts");
+        assert_eq!(found.len(), 1, "one binding for one name");
+        assert_eq!(
+            found[0].source_path, "/slack/T1/users",
+            "the local one wins"
+        );
+    }
+
+    /// A shared binding faces the SAME gates a local one does, at the same seam: an ill-shaped
+    /// binding and one reading a foreign driver are both refused when a map references them. The
+    /// declaration-scope door is not a wider door.
+    #[test]
+    fn a_shared_lookup_faces_the_same_shape_and_confinement_gates() {
+        let sharing_body = map_body_of(
+            "CREATE MAP CALL slack.delete ( channel text ) /slack/{ws}/messages AS \
+             INSERT INTO /http/slack/chat.delete VALUES ({channel: cid})",
+        );
+        for pipeline in [
+            "/github/repos |> WHERE name == row.channel |> SELECT id",
+            "/slack/{ws}/channels |> LIMIT 1",
+        ] {
+            let shared = [shared_binding("cid", pipeline)];
+            let err = map_body_lookups(
+                &sharing_body,
+                "slack",
+                "/slack/T1/messages",
+                &[("ws".to_string(), "T1".to_string())],
+                &shared,
+            )
+            .expect_err("a shared binding is gated exactly as a local one");
+            assert_eq!(err.code(), "invalid_path");
+        }
     }
 
     /// QG5 — the binding evaluates PER ROW: two rows naming two channels produce two effect bodies
@@ -2303,6 +2537,7 @@ mod tests {
             "slack",
             "/slack/T1/messages",
             &[("ws".to_string(), "T1".to_string())],
+            &[],
         )
         .unwrap();
         let collection = channels(&[("general", "C_GEN"), ("random", "C_RND")]);
@@ -2339,7 +2574,7 @@ mod tests {
     #[test]
     fn an_unresolvable_name_is_refused_and_no_body_is_built() {
         let body = map_body_of(LOOKUP_MAP);
-        let lookups = map_body_lookups(&body, "slack", "/slack/T1/messages", &[]).unwrap();
+        let lookups = map_body_lookups(&body, "slack", "/slack/T1/messages", &[], &[]).unwrap();
         let err = eval_map_body(
             &body,
             "slack",
@@ -2357,7 +2592,7 @@ mod tests {
     #[test]
     fn an_ambiguous_name_is_refused_rather_than_picked() {
         let body = map_body_of(LOOKUP_MAP);
-        let lookups = map_body_lookups(&body, "slack", "/slack/T1/messages", &[]).unwrap();
+        let lookups = map_body_lookups(&body, "slack", "/slack/T1/messages", &[], &[]).unwrap();
         assert!(eval_map_body(
             &body,
             "slack",

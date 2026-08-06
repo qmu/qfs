@@ -53,6 +53,10 @@ pub struct RestApplyDriver {
     /// The confined REST applier the lookup fetch rides — the same one the read facet uses, so a
     /// lookup gets the driver's auth, its host pin, and its pagination for free.
     applier: qfs_driver_http::RestApplier,
+    /// The driver's declaration-scope shared lookups (§13.1 G10) as `(bound name, binding JSON)`:
+    /// a binding written once in the declaration and used by every map body that references its
+    /// name. A map's own `LET` of the same name shadows it.
+    shared_lookups: Vec<(String, String)>,
 }
 
 impl RestApplyDriver {
@@ -65,6 +69,7 @@ impl RestApplyDriver {
         maps: Vec<MapSpec>,
         views: Vec<qfs_exec::declared::ViewSpec>,
         applier: qfs_driver_http::RestApplier,
+        shared_lookups: Vec<(String, String)>,
     ) -> Self {
         Self {
             inner,
@@ -72,6 +77,7 @@ impl RestApplyDriver {
             maps,
             views,
             applier,
+            shared_lookups,
         }
     }
 
@@ -189,6 +195,7 @@ impl ApplyDriver for RestApplyDriver {
             &self.driver_name,
             &mount_path,
             &params,
+            &self.shared_lookups,
         )
         .map_err(|e| {
             EffectError::terminal(format!("declared map LET is not usable: {}", e.code()))

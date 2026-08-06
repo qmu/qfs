@@ -1564,6 +1564,42 @@ fn a_map_body_without_a_let_is_unchanged_by_the_program_seq_switch() {
     );
 }
 
+#[test]
+fn create_lookup_desugars_to_a_lookup_row_carrying_the_binding_pipeline() {
+    // Blueprint §13.1 G10 — the declaration-scope reverse lookup. One statement, one
+    // `/sys/drivers` row: `kind='lookup'`, the key `<driver>/<name>` maps reference it by, and the
+    // binding pipeline stored in `body` exactly as a map's own `LET` value would be.
+    let e = effect_of(parse_ok(
+        "CREATE LOOKUP slack/cid AS \
+         /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id",
+    ));
+    assert_eq!(target_path(&e), "/sys/drivers");
+    assert_eq!(values_cell(&e, "kind").as_deref(), Some("lookup"));
+    assert_eq!(values_cell(&e, "name").as_deref(), Some("slack/cid"));
+    let body = values_cell(&e, "body").expect("the binding pipeline is stored");
+    let stmt: Statement = serde_json::from_str(&body).expect("the stored binding rehydrates");
+    assert!(
+        matches!(stmt, Statement::Query(_)),
+        "a shared lookup stores the same read pipeline a local LET binds, got {stmt:?}"
+    );
+}
+
+#[test]
+fn a_shared_lookup_key_is_a_name_not_a_path_and_names_exactly_one_driver() {
+    // §5.5 — a lookup is a DEFINITION (nothing can read it as a surface), so it is referenced by a
+    // bare qualified name; the `/type/…`-style path form is the category error that rule forbids.
+    // The key is exactly `<driver>/<name>`: the driver whose maps may use it, and the one bare name
+    // a map body can spell.
+    assert!(parse_statement(
+        "CREATE LOOKUP /slack/cid AS /slack/{ws}/channels |> WHERE name == row.channel |> SELECT id"
+    )
+    .is_err());
+    assert!(parse_statement(
+        "CREATE LOOKUP cid AS /slack/{ws}/channels |> WHERE name == row.channel |> SELECT id"
+    )
+    .is_err());
+}
+
 /// Parse a `CREATE MAP …` and return the stored `body` column of the `/sys/drivers` row it desugars
 /// to — the exact JSON the exec layer rehydrates.
 fn stored_map_body(src: &str) -> String {

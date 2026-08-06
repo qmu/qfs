@@ -9,6 +9,7 @@ category: Added
 depends_on:
 mission:
 merge_policy:
+claim: work-20260806-210635
 ---
 
 # A declared lookup cannot be shared across maps, so the same binding is written once per map

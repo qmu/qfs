@@ -58,3 +58,14 @@ pub(crate) fn map_specs(
         })
         .collect()
 }
+
+/// The driver's declaration-scope reverse lookups (§13.1 G10) as `(bound name, binding JSON)` — the
+/// shared half of `map_body_lookups`. Kept as raw stored text on purpose: a shared binding is
+/// validated (shape + §13 confinement) at the SAME seam a map's own `LET` is, so an ill-shaped
+/// declaration cannot become a live lookup by arriving through a different door.
+pub(crate) fn shared_lookups(d: &crate::declared_driver::DeclaredDriver) -> Vec<(String, String)> {
+    d.lookups
+        .iter()
+        .map(|l| (l.name.clone(), l.body.clone()))
+        .collect()
+}
