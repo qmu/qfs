@@ -421,3 +421,4 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-08-05 — ticket added — 20260805113200-steering-live-fire-reaches-a-real-session.md
 - 2026-08-05 — ticket added — 20260805113300-launch-live-fire-spawns-an-addressable-session.md
 - 2026-08-05 — mission replanned — mission.md
+- 2026-08-06 — blocked — blocked-20260806-container-spike-has-no-credential.md
