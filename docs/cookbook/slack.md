@@ -63,8 +63,10 @@ a workspace you already read.
    and pick the workspace to install it into. That choice is permanent for this token: the app
    reaches one workspace, so a second workspace means a second app.
 2. In the app's sidebar open **OAuth & Permissions**, scroll to **Scopes**, and add under **Bot
-   Token Scopes**: `chat:write` to post, and `channels:history` to read a public channel's tail. Add
-   nothing else yet — every further capability on this page has its own scope, listed in
+   Token Scopes**: `chat:write` to post, and `channels:history` to read a **public** channel's tail —
+   or `groups:history` if the channel you actually want to read is **private**, which is a separate
+   scope in Slack's model, not a stronger version of the same one. Add nothing else yet: every
+   further capability on this page has its own scope, listed in
    [Scopes at a glance](#scopes-at-a-glance), and a scope you never granted is one that cannot be
    used against you.
 3. Scroll back up to **OAuth Tokens for Your Workspace**, press **Install to Workspace**, and
@@ -74,13 +76,24 @@ a workspace you already read.
 5. In Slack itself, invite the app to every channel it must read: type `/invite @<your app name>` in
    that channel.
 
-::: warning A channel the app has not joined reads as an empty channel
-Step 5 is the one that gets skipped, and nothing in the Slack app config mentions it. A tail read is
-Slack's `conversations.history` on that channel, and Slack answers `not_in_channel` for a channel the
-app is not a member of: the scope grants the *ability* to read history, never membership of any
-particular channel. An uninvited app and a missing `channels:history` therefore look identical from
-the outside — a read that comes back with nothing. Check the invite first; it is the cheaper of the
-two to fix.
+::: warning A channel the app has not joined refuses the read
+Step 5 is the one that gets skipped, and nothing in the Slack app config mentions it. A scope grants
+the *ability* to read history; it never grants membership of a particular channel, and a tail read is
+`conversations.history` against that one channel. The read fails until the app is a member — and on a
+**private** channel it fails as `channel_not_found`, because a channel the app cannot see is reported
+as one that does not exist rather than one it has not joined.
+
+Observed on a private channel, in this order:
+
+| state | what comes back |
+| ----- | --------------- |
+| app not invited | `channel_not_found` |
+| app invited, only `chat:write` + `channels:history` granted | `missing_scope`, naming `groups:history` |
+| `groups:history` granted and the app reinstalled | the messages |
+
+Two different causes with two different fixes, and the error names which one you are looking at.
+Read it before changing scopes: `channel_not_found` on an id you copied out of Slack itself means
+the invite, not the grant.
 :::
 
 **A second workspace is a second app, a second account label, and a second mount** — nothing is
@@ -306,8 +319,10 @@ working.
 | ------------ | ----- | ----- |
 | post a message (`insert into …/messages`) | bot (`xoxb-…`) | `chat:write` |
 | post as yourself | user (`xoxp-…`) | `chat:write` (a **user** scope) |
-| read a public channel's tail, its thread replies, and its reactions | either | `channels:history` |
-| list the workspace's channels, and name a channel by `#name` in a `CALL` | either | `channels:read` |
+| read a **public** channel's tail, its thread replies, and its reactions | either | `channels:history` |
+| read a **private** channel's tail, its thread replies, and its reactions | either | `groups:history` |
+| list the workspace's public channels, and name one by `#name` in a `CALL` | either | `channels:read` |
+| list the workspace's private channels the app is in | either | `groups:read` |
 | read the user directory — including looking up a DM peer's `U…` id | either | `users:read` |
 | open a DM (`/slack/<ws>/dms/<user>`) | either | `im:write` |
 | read a DM's messages | either | `im:history` |
@@ -316,11 +331,12 @@ working.
 | pin or unpin a message (`slack.pin` / `slack.unpin`) | either | `pins:write` |
 | edit or delete a message (`slack.update` / `slack.delete`) | either | `chat:write` |
 
-These rows cover **public** channels. A private channel is a separate scope family in Slack's model
-(`groups:history` and `groups:read` in place of the two `channels:` scopes), and a private channel is
-readable only by an app that has been added to it.
+The `channels:` and `groups:` pairs are separate grants, not a weak and a strong form of one grant:
+an app holding `channels:history` reads nothing from a private channel, and the refusal names
+`groups:history` as what it needed. Adding a scope after installing does not take effect until you
+**Reinstall to Workspace**.
 
-Posting needs no read scope at all: a mount holding `chat:write` alone posts successfully and returns
-nothing on a tail read. When reads come back empty, check `channels:history` **and** whether the app
-was ever invited to the channel — see
-[What to create on the Slack side](#what-to-create-on-the-slack-side).
+Every scope above is an *ability*, never access to a particular conversation — the app still has to
+be in the channel. See
+[What to create on the Slack side](#what-to-create-on-the-slack-side) for the two failures that
+distinguishes and how to tell them apart.
