@@ -88,4 +88,8 @@
 * [The Slack webhook surface went with the crate](20260804212551-the-slack-webhook-surface-went-with.md)
 * [Two commits exceed the branch-safety size threshold](20260804212551-two-commits-exceed-the-branch-safety.md)
 * [Two tests used Slack as an example of a general property](20260804212551-two-tests-used-slack-as-an.md)
+* [Live confirmation of the Chatwork force=1 fix stays an attended action, not a ticket](20260812141517-live-confirmation-of-the-chatwork-force-1-fix-stays-an-attended-action-not-a-ticket.md)
+* [The retired Slack webhook surface needs no ticket until inbound events are wanted](20260812141518-the-retired-slack-webhook-surface-needs-no-ticket-until-inbound-events-are-wanted.md)
+* [The branch-safety commit-size findings are recorded, not work](20260812141520-the-branch-safety-commit-size-findings-are-recorded-not-work.md)
+* [The Slack-as-example test concern is moot, verified in the tree](20260812141521-the-slack-as-example-test-concern-is-moot-verified-in-the-tree.md)
 <!-- okf:generated:end -->

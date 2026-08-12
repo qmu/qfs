@@ -1,13 +1,14 @@
 ---
 created_at: 2026-07-25T11:05:00+09:00
 author: a@qmu.jp
+assignees: [a@qmu.jp]
 type: bugfix
 layer: [Domain, Infrastructure]
 effort:
 commit_hash:
 category: Changed
 depends_on:
-mission: what-a-principal-can-see-and-do-is-granted-by-policy
+mission:
 ---
 
 # Gate the statement bridge read leg with the same policy
@@ -113,3 +114,17 @@ urgent — reusing it would deepen exactly the risk being tracked).
 The related concern `one-coarse-api-policy-row-for` (urgent) is the tracked risk this ticket
 discharges on the read leg; splitting the remaining non-endpoint faces off the shared `api` row is
 that concern's own remit, not this ticket's.
+
+## Queue provenance — the `mission:` stamp was cleared on 2026-08-12
+
+This ticket was minted under the mission **`what-a-principal-can-see-and-do-is-granted-by-policy`**, which closed `achieved` while the ticket
+itself stayed unfinished. `plan-units.sh` excludes any mission-stamped ticket from the developer's
+backlog **without checking whether that mission is still active** (`plan-units.sh:432` — a non-empty
+mission relation is excluded as `mission_member`), and only *active* missions are offered as mission
+units. A ticket stamped with a closed mission is therefore reachable by neither path, and this one
+had been invisible to every `/drive` survey since the close.
+
+The stamp is cleared so the ticket returns to the ordinary backlog — the same correction
+`20260804173000` received when its own mission closed. The provenance lives here in prose instead.
+
+**Still-open evidence (verified 2026-08-12, read-only):** The read leg is still ungated: `McpEngine::read_rows` parses a caller-supplied statement and runs it through `block_on_read` under a hardcoded `RequestContext::anonymous()`, with no policy resolution (`crates/qfs/src/mcp.rs`, the `mode: "read"` leg).
