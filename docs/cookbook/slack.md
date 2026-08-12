@@ -1,6 +1,6 @@
 ---
 skill_name: qfs-slack
-skill_description: Use when a task needs Slack through qfs — read the latest messages in a channel, list and download the files shared in a channel or DM (newest first), upload a file's bytes and detach (delete) it, and post a message over /slack, as an append log. Covers connecting a Slack workspace.
+skill_description: Use when a task needs Slack through qfs — read the latest messages in a channel, list and download the files shared in a channel or DM (newest first), upload a file's bytes and detach (delete) it, and post a message over /slack, as an append log. Covers creating the Slack app, the bot-token scopes it needs, and connecting a Slack workspace.
 ---
 
 # Slack
@@ -48,8 +48,60 @@ nothing — add `--commit` to actually send it. Paste any recipe below and safel
 *would* do first.
 :::
 
-Slack isn't reachable until you connect a workspace to a path — one command, in **[Setup](#setup)**.
-After that every recipe on this page works verbatim.
+Slack isn't reachable until an app in the workspace hands qfs a token and that token is bound to a
+path — **[What to create on the Slack side](#what-to-create-on-the-slack-side)**, then
+**[Setup](#setup)**. After that every recipe on this page works verbatim.
+
+## What to create on the Slack side
+
+The `$SLACK_TOKEN` that [Setup](#setup) pipes into the vault is a **bot token** (`xoxb-…`), issued by
+a Slack app you install into the workspace you want to reach. There is no way to obtain one without
+creating that app, so this is step zero for every workspace — including a second one added alongside
+a workspace you already read.
+
+1. Open **api.slack.com/apps** and choose **Create New App** → **From scratch**. Give the app a name
+   and pick the workspace to install it into. That choice is permanent for this token: the app
+   reaches one workspace, so a second workspace means a second app.
+2. In the app's sidebar open **OAuth & Permissions**, scroll to **Scopes**, and add under **Bot
+   Token Scopes**: `chat:write` to post, and `channels:history` to read a public channel's tail. Add
+   nothing else yet — every further capability on this page has its own scope, listed in
+   [Scopes at a glance](#scopes-at-a-glance), and a scope you never granted is one that cannot be
+   used against you.
+3. Scroll back up to **OAuth Tokens for Your Workspace**, press **Install to Workspace**, and
+   approve the consent screen. The page then shows a **Bot User OAuth Token** beginning `xoxb-`.
+4. Copy that token and give it to qfs through [Setup](#setup) below — on **stdin**, never as a
+   command-line argument.
+5. In Slack itself, invite the app to every channel it must read: type `/invite @<your app name>` in
+   that channel.
+
+::: warning A channel the app has not joined reads as an empty channel
+Step 5 is the one that gets skipped, and nothing in the Slack app config mentions it. A tail read is
+Slack's `conversations.history` on that channel, and Slack answers `not_in_channel` for a channel the
+app is not a member of: the scope grants the *ability* to read history, never membership of any
+particular channel. An uninvited app and a missing `channels:history` therefore look identical from
+the outside — a read that comes back with nothing. Check the invite first; it is the cheaper of the
+two to fix.
+:::
+
+**A second workspace is a second app, a second account label, and a second mount** — nothing is
+shared between them. Repeat the steps above in the other workspace, then give its token its own
+label and its own path, leaving the first mount untouched:
+
+```sh
+printf %s "$SLACK_TOKEN" | qfs account add slack acme   # a second account, labelled `acme`
+qfs connect /slack-acme --driver slack --account acme   # its own mount, bound to that account
+```
+
+The label and the mount path are yours to choose; the `default` label and the `/slack` path in
+[Setup](#setup) are one instance of these same two commands, not fixed names.
+
+**Undoing it** is those two layers in reverse. On the Slack side, uninstall the app — or revoke its
+token — from the workspace's app-management page. On the qfs side, `qfs disconnect /slack-acme`
+removes the mount and `qfs account remove slack acme` deletes the token together with its consent
+record.
+
+To post as a **person** instead of as the app, the token is a different one and its scopes live under
+**User Token Scopes** — see [Post as yourself (a user token)](#post-as-yourself-a-user-token).
 
 ## Setup
 
@@ -246,12 +298,29 @@ own token without disturbing anyone else's.
 
 ### Scopes at a glance
 
+Grant only the rows you use. Each names the scope Slack requires for the Web API method that path
+actually calls, so a scope you omit shows up as that one path failing while everything else keeps
+working.
+
 | you want to… | token | scope |
 | ------------ | ----- | ----- |
-| post as the bot | bot (`xoxb-…`) | `chat:write` |
+| post a message (`insert into …/messages`) | bot (`xoxb-…`) | `chat:write` |
 | post as yourself | user (`xoxp-…`) | `chat:write` (a **user** scope) |
-| read the channel tail on that mount | either | `channels:history` |
+| read a public channel's tail, its thread replies, and its reactions | either | `channels:history` |
+| list the workspace's channels, and name a channel by `#name` in a `CALL` | either | `channels:read` |
+| read the user directory — including looking up a DM peer's `U…` id | either | `users:read` |
+| open a DM (`/slack/<ws>/dms/<user>`) | either | `im:write` |
+| read a DM's messages | either | `im:history` |
+| list the files shared in a channel, a DM, or the workspace | either | `files:read` |
+| add a reaction (`slack.react`) | either | `reactions:write` |
+| pin or unpin a message (`slack.pin` / `slack.unpin`) | either | `pins:write` |
+| edit or delete a message (`slack.update` / `slack.delete`) | either | `chat:write` |
 
-A mount posts fine without `channels:history`; it needs that scope only to *read* the log — a bot
-token missing it posts successfully but returns nothing on a tail read, worth checking first if
-reads come back empty.
+These rows cover **public** channels. A private channel is a separate scope family in Slack's model
+(`groups:history` and `groups:read` in place of the two `channels:` scopes), and a private channel is
+readable only by an app that has been added to it.
+
+Posting needs no read scope at all: a mount holding `chat:write` alone posts successfully and returns
+nothing on a tail read. When reads come back empty, check `channels:history` **and** whether the app
+was ever invited to the channel — see
+[What to create on the Slack side](#what-to-create-on-the-slack-side).
