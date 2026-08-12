@@ -1,13 +1,14 @@
 ---
 created_at: 2026-07-25T14:30:00+09:00
 author: a@qmu.jp
+assignees: [a@qmu.jp]
 type: bugfix
 layer: [Domain]
 effort:
 commit_hash:
 category:
 depends_on:
-mission: a-where-predicate-is-honored-or-refused-never-dropped
+mission:
 ---
 
 # The cookbook ratchet only parses — it must typecheck against the describe registry
@@ -83,3 +84,17 @@ cred-free describe registry (`packages/qfs/crates/qfs/src/describe.rs`, the same
   gap let through. The article fix is done; this is the ratchet that should have prevented it.
 - The check is cheap: the describe registry is already linked into the test workspace for the
   `gen-docs` anti-drift, and `Schema::column` is the whole lookup.
+
+## Queue provenance — the `mission:` stamp was cleared on 2026-08-12
+
+This ticket was minted under the mission **`a-where-predicate-is-honored-or-refused-never-dropped`**, which closed `achieved` while the ticket
+itself stayed unfinished. `plan-units.sh` excludes any mission-stamped ticket from the developer's
+backlog **without checking whether that mission is still active** (`plan-units.sh:432` — a non-empty
+mission relation is excluded as `mission_member`), and only *active* missions are offered as mission
+units. A ticket stamped with a closed mission is therefore reachable by neither path, and this one
+had been invisible to every `/drive` survey since the close.
+
+The stamp is cleared so the ticket returns to the ordinary backlog — the same correction
+`20260804173000` received when its own mission closed. The provenance lives here in prose instead.
+
+**Still-open evidence (verified 2026-08-12, read-only):** Still open: `crates/test/tests/cookbook_skills.rs` calls `parse_statement` and asserts nothing beyond parsing — no typecheck against the describe registry.

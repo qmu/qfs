@@ -170,3 +170,20 @@ subsumes both rather than two. That question is minted as
    `RestSlackClient::apply` above? Ticket 20260724014100's QG2 says "preview-time error"; the oracle
    it compares against resolves at apply. That mismatch needs settling before the equivalence test
    can be written to a true bar.
+
+## Archived 2026-08-12 — this shipped, the ticket outlived its mission
+
+The G4 stage is **implemented and covered**: `|> FOLLOW <field> INTO /http/<drv>/<template>` parses
+(`crates/parser/src/tests.rs`, `follow_into_parses_the_per_row_fan_out_target`) and evaluates
+(`crates/exec/src/declared.rs`, `fan_out_rows`) with the ticket's four rules mechanical — the
+`FOLLOW_FANOUT_MAX` = 50 ceiling as a refusal rather than a truncation, per-row confinement to
+`/http/<driver>/…`, a refusal (never a silent `Null`) for an unresolvable field, and one shape for
+every row. It landed in `365d521` "Add per-row FOLLOW INTO fan-out" and reached `main` through
+PR #27, so the ticket is filed under that branch's archive.
+
+It sat in `todo` afterwards only because its mission (`the-declared-slack-twin-retires-the-compiled-driver`)
+closed `carried` and the stamp kept it out of every survey — the same defect that stranded five
+sibling tickets, corrected in the same pass. **Quality-gate item 4 was met by a different route:**
+the Slack channel-name→id resolution is expressed with the §13.1 **G9** `LET` reverse lookup rather
+than with this fan-out stage, and its equivalence against the compiled driver is proven in the twin's
+tests.

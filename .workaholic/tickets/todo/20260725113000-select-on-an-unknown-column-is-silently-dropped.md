@@ -1,13 +1,14 @@
 ---
 created_at: 2026-07-25T11:30:00+09:00
 author: a@qmu.jp
+assignees: [a@qmu.jp]
 type: bugfix
 layer: [Domain]
 effort:
 commit_hash:
 category:
 depends_on:
-mission: a-where-predicate-is-honored-or-refused-never-dropped
+mission:
 ---
 
 # `select` on an unknown column is silently dropped — the last stage that can mean nothing
@@ -164,3 +165,17 @@ Sequencing: this lands **after** `20260725143000` (raise the cookbook ratchet fr
 typecheck) if that is ready, because this refusal will break any shipped recipe still naming a
 column that does not exist, and the ratchet is what proves none remain. If the ratchet is not ready
 first, sweep the cookbook by hand in the same slice.
+
+## Queue provenance — the `mission:` stamp was cleared on 2026-08-12
+
+This ticket was minted under the mission **`a-where-predicate-is-honored-or-refused-never-dropped`**, which closed `achieved` while the ticket
+itself stayed unfinished. `plan-units.sh` excludes any mission-stamped ticket from the developer's
+backlog **without checking whether that mission is still active** (`plan-units.sh:432` — a non-empty
+mission relation is excluded as `mission_member`), and only *active* missions are offered as mission
+units. A ticket stamped with a closed mission is therefore reachable by neither path, and this one
+had been invisible to every `/drive` survey since the close.
+
+The stamp is cleared so the ticket returns to the ordinary backlog — the same correction
+`20260804173000` received when its own mission closed. The provenance lives here in prose instead.
+
+**Still-open evidence (verified 2026-08-12, read-only):** Still open: `qfs-engine`'s `eval::project` resolves projection columns with a `filter_map` and drops the ones it cannot find, so `|> select nosuchcol` still returns an empty schema at exit 0.
