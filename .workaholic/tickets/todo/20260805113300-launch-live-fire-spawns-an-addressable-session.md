@@ -1,6 +1,7 @@
 ---
 created_at: 2026-08-05T11:33:00+09:00
 author: a@qmu.jp
+assignees: [a@qmu.jp]
 type: enhancement
 layer: [Infrastructure]
 effort:

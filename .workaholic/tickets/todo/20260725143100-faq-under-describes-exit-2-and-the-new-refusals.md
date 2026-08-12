@@ -1,6 +1,7 @@
 ---
 created_at: 2026-07-25T14:31:00+09:00
 author: a@qmu.jp
+assignees: [a@qmu.jp]
 type: bugfix
 layer: [Domain]
 effort:
