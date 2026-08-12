@@ -75,7 +75,8 @@ fn lock_session() -> Result<String, String> {
 /// 20260706145610). Unlock the store through the guardian ladder (an enrolled keychain slot / a
 /// still-live session / `QFS_PASSPHRASE` / an echo-off passphrase prompt) and FORCE-mint a fresh
 /// time-boxed session-unlock cache from the unlocked DEK, then print the resulting session
-/// status/TTL. Lets a human warm the cross-process session before delegating one-shot `qfs` runs to
+/// status/TTL — plus, when `QFS_SESSION_TTL` asked for something the resolver could not honor
+/// verbatim, a note saying what was used instead (ticket 20260813033200). Lets a human warm the cross-process session before delegating one-shot `qfs` runs to
 /// an AI agent.
 ///
 /// Force-mints even when a keychain slot or a still-live session already unlocked the store:
@@ -85,11 +86,24 @@ fn lock_session() -> Result<String, String> {
 /// secret-free "cannot prompt" error and this verb surfaces it verbatim (exit 1), never a hang.
 fn unlock_session() -> Result<String, String> {
     let store = crate::connection::open_store()?;
+    // A `QFS_SESSION_TTL` that was clamped or unparseable is stated HERE, beside the resulting
+    // window (ticket 20260813033200). Silently using a different number than the operator asked for
+    // is what hid the old 7-day ceiling; the note rides the same line so it cannot be missed.
+    let note = crate::session_unlock::ttl_adjustment_note();
+    let with_note = |msg: String| match &note {
+        Some(n) => format!("{msg}\nnote: {n}"),
+        None => msg,
+    };
     match crate::session_unlock::force_mint_session(&store) {
         Some(_) => match crate::session_unlock::status_line() {
-            // status_line renders "session\t…\texpires in Xh Ym"; flatten the tabs for a one-liner.
-            Some(line) => Ok(format!("unlocked the vault — {}", line.replace('\t', " "))),
-            None => Ok("unlocked the vault (session status unavailable)".into()),
+            // status_line renders "session\t…\texpires in Xd Yh"; flatten the tabs for a one-liner.
+            Some(line) => Ok(with_note(format!(
+                "unlocked the vault — {}",
+                line.replace('\t', " ")
+            ))),
+            None => Ok(with_note(
+                "unlocked the vault (session status unavailable)".into(),
+            )),
         },
         // No session dir on this host (or the wrap/write failed): the store is unlocked for THIS
         // process, but the cross-process cache could not be written. Say so plainly.

@@ -41,12 +41,27 @@ use crate::secret_store::SqliteSecrets;
 /// (the cache is a file, not a DB slot). Distinct from `passphrase` / `keychain`.
 const GUARDIAN_SESSION: &str = "session";
 
-/// The default session TTL: a work-day. Overridable via `QFS_SESSION_TTL` (see [`resolved_ttl_secs`]).
-const DEFAULT_TTL_SECS: i64 = 8 * 60 * 60;
-/// TTL clamp floor/ceiling (1 minute .. 7 days) — a garbled override can neither disable the cache
-/// nor extend it unreasonably.
+/// The default session TTL: **two weeks** (developer instruction 2026-08-13, ticket
+/// 20260813033200). It was a work-day (8h) from the mechanism's first commit until then, which meant
+/// an operator who warmed the session in the morning was prompted again the same evening — and a
+/// delegated agent's later one-shots were prompted with nobody there to answer. Overridable via
+/// `QFS_SESSION_TTL` (see [`resolve_ttl`]).
+///
+/// The window is bounded by more than this number: the session key folds in the boot id, so a
+/// reboot invalidates the cache whatever the TTL says (kept deliberately — developer ruling
+/// 2026-08-13). Two weeks is therefore "until the next reboot, at most two weeks".
+const DEFAULT_TTL_SECS: i64 = 14 * 24 * 60 * 60;
+/// The TTL clamp floor: one minute. A garbled or tiny override can never disable the cache.
 const MIN_TTL_SECS: i64 = 60;
-const MAX_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+/// The TTL clamp ceiling: 30 days. A ceiling exists because the window IS the value of a stolen
+/// `session.unlock` file to an attacker who also holds this uid on this host between reboots; it is
+/// not a formatting limit. 30 days is the smallest round number that leaves the two-week default
+/// room to be raised deliberately without becoming "no ceiling at all".
+///
+/// **A clamp is reported, never silent** (ticket 20260813033200): capping a requested value and
+/// saying nothing is the engine answering a different question than the one asked — the defect that
+/// hid the old 7-day ceiling from anyone who tried `QFS_SESSION_TTL=14d` and got 7d.
+const MAX_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 
 /// Set true the moment [`crate::connection::resolve_store_passphrase`] prompts INTERACTIVELY (not the
 /// env-var / already-cached paths) — the one signal that authorizes minting a persistent session
@@ -75,16 +90,73 @@ fn session_unlock_path() -> Option<std::path::PathBuf> {
     crate::store::default_session_unlock_path()
 }
 
-/// Resolve the TTL in seconds: `QFS_SESSION_TTL` (a bare seconds count, or a `30m`/`8h`/`2d` duration)
-/// clamped to `[MIN_TTL_SECS, MAX_TTL_SECS]`, else the 8-hour default. A garbled value falls back to
-/// the default rather than disabling the cache.
+/// A resolved TTL, plus — when the requested override was **not honored verbatim** — a secret-free
+/// note saying what happened instead. The note is what makes the adjustment observable; the caller
+/// prints it beside the session status.
+pub(crate) struct ResolvedTtl {
+    /// The seconds a mint will actually use.
+    pub secs: i64,
+    /// `Some` only when the environment asked for something else: unparseable, or outside the clamp.
+    pub note: Option<String>,
+}
+
+/// Resolve the TTL: `QFS_SESSION_TTL` (a bare seconds count, or a `30m`/`8h`/`14d` duration) clamped
+/// to `[MIN_TTL_SECS, MAX_TTL_SECS]`, else the two-week default.
+///
+/// **Every departure from what was asked for is reported.** A garbled value still falls back to the
+/// default rather than disabling the cache, and an out-of-range value is still clamped rather than
+/// refused — a session that fails to warm because of a typo would be worse than one that warms for a
+/// stated different duration. What changed (ticket 20260813033200) is that both now SAY so.
+fn resolve_ttl() -> ResolvedTtl {
+    let env = std::env::var("QFS_SESSION_TTL").ok();
+    resolve_ttl_from(env.as_deref())
+}
+
+/// The pure half of [`resolve_ttl`]: the same resolution over an explicit raw value, so the rules
+/// (default, floor, ceiling, and every note) are testable without mutating process environment —
+/// which no test can do safely while its siblings run in the same process.
+fn resolve_ttl_from(env: Option<&str>) -> ResolvedTtl {
+    let raw = match env {
+        Some(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => {
+            return ResolvedTtl {
+                secs: DEFAULT_TTL_SECS,
+                note: None,
+            }
+        }
+    };
+    let Some(requested) = parse_duration_secs(&raw) else {
+        return ResolvedTtl {
+            secs: DEFAULT_TTL_SECS,
+            note: Some(format!(
+                "QFS_SESSION_TTL='{raw}' is not a duration (use a bare seconds count, or 30m / 8h / \
+                 14d) — using the default {}",
+                humanize_secs(DEFAULT_TTL_SECS)
+            )),
+        };
+    };
+    let secs = requested.clamp(MIN_TTL_SECS, MAX_TTL_SECS);
+    let note = (secs != requested).then(|| {
+        format!(
+            "QFS_SESSION_TTL='{raw}' is outside the accepted range ({} … {}) — using {}",
+            humanize_secs(MIN_TTL_SECS),
+            humanize_secs(MAX_TTL_SECS),
+            humanize_secs(secs)
+        )
+    });
+    ResolvedTtl { secs, note }
+}
+
+/// The seconds a mint uses, dropping the note — for the mint paths, which do not print.
 fn resolved_ttl_secs() -> i64 {
-    match std::env::var("QFS_SESSION_TTL") {
-        Ok(v) if !v.trim().is_empty() => parse_duration_secs(v.trim())
-            .unwrap_or(DEFAULT_TTL_SECS)
-            .clamp(MIN_TTL_SECS, MAX_TTL_SECS),
-        _ => DEFAULT_TTL_SECS,
-    }
+    resolve_ttl().secs
+}
+
+/// The note to print beside a warmed session when the requested `QFS_SESSION_TTL` was not honored
+/// verbatim, `None` when it was (or when none was set). The `qfs auth` surface reads this.
+#[must_use]
+pub fn ttl_adjustment_note() -> Option<String> {
+    resolve_ttl().note
 }
 
 /// Parse `"3600"` / `"30m"` / `"8h"` / `"2d"` to seconds. `None` on garbage.
@@ -301,10 +373,15 @@ pub fn status_line() -> Option<String> {
 
 /// Render a seconds count as a compact `Nh Nm` / `Nm` / `Ns` string (display only).
 fn humanize_secs(s: i64) -> String {
-    let h = s / 3600;
+    // Days are rendered because the default is now two weeks: "336h 0m" is a true answer to
+    // "how long is left" that no operator reads as a fortnight.
+    let d = s / (24 * 3600);
+    let h = (s % (24 * 3600)) / 3600;
     let m = (s % 3600) / 60;
     let sec = s % 60;
-    if h > 0 {
+    if d > 0 {
+        format!("{d}d {h}h")
+    } else if h > 0 {
         format!("{h}h {m}m")
     } else if m > 0 {
         format!("{m}m")
@@ -479,6 +556,72 @@ mod tests {
         assert_eq!(parse_duration_secs("0"), None);
         assert_eq!(parse_duration_secs("abc"), None);
         assert_eq!(parse_duration_secs(""), None);
+    }
+
+    /// Ticket 20260813033200 — the default window is TWO WEEKS, and nothing is said about it because
+    /// nothing was adjusted.
+    #[test]
+    fn the_default_session_window_is_two_weeks() {
+        let r = resolve_ttl_from(None);
+        assert_eq!(r.secs, 14 * 24 * 60 * 60);
+        assert!(r.note.is_none(), "an unset override adjusts nothing");
+        let blank = resolve_ttl_from(Some("   "));
+        assert_eq!(blank.secs, 14 * 24 * 60 * 60);
+        assert!(blank.note.is_none());
+    }
+
+    /// The regression this ticket exists for: `QFS_SESSION_TTL=14d` used to yield SEVEN days,
+    /// silently, because the ceiling was 7d. Two weeks must now be reachable exactly.
+    #[test]
+    fn a_two_week_override_is_honored_exactly() {
+        let r = resolve_ttl_from(Some("14d"));
+        assert_eq!(r.secs, 14 * 24 * 60 * 60);
+        assert!(
+            r.note.is_none(),
+            "an honored value must not claim it was adjusted: {:?}",
+            r.note
+        );
+    }
+
+    /// A clamp still clamps — and now SAYS it did, naming the value actually used. A silent
+    /// adjustment is the defect that hid the old ceiling.
+    #[test]
+    fn an_out_of_range_override_is_clamped_and_reported() {
+        let high = resolve_ttl_from(Some("90d"));
+        assert_eq!(high.secs, 30 * 24 * 60 * 60, "capped at the ceiling");
+        let note = high.note.expect("a clamp must be reported");
+        assert!(
+            note.contains("90d"),
+            "the note names what was asked: {note}"
+        );
+        assert!(note.contains("30d"), "and what was used: {note}");
+
+        let low = resolve_ttl_from(Some("10s"));
+        assert_eq!(low.secs, 60, "raised to the floor");
+        assert!(low.note.is_some(), "the floor is reported too");
+    }
+
+    /// A garbled value still falls back to the default rather than disabling the cache — a session
+    /// that failed to warm over a typo would be worse — but the fallback is stated.
+    #[test]
+    fn an_unparseable_override_falls_back_to_the_default_and_says_so() {
+        let r = resolve_ttl_from(Some("two weeks"));
+        assert_eq!(r.secs, 14 * 24 * 60 * 60);
+        let note = r.note.expect("an ignored value must be reported");
+        assert!(
+            note.contains("two weeks") && note.contains("14d"),
+            "the note names the rejected input and the window used: {note}"
+        );
+    }
+
+    /// The remaining-TTL rendering carries days, or a fortnight reads as "336h 0m".
+    #[test]
+    fn humanized_durations_carry_days() {
+        assert_eq!(humanize_secs(14 * 24 * 60 * 60), "14d 0h");
+        assert_eq!(humanize_secs(36 * 60 * 60), "1d 12h");
+        assert_eq!(humanize_secs(8 * 60 * 60), "8h 0m");
+        assert_eq!(humanize_secs(90), "1m");
+        assert_eq!(humanize_secs(30), "30s");
     }
 
     /// The `qfs auth` path (ticket 20260706145610): `force_mint_session` mints a live

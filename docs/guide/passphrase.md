@@ -97,12 +97,21 @@ environment or history, and unlike option 3 nothing sits in plaintext at rest �
 data-key, bound to this machine, this OS user, and the deadline, is cached. A **reboot** invalidates
 it; so does `qfs auth --lock`.
 
-Change the window with `QFS_SESSION_TTL` (a bare seconds count, or `30m` / `8h` / `2d`; clamped to
-1 minute … 7 days):
+The default window is **two weeks**. Change it with `QFS_SESSION_TTL` (a bare seconds count, or
+`30m` / `8h` / `14d`; clamped to 1 minute … 30 days):
 
 ```sh
-QFS_SESSION_TTL=2h qfs auth    # warm a 2-hour session instead of the 8-hour default
+QFS_SESSION_TTL=2h qfs auth    # warm a 2-hour session instead of the two-week default
+QFS_SESSION_TTL=90d qfs auth   # above the ceiling: warms 30d AND says it was clamped
 ```
+
+A value that is out of range or not a duration is **not** refused — the session still warms, at the
+clamped value or the default — but `qfs auth` states which value it used. It never uses a window you
+did not ask for without telling you.
+
+The deadline is fixed when the session is minted and is authenticated by the key derivation, so
+changing `QFS_SESSION_TTL` afterwards does not extend a live session: run `qfs auth` again to mint a
+fresh one.
 
 `qfs auth` warms the session however it unlocked the store — an interactive prompt, `QFS_PASSPHRASE`,
 an enrolled keychain, or an already-live session — because running it is your explicit intent to

@@ -445,7 +445,7 @@ pub enum VaultAction {
     Lock,
     /// `qfs auth` — unlock the store (an echo-off passphrase prompt when no keychain / live session /
     /// `QFS_PASSPHRASE` already opens it) and MINT the time-boxed session-unlock cache, warming the
-    /// cross-process session so delegated one-shots skip the re-prompt within the TTL (default 8h).
+    /// cross-process session so delegated one-shots skip the re-prompt within the TTL (default 14d).
     /// Reached via the top-level `qfs auth` command, not a `vault` verb. Selectors only — no
     /// passphrase/KEK rides here; the launcher owns the prompt + the mint.
     Unlock,
@@ -732,9 +732,11 @@ enum Command {
     },
     /// Warm the time-boxed local auth session: unlock the credential store (an echo-off passphrase
     /// prompt if no keychain / live session / `QFS_PASSPHRASE` already opens it) and cache the
-    /// unlock for a bounded window (default 8h, override with `QFS_SESSION_TTL`) so later `qfs`
+    /// unlock for a bounded window (default 14d, override with `QFS_SESSION_TTL`) so later `qfs`
     /// one-shots — a new pane, or a delegated agent's separate processes — skip the prompt until it
-    /// expires. Prints the remaining TTL. `qfs auth --lock` drops the session (the next command
+    /// expires. Prints the remaining TTL, and says so when an override was clamped or unparseable
+    /// rather than quietly using a different window. A reboot invalidates the session whatever the
+    /// TTL says (the key binds the boot id). `qfs auth --lock` drops the session (the next command
     /// re-prompts). Session control lives here, not under `qfs vault` (which manages the persistent
     /// key slots); no passphrase/KEK rides in argv — the launcher owns the prompt + the mint.
     Auth {
