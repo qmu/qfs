@@ -231,8 +231,8 @@ printf %s "$NEWPASS" | qfs vault rekey   # re-wrap the data-key under a new pass
 delegated agent's **separate processes** — skip the prompt until it expires:
 
 ```sh
-qfs auth                          # warm the session; prints the remaining TTL (default 8h)
-QFS_SESSION_TTL=2h qfs auth       # warm a 2-hour session instead (override; clamped 1m..7d)
+qfs auth                          # warm the session; prints the remaining TTL (default 14d)
+QFS_SESSION_TTL=2h qfs auth       # warm a 2-hour session instead (override; clamped 1m..30d)
 qfs auth --lock                   # drop the session now — the next command re-prompts
 qfs vault slots                   # shows the live session beside the key slots
 ```
