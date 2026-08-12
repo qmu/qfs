@@ -126,6 +126,11 @@ qfs connect /slack  --driver slack  --account team       # → /slack/…
 qfs stores the token encrypted and never prints it back. `qfs account list` shows the account
 label only.
 
+A Slack token does not exist until you create an app in the workspace and install it — the console
+walkthrough, the bot-token scopes to grant, and the channel invite the app needs before it can read
+anything are in
+[What to create on the Slack side](/cookbook/slack#what-to-create-on-the-slack-side).
+
 ## Amazon S3 & Cloudflare R2 — access keys
 
 S3 and R2 sign each request with an access-key pair. The **secret** access key is sealed with

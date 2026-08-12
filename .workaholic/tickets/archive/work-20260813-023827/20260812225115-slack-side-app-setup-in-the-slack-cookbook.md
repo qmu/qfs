@@ -5,6 +5,7 @@ assignees: [a@qmu.jp]
 depends_on:
 mission:
 merge_policy: review
+claim: work-20260813-023827
 ---
 
 # Document what to create on the Slack side before connecting a workspace
@@ -267,3 +268,61 @@ reach an installed cache without it.
   agrees (`docs/cookbook/faq.md` lines 32, 93-96).
 - The existing "Post as yourself" section's scope sentence and the new bot-side text must not
   disagree about `chat:write` / `channels:history` (`docs/cookbook/slack.md` lines 202-204).
+
+## Final Report
+
+Development completed as planned, and the live walk-through the Quality Gate required was performed
+by the developer against a real workspace (`qmu`, `T03S55GBR`) with a newly created app. The
+walk-through changed the article: the drafted `/invite` warning was **wrong**, and the observed
+behavior replaced it.
+
+The gate's before/after observation, in order, against a private channel:
+
+| state | Slack's answer |
+| ----- | -------------- |
+| app not invited | `channel_not_found` |
+| app invited, `chat:write` + `channels:history` granted | `missing_scope`, `needed: groups:history` |
+| `groups:history` granted, app reinstalled | the messages |
+
+The draft had claimed an uninvited app and a missing scope "look identical from the outside — a read
+that comes back with nothing". Both halves were false: each failure returns a distinct, named error,
+and nothing comes back empty. The warning now states the observed ladder as a table and tells the
+reader to read the error before changing scopes, since `channel_not_found` on an id copied out of
+Slack means the invite rather than the grant.
+
+`groups:history` and `groups:read` were promoted from a footnote into real rows of the
+capability→scope table, and step 2 of the walk-through now names `groups:history` at the point where
+the reader chooses scopes — a private channel is the common case, and the draft made it an
+afterthought.
+
+### Discovered Insights
+
+- **Insight**: A Slack scope is an *ability*, never access to a conversation, and the two failure
+  modes that follow are reported differently enough to diagnose: a channel the app cannot see is
+  `channel_not_found` (not `not_in_channel`), while a channel it is in but lacks the scope for is
+  `missing_scope` with the needed scope named in the response.
+  **Context**: The public-channel `not_in_channel` case that most documentation describes is not what
+  a reader hits first, because private channels are the common case and they fail earlier and with a
+  different error. Writing the doc from the API reference rather than from a run would have shipped
+  the wrong symptom.
+- **Insight**: `channels:history` and `groups:history` are disjoint grants, not a weak and a strong
+  form of one grant, and a scope added after **Install to Workspace** does nothing until
+  **Reinstall to Workspace**.
+  **Context**: This is the shape of most "I granted it and it still fails" reports, and it is
+  invisible from the token itself — only the `provided` list in a raw Slack error response shows what
+  the token actually carries.
+- **Insight**: The declared driver asset (`slack_driver.qfs`) is the only honest source for "which
+  scope does this path need", because each view names the Web API method it calls. Reading it
+  produced eleven verified table rows from three guessed ones, and in the same pass exposed three
+  documented file operations (download, upload, detach) with no view or map behind them anywhere in
+  the tree.
+  **Context**: The compiled driver that implemented those operations was deleted when `/slack` became
+  declared-only, and the twin's equivalence tests cover the file *listings* only, so nothing failed
+  when the implementation left. Recorded as ticket
+  `20260813024753-slack-file-upload-and-download-are-documented-but-unimplemented.md`.
+- **Insight**: The cookbook ratchet extracts only ```` ```qfs ```` fences, so a section of prose and
+  shell blocks carries zero automated coverage, and VitePress runs with `ignoreDeadLinks: true` so a
+  wrong anchor fails silently.
+  **Context**: Both holes were closed by hand here — the branch's docs were served from a throwaway
+  container and the rendered pages driven in a real browser to confirm every heading id, that no
+  in-page anchor is broken, and that the guide's cross-page link resolves with status 200.
