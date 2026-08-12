@@ -1192,6 +1192,58 @@ would have to land on the compiled side simultaneously or a twin is not a twin. 
 mission. The consequence is stated where it bites: what PREVIEW prints for a name-addressed write is
 the **unresolved** name, on the declared and compiled sides alike.)*
 
+**G10 — a lookup is declared once and shared by the maps that reference it** *(ruled 2026-08-06,
+ticket 20260804173000)*. G9 gave a map body its reverse lookup; wiring it into Slack's five
+ID-requiring CALL maps then meant writing the **identical** binding five times, and the measurement
+showed it: `slack_driver.qfs` went from 40 to 45 statement-lines, five of them one line repeated.
+That is duplication growing **linearly with a service's ID-requiring calls**, which is the weakest
+possible form of the §13.2 conciseness claim. The fix keeps the G9 binding exactly as it is and
+moves only *where it is written*:
+
+```qfs
+CREATE LOOKUP slack/cid AS /slack/{ws}/channels |> WHERE name == row.channel OR id == row.channel |> SELECT id;
+
+CREATE MAP CALL slack.react ( channel text, ts text, emoji text ) /slack/{ws}/{channel}/messages AS
+  INSERT INTO /http/slack/reactions.add VALUES ({channel: cid, timestamp: row.ts, name: row.emoji});
+```
+
+Four things are ruled:
+
+- **Shape — a declaration-scope binding referenced by name, which is the driver-level
+  default-with-per-map-override device §13.2 already adopted** for `PAGINATE` and extended for
+  `PUSHDOWN`. A map uses the binding by spelling `cid`; a map that binds `cid` itself **shadows**
+  the shared one. Saving: **N−1 lines** for a driver with N ID-requiring calls, the same arithmetic
+  the pagination default earns.
+- **Demand-driven, so the device costs nothing where it is unused.** A shared lookup is extracted
+  **only when the map's own wire-body expression references its name**, so the post map issues no
+  `conversations.list` it did not ask for. A terseness device that smuggled a wire read into every
+  write would be shortening the declaration by lengthening the request log — rejected on the same
+  grounds §13.2 rejects a device that saves nothing measurable.
+- **Same seam, same gates.** A shared binding is validated where a local one is
+  (`map_body_lookups`): the one accepted G9 shape, and the §13 confinement that a lookup reads the
+  declaring driver's **own** mount. A declaration-scope door is not a wider door — a wrongly-shaped
+  or foreign shared binding is refused exactly as an inline one is, at the moment a map references
+  it.
+- **Spelling — `CREATE LOOKUP <driver>/<name>`, a §5.5 definition NAME, not a path.** Nothing can
+  read a lookup as a surface, so it is referenced by name (the rule that makes `OF chatwork/message`
+  a name); the key names the driver whose maps may use it and the one bare name a body can spell.
+  One statement, one `/sys/drivers` row (`kind='lookup'`) — the same association by leading segment
+  every `view`/`map` row uses, and **no schema change**.
+
+*Measured after:* `slack_driver.qfs` **45 → 41** statement-lines (−5 duplicate lines, +1
+declaration), the twin's read-equivalence, effect-equivalence and refusal tests passing **unchanged**
+— sharing changes where the binding is written, not what the write does.
+
+*(**Deliberately not taken.** **Binding inheritance from the mount path** — maps sharing a mount
+path share its bindings — was declined: the six shipped Slack maps share
+`/slack/{ws}/{channel}/messages` by accident of dispatch-by-verb, so keying the scope on the path
+would build a language rule on a coincidence, and a map's binding set would change when an unrelated
+map moved. Keying on the **driver** is the scope the declaration actually has. **An explicit
+per-map reference** — `LET cid = LOOKUP slack/cid` in every body — was declined for measuring
+worse than the problem: it keeps one line per map and adds a declaration, so the file grows. **Leave
+it and restate the bar** was declined last: it accepts the linear term, and github/drive/mail each
+have their own path→id and name→id resolutions to write once per call site.)*
+
 **G5 — a declared `CALL` grows a typed signature.** `CREATE MAP CALL <drv>.<action>` is redefined to
 take an **optional typed parameter list** — `CREATE MAP CALL <drv>.<action> ( <param> <type>, … )
 /<node> AS <effect> [IRREVERSIBLE]` — so the declared CALL reports the same typed signature the
@@ -1279,7 +1331,7 @@ column by 5–9 per file; the statement-lines column was and is correct.)*
 | `github_account.qfs` | 18 | 5 | read-only `/ghdecl` slice (proves `AUTH ACCOUNT`) |
 | `chatwork.qfs` | **32** | 10 | **full tier-1 service + file transfer — the calibration point** |
 | `cloudflare.qfs` | 49 | 16 | zones + DNS + KV get/put + queue push + **queue pull (the G1 read-over-POST view + its `queue_message` type)** + D1 SQL arm |
-| `slack_driver.qfs` | **45** | 21 | **full twin — 5 types + 9 read views (DM over G1 `\|> POST`) + driver-level G2 `PUSHDOWN` + a post map + 5 typed G5 CALL maps, each resolving its channel through a G9 lookup**. Was 40 before the five lookups; the five added lines are *one* binding written five times, which a declaration cannot yet share (ticket 20260804173000). |
+| `slack_driver.qfs` | **41** | 22 | **full twin — 5 types + 9 read views (DM over G1 `\|> POST`) + driver-level G2 `PUSHDOWN` + a post map + 1 shared G10 `CREATE LOOKUP` + 5 typed G5 CALL maps, each resolving its channel through it**. Measured history: 40 (reads + untyped CALLs) → 45 when each CALL gained its own G9 lookup → **41** once G10 let the declaration state that binding once (ticket 20260804173000). |
 
 The per-family measurements of the inventory's *expressible today* dispositions — and the projected
 full-twin statement-line counts for slack/github/drive/mail — live **next to the dispositions** in
@@ -1288,7 +1340,8 @@ evidence in one place.
 
 **What the first real conversion did to the projection.** `slack_driver.qfs` is the first twin that
 actually *tests* the "every projected twin lands under ~40 statement-lines" claim, and the measured
-answer is **40 — at the bar, not under it**, against a projection of ~25–30. The read surface alone
+answer is **41 — at the bar, not under it** (40 before its CALL maps resolved names; 45 with the
+lookup written per map; 41 with the G10 shared lookup), against a projection of ~25–30. The read surface alone
 shipped at 31 statement-lines (ticket 20260724014000); the five typed G5 CALL maps added the last 9.
 So the bar holds for a full tier-1 twin with no headroom to spare, and the inventory's projections
 for github/drive/mail should be read as **optimistic by roughly a third** — the CALL/write half is
@@ -1309,6 +1362,14 @@ writing).** A device is adopted only where its ruling landed and its *after* is 
   `PUSHDOWN` clause covering `ts >=`/`ts <=`/`ts >`/`ts <`/`LIMIT` across all 9 read views, where a
   per-view spelling would have cost one clause per messages-shaped view. Measured saving on the real
   file: **1 line instead of 4**.
+- **Declaration-scope shared lookup — ADOPTED (shipped, §13.1 G10).** The same driver-level
+  default-with-per-map-override shape, applied to the G9 reverse lookup. *Before* (`slack_driver.qfs`,
+  real): 5 CALL maps × one identical `LET cid = /slack/{ws}/channels |> WHERE name == row.channel OR
+  id == row.channel |> SELECT id`. *After* (real): one `CREATE LOOKUP slack/cid AS …` and five maps
+  that reference `cid`. **Measured saving: 4 lines (45 → 41)** — N−1 for a driver with N
+  ID-requiring calls, and it removes the *linear* term, which is what the bar was protecting. The
+  contract is not hidden: the binding is one greppable statement in the same declaration, an
+  unreferenced one is never fetched, and a map may still bind the name itself.
 - **`ENCODE`-slot codec for body shapes — ADOPTED (shipped `multipart`; ruled `message`, §13.1 G3).**
   *Before*: a bespoke per-service upload/MIME descriptor. *After* (`chatwork.qfs`, real):
   `INSERT INTO /http/chatwork/rooms/{room}/files |> ENCODE multipart VALUES (row)` — **one word** in
