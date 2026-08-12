@@ -5,6 +5,7 @@ assignees: [a@qmu.jp]
 depends_on:
 mission:
 merge_policy: review
+claim: work-20260813-023827
 ---
 
 # Document what to create on the Slack side before connecting a workspace
