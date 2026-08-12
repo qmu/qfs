@@ -5,6 +5,7 @@ assignees: [a@qmu.jp]
 depends_on:
 mission:
 merge_policy: review
+claim: work-20260813-035011
 ---
 
 # The default `qfs auth` session lasts two weeks, and a two-week override is reachable at all
