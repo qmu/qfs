@@ -27,6 +27,7 @@ concerns: []
 gate_type: live-app
 gate_target: /claude/sessions
 gate_assert: An HTTP endpoint bound over the sessions query, served on the worktree's dev port, returns one row per live Claude Code session read from the real on-disk store — including the session driving the check — each carrying a non-empty last_message.
+actual_hours: 0.4
 ---
 
 # Claude Code sessions are queryable and steerable as qfs paths
@@ -420,3 +421,5 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-08-05 — ticket added — 20260805113200-steering-live-fire-reaches-a-real-session.md
 - 2026-08-05 — ticket added — 20260805113300-launch-live-fire-spawns-an-addressable-session.md
 - 2026-08-05 — mission replanned — mission.md
+- 2026-08-06 — blocked — blocked-20260806-container-spike-has-no-credential.md
+- 2026-08-06 — run recorded (+0.4h) — drive-20260806-213952
