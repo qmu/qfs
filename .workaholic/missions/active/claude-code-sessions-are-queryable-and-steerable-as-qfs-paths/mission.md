@@ -27,7 +27,6 @@ concerns: []
 gate_type: live-app
 gate_target: /claude/sessions
 gate_assert: An HTTP endpoint bound over the sessions query, served on the worktree's dev port, returns one row per live Claude Code session read from the real on-disk store — including the session driving the check — each carrying a non-empty last_message.
-claim: work-20260806-213952
 actual_hours: 0.4
 ---
 
