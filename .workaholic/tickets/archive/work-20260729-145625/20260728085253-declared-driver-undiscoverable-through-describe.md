@@ -4,11 +4,12 @@ author: a@qmu.jp
 assignees: [a@qmu.jp]
 type: enhancement
 layer: [Domain]
-effort:
+effort: 4h
 commit_hash:
 category: Changed
 depends_on:
 mission:
+claim: work-20260729-145625
 ---
 
 # A declared driver is undiscoverable through `describe`, so the documented agent loop cannot be run against one
@@ -111,3 +112,62 @@ Filed from another repository via `/request`; sibling to the form-codec ticket f
 2026-07-27, which came out of the same session. Both are the same shape of gap — a declared
 driver is presented as a first-class way to add a service, but reading its surface and writing
 through it both fall short of what the compiled drivers do.
+
+## Final Report
+
+Scope items 1–4 are implemented and gated. Item 5 (incremental reads) is answered as far as the
+service truthfully allows — see the insight below.
+
+`DESCRIBE` now answers a declared node from the declaration itself rather than falling back to the
+generic REST answer. Three things carry it:
+
+- **`SchemaContract`** (new, on `NodeDesc`/`DescribeReport`) states *where* a node's columns come
+  from — `Declared { of_type }`, `Compiled`, or `Undeclared`. A declared view with an `OF` reports
+  that type's columns; one without reports **zero columns and `Undeclared`**, so "nobody stated a
+  row type" is a declared answer instead of a synthetic `value: Json` a caller reads as the schema.
+- **`ChildNode`** (new) + `Driver::children` (default-empty) makes a mount walkable: `/chatwork`
+  names `rooms`, `/chatwork/rooms` names `{room}` *as a parameter*, and so on to a leaf. `MountDriver`
+  maps child paths back **out** through the remap so the caller gets addressable paths.
+- **`RestDriver::with_declared_nodes`** is the lift — the same shape `with_procs` already had for
+  `CREATE MAP CALL`. `declared_node_descs` builds it from the driver's own view/map rows, resolving
+  each `OF` against the same declared-type registry `declared_eval::view_specs` reads.
+
+Verified live against the developer's real installed `chatwork` declaration (not only fixtures):
+`describe /chatwork/rooms` returned `room_id/name/type/role` with
+`schema_contract: {"kind":"declared","of_type":"/type/chatwork/room"}`, `child_address` keyed on
+`room_id`, and `children: [{segment:"{room}", parameter:"room"}]` — the ticket's exact repro,
+answered.
+
+### Discovered Insights
+
+- **Insight**: A declared node's capabilities were keyed by the *resource segment*
+  (`resources()` groups every declaration under the first segment after the driver name), so
+  `/chatwork/rooms` advertised the `INSERT` that actually belongs to
+  `/chatwork/rooms/{room}/messages`. Capabilities are now per declared NODE when a mount declares
+  any; a mount that declares none keeps the segment gate unchanged.
+  **Context**: `describe`'s `native_verbs` is derived from capabilities, so this over-claim reached
+  the agent-facing hint — the exact "never advertise a capability by over-claim" failure the
+  describe contract's own docs forbid. It was invisible before only because the root and the
+  leaves shared one answer.
+
+- **Insight**: Chatwork nests the sender under an `account` object, so `account_id`/`account_name`
+  are not top-level fields an `OF` contract can name. The view lifts them with `Expr::Path`
+  struct navigation inside the body (`|> SELECT … account.account_id AS account_id`) — the `OF`
+  projection runs *after* the body, so the body is where a nested field becomes a column.
+  **Context**: This is the general recipe for any declared driver over an API with nested response
+  objects; without it the `OF` contract can only ever name what the endpoint puts at the top level.
+
+- **Insight**: Item 5 (incremental reads) cannot be pushed down truthfully — Chatwork's
+  `GET /rooms/{room}/messages` accepts only `force`, no since-parameter. Declaring a `PUSHDOWN`
+  map for `send_time >` would have produced a *silently wrong* wire call. What the change does
+  deliver is `send_time` as a real column, so `|> where send_time > …` works as a local residual,
+  and the cookbook says plainly that it filters locally and does not save the round trip.
+  **Context**: The §13.1 G2 `PUSHDOWN (…)` clause is only honest when the endpoint has the
+  parameter; "honest-but-chatty" is the correct answer when it does not.
+
+- **Insight**: The declared-type registry keys types by their **`/type/`-prefixed** path
+  (`/type/chatwork/message`), which is what both `CREATE VIEW … OF` stores and `types_from_conn`
+  reads. A lookup written against the bare `chatwork/message` spelling silently resolves nothing
+  and degrades to `Undeclared` rather than failing.
+  **Context**: `declared_from_script` in the tests rebuilds the model through the real desugar for
+  exactly this reason — a hand-built fixture would have hidden the prefix.

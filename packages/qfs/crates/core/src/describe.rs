@@ -27,8 +27,8 @@
 //! agent sees the FS/SQL-shaped verbs each archetype answers to.
 
 use qfs_driver::{
-    AliasFn, Archetype, Capabilities, ChildAddress, Driver, NodeDesc, Path, ProcSig,
-    PushdownProfile,
+    AliasFn, Archetype, Capabilities, ChildAddress, ChildNode, Driver, NodeDesc, Path, ProcSig,
+    PushdownProfile, SchemaContract,
 };
 use qfs_types::Column;
 use serde::Serialize;
@@ -67,6 +67,13 @@ pub struct DescribeReport {
     /// "no child". A generic consumer builds the drill link from this — never from a
     /// per-service guess.
     pub child_address: ChildAddress,
+    /// Where [`Self::columns`] came from — a stated contract, the driver's compiled knowledge, or
+    /// nothing at all. An agent reads this before trusting an empty or open column list.
+    pub schema_contract: SchemaContract,
+    /// The **child locations** beneath this node: the next segments to walk, including `{param}`
+    /// ones. This is what makes the surface walkable from a mount root down to a leaf using only
+    /// `DESCRIBE` output — never a guess reconstructed from a driver's source.
+    pub children: Vec<ChildNode>,
 }
 
 impl DescribeReport {
@@ -85,6 +92,7 @@ impl DescribeReport {
             archetype,
             schema,
             child_address,
+            schema_contract,
             ..
         } = driver.describe(path)?;
         let verbs = driver.capabilities(path);
@@ -98,6 +106,8 @@ impl DescribeReport {
             aliases: driver.prelude().to_vec(),
             pushdown: PushdownSummary::from_profile(driver.pushdown()),
             child_address,
+            schema_contract,
+            children: driver.children(path),
         })
     }
 }
@@ -137,6 +147,9 @@ impl DescribeReport {
         }
         self.path = full_path.to_string();
         self.child_address = ChildAddress::None;
+        // A `@`-selected ROW claims no declared child either: declared children hang off the
+        // node's containment segments (`/x/{p}/y`), which a row address is not a step on.
+        self.children = Vec::new();
         Ok(self)
     }
 }
