@@ -1,0 +1,28 @@
+{
+  "permissions": {},
+  "enabledPlugins": {
+    "workaholic@workaholic": true
+  },
+  "extraKnownMarketplaces": {
+    "workaholic": {
+      "source": {
+        "source": "github",
+        "repo": "qmu/workaholic"
+      }
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-start.sh",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
