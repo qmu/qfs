@@ -5,6 +5,7 @@ assignees: [a@qmu.jp]
 depends_on:
 mission:
 merge_policy: review
+claim: work-20260816-195829
 ---
 
 # A declared driver has no upgrade path, so a shipped declaration fix never reaches a live mount
