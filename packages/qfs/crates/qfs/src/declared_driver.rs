@@ -2624,9 +2624,9 @@ mod tests {
         let stmts = shipped_statements(script);
         assert_eq!(
             stmts.len(),
-            22,
-            "1 driver + 5 types + 9 views + 1 post map + 1 shared LOOKUP + 5 typed CALL maps: \
-             {stmts:?}"
+            23,
+            "1 driver + 5 types + 9 views + 1 post map + 1 shared LOOKUP + 5 typed CALL maps + \
+             1 file-detach REMOVE map: {stmts:?}"
         );
         for s in &stmts {
             assert!(
@@ -2653,9 +2653,15 @@ mod tests {
         // away: what G10 fixed is the SLOPE (a twin no longer pays one line per ID-requiring call),
         // not the intercept. Whether ~40 remains the right §13.2 claim for a complete twin is the
         // open concern `the-13-2-calibration-table-was`, still the developer's to answer.
+        //
+        // 43 since the file-detach `CREATE MAP REMOVE` landed (ticket 20260813024753): two lines
+        // bought the file surface's only write, and the same ticket removed the article's upload
+        // and download rather than reproducing them — so this measurement is what a twin costs
+        // when it stops over-promising, and it moves the calibration concern further from ~40
+        // rather than closer.
         assert!(
-            statement_lines <= 41,
-            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~41 statement-lines); \
+            statement_lines <= 43,
+            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~43 statement-lines); \
              measured {statement_lines}"
         );
         // Host-confinement floor over the shipped bytes: every /http/ reference is /http/slack/.
@@ -2756,8 +2762,9 @@ mod tests {
             .filter(|l| !l.trim_start().starts_with("--") && l.contains("IRREVERSIBLE"))
             .count();
         assert_eq!(
-            marked, 2,
-            "pin and delete are the two irreversible declared CALLs"
+            marked, 3,
+            "pin and delete are the two irreversible declared CALLs, and the file detach \
+             (`CREATE MAP REMOVE`, ticket 20260813024753) is the third irreversible marking"
         );
     }
 
@@ -2814,8 +2821,8 @@ mod tests {
                 .collect();
         assert_eq!(
             maps.len(),
-            6,
-            "the post map plus the five CALL maps: {maps:?}"
+            7,
+            "the post map, the five CALL maps, and the file-detach REMOVE map: {maps:?}"
         );
         maps
     }
@@ -3844,6 +3851,94 @@ mod tests {
             posted,
             serde_json::json!({ "channel": "#general", "text": "ship it" }),
             "the MAP shaped the row into the exact chat.postMessage body"
+        );
+    }
+
+    #[test]
+    fn shipped_slack_detach_map_fires_files_delete_behind_the_gate() {
+        // Ticket 20260813024753. `docs/cookbook/slack.md` taught three file operations the driver
+        // did not carry after the compiled crate was retired. Two of them cannot be expressed by a
+        // declaration at all (the upload is a three-call external flow; a download would need
+        // `FOLLOW` to carry the bearer, which it never does) and were removed from the article; the
+        // detach IS one request, so it is declared — and pinned here, over the SHIPPED bytes, so
+        // the article's surviving `remove /slack/<ws>/files/<id>` recipe cannot drift from it.
+        let detach = shipped_slack_maps()
+            .into_iter()
+            .find(|m| m.verb == "REMOVE")
+            .expect("the shipped asset declares the file-detach REMOVE map");
+        assert_eq!(detach.path, "/slack/{ws}/files/{file}");
+        assert!(
+            detach.irreversible,
+            "a Slack file delete is irreversible and must ride the standard gate"
+        );
+
+        // The map binds the id from its OWN path segment, so an empty incoming row is the whole
+        // write — nothing about the file has to be carried in a row for `remove <path>` to work.
+        let incoming = qfs_core::RowBatch::new(
+            qfs_core::Schema::new(vec![]),
+            vec![qfs_core::Row::new(vec![])],
+        );
+        let write = qfs_exec::declared::eval_map_body(
+            &detach.body,
+            "slack",
+            "/slack/acme/files/F0123",
+            &[("file".to_string(), "F0123".to_string())],
+            &incoming,
+            &[],
+        )
+        .expect("the detach map evaluates");
+        assert_eq!(write.rest_path, "/rest/slack/files.delete");
+        // The MAP's verb is what a statement matches on; the BODY's verb is what reaches the wire,
+        // and Slack's methods are POSTs — the same split the five CALL maps already ride. A REMOVE
+        // body here would issue `DELETE /files.delete`, which Slack does not serve.
+        assert_eq!(
+            write.wire_kind,
+            qfs_core::EffectKind::Insert,
+            "the detach fires Slack's POST method, not an HTTP DELETE"
+        );
+
+        let d = DeclaredDriver {
+            name: "slack".into(),
+            base_url: "https://slack.com/api".into(),
+            auth: r#"{"kind":"bearer"}"#.into(),
+            pagination: None,
+            pushdown: None,
+            views: vec![],
+            lookups: Vec::new(),
+            maps: vec![detach.clone()],
+        };
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"{"ok":true}"#.to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+
+        use qfs_runtime::SharedApplier as _;
+        let node = qfs_core::EffectNode::new(
+            qfs_core::NodeId(0),
+            write.wire_kind,
+            qfs_core::Target::new(
+                qfs_core::DriverId::new("rest"),
+                qfs_core::VfsPath::new(&write.rest_path),
+            ),
+        )
+        .with_args(qfs_driver_http::http_body_args(&write.bodies[0]));
+        driver
+            .rest_applier()
+            .apply_shared(&node)
+            .expect("the twin detaches");
+
+        let req = &mock.recorded()[0];
+        assert_eq!(req.method, qfs_driver_http::HttpMethod::Post);
+        assert_eq!(req.url, "https://slack.com/api/files.delete");
+        let posted: serde_json::Value =
+            serde_json::from_slice(req.body.as_deref().expect("a POST body")).expect("valid JSON");
+        assert_eq!(
+            posted,
+            serde_json::json!({ "file": "F0123" }),
+            "the MAP shaped the path segment into the exact files.delete body"
         );
     }
 
