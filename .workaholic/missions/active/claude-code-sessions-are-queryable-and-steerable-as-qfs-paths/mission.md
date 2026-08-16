@@ -28,6 +28,7 @@ gate_type: live-app
 gate_target: /claude/sessions
 gate_assert: An HTTP endpoint bound over the sessions query, served on the worktree's dev port, returns one row per live Claude Code session read from the real on-disk store — including the session driving the check — each carrying a non-empty last_message.
 actual_hours: 0.4
+claim: work-20260816-154228
 ---
 
 # Claude Code sessions are queryable and steerable as qfs paths
