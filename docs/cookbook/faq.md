@@ -199,13 +199,15 @@ qfs auth --lock
 | A write "affected 1" but nothing changed | You saw a **PREVIEW** — writes change nothing without `--commit` | Re-run with `--commit` |
 | `--commit` of a send/remove is refused | The plan is **irreversible** and a one-shot needs the explicit extra ack | Add `--commit-irreversible` |
 | An `auth` error resolving a secret | The vault is locked, or the account's credential was revoked | `qfs auth` to unlock; `qfs account rotate <provider> <label>` to re-mint |
+| `` `where` names column 'nope', which this relation does not carry `` (`code: unknown_column`, `kind: usage`, exit 2) | A stage named a column the relation has no such thing as. This is **not** "nothing matched" — a typo now refuses instead of quietly answering zero rows, so the two are distinguishable | `qfs describe <path>` and use a real column; the message lists the available ones |
+| `` `expand` cannot explode column 'path': it is a scalar (text), not an array or a struct `` (`code: not_expandable`, `kind: usage`, exit 2) | `expand` was pointed at a column that carries no nested rows to explode | `qfs describe <path>` and expand an array or struct column instead |
 
 **Exit codes** are stable so an agent can branch on them:
 
 | Code | Meaning |
 | --- | --- |
 | `0` | success — rows rendered, or a PREVIEW shown |
-| `2` | parse or CLI usage error (a relative path, a bad flag) |
+| `2` | a malformed question — a parse error, a CLI usage error (a relative path, a bad flag), or a stage naming something the relation does not have |
 | `3` | capability — unknown source, or a verb the path does not support |
 | `4` | a destructive set-wide plan was previewed without `--commit` |
 | `5` | an effect failed to apply during commit |
