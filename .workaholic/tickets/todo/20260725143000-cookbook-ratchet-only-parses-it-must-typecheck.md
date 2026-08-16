@@ -9,6 +9,7 @@ commit_hash:
 category:
 depends_on:
 mission:
+claim: work-20260816-184034
 ---
 
 # The cookbook ratchet only parses — it must typecheck against the describe registry
