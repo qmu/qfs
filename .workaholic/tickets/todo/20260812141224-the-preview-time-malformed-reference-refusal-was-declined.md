@@ -5,6 +5,7 @@ assignees: [a@qmu.jp]
 depends_on:
 mission:
 merge_policy: review
+claim: work-20260816-194441
 ---
 
 # The blueprint promises a preview-time malformed-reference refusal the implementation deliberately declined
