@@ -653,6 +653,7 @@ mod tests {
     /// reaches the live applier.
     #[test]
     fn live_committer_gates_deny_and_block_before_any_apply() {
+        let _home = crate::testenv::HomeGuard::new();
         let (engine, _reads, _safety) = crate::shell::run_engine_and_reads();
         let policies: PolicyTableHandle = Arc::new(std::sync::RwLock::new(Arc::new(
             qfs_host::PolicyTable::new(),
@@ -700,6 +701,7 @@ mod tests {
     /// This is the hermetic twin of the owner-attended live round (T9 fires over HTTP serve).
     #[test]
     fn sweep_once_with_the_live_committer_applies_a_real_local_write() {
+        let _home = crate::testenv::HomeGuard::new();
         let (_state_dir, host) = tempdir_host();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let out = dir.path().join("swept.txt");
@@ -822,6 +824,7 @@ mod tests {
     /// effects) — the mission's over-reach case, on a timer.
     #[test]
     fn sweep_once_agent_fire_denied_by_agent_subject_records_denial() {
+        let _home = crate::testenv::HomeGuard::new();
         let (_dir, host) = tempdir_host();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let out = dir.path().join("blocked.txt");
@@ -881,6 +884,7 @@ mod tests {
     /// run, nothing applied. An agent can NEVER fire an irreversible plan unattended.
     #[test]
     fn sweep_once_agent_irreversible_is_blocked_fail_closed() {
+        let _home = crate::testenv::HomeGuard::new();
         let (_dir, host) = tempdir_host();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let victim = dir.path().join("keep.txt");
@@ -937,6 +941,7 @@ mod tests {
     /// no network, no creds, so the live fire is the one non-hermetic acceptance item.
     #[test]
     fn live_round_rehearsal_narrow_grant_fires_and_overreach_is_denied() {
+        let _home = crate::testenv::HomeGuard::new();
         let (_state_dir, host) = tempdir_host();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let granted = dir.path().join("granted.txt");
