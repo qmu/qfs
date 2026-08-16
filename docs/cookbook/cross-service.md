@@ -132,7 +132,7 @@ touch log** with `UNION`, normalized to a single shape and sorted newest first:
 
 ```qfs
 /mail/inbox
-|> select from as contact, 'email' as channel, subject as detail, received_at as at
+|> select from as contact, 'email' as channel, subject as detail, date as at
 |> union
    /slack/acme/support/messages
 |> select user as contact, 'slack' as channel, text as detail, ts as at
@@ -346,7 +346,7 @@ then switch on its output:
 
 ```qfs
 create transform triage
-  input (subject text, body text)
+  input (subject text, snippet text)
   output (route text)
   provider anthropic
   model 'claude-sonnet-5'
@@ -354,12 +354,12 @@ create transform triage
 
 ```qfs
 /mail/inbox
-|> select subject, body
+|> select subject, snippet
 |> transform triage
 |> switch route {
      'urgent' => select subject as text |> insert into /slack/acme/ops-alerts/messages,
-     'report' => select subject, body |> insert into /sql/pg/triage_log,
-     else     => select subject, body |> insert into /mail/drafts
+     'report' => select subject, snippet |> insert into /sql/pg/triage_log,
+     else     => select subject, snippet |> insert into /mail/drafts
    }
 ```
 
