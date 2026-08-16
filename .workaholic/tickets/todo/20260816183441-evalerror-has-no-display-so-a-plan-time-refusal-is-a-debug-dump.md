@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260816-194159
 ---
 
 # `EvalError` has no `Display`, so a plan-time refusal reaches the operator as a Debug dump
