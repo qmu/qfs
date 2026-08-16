@@ -93,4 +93,5 @@
 * [The branch-safety commit-size findings are recorded, not work](20260812141520-the-branch-safety-commit-size-findings-are-recorded-not-work.md)
 * [The Slack-as-example test concern is moot, verified in the tree](20260812141521-the-slack-as-example-test-concern-is-moot-verified-in-the-tree.md)
 * [The default qfs auth session TTL must be two weeks, not 8 hours](20260813033130-the-default-qfs-auth-session-ttl-must-be-two-weeks-not-8-hours.md)
+* [Workaholic unbound-plugin fallback assumes the checkout is qmu/workaholic](20260816051948-workaholic-unbound-plugin-fallback-assumes-the-checkout-is-qmu-workaholic.md)
 <!-- okf:generated:end -->
