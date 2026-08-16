@@ -3150,7 +3150,9 @@ mod tests {
         // What is NOT asserted, deliberately: that a MALFORMED reference is told apart from a merely
         // unknown one. That distinction needs a shape rule — Slack's `C`/`G`/`D` id prefixes — and
         // this implementation resolves against DATA instead, so it has no shape knowledge to check
-        // against and should not acquire any in a generic engine. See the ticket's Final Report.
+        // against and should not acquire any in a generic engine. Blueprint §13.1 G9 promised that
+        // refusal until 2026-08-16; ticket 20260812141224 ruled the deviation confirmed and amended
+        // the clause to state what this test pins, so the document and the binary now agree.
         use qfs_core::{
             Column, ColumnType, DriverId, EffectKind, EffectNode, NodeId, PlanBuilder, ProcId, Row,
             RowBatch, Schema, Target, Value, VfsPath,
