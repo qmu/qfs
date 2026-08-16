@@ -240,7 +240,7 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
       closes this item (#20260805113200-steering-live-fire-reaches-a-real-session.md). The item is
       marked with the LIVE FIRE alone, deliberately: archiving an earlier ticket must not tick a
       criterion it only half meets)*
-- [ ] **Launching a session is designed, then shipped.** Greenfield: no grammar, no capability, no
+- [x] **Launching a session is designed, then shipped.** Greenfield: no grammar, no capability, no
       prior design. Needs a design brief first (what a launch *is*, whether it is irreversible and
       therefore gated, what identity it runs under, how its id becomes addressable) — closing
       owner-named capability 2 *(hermetic design + implementation done 2026-07-19, commit a73fa01 /
@@ -427,3 +427,4 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-08-16 — ticket archived — 20260805113000-capture-the-teams-inbox-contract-in-a-container.md
 - 2026-08-16 — ticket archived — 20260805113100-append-instruction-writes-the-lead-teams-inbox.md
 - 2026-08-16 — ticket archived — 20260805113200-steering-live-fire-reaches-a-real-session.md
+- 2026-08-16 — ticket archived — 20260805113300-launch-live-fire-spawns-an-addressable-session.md
