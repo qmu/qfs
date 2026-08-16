@@ -949,3 +949,66 @@ fn a_driver_residual_may_name_a_backend_pseudo_column_and_still_evaluates() {
     .expect_err("the caller-written form refuses the same predicate");
     assert_eq!(err.code(), "unknown_column");
 }
+
+// ---- The runtime twin of the planner's `SELECT` refusal (ticket 20260725113000) ----
+
+/// A plan whose scan is **late-bound** (empty schema, so the planner stays lenient) with a
+/// projection over it — the post-decode / declared-driver shape, where the only schema that exists
+/// is the one the driver actually delivered.
+fn late_bound_select_plan(columns: &[&str]) -> LogicalPlan {
+    LogicalPlan::Project {
+        input: Box::new(LogicalPlan::scan(SourceId::new("api"), Schema::empty())),
+        columns: columns.iter().map(|c| (*c).to_string()).collect(),
+    }
+}
+
+#[test]
+fn select_on_a_column_absent_from_the_delivered_batch_is_refused() {
+    // A projection reaches rows by two roads. When the relation was described, the planner refuses
+    // before the scan; when it was late-bound (a decode, a declared driver with no `OF`), the
+    // delivered batch is the first and only schema — so the refusal must exist here too, or the
+    // undescribable case would keep answering rows of nothing at exit 0.
+    let err = run_local(&late_bound_select_plan(&["nosuchcol"]), users_batch())
+        .expect_err("an unknown column is refused over the delivered batch");
+    assert_eq!(err.code(), "unknown_column");
+    match &err {
+        qfs_engine::EngineError::UnknownColumn {
+            stage,
+            name,
+            available,
+        } => {
+            assert_eq!(*stage, "select");
+            assert_eq!(name, "nosuchcol");
+            assert_eq!(
+                available,
+                &vec!["id".to_string(), "name".into(), "age".into()]
+            );
+        }
+        other => panic!("expected UnknownColumn, got {other:?}"),
+    }
+}
+
+#[test]
+fn select_over_a_delivered_batch_keeps_its_real_columns() {
+    // The control: a projection naming real columns still narrows, in the order asked.
+    let out = run_local(&late_bound_select_plan(&["name", "id"]), users_batch())
+        .expect("a real projection is not an error");
+    assert_eq!(
+        out.schema.column_names(),
+        vec!["name".to_string(), "id".into()]
+    );
+    assert_eq!(out.rows.len(), 3);
+}
+
+#[test]
+fn a_projection_over_an_undescribed_empty_batch_stays_lenient() {
+    // The leniency, at the runtime seam this time: a batch that carries no schema at all is
+    // late-bound, not empty of the column — refusing it would break the undescribable relations
+    // the same fold deliberately spares at plan time.
+    let out = run_local(
+        &late_bound_select_plan(&["anything"]),
+        RowBatch::new(Schema::empty(), vec![]),
+    )
+    .expect("an undescribable relation is not refused");
+    assert!(out.rows.is_empty());
+}

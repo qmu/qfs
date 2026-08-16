@@ -13,7 +13,7 @@
 //! layer performs directly (with a driver capability check for `cd`), so they are modelled here
 //! only as their [`Builtin`] tag, never desugared to a statement.
 
-use qfs_core::{Archetype, NodeCategory};
+use qfs_core::{Archetype, Name, NodeCategory, Schema};
 
 use crate::error::{ErrorKind, ExecError};
 use crate::shell::path::{resolve, VfsPath};
@@ -26,15 +26,41 @@ pub struct NodeFacts {
     pub archetype: Archetype,
     /// Which of §5.5's two categories the node's rows are (data vs definitions).
     pub category: NodeCategory,
+    /// Whether the node's described schema carries **every** column `ls`'s blob-namespace
+    /// projection names ([`LISTING_COLUMNS`]).
+    ///
+    /// `ls` is machine-written, not caller-written: since ticket 20260725113000 a `SELECT` naming
+    /// an undescribed column is refused, and a blob namespace that describes fewer columns than the
+    /// canonical listing (a driver that lists names only) would make the shell's own builtin fail
+    /// against a relation it was merely summarising. So the projection is emitted only when the
+    /// relation declares all of it, and the bare read — `ls`'s existing safe default for every
+    /// other archetype — carries the rest.
+    pub lists_files: bool,
 }
 
+/// The columns `ls` projects over a blob namespace, in display order.
+pub const LISTING_COLUMNS: [&str; 4] = ["name", "size", "is_dir", "modified"];
+
 impl NodeFacts {
-    /// Build the facts for a node.
+    /// Build the facts for a node whose described schema carries the whole listing projection.
     #[must_use]
     pub fn new(archetype: Archetype, category: NodeCategory) -> Self {
         Self {
             archetype,
             category,
+            lists_files: true,
+        }
+    }
+
+    /// [`NodeFacts::new`] with the listing-projection fact read off the node's described schema.
+    #[must_use]
+    pub fn with_schema(archetype: Archetype, category: NodeCategory, schema: &Schema) -> Self {
+        Self {
+            archetype,
+            category,
+            lists_files: LISTING_COLUMNS
+                .iter()
+                .all(|c| schema.column(&Name::from(*c)).is_some()),
         }
     }
 
@@ -218,9 +244,14 @@ pub fn desugar(
                 None => cwd.clone(),
             };
             let abs = target.render();
+            let lists_files = facts.src.is_some_and(|f| f.lists_files);
             let stmt = match ls_archetype {
-                Some(Archetype::BlobNamespace) => {
-                    format!("{abs} |> SELECT name, size, is_dir, modified")
+                // …and only when the namespace DESCRIBES that projection: a blob namespace that
+                // declares fewer columns gets the bare read, because since ticket 20260725113000 a
+                // `SELECT` naming an undescribed column is refused and `ls` must never be the
+                // caller of a malformed question.
+                Some(Archetype::BlobNamespace) if lists_files => {
+                    format!("{abs} |> SELECT {}", LISTING_COLUMNS.join(", "))
                 }
                 _ => abs,
             };
@@ -470,6 +501,7 @@ fn two_args<'a>(args: &'a [String], usage: &str) -> Result<(&'a String, &'a Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qfs_core::{Column, ColumnType};
 
     fn cwd() -> VfsPath {
         VfsPath::new("local", vec!["docs".into()])
@@ -550,6 +582,53 @@ mod tests {
         // An unmounted/undescribable target also defaults to the bare read.
         let d = desugar(Builtin::Ls, &["/x/y".into()], &cwd(), Facts::default()).unwrap();
         assert_eq!(d.statements, vec!["/x/y"]);
+    }
+
+    #[test]
+    fn ls_over_a_blob_namespace_that_describes_less_falls_back_to_the_bare_read() {
+        // Ticket 20260725113000 made an undescribed column in a `SELECT` a refusal, and `ls` is
+        // machine-written: a blob namespace that lists names only (a driver whose describe carries
+        // no `size`/`modified`) must still list, not refuse. The bare read is `ls`'s existing safe
+        // default for every other archetype; this is the same default, keyed on the schema.
+        let names_only = Schema::new(vec![Column::new("name", ColumnType::Text, false)]);
+        let d = desugar(
+            Builtin::Ls,
+            &[],
+            &cwd(),
+            Facts::of_src(Some(NodeFacts::with_schema(
+                Archetype::BlobNamespace,
+                NodeCategory::Data,
+                &names_only,
+            ))),
+        )
+        .unwrap();
+        assert_eq!(d.statements, vec!["/local/docs"]);
+    }
+
+    #[test]
+    fn ls_over_a_blob_namespace_that_describes_the_listing_keeps_the_projection() {
+        // The control: the projection is emitted exactly when the relation declares all of it.
+        let full = Schema::new(vec![
+            Column::new("name", ColumnType::Text, false),
+            Column::new("size", ColumnType::Int, true),
+            Column::new("is_dir", ColumnType::Bool, false),
+            Column::new("modified", ColumnType::Timestamp, true),
+        ]);
+        let d = desugar(
+            Builtin::Ls,
+            &[],
+            &cwd(),
+            Facts::of_src(Some(NodeFacts::with_schema(
+                Archetype::BlobNamespace,
+                NodeCategory::Data,
+                &full,
+            ))),
+        )
+        .unwrap();
+        assert_eq!(
+            d.statements,
+            vec!["/local/docs |> SELECT name, size, is_dir, modified"]
+        );
     }
 
     #[test]

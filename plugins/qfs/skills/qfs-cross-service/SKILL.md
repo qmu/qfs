@@ -346,7 +346,7 @@ then switch on its output:
 
 ```qfs
 create transform triage
-  input (subject text, body text)
+  input (subject text, snippet text)
   output (route text)
   provider anthropic
   model 'claude-sonnet-5'
@@ -354,14 +354,19 @@ create transform triage
 
 ```qfs
 /mail/inbox
-|> select subject, body
+|> select subject, snippet
 |> transform triage
 |> switch route {
      'urgent' => select subject as text |> insert into /slack/acme/ops-alerts/messages,
-     'report' => select subject, body |> insert into /sql/pg/triage_log,
-     else     => select subject, body |> insert into /mail/drafts
+     'report' => select subject, snippet |> insert into /sql/pg/triage_log,
+     else     => select subject, snippet as body |> insert into /mail/drafts
    }
 ```
+
+The projection names `snippet` because that is what a message row *carries* — `qfs describe
+/mail/inbox` lists it, and a `select` naming a column the relation does not carry is refused at
+exit 2 rather than silently dropped. The draft arm renames it (`snippet as body`) because the
+compose form's column is `body`.
 
 Read left to right: `transform triage` adds the model's per-row choice as the `route` column;
 `switch route { … }` **partitions** the rows by that value and each arm's continuation runs over
