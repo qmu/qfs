@@ -9,6 +9,7 @@ commit_hash:
 category:
 depends_on:
 mission:
+claim: work-20260816-181224
 ---
 
 # `of` compares against the empty codec schema — the one fold this mission left strict
