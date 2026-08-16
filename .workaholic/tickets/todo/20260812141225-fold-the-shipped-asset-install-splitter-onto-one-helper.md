@@ -5,6 +5,7 @@ assignees: [a@qmu.jp]
 depends_on:
 mission:
 merge_policy: review
+claim: work-20260816-180012
 ---
 
 # Fold the shipped-asset install-splitter onto one helper, so a test cannot drift from the install path
