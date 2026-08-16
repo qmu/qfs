@@ -9,6 +9,7 @@ commit_hash:
 category:
 depends_on:
 mission:
+claim: work-20260816-174228
 ---
 
 # The FAQ under-describes exit 2 — the most likely error this mission produces
