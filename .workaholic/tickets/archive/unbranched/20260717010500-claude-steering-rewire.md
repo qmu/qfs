@@ -1,5 +1,6 @@
 ---
 created_at: 2026-07-17T01:05:00+09:00
+status: icebox
 author: a@qmu.jp
 type: enhancement
 layer: [Domain, Infrastructure]

@@ -224,7 +224,7 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
       running session with a truthful `last_message` (`schema.rs:117`), read from the real store —
       closing owner-named capabilities 1 and 3 *(done 2026-07-17: verified live over the gate
       endpoint — 37 rows = the 37 live registry records on this box, zero empty `last_message`)*
-- [ ] **Steering reaches a real session via the teams inbox.** An INSERT into
+- [x] **Steering reaches a real session via the teams inbox.** An INSERT into
       `/hosts/<host>/claude/sessions/<id>/instructions` is observed by the target session by
       **appending a message to that session's teams inbox** (`~/.claude/teams/<session>/inboxes/
       <member>.json` — a durable per-recipient JSON array the running session drains), rather than
@@ -424,3 +424,4 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-08-05 — mission replanned — mission.md
 - 2026-08-06 — blocked — blocked-20260806-container-spike-has-no-credential.md
 - 2026-08-06 — run recorded (+0.4h) — drive-20260806-213952
+- 2026-08-16 — ticket archived — 20260805113000-capture-the-teams-inbox-contract-in-a-container.md
