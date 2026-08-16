@@ -312,6 +312,7 @@ mod tests {
 
     #[test]
     fn sink_selection_builds_the_configured_sink() {
+        let _home = crate::testenv::HomeGuard::new();
         assert_eq!(build_sink(SinkKind::File).kind(), SinkKind::File);
         assert_eq!(build_sink(SinkKind::Stdout).kind(), SinkKind::Stdout);
         assert_eq!(build_sink(SinkKind::Otel).kind(), SinkKind::Otel);

@@ -1,11 +1,13 @@
 ---
 created_at: 2026-08-16T20:57:52+00:00
+status: done
 author: a@qmu.jp
 assignees: []
 depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260816-210358
 ---
 
 # Nine `qfs` unit tests fail on a checkout where `XDG_CONFIG_HOME` is unset
@@ -110,3 +112,51 @@ unset.
   rather than fixed opportunistically.
 - Worth checking whether the guard can name the *test* it fired in, not only the fix: nine
   identical panics in one run cost a bisect to attribute.
+
+## Final Report
+
+Development completed as planned. The nine tests now isolate their own config home; the `store.rs`
+guard is untouched.
+
+Two shapes were behind the nine, and the second is the one worth knowing:
+
+- **Three `declared_driver` tests held the bare lock, not the home.** They opened with
+  `crate::testenv::env_guard()`, which serialises env-mutating tests but points nothing at a
+  tempdir — so they reached `default_project_db_path` and hit the guard. `HomeGuard::new()` holds
+  that same lock internally, so the swap is one line each and loses no serialisation.
+- **Six had no guard at all** (five in `sweeper`, one in `telemetry`). They were not written as env
+  tests: `tempdir_host()` isolates the *host* state directory, and `build_sink(SinkKind::File)`
+  reads like a pure constructor. Both reach the store underneath, which is why "does this test
+  touch the environment?" is the wrong question to write a test against — `HomeGuard` is cheap and
+  the guard is the only thing that answers reliably.
+
+### Quality Gate
+
+**Criteria.** `cargo test --workspace` exits 0 with `XDG_CONFIG_HOME` unset **and** set; the
+`store.rs` guard is unchanged.
+
+**Verification, from `packages/qfs`:**
+
+```
+$ env -u XDG_CONFIG_HOME cargo test --workspace
+test result: ok. 483 passed; 0 failed; 1 ignored   (the qfs crate, where all nine live)
+2723 passed across the workspace, 0 failed
+
+$ XDG_CONFIG_HOME=<tmp> cargo test --workspace
+0 failures
+```
+
+Before the change the same first command reported `FAILED. 474 passed; 9 failed`, each panicking at
+`crates/qfs/src/store.rs:54`.
+
+**Gate.** `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo fmt --all --check` all exit 0.
+
+### Discovered Insights
+
+- **Insight**: `HomeGuard::new()` is a strict superset of `env_guard()` — it acquires the same
+  crate-wide `ENV_LOCK` through the same poison-clearing path and additionally points
+  `XDG_CONFIG_HOME` at a tempdir.
+  **Context**: so `env_guard()` is only ever right for a test that touches namespaced vars and
+  provably never reaches a store resolver. Where the two are confusable, `HomeGuard` is the safe
+  default, and the nine tests here were all of the confusable kind.

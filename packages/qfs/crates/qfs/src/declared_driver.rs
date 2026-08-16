@@ -1602,7 +1602,7 @@ mod tests {
     fn declared_secrets_builds_the_account_adapter_for_account_auth() {
         // An account-auth declared driver gets the account-backed adapter (no per-driver SECRET), and
         // resolving through it reaches the connected account's stored bearer.
-        let _g = crate::testenv::env_guard();
+        let _home = crate::testenv::HomeGuard::new();
         let d = ghdecl_account_driver();
         // No commit store in the test env → the adapter is built over an in-memory vault; we assert
         // its SHAPE (account resolution + fail-closed), the resolution itself is covered above.
@@ -1624,7 +1624,7 @@ mod tests {
 
     #[test]
     fn declared_secret_ref_store_resolves_env_secret_for_default_auth() {
-        let _g = crate::testenv::env_guard();
+        let _home = crate::testenv::HomeGuard::new();
         let var = "QFS_DECLARED_CHATWORK_TOKEN_TEST";
         std::env::set_var(var, "cw-test-token");
         let d = chatwork_driver();
@@ -1640,7 +1640,7 @@ mod tests {
 
     #[test]
     fn declared_secret_ref_store_rejects_a_different_auth_key() {
-        let _g = crate::testenv::env_guard();
+        let _home = crate::testenv::HomeGuard::new();
         let var = "QFS_DECLARED_CHATWORK_TOKEN_MISMATCH_TEST";
         std::env::set_var(var, "cw-test-token");
         let d = chatwork_driver();
