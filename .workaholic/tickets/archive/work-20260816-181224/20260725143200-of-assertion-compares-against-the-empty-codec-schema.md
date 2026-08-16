@@ -1,5 +1,6 @@
 ---
 created_at: 2026-07-25T14:32:00+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 type: bugfix
@@ -111,3 +112,83 @@ The stamp is cleared so the ticket returns to the ordinary backlog — the same 
 `20260804173000` received when its own mission closed. The provenance lives here in prose instead.
 
 **Still-open evidence (verified 2026-08-12, read-only):** Still open: `check_of_assertion` in `crates/core/src/eval.rs` carries no empty-schema leniency, so a `|> decode md |> of article` still compares against `Schema::empty()`.
+
+## Final Report
+
+Development completed as planned.
+
+### The decision, and why (Quality Gate item 1)
+
+The ticket names two defensible answers and forbids assuming the first. **Lenient** is implemented.
+The reason is not preference but consistency evidence already in the tree: four sibling folds —
+`select`, `where`, `expand`, and the transform-input membership check — were all made lenient over
+an empty schema by ticket `20260717180300`, and this ticket's own `## Policies` section requires
+that "the four folds and this one should state the same rule about an undescribable relation, in
+one place, rather than diverge silently". `check_of_assertion` was the one that was missed, not the
+one that was ruled differently.
+
+The second option — refusing `decode |> of` explicitly — is the one the ticket says "must be a
+deliberate ruling, not a fallback". An unattended run does not hold that ruling: it removes a shape
+the ticket itself calls exactly what an operator wants. So the choice available here was between
+matching what already shipped and inventing a new refusal, and only the first is defensible without
+a developer. **Recorded as a deferred decision available to reverse**: if the developer prefers the
+explicit refusal, this branch is the one place to change and the test below pins both directions.
+
+**Scope kept narrow deliberately:** the leniency is applied *after* type resolution, so an
+unresolvable name is still `of_type_unresolved`. That error does not depend on the incoming schema,
+and letting an empty schema suppress it would have traded one false claim for another.
+
+### Verification (Quality Gate item 2 — both directions, measured)
+
+Pre-fix, with the new empty-schema arm reverted and the binary rebuilt:
+
+```
+$ qfs run "/local/tmp/qfsdemo/a.json |> decode json |> of (id int, title text)"
+{"error":{"code":"of_assertion_failed","kind":"usage","message":"OfAssertionFailed { ty: \"(inline)\", missing: [\"id\", \"title\"], unexpected: [], mismatched: [] }"}}
+EXIT=2
+```
+
+Every asserted column reported missing from a schema that is empty by construction — the false
+claim, reproduced.
+
+Post-fix, same command:
+
+```
+$ qfs run "/local/tmp/qfsdemo/a.json |> decode json |> of (id int, title text)"
+{"schema":[{"name":"path","type":"text"},{"name":"id","type":"int"},{"name":"title","type":"text"}],"rows":[{"path":"/local/tmp/qfsdemo/a.json","id":1,"title":"x"}],...}
+EXIT=0
+```
+
+And the control — `of` over a **described** relation still refuses a genuine mismatch, so the
+leniency is scoped to undescribable rather than switched on globally:
+
+```
+$ qfs run "/local/tmp/qfsdemo |> of (nope text)"
+{"error":{"code":"of_assertion_failed","kind":"usage","message":"OfAssertionFailed { ty: \"(inline)\", missing: [\"nope\"], unexpected: [\"name\", \"path\", \"size\", \"modified\", \"is_dir\", \"mode\", \"content\"], mismatched: [] }"}}
+EXIT=2
+```
+
+`of_after_a_codec_is_late_bound_but_still_resolves_its_type_name` pins all four facts (named
+lenient, inline lenient, unresolved name still refused, described relation still refused) beside the
+existing `a_stage_after_a_codec_does_not_get_refused_against_the_pre_decode_columns`, and it was
+confirmed to **fail** with the arm reverted — so it is a regression test, not a tautology.
+
+Gate: `cargo test --workspace` 2720 passed / 0 failed, `cargo clippy --workspace --all-targets --
+-D warnings` `CLIPPY=0`, `cargo fmt --all --check` `FMT=0`, `gen-docs --check` /
+`gen-skills --check` / `check-migrations` all exit 0. Blueprint §5.6 updated to say the structural
+half stays late-bound at a codec seam (Quality Gate item 3).
+
+### Discovered Insights
+
+- **Insight**: The five folds are lenient for the same reason but say so in five places. Four carry
+  a hand-written `if …columns.is_empty()` guard with its own comment; the fifth was missed for a
+  month precisely because nothing links them.
+  **Context**: The ticket's own Policies section asks for "one place". A shared
+  `Schema::is_undescribable()` predicate — or a single guard at the fold dispatcher — would make the
+  next fold's omission a compile-time question rather than a review-time one. Out of scope here (the
+  ticket scopes the `of` arm), but it is the durable fix.
+- **Insight**: `of_assertion_failed`'s message is the Rust `Debug` form of the error struct
+  (`OfAssertionFailed { ty: "(inline)", missing: [...] }`), not prose.
+  **Context**: The same defect class this run minted `20260816175149` for on the post-decode path.
+  That ticket's acceptance criterion — "no error message reaching an operator contains Rust `Debug`
+  struct syntax" — already covers this site, so it is recorded here rather than re-ticketed.

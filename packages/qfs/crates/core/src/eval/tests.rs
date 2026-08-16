@@ -1617,3 +1617,40 @@ fn a_stage_after_a_codec_does_not_get_refused_against_the_pre_decode_columns() {
         "a described relation still refuses an unexpandable/unknown column"
     );
 }
+
+#[test]
+fn of_after_a_codec_is_late_bound_but_still_resolves_its_type_name() {
+    // Ticket 20260725143200 — the fifth fold. `check_of_assertion` was the one downstream check
+    // with no empty-schema arm, so `… |> decode <fmt> |> of <type>` diffed the asserted columns
+    // against `Schema::empty()` and reported EVERY one of them missing: a plan-time
+    // `of_assertion_failed` fired before the decode that would have produced exactly those columns.
+    // It is now lenient like `select` / `where` / `expand` and the transform input check.
+    let body = r#"{"columns":[
+        {"name":"id","type":"int","nullable":false,"primary_key":false,"unique":false},
+        {"name":"title","type":"text","nullable":true,"primary_key":false,"unique":false}
+    ],"where":null}"#;
+    let reg = registry_with_declared_type("article", body);
+
+    // Named and inline alike ride to the next materialising boundary.
+    for src in [
+        "/mail |> decode json |> of article",
+        "/mail |> decode json |> of (id int, title text)",
+    ] {
+        let stmt = parse_statement(src).unwrap();
+        assert!(
+            Evaluator::new(&reg).eval(&stmt).is_ok(),
+            "`{src}` must not be diffed against the empty codec schema"
+        );
+    }
+
+    // Leniency is about the SCHEMA, never about the type NAME: an unresolvable name is still an
+    // honest `of_type_unresolved`, which no incoming schema can make true or false.
+    let err = eval("/mail |> decode json |> of nosuchtype").unwrap_err();
+    assert_eq!(err.code(), "of_type_unresolved");
+
+    // The control: over a DESCRIBED relation `of` still refuses a genuine mismatch, so the
+    // leniency is scoped to "undescribable" rather than switched on globally.
+    let stmt = parse_statement("/db/users |> of (id int, name text)").unwrap();
+    let err = Evaluator::new(&seeded_registry()).eval(&stmt).unwrap_err();
+    assert_eq!(err.code(), "of_assertion_failed");
+}

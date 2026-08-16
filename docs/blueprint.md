@@ -375,8 +375,12 @@ of customer` vocabulary generalised, never a transform special case:
   structured error (`of_assertion_failed`) naming the differing columns — the missing, the
   unexpected, and the type-mismatched. §5.3's rules make the schema known at every seam **except
   one**: a codec seam deliberately reports `Schema::empty()` (a decode's columns are undescribable
-  until the bytes are read), so `… |> decode <fmt> |> of <type>` is compared against an empty
-  schema and there is nothing plan time can honestly prove there. A named type is resolved
+  until the bytes are read), so there is nothing plan time can honestly prove at
+  `… |> decode <fmt> |> of <type>` — and the structural half therefore stays **late-bound** there,
+  riding to the next materialising boundary with the refinement half, exactly as `select`, `where`,
+  `expand` and the transform input check already do over an undescribable relation. Diffing against
+  the empty schema instead would report every asserted column as missing, before the decode that
+  produces exactly those columns. A named type is resolved
   from the plan-time declared-type registry (the `transform_defs` twin; the pure planner cannot read
   the System DB), so an unknown name is a structured `of_type_unresolved`. Where the asserted type
   carries a refinement, the structural half is plan-checked and the predicate half is membership at

@@ -995,6 +995,15 @@ impl<'r> Evaluator<'r> {
     /// equality plus, for columns known on both sides, type equality — an `unknown` on either side is
     /// conservatively skipped (the honest gap meter). `of` never coerces; a mismatch names the
     /// differing columns.
+    ///
+    /// Over an **undescribable** relation (an undescribing driver, or anything after a codec) the
+    /// structural half stays late-bound, exactly as `select` / `where` / `expand` and the transform
+    /// input check already do: the asserted type is still RESOLVED (an unknown name is
+    /// `of_type_unresolved` whatever the incoming schema is), but it is not diffed against a schema
+    /// that is empty by construction. Comparing there reported every asserted column as missing —
+    /// a plan-time `of_assertion_failed` whose content is false, fired before the decode that would
+    /// have produced exactly those columns (ticket 20260725143200; the same false claim ticket
+    /// 20260717180300 removed from the codec node itself).
     fn check_of_assertion(&self, oref: &OfRef, actual: &Schema) -> Result<(), EvalError> {
         let (ty_label, asserted) = match &oref.target {
             OfTarget::Inline(cols) => (
@@ -1020,6 +1029,12 @@ impl<'r> Evaluator<'r> {
                 (name.clone(), def.schema.clone())
             }
         };
+        // Undescribable incoming relation: nothing to diff against. The refinement half already
+        // rides to the next materialising boundary (§5.4's honest split); over an empty schema the
+        // structural half rides with it.
+        if actual.columns.is_empty() {
+            return Ok(());
+        }
         structural_diff(&ty_label, &asserted, actual)
     }
 
