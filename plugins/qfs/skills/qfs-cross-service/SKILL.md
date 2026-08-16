@@ -256,9 +256,10 @@ mail.reply(...)`: a `CALL`'s arguments are literals, so only the `INSERT … FRO
 attachments from another service.)
 
 ::: tip The same shape on other services
-**Slack** — share a cross-sourced file *into a channel* with `… |> upsert into /slack/<ws>/files`
-and a `channel` column (see the [Slack cookbook](/cookbook/slack#upload-a-file-to-slack-and-detach));
-a *threaded* file-reply (`thread_ts`) is a recorded follow-up. **Chatwork** — posting a room message
+**Slack** — posting a channel message works, but sending a file to Slack is a recorded gap: its
+upload is a three-call external flow a declared map cannot express, so a Slack file-share is not yet
+expressible (see [what the file surface does not
+do](/cookbook/slack#what-the-file-surface-does-not-do)). **Chatwork** — posting a room message
 reply works, but attaching a file is a recorded gap (it needs a generic multipart-upload primitive
 in the declared driver), so a Chatwork file-reply is not yet expressible.
 :::

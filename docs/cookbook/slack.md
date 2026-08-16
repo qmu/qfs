@@ -1,6 +1,6 @@
 ---
 skill_name: qfs-slack
-skill_description: Use when a task needs Slack through qfs — read the latest messages in a channel, list and download the files shared in a channel or DM (newest first), upload a file's bytes and detach (delete) it, and post a message over /slack, as an append log. Covers creating the Slack app, the bot-token scopes it needs, and connecting a Slack workspace.
+skill_description: Use when a task needs Slack through qfs — read the latest messages in a channel, list the files shared in a channel or DM (newest first), detach (delete) one by its id, and post a message over /slack, as an append log. Covers creating the Slack app, the bot-token scopes it needs, and connecting a Slack workspace.
 ---
 
 # Slack
@@ -178,7 +178,8 @@ A channel's or DM's shared files are their own listing — `/slack/acme/general/
 `#name`) and `/slack/acme/dms/U07ALICE/files` (a DM, by the peer's Slack **user id**). The listing is
 scoped by Slack's own file-share record for that conversation (not by who uploaded a file, nor by
 upload time alone), so "the latest file in this DM" is provably that DM's newest share. File
-columns: `id`, `name`, `mimetype`, `size`, `created`, `user`. These listings are read-only.
+columns: `id`, `name`, `mimetype`, `size`, `created`, `user`. Reading is all these listings do — the one write on the file surface is the
+detach below.
 
 A DM is addressed by the peer's **user id** (`U…`, the same form `/slack/<ws>/dms/<user>/messages`
 uses), not a display name — qfs opens the IM channel (`conversations.open`) from that id. Look the id
@@ -200,27 +201,13 @@ up in the workspace directory: `/slack/acme/users |> where name == 'alice' |> se
 |> order by created DESC
 ```
 
-Download one by its id — `/slack/acme/files/F0123` returns a `content` column carrying the bytes,
-which you can write on to Drive or disk (see [files & object storage](/cookbook/files)).
+The listing carries a file's metadata, not its bytes: qfs reads *what was shared*, and fetching the
+content itself is not part of the Slack surface today (see *What the file surface does not do*
+below).
 
-## Upload a file to Slack (and detach)
+## Detach a file from Slack
 
-Write a file's **bytes** into the workspace file namespace with `UPSERT INTO /slack/<ws>/files`. The
-row carries the same `{filename, mime, bytes}` vocabulary a Gmail attachment and a Drive blob speak,
-so a file flows in from any service without reshaping. Add an optional `channel` to share it there:
-
-```qfs
-/drive/my/report.pdf
-|> select name as filename, mime_type as mime, content as bytes, 'C0INCIDENTS' as channel
-|> upsert into /slack/acme/files
-```
-
-Under the hood this is Slack's external-upload flow (reserve an upload URL, send the bytes, complete
-the share); the legacy `files.upload` is retired for new apps. Like every write it previews first and
-sends the bytes only on `--commit`. The bytes travel out-of-band of the JSON API, so no file content
-ever lands in a request log.
-
-**Detach** — remove a file by its id. A delete is irreversible, so it needs the explicit gate:
+Remove a file by its id. A delete is irreversible, so it needs the explicit gate:
 
 ```qfs
 remove /slack/acme/files/F0123
@@ -229,6 +216,26 @@ remove /slack/acme/files/F0123
 ```text
 qfs run -e "remove /slack/acme/files/F0123" --commit-irreversible
 ```
+
+Like every irreversible effect it previews by default and asks for the gate before anything leaves
+the machine; the id is the one from the listings above.
+
+### What the file surface does not do
+
+Two operations you might expect are deliberately absent rather than pending, and knowing why saves
+you looking for a spelling that does not exist:
+
+- **Downloading a file's bytes.** Slack serves file content from `url_private`, which requires the
+  app's bearer token on the download request. qfs's declared `FOLLOW` stage — the primitive that
+  fetches a delivered URL, and the one Chatwork's download rides — sends **no** credential by
+  design, because a delivered URL usually points at a foreign host and the driver's token must not
+  follow it there. So an authorized download is not expressible in the declaration today. Route the
+  bytes through a service whose blob read qfs does carry ([files & object
+  storage](/cookbook/files), [Google Drive](/cookbook/gdrive)).
+- **Uploading a file.** Slack's current upload is a three-call external flow (reserve an upload URL,
+  PUT the bytes out-of-band, then complete the share); `files.upload` is retired for new apps. A
+  declared map is **one** request, so the flow cannot be written as one — unlike Chatwork's
+  single-POST multipart upload.
 
 ## Post a message
 
@@ -327,6 +334,7 @@ working.
 | open a DM (`/slack/<ws>/dms/<user>`) | either | `im:write` |
 | read a DM's messages | either | `im:history` |
 | list the files shared in a channel, a DM, or the workspace | either | `files:read` |
+| detach a file (`remove /slack/<ws>/files/<id>`) | either | `files:write` |
 | add a reaction (`slack.react`) | either | `reactions:write` |
 | pin or unpin a message (`slack.pin` / `slack.unpin`) | either | `pins:write` |
 | edit or delete a message (`slack.update` / `slack.delete`) | either | `chat:write` |
