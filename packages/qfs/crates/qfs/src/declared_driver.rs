@@ -2621,31 +2621,7 @@ mod tests {
         // on the shipped grammar, and MEASURE the §13.2 conciseness bar (≤ ~40 statement-lines for a
         // tier-1/2 service; chatwork.qfs = 32 is the calibration point).
         let script = qfs_skill::SLACK_DRIVER;
-        let mut stmts: Vec<String> = Vec::new();
-        let mut cur = String::new();
-        for raw in script.lines() {
-            let line = if raw.trim_start().starts_with('#') {
-                ""
-            } else {
-                raw.split("--").next().unwrap_or("")
-            };
-            let mut rest = line;
-            while let Some(pos) = rest.find(';') {
-                cur.push_str(&rest[..pos]);
-                if !cur.trim().is_empty() {
-                    stmts.push(cur.trim().to_string());
-                }
-                cur.clear();
-                rest = &rest[pos + 1..];
-            }
-            if !rest.is_empty() {
-                cur.push_str(rest);
-                cur.push('\n');
-            }
-        }
-        if !cur.trim().is_empty() {
-            stmts.push(cur.trim().to_string());
-        }
+        let stmts = shipped_statements(script);
         assert_eq!(
             stmts.len(),
             22,
@@ -2790,55 +2766,52 @@ mod tests {
     /// and the `IRREVERSIBLE` flag — read from the SHIPPED bytes, so the effect-equivalence proofs
     /// below cannot drift from the declaration an operator actually installs.
     fn shipped_slack_maps() -> Vec<DeclaredMap> {
-        let stripped: String = qfs_skill::SLACK_DRIVER
-            .lines()
-            .map(|l| l.split("--").next().unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let maps: Vec<DeclaredMap> = stripped
-            .split(';')
-            .map(str::trim)
-            .filter(|s| s.starts_with("CREATE MAP "))
-            .map(|stmt| {
-                // The declaration wraps across lines; collapse it to one line so the `AS` seam and
-                // the signature parens are found the same way wherever the author broke the line.
-                let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
-                let (head, tail) = stmt
-                    .split_once(" AS ")
-                    .expect("a MAP declares `AS <effect>`");
-                let (body_src, irreversible) = match tail.trim().strip_suffix("IRREVERSIBLE") {
-                    Some(b) => (b.trim(), true),
-                    None => (tail.trim(), false),
-                };
-                let head = head.trim_start_matches("CREATE MAP ").trim();
-                // `CALL <drv>.<action> ( <sig> ) /<node>` or `<VERB> /<node>`. The verb label is
-                // rendered canonically (no space before the signature, `, `-joined params) — the
-                // shape `declared_proc_sig`/`call_action` read, asserted against the compiled
-                // registry in `shipped_slack_call_maps_carry_typed_g5_signatures`.
-                let (verb, path) = match head.split_once('(') {
-                    Some((call_head, rest)) => {
-                        let (sig, path) = rest.split_once(')').expect("a signature closes");
-                        let sig = sig
-                            .split(',')
-                            .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        (format!("{}({sig})", call_head.trim()), path.trim())
-                    }
-                    None => {
-                        let (verb, path) = head.split_once(' ').expect("a verb then a node path");
-                        (verb.trim().to_string(), path.trim())
-                    }
-                };
-                DeclaredMap {
-                    path: path.to_string(),
-                    verb,
-                    body: serde_json::to_string(&qfs_exec::parse(body_src).expect("body parses"))
+        let maps: Vec<DeclaredMap> =
+            shipped_statements_of_kind(qfs_skill::SLACK_DRIVER, "CREATE MAP ")
+                .iter()
+                .map(|stmt| {
+                    // The declaration wraps across lines; collapse it to one line so the `AS` seam and
+                    // the signature parens are found the same way wherever the author broke the line.
+                    let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let (head, tail) = stmt
+                        .split_once(" AS ")
+                        .expect("a MAP declares `AS <effect>`");
+                    let (body_src, irreversible) = match tail.trim().strip_suffix("IRREVERSIBLE") {
+                        Some(b) => (b.trim(), true),
+                        None => (tail.trim(), false),
+                    };
+                    let head = head.trim_start_matches("CREATE MAP ").trim();
+                    // `CALL <drv>.<action> ( <sig> ) /<node>` or `<VERB> /<node>`. The verb label is
+                    // rendered canonically (no space before the signature, `, `-joined params) — the
+                    // shape `declared_proc_sig`/`call_action` read, asserted against the compiled
+                    // registry in `shipped_slack_call_maps_carry_typed_g5_signatures`.
+                    let (verb, path) = match head.split_once('(') {
+                        Some((call_head, rest)) => {
+                            let (sig, path) = rest.split_once(')').expect("a signature closes");
+                            let sig = sig
+                                .split(',')
+                                .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            (format!("{}({sig})", call_head.trim()), path.trim())
+                        }
+                        None => {
+                            let (verb, path) =
+                                head.split_once(' ').expect("a verb then a node path");
+                            (verb.trim().to_string(), path.trim())
+                        }
+                    };
+                    DeclaredMap {
+                        path: path.to_string(),
+                        verb,
+                        body: serde_json::to_string(
+                            &qfs_exec::parse(body_src).expect("body parses"),
+                        )
                         .expect("body serializes"),
-                    irreversible,
-                }
-            })
-            .collect();
+                        irreversible,
+                    }
+                })
+                .collect();
         assert_eq!(
             maps.len(),
             6,
@@ -2852,15 +2825,8 @@ mod tests {
     /// these for a CALL map's `LET` to resolve at all — read from the shipped bytes for the same
     /// reason the maps are.
     fn shipped_slack_views() -> Vec<DeclaredNode> {
-        let stripped: String = qfs_skill::SLACK_DRIVER
-            .lines()
-            .map(|l| l.split("--").next().unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join("\n");
-        stripped
-            .split(';')
-            .map(str::trim)
-            .filter(|s| s.starts_with("CREATE VIEW "))
+        shipped_statements_of_kind(qfs_skill::SLACK_DRIVER, "CREATE VIEW ")
+            .iter()
             .map(|stmt| {
                 let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
                 let (head, body_src) = stmt
@@ -2890,15 +2856,8 @@ mod tests {
     /// absent — which is exactly what the equivalence proofs below must NOT be allowed to do
     /// silently.
     fn shipped_slack_lookups() -> Vec<DeclaredLookup> {
-        let stripped: String = qfs_skill::SLACK_DRIVER
-            .lines()
-            .map(|l| l.split("--").next().unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join("\n");
-        stripped
-            .split(';')
-            .map(str::trim)
-            .filter(|s| s.starts_with("CREATE LOOKUP "))
+        shipped_statements_of_kind(qfs_skill::SLACK_DRIVER, "CREATE LOOKUP ")
+            .iter()
             .map(|stmt| {
                 let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
                 let (head, body_src) = stmt
@@ -2924,15 +2883,8 @@ mod tests {
     /// deliberately, so a zero-column projection can never pass silently) — which is why the lookup
     /// harness needs them and not just the views.
     fn shipped_slack_types() -> Vec<DeclaredType> {
-        let stripped: String = qfs_skill::SLACK_DRIVER
-            .lines()
-            .map(|l| l.split("--").next().unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join("\n");
-        stripped
-            .split(';')
-            .map(str::trim)
-            .filter(|s| s.starts_with("CREATE TYPE "))
+        shipped_statements_of_kind(qfs_skill::SLACK_DRIVER, "CREATE TYPE ")
+            .iter()
             .map(|stmt| {
                 let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
                 let head = stmt.trim_start_matches("CREATE TYPE ").trim();
@@ -3474,17 +3426,11 @@ mod tests {
     fn shipped_slack_script_declares_the_g2_pushdown() {
         // The declaration's `PUSHDOWN (…)` clause must actually desugar to the descriptor the
         // equivalence tests lower through — parsed from the SHIPPED bytes, not a paraphrase.
-        // Strip `--` comments the way the install splitter does, then take the driver statement.
-        let stripped: String = qfs_skill::SLACK_DRIVER
-            .lines()
-            .map(|l| l.split("--").next().unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let driver_stmt = stripped
-            .split(';')
+        // Split the way the install splitter does, then take the driver statement.
+        let driver_stmt = shipped_statements(qfs_skill::SLACK_DRIVER)
+            .into_iter()
             .find(|s| s.contains("CREATE DRIVER slack"))
-            .expect("the shipped asset declares the driver")
-            .to_string();
+            .expect("the shipped asset declares the driver");
         let stmt = qfs_exec::parse(driver_stmt.trim()).expect("the driver statement parses");
         let rendered = format!("{stmt:?}");
         for expected in [
@@ -4938,31 +4884,7 @@ mod tests {
         // install lands /sys/drivers rows with zero network (the parser crate separately proves each
         // CREATE DRIVER/VIEW/MAP desugars to /sys/drivers).
         let script = qfs_skill::CLOUDFLARE_DRIVER;
-        let mut stmts: Vec<String> = Vec::new();
-        let mut cur = String::new();
-        for raw in script.lines() {
-            let line = if raw.trim_start().starts_with('#') {
-                ""
-            } else {
-                raw.split("--").next().unwrap_or("")
-            };
-            let mut rest = line;
-            while let Some(pos) = rest.find(';') {
-                cur.push_str(&rest[..pos]);
-                if !cur.trim().is_empty() {
-                    stmts.push(cur.trim().to_string());
-                }
-                cur.clear();
-                rest = &rest[pos + 1..];
-            }
-            if !rest.is_empty() {
-                cur.push_str(rest);
-                cur.push('\n');
-            }
-        }
-        if !cur.trim().is_empty() {
-            stmts.push(cur.trim().to_string());
-        }
+        let stmts = shipped_statements(script);
 
         assert_eq!(
             stmts.len(),
@@ -5015,6 +4937,16 @@ mod tests {
             stmts.push(cur.trim().to_string());
         }
         stmts
+    }
+
+    /// The shipped asset's statements of one `CREATE <kind>` form, over the same one splitter.
+    /// A per-kind extractor that re-split the bytes itself would be a second copy of the install
+    /// semantics, which is the drift this helper exists to make impossible.
+    fn shipped_statements_of_kind(script: &str, prefix: &str) -> Vec<String> {
+        shipped_statements(script)
+            .into_iter()
+            .filter(|s| s.starts_with(prefix))
+            .collect()
     }
 
     #[test]
@@ -5171,31 +5103,7 @@ mod tests {
         // REFERENCE (`AUTH ACCOUNT 'github'`), never a token, so the /sys/drivers row carries only the
         // provider name.
         let script = qfs_skill::GITHUB_ACCOUNT_DRIVER;
-        let mut stmts: Vec<String> = Vec::new();
-        let mut cur = String::new();
-        for raw in script.lines() {
-            let line = if raw.trim_start().starts_with('#') {
-                ""
-            } else {
-                raw.split("--").next().unwrap_or("")
-            };
-            let mut rest = line;
-            while let Some(pos) = rest.find(';') {
-                cur.push_str(&rest[..pos]);
-                if !cur.trim().is_empty() {
-                    stmts.push(cur.trim().to_string());
-                }
-                cur.clear();
-                rest = &rest[pos + 1..];
-            }
-            if !rest.is_empty() {
-                cur.push_str(rest);
-                cur.push('\n');
-            }
-        }
-        if !cur.trim().is_empty() {
-            stmts.push(cur.trim().to_string());
-        }
+        let stmts = shipped_statements(script);
 
         assert_eq!(stmts.len(), 5, "1 driver + 2 types + 2 views: {stmts:?}");
         for s in &stmts {
