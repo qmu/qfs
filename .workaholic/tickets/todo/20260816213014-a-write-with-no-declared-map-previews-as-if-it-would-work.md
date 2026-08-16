@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260816-213314
 ---
 
 # A write to a declared driver with no matching `CREATE MAP` previews as if it would work
