@@ -9,6 +9,7 @@ commit_hash:
 category: Changed
 depends_on:
 mission:
+claim: work-20260816-164408
 ---
 
 # Gate the statement bridge read leg with the same policy
