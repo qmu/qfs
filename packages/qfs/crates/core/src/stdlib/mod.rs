@@ -183,6 +183,46 @@ impl FnError {
     }
 }
 
+impl std::fmt::Display for FnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FnError::UnknownFunction { name } => {
+                write!(f, "no built-in function is registered as `{name}`")
+            }
+            FnError::Arity {
+                name,
+                expected,
+                found,
+            } => write!(
+                f,
+                "`{name}` takes {expected} argument(s), but {found} were supplied"
+            ),
+            FnError::Type {
+                name,
+                expected,
+                found,
+            } => write!(f, "`{name}` expects {expected}, but was given {found}"),
+            FnError::Domain { name, reason } => {
+                write!(f, "`{name}` was called outside its domain: {reason}")
+            }
+            FnError::AggregateOutsideAggregate { name } => {
+                write!(f, "aggregate `{name}` is only usable under `AGGREGATE`")
+            }
+            FnError::ScalarInAggregate { name } => write!(
+                f,
+                "scalar `{name}` cannot stand where an aggregate is required"
+            ),
+            FnError::CapabilityDenied { builtin, requested } => write!(
+                f,
+                "`{builtin}` is capability-gated and the gate is off, so '{requested}' \
+                 was not read"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FnError {}
+
 /// The declared signature of a built-in (blueprint §6 typed dispatch). Carries the **arity
 /// policy** (fixed/variadic), the **return type**, and — for the **plan-time static type
 /// checker** (decision T, ticket t75) — an optional **per-argument type contract**.
