@@ -2261,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "qfs"
-version = "0.0.102"
+version = "0.0.103"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4549,6 +4549,8 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "qfs",
+ "qfs-core",
+ "qfs-parser",
 ]
 
 [[package]]

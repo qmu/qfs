@@ -21,5 +21,14 @@ path = "src/main.rs"
 # `qfs` is already compiled, so linking it here is cheap.
 qfs = { path = "../crates/qfs" }
 
+[dev-dependencies]
+# The cookbook verified-true ratchet lives here rather than in the binary crate: it needs BOTH the
+# grammar (to read each recipe) and `qfs`'s compiled describe registry (to check the columns it
+# names), and the binary's own dep guard (`crates/cmd/tests/dep_direction.rs`) pins it off the lower
+# spine — a `qfs -> qfs-parser` edge, even dev-only, is a spine violation. xtask already links `qfs`
+# for gen-docs and ships in nothing, so it is the anti-drift tooling's natural home.
+qfs-parser = { path = "../crates/parser" }
+qfs-core = { path = "../crates/core" }
+
 [lints]
 workspace = true
