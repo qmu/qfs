@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260816-210358
 ---
 
 # Nine `qfs` unit tests fail on a checkout where `XDG_CONFIG_HOME` is unset
