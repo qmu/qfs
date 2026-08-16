@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260816-182531
 ---
 
 # A post-decode refusal leaks the Rust debug struct instead of the prose sentence
