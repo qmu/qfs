@@ -1187,12 +1187,27 @@ Three things are ruled, and each rules out an alternative that looked equivalent
   refused **at declaration time**. Reusing the declared view is what settles paging without
   restating it: the view's cursor pagination and its `OF <type>` contract apply as written, so a
   match on page two resolves rather than reporting "not found".
-- **Time — COMMIT, in the confined applier, immediately before the effect leg; PREVIEW additionally
-  refuses a *malformed* reference with no I/O.** The collection is fetched **once per statement** and
-  matched **locally per row** — the compiled oracle's own shape, which is what makes equivalence
-  provable on shared fixtures rather than merely asserted. A name matching nothing, or matching more
-  than one row, is a structured refusal **before the effect leg fires**; the effect leg is never
-  issued.
+- **Time — COMMIT, in the confined applier, immediately before the effect leg; PREVIEW performs no
+  I/O and therefore resolves nothing and refuses nothing.** The collection is fetched **once per
+  statement** and matched **locally per row** — the compiled oracle's own shape, which is what makes
+  equivalence provable on shared fixtures rather than merely asserted. A name matching nothing, or
+  matching more than one row, is a structured refusal **before the effect leg fires**; the effect leg
+  is never issued, so no wire write ever carries a guessed id.
+
+  *(**Amended 2026-08-16, ticket `20260812141224`.** This clause used to promise that PREVIEW would
+  *additionally* refuse a **malformed** reference with no I/O. The implementation declined that
+  second clause and was right to: "malformed" presupposes a **shape rule** — a way to tell a
+  legal-but-unknown reference from an illegal one without asking the service — and the shipped
+  resolution matches against **data** instead (`WHERE name == row.channel OR id == row.channel`)
+  precisely so a generic engine never has to know that a Slack channel id looks like `C0…`. That is
+  what let the declared twin reproduce the compiled driver's behaviour without importing its
+  `C`/`G`/`D` prefix heuristic, and it leaves no malformed-versus-merely-unknown line to draw at
+  preview time. The same answer governs every other declared name resolution — drive's path→id,
+  mail's label→id — for the same reason: a shape heuristic is service knowledge, and a generic
+  engine declares and refuses rather than guessing. The property that IS true is pinned by
+  `preview_of_a_name_addressed_call_performs_no_io_at_all`
+  (`packages/qfs/crates/qfs/src/declared_driver.rs`): PREVIEW records **zero** wire requests for a
+  name-addressed CALL.)*
 
 Purity is preserved rather than traded away: the evaluator stays a pure function of its inputs, the
 applier performs the one fetch, and the resolved values are bound as **additional columns** before

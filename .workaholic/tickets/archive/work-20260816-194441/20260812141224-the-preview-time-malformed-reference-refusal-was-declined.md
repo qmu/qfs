@@ -1,5 +1,6 @@
 ---
 created_at: 2026-08-12T14:12:24+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -105,3 +106,46 @@ taken in the G9 ruling).
   the reason it was written, and the next author would re-propose the same check.
 - The same tension will recur for every declared driver that resolves a name (drive's path→id, mail's
   label→id). Whatever is ruled here should be phrased generally enough to answer those too.
+
+## Final Report
+
+Development completed as planned.
+
+### Open Decision resolved
+
+**Ruled: Option A — confirm the deviation.** The blueprint's §13.1 G9 timing clause was corrected to
+state what the binary does; no behavioural change ships.
+
+Reason, recorded so the check is not re-proposed blind: "malformed" presupposes a **shape rule** — a
+way to separate a legal-but-unknown reference from an illegal one without asking the service. The
+shipped resolution (`resolve_lookup`, `packages/qfs/crates/exec/src/declared.rs`) matches against
+**data** (`WHERE name == row.channel OR id == row.channel`), which is exactly what let the declared
+twin reproduce the compiled Slack driver without importing its `C`/`G`/`D` id-prefix heuristic. A
+generic engine that acquired that heuristic to satisfy the clause would be guessing at one service's
+id convention — the thing 「推測するな、宣言して拒否せよ」 forbids — so there is no
+malformed-versus-merely-unknown line to draw at preview time.
+
+Option B was rejected on its own enumeration: of the four checks the ticket lists as honestly
+generic, three (the binding exists, the lookup source is a declared view of this driver, the
+`row.<field>` is a declared CALL parameter) are declaration-time facts `map_body_lookups` already
+refuses at extraction, so implementing them at preview would duplicate an existing refusal at a
+later point. Only the empty/`Null` reference value is per-row, and surfacing that one alone would
+buy a partial preview-time refusal at the cost of re-opening "what does PREVIEW check" for every
+driver — a product-wide question §13.1's own *Deliberately not taken* note already routes to its own
+mission.
+
+### Discovered Insights
+
+- **Insight**: the truthful property was already pinned, and the test's own comment carried the
+  declined-check reasoning — it just had nowhere authoritative to point.
+  `preview_of_a_name_addressed_call_performs_no_io_at_all`
+  (`packages/qfs/crates/qfs/src/declared_driver.rs`) asserts PREVIEW records **zero** wire requests
+  for a name-addressed CALL and explicitly says the malformed distinction is not asserted, deferring
+  to "the ticket's Final Report" — a pointer into a queue artifact rather than into the design
+  document. The document/binary gap this ticket closed was therefore one of *direction*: the code
+  knew the ruling and the blueprint did not, so the two now cross-reference each other and a reader
+  arriving from either side lands on the same statement.
+- **Insight**: the same tension recurs for every declared name resolution, so the amendment is
+  phrased at the rule rather than at Slack. Drive's path→id and mail's label→id resolve the same
+  way and would each face the same "can preview tell malformed from unknown" question; the clause
+  now answers it once for the whole class, which is what the ticket's Considerations asked for.
