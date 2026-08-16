@@ -418,6 +418,135 @@ impl EvalError {
     }
 }
 
+/// Every plan-time refusal reads as a sentence (ticket `20260816183441`). The `Debug` form was the
+/// machine-facing message until 2026-08-16, and it reached operators as `OfAssertionFailed { ty:
+/// "(inline)", … }` — a dump, where every other error type in the workspace (`EngineError`,
+/// `LowerError`, `PlanError`, `CfsError`, `TypeError`, `HostScopeError`) already renders prose.
+/// The match is **exhaustive with no `_` arm** so a new variant cannot silently regress to one.
+impl std::fmt::Display for EvalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // The four delegating arms carry a structured inner error that renders itself.
+            EvalError::Resolve(e) => e.fmt(f),
+            EvalError::Type(e) => e.fmt(f),
+            EvalError::Fn(e) => e.fmt(f),
+            EvalError::HostScope(e) => e.fmt(f),
+            EvalError::UnroutedPath { path } => write!(
+                f,
+                "path `{path}` routes to no mounted driver, so no schema can be described for it"
+            ),
+            EvalError::SelectionNotLowered { path } => write!(
+                f,
+                "path `{path}` carries a selection segment (`@`) in a position this lowering does \
+                 not cover; address the row with an explicit `WHERE <key> == …` instead"
+            ),
+            EvalError::NonLiteralValues { detail } => write!(
+                f,
+                "`INSERT … VALUES` takes constants only, but a cell is {detail}; use \
+                 `INSERT … FROM <query>` for computed rows"
+            ),
+            EvalError::DriverWrite { detail } => {
+                write!(f, "the driver cannot lower this write: {detail}")
+            }
+            EvalError::WriteFilterUnsupported { path, detail } => write!(
+                f,
+                "the `WHERE` filter on `{path}` cannot be carried to the applier as complete \
+                 equality keys ({detail}); dropping part of it would widen the write, so this \
+                 refuses"
+            ),
+            EvalError::IrreversibleInTransaction { effect } => write!(
+                f,
+                "`{effect}` is irreversible and cannot run inside a `TRANSACTION` block, which \
+                 promises all-or-nothing rollback; lift it out of the block"
+            ),
+            EvalError::LambdaArity { expected, found } => write!(
+                f,
+                "this lambda declares {expected} parameter(s), but was applied to {found} \
+                 argument(s)"
+            ),
+            EvalError::NotAFunction { detail } => write!(
+                f,
+                "a function or lambda is required in function position, but {detail} was given"
+            ),
+            EvalError::UnknownTypeAnnotation { name, accepted } => write!(
+                f,
+                "unknown type annotation `{name}`; accepted: [{}]",
+                accepted.join(", ")
+            ),
+            EvalError::TransformNotExecutable { name } => write!(
+                f,
+                "transform '{name}' is not installed here: no `CREATE TRANSFORM` defines it"
+            ),
+            EvalError::TransformInputMissing { name, column } => write!(
+                f,
+                "transform '{name}' declares INPUT column '{column}', which the incoming relation \
+                 does not carry"
+            ),
+            EvalError::SwitchNotTerminal => write!(
+                f,
+                "`SWITCH` routes rows to effect arms, so it is only legal as the LAST stage of a \
+                 top-level query pipeline"
+            ),
+            EvalError::FollowOutsideDeclaredBody => write!(
+                f,
+                "`FOLLOW` is a declared-driver body stage and has no meaning in a general query"
+            ),
+            EvalError::PostOutsideDeclaredBody => write!(
+                f,
+                "`POST` is a declared-driver body stage and has no meaning in a general query"
+            ),
+            EvalError::SwitchShape { detail } => {
+                write!(f, "this `SWITCH` arm list is ill-shaped: {detail}")
+            }
+            EvalError::SwitchDiscriminantUnknown { column, available } => write!(
+                f,
+                "`SWITCH` names discriminant column '{column}', which this relation does not \
+                 carry; available: [{}]",
+                available.join(", ")
+            ),
+            EvalError::SwitchArmNotEffect { label } => write!(
+                f,
+                "`SWITCH` arm '{label}' is not effect-terminal; every arm must end in an \
+                 `INSERT`/`UPSERT INTO` write or an effect `CALL`"
+            ),
+            EvalError::SwitchArmOpUnsupported { label, op } => write!(
+                f,
+                "`SWITCH` arm '{label}' uses `{op}`, which an arm continuation does not route"
+            ),
+            EvalError::OfTypeUnresolved { name } => write!(
+                f,
+                "`of` names declared type '{name}', which no `/type/{name}` catalog row defines"
+            ),
+            EvalError::OfAssertionFailed {
+                ty,
+                missing,
+                unexpected,
+                mismatched,
+            } => {
+                write!(f, "`of {ty}` does not match this relation")?;
+                if !missing.is_empty() {
+                    write!(f, "; missing: [{}]", missing.join(", "))?;
+                }
+                if !unexpected.is_empty() {
+                    write!(f, "; undeclared: [{}]", unexpected.join(", "))?;
+                }
+                if !mismatched.is_empty() {
+                    let pairs: Vec<String> = mismatched
+                        .iter()
+                        .map(|(column, expected, actual)| {
+                            format!("{column}: asserted {expected}, is {actual}")
+                        })
+                        .collect();
+                    write!(f, "; mismatched: [{}]", pairs.join("; "))?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for EvalError {}
+
 impl From<ResolveError> for EvalError {
     fn from(e: ResolveError) -> Self {
         EvalError::Resolve(e)

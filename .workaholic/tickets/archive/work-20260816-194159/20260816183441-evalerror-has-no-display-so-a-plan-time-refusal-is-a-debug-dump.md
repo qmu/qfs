@@ -1,11 +1,13 @@
 ---
 created_at: 2026-08-16T18:34:41+00:00
+status: done
 author: a@qmu.jp
 assignees: []
 depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260816-194159
 ---
 
 # `EvalError` has no `Display`, so a plan-time refusal reaches the operator as a Debug dump
@@ -133,3 +135,72 @@ and switch `map_eval_error` to it, keeping `code()` untouched.
 - Two branches have now recorded a concern pointing at this rendering — `work-20260816-174228` and
   `work-20260816-181224`. It is the third sighting, which is the argument for ruling it rather than
   re-observing it.
+
+## Final Report
+
+Development completed as planned: option **(a)**, `EvalError` now `Display`s.
+
+### The Open Decision, resolved — (a) write the `Display`
+
+The ticket called this the developer's to settle because "the tree contains both the convention and
+its contradiction". It does, but not symmetrically, and the asymmetry is readable from the tree
+without a ruling:
+
+- **The convention is six types wide; the contradiction is one comment deep.** `EngineError`,
+  `LowerError`, `PlanError`, `CfsError`, `TypeError` and `HostScopeError` all hand-write a
+  `Display`. Against that stands one comment in `map_eval_error` — which already special-cases the
+  `HostScope` arm *out* of `{:?}` precisely to get prose, so the seam itself had already conceded
+  the point for the one arm that could.
+- **The project shipped the criterion two tickets ago.** `20260816175149` landed a project-wide
+  acceptance item ("no error message reaching an operator contains Rust `Debug` struct syntax") and
+  pinned it at the codec seam; this ticket exists because that criterion was written wider than its
+  scope. Choosing (b) would have meant documenting the dump the project had just decided against.
+- **Both properties the comment defends survive.** *Secret-free*: `Display` renders the same fields
+  the `Debug` did, and no arm holds a credential. *Owned*: the risk (a) adds is a second rendering
+  that can drift from the fields, and that is exactly what the new pin removes — the `Display` match
+  is exhaustive with no `_` arm, so a new variant fails to compile until it renders, and the
+  `{other:?}` fallback is deleted so there is nothing to silently regress into.
+- **It is cheap to reverse.** `code()` and the `ErrorKind` mapping are untouched, so anything
+  branching on the envelope is unaffected either way; if the developer prefers (b), reverting is one
+  commit and no consumer has to change.
+
+The two delegating arms that had no inner `Display` (`Resolve`, `Fn`) got one each — rendering
+`EvalError::Resolve` as a sentence is not possible otherwise, so it is inside this ticket's scope,
+not beyond it.
+
+### Quality Gate
+
+**Criteria.** Every arm renders as a sentence and `map_eval_error` has no `{:?}` fallback; `code()`
+and the `ErrorKind` mapping are byte-identical; the two measured commands answer in prose at their
+original codes and exit codes.
+
+**Verification, re-run against the built binary (not paraphrased):**
+
+```
+$ qfs run "/local/tmp/qfsdemo |> of (nope text)"
+{"error":{"code":"of_assertion_failed","kind":"usage","message":"`of (inline)` does not match this relation; missing: [nope]; undeclared: [name, path, size, modified, is_dir, mode, content]"}}
+EXIT=2
+
+$ qfs run "/local/tmp/qfsdemo/t.csv |> decode csv |> transform nosuch"
+{"error":{"code":"transform_not_executable","kind":"internal","message":"transform 'nosuch' is not installed here: no `CREATE TRANSFORM` defines it"}}
+EXIT=5
+```
+
+Same codes, same exit codes, prose instead of a struct dump.
+
+**Gate.** `cargo test --workspace` (2723 passed, 0 failed), `cargo clippy --workspace --all-targets
+-- -D warnings`, `cargo fmt --all --check`, `gen-docs --check`, `gen-skills --check`,
+`check-migrations` — all exit 0.
+
+### Discovered Insights
+
+- **Insight**: Nine `qfs`-crate unit tests fail on a machine where `XDG_CONFIG_HOME` is unset —
+  `store.rs`'s `forbid_shared_home_fallback_in_tests` guard panics with "wrap the test in
+  `testenv::HomeGuard`" — and pass when it is set.
+  **Context**: The suite is documented as hermetic, but those nine inherit hermeticity from the
+  ambient environment rather than from a guard, so a fresh container reads them as a red gate
+  unrelated to whatever it is driving. Minted as `20260816205752`.
+- **Insight**: `map_eval_error` had already carved the `HostScope` arm out of the `{:?}` rendering
+  to make one canonical pointer readable. A convention with a hand-written exception for the case
+  that mattered most is a convention already deciding against itself — worth reading as evidence
+  when a ticket calls a fork evidence-free.

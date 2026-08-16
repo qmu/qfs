@@ -194,6 +194,72 @@ impl ResolveError {
     }
 }
 
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolveError::UnknownDriver { driver } => {
+                write!(f, "no driver is mounted for namespace `{driver}`")
+            }
+            ResolveError::UnknownProcedure {
+                driver,
+                name,
+                available,
+            } => write!(
+                f,
+                "driver `{driver}` declares no procedure '{name}'; available: [{}]",
+                available.join(", ")
+            ),
+            ResolveError::ArityMismatch {
+                qualified,
+                expected,
+                found,
+            } => write!(
+                f,
+                "`CALL {qualified}` declares {expected} parameter(s), but {found} argument(s) \
+                 were supplied"
+            ),
+            ResolveError::UnknownArg {
+                qualified,
+                arg,
+                params,
+            } => write!(
+                f,
+                "`CALL {qualified}` declares no argument '{arg}'; declared: [{}]",
+                params.join(", ")
+            ),
+            ResolveError::AliasNotProvided { name, driver } => write!(
+                f,
+                "alias `{name}` is not shipped by the receiver driver `{driver}`"
+            ),
+            ResolveError::AmbiguousAlias { name, candidates } => write!(
+                f,
+                "alias `{name}` resolves on more than one in-scope driver ([{}]); \
+                 spell it as a qualified `CALL`",
+                candidates.join(", ")
+            ),
+            ResolveError::UnknownReceiver { name } => write!(
+                f,
+                "alias `{name}` has no receiver: the pipeline's source is not a single \
+                 resolved driver path"
+            ),
+            ResolveError::UnknownBinding { name } => {
+                write!(f, "`FROM {name}` names no `LET` binding in scope")
+            }
+            ResolveError::UnsupportedVerb {
+                path,
+                verb,
+                supported,
+            } => write!(
+                f,
+                "node `{path}` does not support `{verb}`; supported: [{}]",
+                supported.join(", ")
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ResolveError {}
+
 /// Map a parser [`EffectVerb`] to its canonical [`WriteVerb`] (t09 carry-over O2).
 ///
 /// This is the **single source of truth** for the AST-verb translation, an

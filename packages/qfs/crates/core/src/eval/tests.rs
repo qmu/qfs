@@ -1654,3 +1654,135 @@ fn of_after_a_codec_is_late_bound_but_still_resolves_its_type_name() {
     let err = Evaluator::new(&seeded_registry()).eval(&stmt).unwrap_err();
     assert_eq!(err.code(), "of_assertion_failed");
 }
+
+/// Ticket `20260816183441`. Every plan-time refusal reaches an operator through
+/// `map_eval_error`, which rendered it with `{:?}` until 2026-08-16 — so `|> of (nope text)`
+/// answered `OfAssertionFailed { ty: "(inline)", … }`, a Rust dump, while the engine and the
+/// planner answered sentences. The ruling was to write the `Display`, and this is its pin: every
+/// arm — constructed here so a new variant fails to compile until it is listed — renders prose,
+/// and none of them carries Rust `Debug` struct syntax. Same negative assertion `20260816175149`
+/// added at the codec seam.
+#[test]
+fn every_eval_error_arm_renders_as_a_sentence() {
+    let arms: Vec<EvalError> = vec![
+        EvalError::Resolve(ResolveError::UnknownProcedure {
+            driver: "drive".into(),
+            name: "nope".into(),
+            available: vec!["copy".into(), "trash".into()],
+        }),
+        EvalError::Type(qfs_types::TypeError::UnknownColumn {
+            name: "nope".into(),
+            available: vec!["id".into()],
+        }),
+        EvalError::Fn(FnError::UnknownFunction {
+            name: "nosuch".into(),
+        }),
+        EvalError::UnroutedPath {
+            path: "/nowhere/x".into(),
+        },
+        EvalError::HostScope(crate::registry::HostScopeError::MissingHost {
+            path: "/hosts".into(),
+        }),
+        EvalError::SelectionNotLowered {
+            path: "/x/@A".into(),
+        },
+        EvalError::NonLiteralValues {
+            detail: "a function call".into(),
+        },
+        EvalError::DriverWrite {
+            detail: "commits need a message".into(),
+        },
+        EvalError::WriteFilterUnsupported {
+            path: "/sql/db/users".into(),
+            detail: "an OR branch".into(),
+        },
+        EvalError::IrreversibleInTransaction {
+            effect: "REMOVE".into(),
+        },
+        EvalError::LambdaArity {
+            expected: 1,
+            found: 2,
+        },
+        EvalError::NotAFunction {
+            detail: "an int literal".into(),
+        },
+        EvalError::UnknownTypeAnnotation {
+            name: "Str".into(),
+            accepted: vec!["text", "int"],
+        },
+        EvalError::TransformNotExecutable {
+            name: "nosuch".into(),
+        },
+        EvalError::TransformInputMissing {
+            name: "summarize".into(),
+            column: "body".into(),
+        },
+        EvalError::SwitchNotTerminal,
+        EvalError::FollowOutsideDeclaredBody,
+        EvalError::PostOutsideDeclaredBody,
+        EvalError::SwitchShape {
+            detail: "no `else` arm".into(),
+        },
+        EvalError::SwitchDiscriminantUnknown {
+            column: "kind".into(),
+            available: vec!["id".into(), "name".into()],
+        },
+        EvalError::SwitchArmNotEffect {
+            label: "else".into(),
+        },
+        EvalError::SwitchArmOpUnsupported {
+            label: "a".into(),
+            op: "JOIN".into(),
+        },
+        EvalError::OfTypeUnresolved {
+            name: "article".into(),
+        },
+        EvalError::OfAssertionFailed {
+            ty: "(inline)".into(),
+            missing: vec!["nope".into()],
+            unexpected: vec!["name".into(), "path".into()],
+            mismatched: vec![("id".into(), "int".into(), "text".into())],
+        },
+    ];
+
+    // The arm list is total by construction: `code()` is the one exhaustive match over the enum,
+    // so a variant missing here shows up as a code no arm above produces.
+    let rendered_codes: std::collections::BTreeSet<&str> =
+        arms.iter().map(EvalError::code).collect();
+    assert_eq!(
+        rendered_codes.len(),
+        arms.len(),
+        "each arm is listed once: {rendered_codes:?}"
+    );
+
+    for err in &arms {
+        let message = err.to_string();
+        assert!(
+            !message.contains(" { "),
+            "no operator-facing message carries Rust Debug struct syntax: {message:?}"
+        );
+        assert!(
+            !message.is_empty() && message.chars().any(char::is_whitespace),
+            "every arm renders a sentence, not a bare token: {message:?}"
+        );
+    }
+
+    // The two commands the ticket measured, at the evaluator boundary they refuse in.
+    let of = EvalError::OfAssertionFailed {
+        ty: "(inline)".into(),
+        missing: vec!["nope".into()],
+        unexpected: vec!["name".into()],
+        mismatched: vec![],
+    };
+    assert_eq!(
+        of.to_string(),
+        "`of (inline)` does not match this relation; missing: [nope]; undeclared: [name]"
+    );
+    assert_eq!(
+        EvalError::TransformNotExecutable {
+            name: "nosuch".into()
+        }
+        .to_string(),
+        "transform 'nosuch' is not installed here: no `CREATE TRANSFORM` defines it"
+    );
+}
