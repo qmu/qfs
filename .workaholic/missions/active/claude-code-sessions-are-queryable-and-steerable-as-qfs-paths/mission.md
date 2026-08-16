@@ -426,3 +426,4 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-08-06 — run recorded (+0.4h) — drive-20260806-213952
 - 2026-08-16 — ticket archived — 20260805113000-capture-the-teams-inbox-contract-in-a-container.md
 - 2026-08-16 — ticket archived — 20260805113100-append-instruction-writes-the-lead-teams-inbox.md
+- 2026-08-16 — ticket archived — 20260805113200-steering-live-fire-reaches-a-real-session.md
