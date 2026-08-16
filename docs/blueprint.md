@@ -589,13 +589,22 @@ resolves the request's principal, resolves the endpoint's bound policy **by its 
 fail-closed (absent or dangling ⇒ default-deny), and adjudicates every scan target the bound
 statement would read as a `SELECT` under that actor — the `FOR`, `AT` and `WHERE` axes all bite on
 reads — **before** any driver runs. A read the policy does not grant is a `403` structured refusal,
-never an empty relation at `200`. Still open on this axis: (a) the gate runs *ahead of* the scan, so
-adjudication is **whole-path** — `ReadDriver::scan` does carry a `RequestContext` (the M2 principal
-seam), but no driver consults it to narrow rows at the source, so there is no row-level who-axis
-*inside* a driver; (b) the statement bridge's read leg (`POST /api/run` with `mode: read`) is a
-second serve face that resolves no policy at all and still hardcodes an anonymous principal, so one
-policy does not yet govern *every* face reached through the serve seam; (c) role-derived grants,
-above. **Open** — the finer policy semantics: explicit-deny precedence, the evaluation point when a
+never an empty relation at `200`.
+
+**The statement bridge's read leg is gated the same way** *(2026-08-16, ticket 20260725110500)*:
+`POST /api/run` with `mode: read` was the second serve face, and the more permissive one — it parsed
+a **caller-supplied** statement and ran it under a hardcoded anonymous context with no policy
+resolution at all, so a caller an endpoint's policy refused could read the same path through the
+bridge. It now resolves its own named `/server/policies` row — **`bridge`**, deliberately not the
+coarse `api` row that already gates MCP, the dashboard and reconcile together — and adjudicates the
+statement's scan leaves through the **same** `scan_targets` → `evaluate_reads_with_context`
+procedure the endpoint face uses, under the request's resolved principal. Fail-closed in every
+degraded direction: an absent row, an unreadable state lock, or no live `/server` seam all deny. The
+loopback-only default bind stays a deployment posture and is not counted as mitigation. Still open on
+this axis: (a) the gate runs *ahead of* the scan, so adjudication is **whole-path** —
+`ReadDriver::scan` does carry a `RequestContext` (the M2 principal seam), but no driver consults it
+to narrow rows at the source, so there is no row-level who-axis *inside* a driver; (b) role-derived
+grants, above. **Open** — the finer policy semantics: explicit-deny precedence, the evaluation point when a
 trail crosses a derived reverse edge, and the permissions of the management paths themselves.
 
 **Policy grants are path-aware** *(implemented 2026-07-04, ticket 20260704110923)*:
