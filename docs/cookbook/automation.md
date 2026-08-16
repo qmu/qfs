@@ -369,7 +369,19 @@ create endpoint recent
 create policy api
   ALLOW select
   DENY INSERT, update, remove, call
+
+create policy bridge
+  ALLOW select on 'server'
 ```
+
+::: warning `qfs plan` / `qfs apply` need the `bridge` policy
+Both commands read the daemon's live `/server` bindings through the statement bridge, and that read
+is policy-gated like any other: it is adjudicated under the **`bridge`** row above, and a deployment
+that declares none reads nothing (fail-closed — no declared grant, no read, whatever the daemon is
+bound to). Without it, `qfs plan` refuses with `policy_denied` naming the row instead of reporting a
+plan. Grant only what reconcile needs — `select on 'server'` — and keep it distinct from the `api`
+row, which grants far more.
+:::
 
 `qfs plan` shows the add/change/destroy diff against what is live and writes nothing. Its exit code
 distinguishes an empty plan from a pending one — `0` = no changes, `2` = changes pending, `1` =

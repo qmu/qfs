@@ -1051,7 +1051,13 @@ mod tests {
                 }),
         );
         let fallback: qfs_http::Fallback = Arc::new(move |req: &qfs_http::HttpRequest| {
-            crate::dashboard::serve_dashboard(mcp_engine.as_ref(), req)
+            // No session store in the test daemon, so every request is the anonymous principal —
+            // the same fail-closed default `qfs serve` applies when no resolver is wired.
+            crate::dashboard::serve_dashboard(
+                mcp_engine.as_ref(),
+                req,
+                &qfs_core::RequestContext::anonymous(),
+            )
         });
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -1109,6 +1115,18 @@ mod tests {
                 // the policy engine deliberately does NOT let a broad `ALL` grant the
                 // irreversible REMOVE, so the bridge grant names it explicitly.
                 allow: vec!["ALLOW SELECT,INSERT,UPSERT,UPDATE,REMOVE,CALL ON server".to_string()],
+            },
+        );
+        // Ticket 20260725110500: the bridge's READ leg is adjudicated under its OWN named row, so
+        // a daemon whose config declares none serves no bridge read at all. Reconcile is the
+        // bridge's third client, so a reconcilable deployment declares this row — exactly what a
+        // real `config.qfs` must now carry, seeded here for the same reason.
+        s.policies.insert(
+            "bridge".to_string(),
+            PolicyDef {
+                name: "bridge".to_string(),
+                handler: String::new(),
+                allow: vec!["ALLOW SELECT ON server".to_string()],
             },
         );
         s.endpoints.insert(

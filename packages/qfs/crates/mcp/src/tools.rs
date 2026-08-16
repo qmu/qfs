@@ -141,11 +141,22 @@ pub trait McpEngine: Send + Sync {
     /// as a read). Default impl refuses — an engine that wires no read executor (stubs, the
     /// protocol-only binding) stays preview-only.
     ///
+    /// `ctx` is the REQUEST's resolved principal (the M2 "who am I" seam), not a synthesized one:
+    /// an implementation gates the read under it and hands it to the read executor, so the same
+    /// statement decides differently for different callers. It was a hardcoded anonymous context
+    /// until ticket `20260725110500` — the bridge's read leg then ran ungated under an identity
+    /// nobody asked for.
+    ///
     /// # Errors
-    /// An [`EngineError`] on a parse / plan / scan failure, or `unsupported` when the engine
-    /// wires no read executor.
-    fn read_rows(&self, statement: &str) -> Result<Value, EngineError> {
-        let _ = statement;
+    /// An [`EngineError`] on a parse / plan / scan failure, `policy_denied` when the resolved
+    /// principal may not read a scanned path, or `unsupported` when the engine wires no read
+    /// executor.
+    fn read_rows(
+        &self,
+        statement: &str,
+        ctx: &qfs_core::RequestContext,
+    ) -> Result<Value, EngineError> {
+        let _ = (statement, ctx);
         Err(EngineError::new(
             "unsupported",
             "this engine serves preview only (no read executor is wired)",
