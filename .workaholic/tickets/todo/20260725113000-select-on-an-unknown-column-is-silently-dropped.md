@@ -9,6 +9,7 @@ commit_hash:
 category:
 depends_on:
 mission:
+claim: work-20260816-184354
 ---
 
 # `select` on an unknown column is silently dropped — the last stage that can mean nothing
