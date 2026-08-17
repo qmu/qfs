@@ -44,6 +44,13 @@ authoritative; this skill is the quick operating guide.
 
 1. **`qfs describe <path>`** — learn the node's archetype, columns, supported verbs, `CALL`
    procedures, and which filters push down. Pure: no creds, no network. **Always read this first.**
+   The report also carries `children` — the node's statically known child locations, each with its
+   full `path` — so a surface whose children are *declared* rather than delivered as rows (a
+   declared driver's view tree) is walkable from its mount root down with describe alone. A child's
+   `param` names a segment you bind (`{room}` wants a room id); `node` says it is addressable in its
+   own right rather than a segment to walk through. `row_contract` names the declared row type the
+   columns come from, and `columns: []` with `row_contract: null` means the node declares no row
+   shape — a stated answer, not a missing one.
 2. **Write a statement** against what describe told you.
 3. **`qfs run '<statement>'`** — **previews by default**: prints the effect-plan (paths, affected
    counts, and an `irreversible` flag) without touching anything.

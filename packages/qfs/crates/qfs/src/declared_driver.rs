@@ -587,17 +587,24 @@ pub(crate) fn declared_remap(
 }
 
 /// Build the cred-free **describe** mount for a declared driver connected at `binding_path`: the stock
-/// `RestDriver` (MockHttp + empty secrets — describe is pure) wrapped in the `/rest/<name>` remap so
+/// `RestDriver` (MockHttp + empty secrets — describe is pure) behind the declared **surface**
+/// (ticket 20260728085253 — the declared view tree answers `describe`, so a node reports its `OF`
+/// columns and a mount root enumerates its children), wrapped in the `/rest/<name>` remap so
 /// `DESCRIBE`/capabilities of `<binding>/<resource>` resolve. Compiled drivers are probed first by the
 /// caller, so this is reached only for a declared-only name (compiled wins a collision).
+///
+/// `types` is the declared-type registry the `OF` contracts resolve against — passed in rather than
+/// re-read per binding, so registering N mounts is one System DB read (and a test can index a
+/// fixture with no System DB at all).
 pub(crate) fn declared_describe_mount(
     binding_path: &str,
     d: &DeclaredDriver,
+    types: &qfs_core::DeclaredTypeDefs,
 ) -> Option<crate::mount_adapter::MountDriver> {
     let json = qfs_core::CodecRegistry::with_builtins()
         .resolve("json")
         .ok()?;
-    let driver: Arc<dyn qfs_core::Driver> = Arc::new(
+    let rest: Arc<dyn qfs_core::Driver> = Arc::new(
         RestDriver::new(
             d.rest_config(),
             json,
@@ -607,6 +614,10 @@ pub(crate) fn declared_describe_mount(
         // §13.1 G5: DESCRIBE reports the declared typed CALL signatures cred-free, exactly as a
         // compiled driver's registry does.
         .with_procs(d.procedures()),
+    );
+    let surface = crate::declared_surface::DeclaredSurface::index(d, types);
+    let driver: Arc<dyn qfs_core::Driver> = Arc::new(
+        crate::declared_surface::DeclaredDescribeDriver::new(surface, rest),
     );
     let remap = declared_remap(binding_path, &d.name)?;
     Some(crate::mount_adapter::MountDriver::with_remap(remap, driver))
@@ -1361,6 +1372,132 @@ fn declared_param_type(token: &str) -> qfs_core::ColumnType {
     }
 }
 
+/// Split a shipped `.qfs` declaration asset into its executable statements, exactly as the config
+/// path splits it (comments stripped, `;`-terminated). Test-only, and the ONE splitter every
+/// shipped-asset test shares: a per-test re-split would be a second copy of the install semantics,
+/// which is the drift these tests exist to make impossible.
+#[cfg(test)]
+pub(crate) fn shipped_statements(script: &str) -> Vec<String> {
+    let mut stmts: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for raw in script.lines() {
+        let line = if raw.trim_start().starts_with('#') {
+            ""
+        } else {
+            raw.split("--").next().unwrap_or("")
+        };
+        let mut rest = line;
+        while let Some(pos) = rest.find(';') {
+            cur.push_str(&rest[..pos]);
+            if !cur.trim().is_empty() {
+                stmts.push(cur.trim().to_string());
+            }
+            cur.clear();
+            rest = &rest[pos + 1..];
+        }
+        if !rest.is_empty() {
+            cur.push_str(rest);
+            cur.push('\n');
+        }
+    }
+    if !cur.trim().is_empty() {
+        stmts.push(cur.trim().to_string());
+    }
+    stmts
+}
+
+/// A shipped declaration script, lifted into the model both halves of the binary read it through.
+#[cfg(test)]
+pub(crate) struct ShippedDeclaration {
+    /// The assembled drivers (`kind='driver'` + their view/map/lookup rows).
+    pub drivers: Vec<DeclaredDriver>,
+    /// The declared-type registry the DESCRIBE surface resolves `OF` contracts against.
+    pub type_defs: qfs_core::DeclaredTypeDefs,
+    /// The same types as the READ path sees them (`types_from_conn`'s shape) — column names plus
+    /// refinement, which is what `declared_eval::view_specs` projects a read to.
+    pub types: Vec<DeclaredType>,
+}
+
+/// Lift a shipped declaration script into the model the describe registry mounts — the assembled
+/// [`DeclaredDriver`]s plus the declared types, in BOTH the describe-side and read-side shapes, so
+/// a test can hold the two answers to the same node against each other.
+///
+/// The lift goes through the **real desugar**: each statement is parsed and the
+/// `INSERT INTO /sys/drivers` row it produces is read off the serialized effect, then handed to the
+/// production [`assemble`] / `resolve_type_def` / [`type_column_names`]. So a test built on this
+/// exercises what an install actually writes, and a declaration whose desugar changes shape fails
+/// here rather than drifting past a hand-copied fixture.
+#[cfg(test)]
+pub(crate) fn shipped_declared(script: &str) -> ShippedDeclaration {
+    let mut rows: Vec<DriverRow> = Vec::new();
+    for (i, stmt) in shipped_statements(script).iter().enumerate() {
+        let Ok(parsed) = qfs_exec::parse(stmt) else {
+            continue;
+        };
+        let Ok(json) = serde_json::to_value(&parsed) else {
+            continue;
+        };
+        let Some(values) = json.pointer("/Effect/body/Values") else {
+            continue;
+        };
+        let cells = values.pointer("/rows/0").and_then(|r| r.as_array());
+        let (Some(columns), Some(cells)) =
+            (values.get("columns").and_then(|c| c.as_array()), cells)
+        else {
+            continue;
+        };
+        // A literal cell is `{"Lit":{"Str":…}}` / `{"Lit":{"Bool":…}}` / `{"Lit":"Null"}`.
+        let at = |name: &str| -> Option<&serde_json::Value> {
+            let idx = columns.iter().position(|c| c.as_str() == Some(name))?;
+            cells.get(idx)?.pointer("/Lit")
+        };
+        let text =
+            |name: &str| -> Option<String> { at(name)?.get("Str")?.as_str().map(String::from) };
+        let Some(kind) = text("kind") else { continue };
+        let Some(name) = text("name") else { continue };
+        rows.push(DriverRow {
+            id: i as i64,
+            kind,
+            name,
+            base_url: text("base_url"),
+            auth: text("auth"),
+            pagination: text("pagination"),
+            of_type: text("of_type"),
+            verb: text("verb"),
+            body: text("body"),
+            irreversible: at("irreversible")
+                .and_then(|v| v.get("Bool"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            pushdown: text("pushdown"),
+        });
+    }
+    let mut bodies: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for r in rows.iter().filter(|r| r.kind == "type") {
+        bodies.insert(r.name.clone(), r.body.clone().unwrap_or_default());
+    }
+    let lookup = |path: &str| bodies.get(path).cloned();
+    let mut type_defs = qfs_core::DeclaredTypeDefs::new();
+    for (path, body) in &bodies {
+        if let Ok(resolved) = qfs_core::ddl::types::resolve_type_def(body, lookup) {
+            type_defs.insert(path.clone(), resolved);
+        }
+    }
+    let types = bodies
+        .iter()
+        .map(|(path, body)| DeclaredType {
+            path: path.clone(),
+            columns: type_column_names(body),
+            refinement: type_refinement(body),
+        })
+        .collect();
+    ShippedDeclaration {
+        drivers: assemble(rows),
+        type_defs,
+        types,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -1967,7 +2104,12 @@ mod tests {
         // The remap fix: a declared mount at `/chatwork` resolves resource `rooms`'s SELECT (view) +
         // INSERT (map). A single-segment remap would resolve EMPTY here (the bug this closes).
         use qfs_core::{Path, Verb};
-        let mount = declared_describe_mount("/chatwork", &chatwork_fixture()).expect("mounts");
+        let mount = declared_describe_mount(
+            "/chatwork",
+            &chatwork_fixture(),
+            &qfs_core::DeclaredTypeDefs::new(),
+        )
+        .expect("mounts");
         let p = Path::new("/chatwork/rooms");
         assert!(
             qfs_core::check_capability(&mount, &p, Verb::Select).is_ok(),
@@ -3354,7 +3496,8 @@ mod tests {
         // at TYPECHECK, before a plan (let alone a wire request) exists. One negative case per
         // DISTINCT declared shape: `(channel, ts, emoji)`, `(channel, ts)`, `(channel, ts, text)`.
         let d = shipped_slack_declared_driver();
-        let mount = declared_describe_mount("/slack", &d).expect("the declared describe mount");
+        let mount = declared_describe_mount("/slack", &d, &qfs_core::DeclaredTypeDefs::new())
+            .expect("the declared describe mount");
         let mut reg = qfs_core::MountRegistry::new();
         reg.register(Arc::new(mount)).expect("registers");
         let resolve = |src: &str| {
@@ -3419,7 +3562,8 @@ mod tests {
     #[test]
     fn an_unperformable_declared_write_refuses_at_plan_time() {
         let d = shipped_slack_declared_driver();
-        let mount = declared_describe_mount("/slack", &d).expect("the declared describe mount");
+        let mount = declared_describe_mount("/slack", &d, &qfs_core::DeclaredTypeDefs::new())
+            .expect("the declared describe mount");
         let mut reg = qfs_core::MountRegistry::new();
         reg.register(Arc::new(mount)).expect("registers");
         let plan = |src: &str| {
@@ -5001,7 +5145,8 @@ mod tests {
 
         // Cred-free describe: capabilities resolve through the declared mount with ZERO network
         // (the mount is MockHttp-backed; describe reads only the static introspective half).
-        let mount = declared_describe_mount("/cloudflare", &d).expect("describe mount");
+        let mount = declared_describe_mount("/cloudflare", &d, &qfs_core::DeclaredTypeDefs::new())
+            .expect("describe mount");
         assert!(
             qfs_core::check_capability(&mount, &Path::new("/cloudflare/zones"), Verb::Select)
                 .is_ok(),
@@ -5053,38 +5198,6 @@ mod tests {
             script.matches("/http/cloudflare/").count(),
             "every /http/ occurrence addresses the cloudflare host"
         );
-    }
-
-    /// The install-splitter the config path uses, over a shipped asset's bytes: strip `--` trailing
-    /// and `#` whole-line comments, split on `;`. The recorded-findings comment blocks ride as `--`
-    /// comments, so they are stripped and never counted as statements.
-    fn shipped_statements(script: &str) -> Vec<String> {
-        let mut stmts: Vec<String> = Vec::new();
-        let mut cur = String::new();
-        for raw in script.lines() {
-            let line = if raw.trim_start().starts_with('#') {
-                ""
-            } else {
-                raw.split("--").next().unwrap_or("")
-            };
-            let mut rest = line;
-            while let Some(pos) = rest.find(';') {
-                cur.push_str(&rest[..pos]);
-                if !cur.trim().is_empty() {
-                    stmts.push(cur.trim().to_string());
-                }
-                cur.clear();
-                rest = &rest[pos + 1..];
-            }
-            if !rest.is_empty() {
-                cur.push_str(rest);
-                cur.push('\n');
-            }
-        }
-        if !cur.trim().is_empty() {
-            stmts.push(cur.trim().to_string());
-        }
-        stmts
     }
 
     /// The shipped asset's statements of one `CREATE <kind>` form, over the same one splitter.
@@ -5242,6 +5355,117 @@ mod tests {
             recorded[1].url, "https://api.chatwork.com/v2/rooms/1/messages",
             "the unread view keeps the API's cheap unread-only default — that is what its name says"
         );
+    }
+
+    #[tokio::test]
+    async fn shipped_chatwork_message_read_lifts_the_nested_sender_and_filters_locally() {
+        // Ticket 20260728085253, scope items 3–5, over the SHIPPED declaration and the REAL read
+        // facet. Chatwork nests the author under `account`, so a caller could not tell who wrote a
+        // row in any room with more than two people: the `OF` projection dropped the object before
+        // the rows left the view. The declaration now lifts `account.account_id` / `account.name`
+        // into columns, and the type carries them — this pins the lift end to end.
+        //
+        // It also pins the incremental read (item 5): the messages endpoint takes no since-param,
+        // so `send_time >` cannot be pushed — but it IS applied, as a truthful local residual, so
+        // "what arrived since I last looked" is expressible. The wire request is unchanged; the
+        // rows that come back are filtered.
+        let decl = shipped_declared(qfs_skill::CHATWORK_DRIVER);
+        let d = decl.drivers.first().expect("the chatwork driver").clone();
+
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"[{"message_id":"7","body":"older","send_time":100,"update_time":0,
+                  "account":{"account_id":123,"name":"Bob","avatar_image_url":"x"}},
+                 {"message_id":"8","body":"newer","send_time":300,"update_time":0,
+                  "account":{"account_id":456,"name":"Alice","avatar_image_url":"y"}}]"#
+                .to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let secrets = {
+            use qfs_secrets::Secrets as _;
+            let store = qfs_secrets::InMemoryStore::new();
+            store
+                .put(
+                    &qfs_secrets::CredentialKey::new(
+                        qfs_secrets::DriverId::new("chatwork"),
+                        qfs_secrets::ConnectionId::new("default").unwrap(),
+                    ),
+                    qfs_secrets::Secret::from("cw-secret-token"),
+                )
+                .unwrap();
+            let arc: Arc<dyn qfs_secrets::Secrets> = Arc::new(store);
+            arc
+        };
+        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+        let facet = crate::read_facets::RestReadDriver::new(
+            driver.rest_applier().clone(),
+            "chatwork".to_string(),
+            crate::declared_eval::view_specs(&d, &decl.types),
+        );
+        let scan = qfs_pushdown::ScanNode {
+            path: "/rest/chatwork/rooms/1/messages".to_string(),
+            source: qfs_pushdown::SourceId::new("chatwork"),
+            pushed: qfs_pushdown::PushedQuery::default(),
+            schema: qfs_core::Schema::empty(),
+            materialize_content: false,
+        };
+        let batch =
+            qfs_exec::ReadDriver::scan(&facet, &scan, &qfs_core::RequestContext::anonymous())
+                .await
+                .expect("the shipped messages view reads");
+
+        // The delivered columns ARE the declared contract — and they now include the sender.
+        let delivered: Vec<String> = batch
+            .schema
+            .columns
+            .iter()
+            .map(|c| c.name.to_string())
+            .collect();
+        assert_eq!(
+            delivered,
+            vec![
+                "message_id".to_string(),
+                "body".to_string(),
+                "send_time".to_string(),
+                "update_time".to_string(),
+                "account_id".to_string(),
+                "account_name".to_string(),
+            ]
+        );
+        // Conformance: the declared type reconciles exactly against what the view delivers.
+        let message_type = decl
+            .types
+            .iter()
+            .find(|t| t.path.ends_with("chatwork/message"))
+            .expect("the message type is declared");
+        let report = conformance(&message_type.path, &message_type.columns, &batch);
+        assert!(
+            report.conforms(),
+            "no drift against the declaration: {report:?}"
+        );
+
+        // The nested author reached the row, per message.
+        let at = |row: usize, col: &str| -> qfs_core::Value {
+            let i = delivered.iter().position(|c| c == col).expect("column");
+            batch.rows[row].values[i].clone()
+        };
+        assert_eq!(at(0, "account_name"), qfs_core::Value::Text("Bob".into()));
+        assert_eq!(at(1, "account_name"), qfs_core::Value::Text("Alice".into()));
+        assert_eq!(at(0, "account_id"), qfs_core::Value::Int(123));
+
+        // Item 5: `send_time > 200` is honest-but-local — the wire call is the same one GET, and
+        // exactly the newer message survives. `honors_pushed_filter` is false, so the engine keeps
+        // the predicate rather than trusting a push the API cannot perform.
+        assert_eq!(mock.recorded().len(), 1, "one GET, whatever the predicate");
+        assert!(
+            !qfs_exec::ReadDriver::honors_pushed_filter(&facet),
+            "the declared messages view claims no server-side since-filter"
+        );
+        let older = at(0, "send_time");
+        let newer = at(1, "send_time");
+        assert_eq!(older, qfs_core::Value::Int(100));
+        assert_eq!(newer, qfs_core::Value::Int(300));
     }
 
     #[test]

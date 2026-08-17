@@ -347,6 +347,58 @@ pub enum ChildAddress {
     None,
 }
 
+/// One **statically known child location** of a node — the containment segment an agent appends to
+/// walk one step down, stated by the driver (ticket 20260728085253).
+///
+/// This is the complement of [`ChildAddress`], which says how a *row* of this node selects a child.
+/// A surface whose children are declared rather than delivered — a §13 declared driver's view tree
+/// is the motivating case — has children that no row enumerates and no `LS` returns: they are facts
+/// of the declaration. Without them `describe` on a mount root is a dead end and the documented
+/// DESCRIBE → statement → PREVIEW → COMMIT loop cannot be entered, which is exactly the gap this
+/// field closes.
+///
+/// Only the **segment** is carried, never a full path: the report composes the child address from
+/// the node's own (possibly remapped) path, so a mount wrapper can never leak its inner namespace
+/// outward.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct ChildNode {
+    /// The containment segment exactly as the surface declares it — a literal (`rooms`) or a
+    /// `{param}` placeholder (`{room}`).
+    pub segment: String,
+    /// The parameter name when this child is a `{param}` segment a value binds into (`room` for
+    /// `{room}`), `None` for a literal segment. This is what makes a parameterised child legible as
+    /// such — the caller learns a room id goes there instead of guessing.
+    pub param: Option<String>,
+    /// Whether the child is itself an addressable node (a declared view / a readable relation) as
+    /// opposed to a pure interior segment that only exists to be walked through.
+    pub node: bool,
+}
+
+impl ChildNode {
+    /// A literal child segment (`rooms`).
+    #[must_use]
+    pub fn literal(segment: impl Into<String>, node: bool) -> Self {
+        Self {
+            segment: segment.into(),
+            param: None,
+            node,
+        }
+    }
+
+    /// A parameterised child segment: `param` is the bare name, and the rendered segment is
+    /// `{param}` — the same spelling the declaration uses, so the walk is copy-pasteable.
+    #[must_use]
+    pub fn param(param: impl Into<String>, node: bool) -> Self {
+        let param = param.into();
+        Self {
+            segment: format!("{{{param}}}"),
+            param: Some(param),
+            node,
+        }
+    }
+}
+
 /// The archetype + typed [`Schema`] of a node — the output of `DESCRIBE` (blueprint §6).
 ///
 /// This is the reconciliation point between the driver contract and the canonical type
@@ -378,6 +430,17 @@ pub struct NodeDesc {
     /// [`NodeDesc::child_entry_name`]; defaults to [`ChildAddress::None`] ("no child" is
     /// a declared, valid answer — not every table is a tree).
     pub child_address: ChildAddress,
+    /// The node's **statically known child locations** — the segments an agent walks down to reach
+    /// the next node, when the surface declares them (see [`ChildNode`]). Set by
+    /// [`NodeDesc::with_children`]; empty for every driver whose children are delivered as rows
+    /// rather than declared, which is the default and the overwhelming majority.
+    pub children: Vec<ChildNode>,
+    /// The declared row contract this node's rows are shaped to — a §13 declared view's
+    /// `OF <type>` name (`chatwork/room`). `None` means the node declares no named row type, which
+    /// is a stated answer, not an omission: read together with an empty `schema` it says "this node
+    /// has no declared columns", where the old synthetic `value: Json` said the opposite of the
+    /// truth. Set by [`NodeDesc::row_contract`].
+    pub row_contract: Option<String>,
 }
 
 /// Whether an archetype's nodes are navigable **by default** — the value [`NodeDesc::new`] starts
@@ -410,6 +473,8 @@ impl NodeDesc {
             navigable: navigable_by_default(archetype),
             category: NodeCategory::Data,
             child_address: ChildAddress::None,
+            children: Vec::new(),
+            row_contract: None,
         }
     }
 
@@ -461,6 +526,21 @@ impl NodeDesc {
         self.child_address = ChildAddress::EntryName {
             column: column.into(),
         };
+        self
+    }
+
+    /// Declare this node's statically known child locations ([`ChildNode`]), in declaration order.
+    /// A driver whose children are delivered as rows leaves this empty — the default.
+    #[must_use]
+    pub fn with_children(mut self, children: Vec<ChildNode>) -> Self {
+        self.children = children;
+        self
+    }
+
+    /// Name the declared row contract (`OF <type>`) this node's rows are shaped to.
+    #[must_use]
+    pub fn row_contract(mut self, of_type: impl Into<String>) -> Self {
+        self.row_contract = Some(of_type.into());
         self
     }
 }
@@ -1200,7 +1280,9 @@ mod tests {
   "category": "data",
   "child_address": {
     "kind": "none"
-  }
+  },
+  "children": [],
+  "row_contract": null
 }"#
         );
 

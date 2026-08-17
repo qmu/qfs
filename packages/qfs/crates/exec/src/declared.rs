@@ -545,6 +545,66 @@ fn is_param(seg: &str) -> bool {
     seg.len() >= 2 && seg.starts_with('{') && seg.ends_with('}')
 }
 
+/// The bare parameter name of a `{param}` template segment (`{room}` → `room`), or `None` for a
+/// literal segment. The public face of [`is_param`], so a caller walking a declared surface
+/// (`DESCRIBE`) classifies a segment with the SAME rule the read path binds it by, rather than
+/// re-deriving the brace convention.
+#[must_use]
+pub fn param_name(seg: &str) -> Option<&str> {
+    is_param(seg).then(|| &seg[1..seg.len() - 1])
+}
+
+/// The columns a declared view body delivers **when they are knowable without a wire read** —
+/// the describe-side twin of [`eval_view_body`]'s terminal stage, for a view that declared no
+/// `OF <type>` (ticket 20260728085253).
+///
+/// Only the two terminal shapes that are statically decided answer:
+///
+/// - a bytes `FOLLOW <field>` (no `INTO`) delivers exactly one [`FOLLOW_CONTENT_COL`] column of
+///   [`ColumnType::Bytes`] — the blob shorthand;
+/// - a terminal `SELECT` of named projections delivers exactly those names, typed
+///   [`ColumnType::Unknown`] (the body knows the names; only the wire knows the types).
+///
+/// Every other body (a bare `DECODE`, an `EXPAND` of an unknown envelope, a `FOLLOW … INTO`
+/// fan-out) returns `None`: its shape is whatever the service sent, which describe cannot honestly
+/// state. `None` means "no declared columns", and the caller reports an empty column list rather
+/// than inventing a synthetic one — the whole point of the ticket.
+#[must_use]
+pub fn body_delivered_columns(body_json: &str) -> Option<Vec<Column>> {
+    let Ok(Statement::Query(pipeline)) = serde_json::from_str::<Statement>(body_json) else {
+        return None;
+    };
+    match pipeline.ops.last()? {
+        PipeOp::Follow(fref) if fref.into.is_none() => Some(vec![Column::new(
+            FOLLOW_CONTENT_COL,
+            ColumnType::Bytes,
+            false,
+        )]),
+        PipeOp::Select(projections) => projections
+            .iter()
+            .map(|p| projection_name(p).map(|n| Column::new(n, ColumnType::Unknown, true)))
+            .collect(),
+        _ => None,
+    }
+}
+
+/// The output name of a projection: its explicit alias, else the bare column / struct-path it
+/// names. A `*` or a computed projection with no alias has no knowable name, so the whole `SELECT`
+/// is declined rather than half-reported.
+fn projection_name(p: &Projection) -> Option<String> {
+    let Projection::Expr { expr, alias } = p else {
+        return None;
+    };
+    if let Some(alias) = alias {
+        return Some(alias.clone());
+    }
+    match expr {
+        Expr::Col(name) => Some(name.clone()),
+        Expr::Path(segs) => segs.last().cloned(),
+        _ => None,
+    }
+}
+
 /// Evaluate a declared view body and return the shaped rows (blueprint §13 tier 2). The `fetch`
 /// closure performs the driver-specific wire read for a `/rest/<name>/<resource>` path (the caller's
 /// confined applier); everything else — rehydrate, confine, run the body's ops through the engine,

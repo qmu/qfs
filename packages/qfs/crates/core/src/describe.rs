@@ -27,11 +27,45 @@
 //! agent sees the FS/SQL-shaped verbs each archetype answers to.
 
 use qfs_driver::{
-    AliasFn, Archetype, Capabilities, ChildAddress, Driver, NodeDesc, Path, ProcSig,
+    AliasFn, Archetype, Capabilities, ChildAddress, ChildNode, Driver, NodeDesc, Path, ProcSig,
     PushdownProfile,
 };
 use qfs_types::Column;
 use serde::Serialize;
+
+/// One walkable child of a described node — a [`ChildNode`] resolved to its **full address** under
+/// the node's own path, so an agent walks the surface with `describe` alone (ticket 20260728085253).
+///
+/// The driver states the segment; the report composes the path. That split is what lets a remapped
+/// mount (`/cw` connected to the `chatwork` declaration, served internally at `/rest/chatwork/…`)
+/// advertise children in the namespace the caller actually addresses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct ChildLink {
+    /// The containment segment as declared — a literal (`rooms`) or a `{param}` placeholder.
+    pub segment: String,
+    /// The child's full address under the described node (`/chatwork/rooms`). A `{param}` segment
+    /// stays a placeholder: it is a template to bind, not a path that resolves as written.
+    pub path: String,
+    /// The parameter name when the segment binds a value at read time, `None` for a literal.
+    pub param: Option<String>,
+    /// Whether the child is an addressable node in its own right, or a pure interior to walk
+    /// through toward one.
+    pub node: bool,
+}
+
+impl ChildLink {
+    /// Compose a driver-stated [`ChildNode`] into a full child address under `parent`.
+    fn under(parent: &str, child: &ChildNode) -> Self {
+        let base = parent.trim_end_matches('/');
+        Self {
+            segment: child.segment.clone(),
+            path: format!("{base}/{}", child.segment),
+            param: child.param.clone(),
+            node: child.node,
+        }
+    }
+}
 
 /// The `DESCRIBE <path>` output contract (blueprint §6): everything an AI agent needs to write the
 /// next qfs statement against a node, in one owned, `Serialize`-only DTO.
@@ -67,6 +101,15 @@ pub struct DescribeReport {
     /// "no child". A generic consumer builds the drill link from this — never from a
     /// per-service guess.
     pub child_address: ChildAddress,
+    /// The node's **statically known child locations**, each resolved to its full address
+    /// ([`ChildLink`]). Empty for a driver whose children are rows rather than declarations; a §13
+    /// declared driver populates it so the surface is walkable from the mount root down using
+    /// `describe` output alone.
+    pub children: Vec<ChildLink>,
+    /// The declared row contract (`OF <type>`) this node's rows are shaped to, when the surface
+    /// declares one. `None` alongside an empty `columns` is the honest "this node declares no row
+    /// type" — never a synthetic stand-in column.
+    pub row_contract: Option<String>,
 }
 
 impl DescribeReport {
@@ -85,11 +128,18 @@ impl DescribeReport {
             archetype,
             schema,
             child_address,
+            children,
+            row_contract,
             ..
         } = driver.describe(path)?;
         let verbs = driver.capabilities(path);
+        let self_path = path.as_str().to_string();
+        let children = children
+            .iter()
+            .map(|c| ChildLink::under(&self_path, c))
+            .collect();
         Ok(Self {
-            path: path.as_str().to_string(),
+            path: self_path,
             archetype,
             native_verbs: node_native_verbs(archetype, &verbs),
             columns: schema.columns,
@@ -98,6 +148,8 @@ impl DescribeReport {
             aliases: driver.prelude().to_vec(),
             pushdown: PushdownSummary::from_profile(driver.pushdown()),
             child_address,
+            children,
+            row_contract,
         })
     }
 }
@@ -137,6 +189,10 @@ impl DescribeReport {
         }
         self.path = full_path.to_string();
         self.child_address = ChildAddress::None;
+        // A selected ROW is not a location in a declared surface tree: the node's declared child
+        // segments hang off the node, never off one of its rows, so re-parenting them under the row
+        // address would advertise paths that do not exist.
+        self.children = Vec::new();
         Ok(self)
     }
 }

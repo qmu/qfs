@@ -1,5 +1,6 @@
 ---
 created_at: 2026-07-28T08:52:53+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 type: enhancement
@@ -112,3 +113,76 @@ Filed from another repository via `/request`; sibling to the form-codec ticket f
 2026-07-27, which came out of the same session. Both are the same shape of gap — a declared
 driver is presented as a first-class way to add a service, but reading its surface and writing
 through it both fall short of what the compiled drivers do.
+
+## Final Report
+
+Development completed as planned for Scope 1–5. The "Related: a declared view cannot be removed"
+observation is **outside this ticket's Scope and Quality Gate** and is a grammar + catalog change of
+its own, so it was minted as ticket `20260817030500-a-declared-view-cannot-be-removed.md` and left
+in the queue rather than folded in here.
+
+What shipped:
+
+1. **Declared nodes report their `OF` columns.** A new `DeclaredSurface` (`declared_surface.rs`)
+   indexes each declared driver's view templates and resolves every `OF <type>` against the
+   declared-type registry; `DeclaredDescribeDriver` answers `describe` from that index and delegates
+   everything else (capabilities, procedures, pushdown, irreversibility, applier) to the inner stock
+   `RestDriver` untouched. A view with no `OF` reports the shape its body statically decides
+   (`qfs_exec::declared::body_delivered_columns`: a bytes `FOLLOW` delivers `content`, a terminal
+   `SELECT` delivers its named projections) and otherwise an EMPTY column list plus a null
+   `row_contract` — the honest "nothing declared here", never the old synthetic `value: Json`.
+2. **Mount roots and intermediate segments enumerate their children.** `NodeDesc` gained
+   `children: Vec<ChildNode>` (driver-stated segments) and `row_contract`; `DescribeReport` composes
+   each child into a full `ChildLink` address under the node's own path. A `{param}` segment is
+   legible as one (`param: "room"`), and `node` separates an addressable view from a pure interior.
+   The driver states only the segment, so a remapped mount can never leak its inner `/rest/<name>`
+   namespace outward.
+3. **The shipped Chatwork declaration carries the fields the endpoints deliver.** `chatwork/room`
+   keeps `sticky`, `icon_path`, `last_update_time`, and all six counts; `chatwork/message` keeps
+   `update_time` plus the sender, lifted out of Chatwork's nested `account` object by an `EXTEND`
+   stage in both message views. The cookbook's worked examples use them (selecting conversations by
+   unread count, attributing a message to its sender).
+4. **Reply support** is the documented recipe the ticket allows as the alternative to a `reply_to`
+   map field — now writable because item 3 exposes `account_id` and `message_id` as columns.
+5. **Incremental reads** are documented as what they honestly are: Chatwork's messages endpoint
+   takes no since-parameter, so `send_time >` is applied as a truthful LOCAL residual over the one
+   GET rather than a pushdown the API cannot perform. Pinned by a test asserting the request count
+   and that the facet does not claim `honors_pushed_filter`.
+
+Verification: `cargo test --workspace` green; `cargo fmt --all --check`;
+`cargo clippy --workspace --all-targets -- -D warnings`; `gen-docs --check` and `gen-skills --check`
+in sync. Gate 1 is pinned by `describe_of_a_declared_node_reports_the_columns_a_read_delivers_*`
+over BOTH shipped declarations (`chatwork.qfs` and `slack_driver.qfs`), comparing the describe fold
+against `declared_eval::view_specs`' `of_columns` — the exact list `shape_to_type` projects a read
+to, so the two answers cannot drift apart again. Gate 2 is pinned by
+`a_declared_surface_is_walkable_from_the_mount_root_using_only_describe`, which walks
+`/chatwork` → `/chatwork/rooms` → `/chatwork/rooms/{room}` → `…/messages` following only child links
+through a real `MountRegistry` resolution.
+
+### Discovered Insights
+
+- **Insight**: The declared read path shapes rows with `shape_to_type`, which projects to the `OF`
+  type's column NAMES and takes each column's TYPE from the delivered batch. So describe and run can
+  agree exactly on the column set while still differing on types (describe reports the declared
+  `timestamp`; a read of a Chatwork epoch field reports `Int`).
+  **Context**: Any future "describe matches run" ratchet must compare names, not typed columns —
+  and closing the type gap means teaching the shaper to coerce, which is a separate decision.
+- **Insight**: A shipped `.qfs` asset can be lifted into the live model *through the real desugar*
+  by parsing each statement and reading the `/sys/drivers` row off the serialized
+  `INSERT INTO /sys/drivers` effect (`declared_driver::shipped_declared`). The binary deliberately
+  has no `qfs-parser` edge, so serde over `qfs_exec::parse`'s output is the only way in — and it is
+  a faithful one, because that JSON *is* what an install writes.
+  **Context**: The existing shipped-asset tests hand-rebuilt their fixtures (`shipped_slack_views()`
+  and friends), which can silently drift from the asset. New tests over a shipped declaration should
+  use `shipped_declared` instead.
+- **Insight**: `RestDriver::caps_for` resolves capabilities by LEADING resource segment only, so
+  `/chatwork/rooms` advertises the `INSERT` that is actually declared at
+  `/chatwork/rooms/{room}/messages`. That is a known, separately-claimed defect
+  (`20260817001110-a-declared-mounts-verb-gate-is-leading-segment-coarse`).
+  **Context**: This ticket deliberately left `capabilities` alone and changed only the describe
+  answer, so the two changes do not collide in the same file.
+- **Insight**: `crates/qfs`'s `provision::tests::offline_run_engine_does_not_mount_server` is flaky
+  under test parallelism — it intermittently panics in `store::forbid_shared_home_fallback_in_tests`
+  because the `HomeGuard` env isolation is process-global. Observed once in three runs on unmodified
+  code paths.
+  **Context**: Not caused by this change; worth its own ticket if it recurs in CI.

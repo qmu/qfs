@@ -37,6 +37,7 @@ pub mod console;
 pub mod dashboard;
 pub mod declared_driver;
 pub mod declared_eval;
+pub mod declared_surface;
 pub mod describe;
 pub mod directory;
 pub mod docs;

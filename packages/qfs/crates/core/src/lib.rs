@@ -44,7 +44,7 @@ pub use ddl::server::{
     Interval, JobDecl, PlanSpec, PolicyRef, Route, ServerBindingDdl, StatementSpec, TriggerDecl,
     ViewDecl, WebhookDecl, CREATE_WRITE_OP,
 };
-pub use describe::{archetype_hint, split_selection, DescribeReport, PushdownSummary};
+pub use describe::{archetype_hint, split_selection, ChildLink, DescribeReport, PushdownSummary};
 pub use eval::{call_proc_id, effect_kind_for, EvalError, EvalValue, Evaluator, PlanSource};
 pub use lambda::{
     apply as apply_lambda, eval_expr as eval_lambda_expr, Closure, LambdaValue, ValueEnv,
@@ -87,8 +87,8 @@ pub use qfs_codec::{
 };
 pub use qfs_driver::{
     check_capability, navigable_by_default, resolve_proc, AliasFn, Archetype, Capabilities,
-    CfsError, Driver, NodeCategory, NodeDesc, Param, Path, ProcSig, PushdownProfile, Verb,
-    VersionSupport,
+    CfsError, ChildNode, Driver, NodeCategory, NodeDesc, Param, Path, ProcSig, PushdownProfile,
+    Verb, VersionSupport,
 };
 pub use qfs_lang::{grammar_ebnf, language_model_reference, RESERVED_KEYWORDS};
 pub use qfs_plan::{

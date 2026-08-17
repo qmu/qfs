@@ -1,6 +1,6 @@
 ---
 skill_name: qfs-chatwork
-skill_description: Use when a task needs Chatwork through qfs — installing and querying the DECLARED /chatwork driver (rooms, a room's latest messages, a room's unread messages, room file listings, file download, and file upload) written in the query language itself, and posting a message to a room. Covers installing the chatwork.qfs declaration, connecting it to a stored Chatwork API token, reading the latest messages versus the unread-only ones, posting a message via ENCODE form, downloading a file's bytes via the FOLLOW stage, and uploading via ENCODE multipart.
+skill_description: Use when a task needs Chatwork through qfs — installing and querying the DECLARED /chatwork driver (rooms and their unread/mention counts, a room's latest messages with their sender, a room's unread messages, room file listings, file download, and file upload) written in the query language itself, and posting or replying to a message in a room. Covers installing the chatwork.qfs declaration, connecting it to a stored Chatwork API token, walking the declared surface with describe, selecting conversations by unread count, attributing a message to its sender, polling a room incrementally with a send_time filter, composing a threaded reply, posting via ENCODE form, downloading a file's bytes via the FOLLOW stage, and uploading via ENCODE multipart.
 ---
 
 # Chatwork (declared driver)
@@ -17,15 +17,16 @@ Once installed and connected (**[Setup](#setup)**), your rooms are a path:
 
 ```qfs
 /chatwork/rooms
-|> select name, type, role
-|> order by name
+|> where unread_num > 0
+|> select name, unread_num, mention_num
+|> order by unread_num DESC
 ```
 
 ```text
-name              type   role
-Deploys           group  admin
-Ops               group  member
-… 6 rows
+name              unread_num  mention_num
+Deploys                    7            1
+Ops                        2            0
+… 2 rows
 ```
 
 That read runs live against Chatwork's REST API — the token is resolved from qfs's vault, never
@@ -53,18 +54,32 @@ CREATE DRIVER chatwork
 CREATE TYPE chatwork/message (
   message_id text PRIMARY KEY,
   body text NOT NULL,
-  send_time timestamp
+  send_time timestamp,
+  update_time timestamp,
+  account_id text,
+  account_name text
 )
 ```
+
+A declared type is the **delivered contract**: the view projects each row to exactly these columns,
+so a field the type omits is a field no caller can reach. That is why the shipped types carry
+everything the endpoint answers rather than a convenient subset — the room type keeps
+`unread_num` / `mention_num` / `message_num` / `last_update_time`, and the message type keeps the
+sender and `update_time`.
+
+Chatwork nests the sender under an `account` object, so the two sender columns are **lifted** in the
+view body with `EXTEND` before the `OF` projection runs:
 
 ```qfs
 CREATE VIEW /chatwork/rooms/{room}/messages OF chatwork/message AS
   /http/chatwork/rooms/{room}/messages?force=1 |> DECODE json
+  |> EXTEND account_id = account.account_id, account_name = account.name
 ```
 
 ```qfs
 CREATE VIEW /chatwork/rooms/{room}/messages/unread OF chatwork/message AS
   /http/chatwork/rooms/{room}/messages |> DECODE json
+  |> EXTEND account_id = account.account_id, account_name = account.name
 ```
 
 ```qfs
@@ -88,14 +103,60 @@ qfs account add chatwork work        # paste the x-chatworktoken value (stdin, i
 qfs connect /chatwork TO chatwork SECRET 'vault:chatwork/work'
 ```
 
-`qfs describe /chatwork/rooms` then lists the declared views credential-free.
+`qfs describe /chatwork/rooms` then reports the node credential-free.
+
+## Walk the surface with `describe`
+
+A declared mount answers `describe` the same way a compiled driver does, so you never have to read
+the `.qfs` source to find out what is there. Start at the mount root and follow `children`:
+
+```text
+$ qfs describe /chatwork --json
+{"path":"/chatwork", …
+ "children":[{"segment":"rooms","path":"/chatwork/rooms","param":null,"node":true}]}
+
+$ qfs describe /chatwork/rooms --json
+{"path":"/chatwork/rooms","row_contract":"/type/chatwork/room",
+ "columns":[{"name":"room_id","ty":"Text",…},{"name":"unread_num","ty":"Int",…}, …],
+ "children":[{"segment":"{room}","path":"/chatwork/rooms/{room}","param":"room","node":false}]}
+
+$ qfs describe /chatwork/rooms/{room} --json
+{"path":"/chatwork/rooms/{room}","columns":[],
+ "children":[{"segment":"messages","path":"/chatwork/rooms/{room}/messages","param":null,"node":true},
+             {"segment":"files","path":"/chatwork/rooms/{room}/files","param":null,"node":true}]}
+```
+
+Three things a caller reads off that:
+
+- **`children`** is the declared surface beneath a node, so the tree is walkable from the mount down.
+- **`param`** marks a segment you bind rather than type literally — `{room}` wants a room id.
+- **`node`** separates an addressable view from a segment that only exists to walk through.
+
+The columns are the declared `OF` type's, named in `row_contract` — the same set a read of the path
+delivers, so the statement you write from `describe` output is the statement that runs. A view with
+no `OF` type reports an empty `columns` list and a null `row_contract`: "nothing declared here" is
+stated, never papered over with a stand-in column.
+
+## Find the conversations with something new
+
+`GET /rooms` already answers the counts, so "which conversations need me" is a `WHERE`, not a scan
+of every room's messages:
+
+```qfs
+/chatwork/rooms
+|> where mention_num > 0 or unread_num > 5
+|> select room_id, name, unread_num, mention_num, last_update_time
+|> order by mention_num DESC, unread_num DESC
+```
 
 ## Read the latest messages in a room
 
-Address a room by its id (from `/chatwork/rooms`), newest first:
+Address a room by its id (from `/chatwork/rooms`), newest first. `account_name` attributes each row
+— without it you cannot tell who wrote what in any room with more than two people:
 
 ```qfs
 /chatwork/rooms/123456/messages
+|> select send_time, account_name, body
 |> order by send_time DESC
 |> limit 20
 ```
@@ -118,6 +179,41 @@ The unread reading is the API's cheap default call, and it keeps a name of its o
 This one **consumes**: Chatwork marks the returned messages read, so the next read of the same room
 returns only what arrived in between. Reach for it when you want "what is new since I last looked";
 reach for `…/messages` when you want the room's latest messages.
+
+## Poll a room for what arrived since you last looked
+
+Keep the `send_time` of the newest row you have seen, and filter on it. Chatwork's messages endpoint
+takes no since-parameter, so the predicate is applied **locally** — the request is the same one GET,
+and only the new rows come back to you:
+
+```qfs
+/chatwork/rooms/123456/messages
+|> where send_time > 1755400000
+|> select send_time, account_name, body
+|> order by send_time
+```
+
+This is the honest version of an incremental read: qfs never claims a server-side filter the API
+does not have. `…/messages/unread` (below) is the cheap alternative when a *consuming* read is
+acceptable.
+
+## Reply to a message
+
+A Chatwork reply is an ordinary message whose body carries a
+`[rp aid=<account_id> to=<room>-<message_id>]` prefix. Both ids are columns now, so the reply
+composes from the message you are replying to instead of being retyped:
+
+```qfs
+/chatwork/rooms/123456/messages
+|> where account_name == 'Alice'
+|> order by send_time DESC
+|> limit 1
+|> select CONCAT('[rp aid=', account_id, ' to=123456-', message_id, ']\nOn it 👍') as body
+|> insert into /chatwork/rooms/123456/messages
+```
+
+Without the prefix every message qfs sends is an unthreaded post, which reads as a visible downgrade
+from how a person uses the service.
 
 ## List the files shared in a room
 

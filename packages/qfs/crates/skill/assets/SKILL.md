@@ -30,7 +30,9 @@ applied until you add `--commit` (or a trailing `COMMIT` keyword).
 | -------------- | ----------------------------------------------------------------------- |
 | `archetype`    | `blob_namespace` / `relational_table` / `append_log` / `object_graph_workflow` — how the node is shaped. |
 | `native_verbs` | The FS/SQL-shaped vocabulary the archetype answers to (a one-line hint). |
-| `columns`      | The typed schema: `name` + `ty` + `nullable`. Read these to build your statement. |
+| `columns`      | The typed schema: `name` + `ty` + `nullable`. Read these to build your statement. An EMPTY list means the node declares no row shape — that is an answer, not a gap. |
+| `row_contract` | The named row type the node's rows are shaped to (a declared driver's `OF <type>`), or `null` when it declares none. |
+| `children`     | The statically known child locations, each with its full `path`. Walk these to explore a surface whose children are declared rather than delivered as rows (a declared driver's view tree). `param` marks a segment you bind (`{room}` wants a room id); `node` says the child is itself addressable rather than a segment to walk through. Empty for a driver whose children are rows — enumerate those by reading the node. |
 | `verbs`        | Which **universal verbs** this node supports. Using an unsupported verb fails at parse/resolve time with a structured error. |
 | `procedures`   | The `CALL driver.action(..)` signatures, with `irreversible` and `requires_scopes`. |
 | `aliases`      | Prelude pure-fn aliases (e.g. `SEND -> mail.send`) — sugar for a `CALL`. |
