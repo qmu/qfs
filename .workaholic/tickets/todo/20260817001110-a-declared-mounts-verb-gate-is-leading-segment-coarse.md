@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260817-004052
 ---
 
 # A declared mount's plan-time verb gate is leading-segment coarse, so it allows a write no `CREATE MAP` declares
