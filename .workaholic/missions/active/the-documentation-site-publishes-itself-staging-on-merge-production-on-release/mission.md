@@ -37,7 +37,7 @@ and the repository documents the procedure the way it documents the GitHub Relea
 
 ## Acceptance
 
-- [ ] A merge to `main` publishes the built site to staging-qfs.qmu.co.jp automatically. (#20260817142443-a-merge-to-main-publishes-the-docs-site-to-staging-qfs-qmu-co-jp.md)
+- [x] A merge to `main` publishes the built site to staging-qfs.qmu.co.jp automatically. (#20260817142443-a-merge-to-main-publishes-the-docs-site-to-staging-qfs-qmu-co-jp.md)
 - [ ] A `v*` release publishes the same built site to qfs.qmu.co.jp automatically. (#20260817142443-a-release-publishes-the-docs-site-to-qfs-qmu-co-jp.md)
 - [ ] The procedure and its credentials are recorded in `.workaholic/deployments/`. (#20260817142443-the-docs-deployment-is-recorded-where-the-github-release-already-is.md)
 
@@ -45,3 +45,4 @@ and the repository documents the procedure the way it documents the GitHub Relea
 
 - 2026-08-17 — Proposed from feedback 20260817142308 (issue #69).
 - 2026-08-17 — ticket archived — 20260817142443-the-docs-site-has-a-worker-deploy-target-it-can-be-published-to.md
+- 2026-08-17 — ticket archived — 20260817142443-a-merge-to-main-publishes-the-docs-site-to-staging-qfs-qmu-co-jp.md
