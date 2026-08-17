@@ -1,5 +1,6 @@
 ---
 created_at: 2026-08-17T10:53:31+00:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -111,3 +112,82 @@ between restoring it and correcting the claim.
   golden corpus uses for `sql`/`git` (`packages/qfs/crates/skill/tests/golden_corpus.rs`);
   covering the parse half first and naming the uncovered remainder is better than a check that
   quietly skips most recipes.
+
+## Final Report
+
+Development completed as planned, with step 2's premise corrected by the evidence.
+
+**Step 1 established which of the two was true, and it was neither.** The ratchet was not lost and
+the claim was not invented — the *path* was stale. `git log --all --diff-filter=ADR --name-status
+-- '*cookbook_skills.rs'` returns three commits: created at `packages/qfs/crates/test/tests/` by
+`f9387de` (repo publish, 2026-07-15), then **renamed to `packages/qfs/xtask/tests/`** by `e17b0a5`
+("Typecheck the cookbook ratchet, not just parse it", 2026-08-16) when ratchet 2 started needing the
+compiled describe registry. `e17b0a5` is an ancestor of `origin/main`, so the file is present and
+enforced on `main` today. (`ef0ae25` shows the same delete, but it is on
+`origin/claude/existing-prs-issues-naiqyz` only, not on `main` — a red herring.) The path `CLAUDE.md`
+gave, `crates/qfs/tests/cookbook_skills.rs`, has **never** existed at any commit.
+
+**So step 2's "restore it at the path `CLAUDE.md` names" was not the right discharge, and was not
+done.** Moving the test to `crates/qfs/tests/` would break it: its own doc comment records that it
+may live neither in `qfs-test` (a wasm-clean harness that must not link the binary) nor in the binary
+crate (whose dep guard pins it off `qfs-parser`), because ratchet 2 needs both `qfs_parser` and
+`qfs::describe::compiled_describe_registry`. `xtask` is the one crate allowed to hold both. The
+references were therefore re-pointed at the real path instead — which is what acceptance criterion 3
+asks for in as many words ("`CLAUDE.md`'s description of the ratchet resolves to a real file, as does
+the comment in `faq_cli_surface.rs`"). Recorded as a decision rather than asked.
+
+**Step 4 needed no work: the check was already where CI runs it.** `xtask` is a workspace member
+(`packages/qfs/Cargo.toml`: `members = ["crates/*", "spikes/*", "xtask"]`), so
+`packages/qfs/xtask/tests/cookbook_skills.rs` is picked up by plain `cargo test --workspace`, which
+CI's `build-test` job runs. The Consideration's worry — that a check behind `gen-skills --check`
+would be enforced nowhere, since no CI job invokes `xtask` — does not apply to an integration test in
+`xtask/tests/`. The distinction is now written into `CLAUDE.md` so the next reader does not have to
+re-derive it.
+
+### Changes
+
+- `CLAUDE.md` — the ratchet's path corrected to `packages/qfs/xtask/tests/cookbook_skills.rs`, with
+  one clause on why it lives in `xtask`; a statement that it runs under `cargo test --workspace` and
+  is therefore CI-enforced, unlike `gen-docs --check` / `gen-skills --check` / `check-migrations`,
+  which no CI job invokes; and a new **What the ratchet does not cover** paragraph.
+- `packages/qfs/xtask/tests/cookbook_skills.rs` — a `# What this does NOT cover` section added to the
+  module doc comment (acceptance criterion 4), naming the five real limits.
+- `packages/qfs/crates/cmd/tests/faq_cli_surface.rs` — its "Home:" paragraph said `cookbook_skills.rs`
+  lives in `crates/test/`; corrected, with the move and its date.
+- `docs/documentation-map.md` — two entries asserted the file does not exist anywhere. Both corrected;
+  gap 7 marked resolved with what was actually wrong.
+
+### Verification
+
+- `cargo test -p xtask --test cookbook_skills` — green: 2 passed. With `--nocapture`: **184 recipes
+  extracted, 62 typechecked, 19 sources skipped and printed by path**.
+- **Negative probe 1 (parse):** appended `/github/qmu/qfs/pulls |> WHERE ||| state = 'open'` to
+  `docs/cookbook/github.md` → `every_cookbook_skill_recipe_parses` FAILED, "1 of 184 cookbook-skill
+  recipes do NOT parse … `[UNEXPECTED_TOKEN] at byte 36`". Reverted byte-identically.
+- **Negative probe 2 (column):** appended `/github/acme/web/pulls |> where nonexistent_column_probe
+  == 'open' |> select number, title` → `every_cookbook_skill_recipe_names_columns_that_exist` FAILED,
+  "names [\"nonexistent_column_probe\"] — not columns of /github/acme/web/pulls". Reverted
+  byte-identically (`git status --porcelain docs/cookbook/github.md` empty).
+- `rg -n 'cookbook_skills' .` — 7 hits, every one resolving: 4 name the real path, 3 name the bare
+  filename.
+- Gate: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo fmt --all --check`, `cargo run -p xtask -- gen-docs --check`,
+  `cargo run -p xtask -- gen-skills --check` — **all exit 0**.
+
+### Discovered Insights
+
+- **Insight**: A "this file does not exist" finding needs `git log --diff-filter=ADR --name-status`
+  over the basename, not a path lookup. The documentation-surveying ticket that provoked this one
+  checked the two paths the repository *names* (`crates/qfs/tests/`, `crates/test/tests/`), found
+  nothing at either, and concluded the ratchet was absent — while it sat at a third path, fully
+  implemented, with both promised checks and a floor. The stale reference and the missing artifact
+  look identical from the reader's side and are opposite defects.
+  **Context**: This repository moves test homes for hard structural reasons (dep-graph guards,
+  wasm-cleanliness), so a test's path is comparatively volatile while its filename is stable. Search
+  by filename across history before concluding anything is gone.
+- **Insight**: `cargo test --workspace` covers `xtask/tests/`, so `xtask` is a legitimate home for an
+  anti-drift test that must link the binary — and such a test is CI-enforced even though no CI job
+  runs `cargo run -p xtask`. The `xtask` *subcommands* (`gen-docs --check`, `gen-skills --check`,
+  `check-migrations`) are the unenforced surface, not the crate.
+  **Context**: The two are easy to conflate, and conflating them once already produced a false
+  "nothing defends this" conclusion in `docs/documentation-map.md`.
