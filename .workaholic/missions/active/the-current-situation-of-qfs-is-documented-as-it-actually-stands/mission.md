@@ -51,7 +51,7 @@ tooling beyond what the survey ticket justifies.
 
 - [x] **The documentation surface is mapped against what ships today**, page by page, with
       the gaps named rather than guessed. (#20260817102723-survey-the-documentation-surface-and-map-it-against-what-ships-today.md)
-- [ ] **The architecture as built is documented** from the source: the crate map, the
+- [x] **The architecture as built is documented** from the source: the crate map, the
       engine's layering, the two state stores, and the faces the binary serves. (#20260817102723-document-the-architecture-as-built-the-crate-map-the-engine-layering-the-state-stores-and-the-faces.md)
 - [ ] **The repository as it stands is documented**: both packages including qfs-viewer, the
       gates, the anti-drift generators, and the release path. (#20260817102723-document-the-repository-as-it-stands-both-packages-the-gates-the-anti-drift-generators-and-the-release-path.md)
@@ -64,3 +64,4 @@ tooling beyond what the survey ticket justifies.
   decomposes, so it is proposed as a mission (the strategy artifact needs a target date the
   ask does not state).
 - 2026-08-17 — ticket archived — 20260817102723-survey-the-documentation-surface-and-map-it-against-what-ships-today.md
+- 2026-08-17 — ticket archived — 20260817102723-document-the-architecture-as-built-the-crate-map-the-engine-layering-the-state-stores-and-the-faces.md

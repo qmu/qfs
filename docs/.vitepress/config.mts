@@ -101,6 +101,7 @@ export default defineConfig({
         // here may never restate a `blueprint`/`parked` blueprint section as current fact.
         text: 'The project as built',
         items: [
+          { text: 'The architecture as built', link: '/guide/architecture' },
           { text: 'Documentation map', link: '/documentation-map' },
         ],
       },
