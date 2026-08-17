@@ -1602,7 +1602,7 @@ mod tests {
     fn declared_secrets_builds_the_account_adapter_for_account_auth() {
         // An account-auth declared driver gets the account-backed adapter (no per-driver SECRET), and
         // resolving through it reaches the connected account's stored bearer.
-        let _g = crate::testenv::env_guard();
+        let _home = crate::testenv::HomeGuard::new();
         let d = ghdecl_account_driver();
         // No commit store in the test env → the adapter is built over an in-memory vault; we assert
         // its SHAPE (account resolution + fail-closed), the resolution itself is covered above.
@@ -1624,7 +1624,7 @@ mod tests {
 
     #[test]
     fn declared_secret_ref_store_resolves_env_secret_for_default_auth() {
-        let _g = crate::testenv::env_guard();
+        let _home = crate::testenv::HomeGuard::new();
         let var = "QFS_DECLARED_CHATWORK_TOKEN_TEST";
         std::env::set_var(var, "cw-test-token");
         let d = chatwork_driver();
@@ -1640,7 +1640,7 @@ mod tests {
 
     #[test]
     fn declared_secret_ref_store_rejects_a_different_auth_key() {
-        let _g = crate::testenv::env_guard();
+        let _home = crate::testenv::HomeGuard::new();
         let var = "QFS_DECLARED_CHATWORK_TOKEN_MISMATCH_TEST";
         std::env::set_var(var, "cw-test-token");
         let d = chatwork_driver();
@@ -2624,9 +2624,9 @@ mod tests {
         let stmts = shipped_statements(script);
         assert_eq!(
             stmts.len(),
-            22,
-            "1 driver + 5 types + 9 views + 1 post map + 1 shared LOOKUP + 5 typed CALL maps: \
-             {stmts:?}"
+            23,
+            "1 driver + 5 types + 9 views + 1 post map + 1 shared LOOKUP + 5 typed CALL maps + \
+             1 file-detach REMOVE map: {stmts:?}"
         );
         for s in &stmts {
             assert!(
@@ -2653,9 +2653,15 @@ mod tests {
         // away: what G10 fixed is the SLOPE (a twin no longer pays one line per ID-requiring call),
         // not the intercept. Whether ~40 remains the right §13.2 claim for a complete twin is the
         // open concern `the-13-2-calibration-table-was`, still the developer's to answer.
+        //
+        // 43 since the file-detach `CREATE MAP REMOVE` landed (ticket 20260813024753): two lines
+        // bought the file surface's only write, and the same ticket removed the article's upload
+        // and download rather than reproducing them — so this measurement is what a twin costs
+        // when it stops over-promising, and it moves the calibration concern further from ~40
+        // rather than closer.
         assert!(
-            statement_lines <= 41,
-            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~41 statement-lines); \
+            statement_lines <= 43,
+            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~43 statement-lines); \
              measured {statement_lines}"
         );
         // Host-confinement floor over the shipped bytes: every /http/ reference is /http/slack/.
@@ -2756,8 +2762,9 @@ mod tests {
             .filter(|l| !l.trim_start().starts_with("--") && l.contains("IRREVERSIBLE"))
             .count();
         assert_eq!(
-            marked, 2,
-            "pin and delete are the two irreversible declared CALLs"
+            marked, 3,
+            "pin and delete are the two irreversible declared CALLs, and the file detach \
+             (`CREATE MAP REMOVE`, ticket 20260813024753) is the third irreversible marking"
         );
     }
 
@@ -2814,8 +2821,8 @@ mod tests {
                 .collect();
         assert_eq!(
             maps.len(),
-            6,
-            "the post map plus the five CALL maps: {maps:?}"
+            7,
+            "the post map, the five CALL maps, and the file-detach REMOVE map: {maps:?}"
         );
         maps
     }
@@ -3397,6 +3404,57 @@ mod tests {
         assert_eq!(wrong_param.code(), "unknown_arg");
     }
 
+    /// Ticket `20260816213014`: PREVIEW is the instrument an operator reads before committing, so
+    /// a write the system cannot perform must refuse at PLAN time — never render an ordinary
+    /// effect row and leave the refusal (if any) to commit. Two shapes, one for each side of the
+    /// asymmetry the ticket measured, both proved against the SHIPPED slack declaration:
+    ///
+    /// 1. **Routed, verb not mapped.** `/slack/{ws}/files` is a declared VIEW with no write map
+    ///    (only `/slack/{ws}/files/{file}` carries `MAP REMOVE`), so an `UPSERT` there refuses
+    ///    naming the verbs the node *does* declare — the recovery information an agent needs.
+    /// 2. **Not routed at all.** The ticket's own probe missed shape 1 because `/slack/acme` was
+    ///    never CONNECTed, so nothing was mounted to have a capability. That write used to build a
+    ///    plan against its literal path and preview `affected: {exact: 1}`; it now refuses like the
+    ///    unrouted READ beside it always has.
+    #[test]
+    fn an_unperformable_declared_write_refuses_at_plan_time() {
+        let d = shipped_slack_declared_driver();
+        let mount = declared_describe_mount("/slack", &d).expect("the declared describe mount");
+        let mut reg = qfs_core::MountRegistry::new();
+        reg.register(Arc::new(mount)).expect("registers");
+        let plan = |src: &str| {
+            let stmt = qfs_exec::parse(src).expect("the statement parses");
+            qfs_core::Evaluator::new(&reg).eval(&stmt)
+        };
+
+        // 1. Routed, no map for the verb: refused, and the refusal names the declared verbs.
+        let unmapped = plan("UPSERT INTO /slack/W1/files VALUES (name) ('a.txt')")
+            .expect_err("an unmapped declared write must not plan");
+        assert_eq!(unmapped.code(), "unsupported_verb");
+        let rendered = unmapped.to_string();
+        assert!(
+            rendered.contains("/slack/W1/files") && rendered.contains("UPSERT"),
+            "the refusal names the path and the verb: {rendered}"
+        );
+        assert!(
+            rendered.contains("SELECT"),
+            "the refusal lists the verbs the node DOES declare: {rendered}"
+        );
+
+        // 2. Not routed at all: refused as the read side is, naming the path.
+        let unrouted = plan("INSERT INTO /nosuchdriver/x VALUES (a) ('1')")
+            .expect_err("an unrouted write target must not plan");
+        assert_eq!(unrouted.code(), "unrouted_path");
+        assert!(
+            unrouted.to_string().contains("/nosuchdriver/x"),
+            "the refusal names the path: {unrouted}"
+        );
+
+        // The control: a MAPPED declared write still plans, unchanged.
+        plan("INSERT INTO /slack/W1/C1/messages VALUES (text) ('hi')")
+            .expect("a mapped declared write still plans");
+    }
+
     #[test]
     fn declared_call_signature_parses_typed_and_untyped() {
         // The G5 grammar's two arms: a typed signature lifts to typed params; the no-signature
@@ -3844,6 +3902,94 @@ mod tests {
             posted,
             serde_json::json!({ "channel": "#general", "text": "ship it" }),
             "the MAP shaped the row into the exact chat.postMessage body"
+        );
+    }
+
+    #[test]
+    fn shipped_slack_detach_map_fires_files_delete_behind_the_gate() {
+        // Ticket 20260813024753. `docs/cookbook/slack.md` taught three file operations the driver
+        // did not carry after the compiled crate was retired. Two of them cannot be expressed by a
+        // declaration at all (the upload is a three-call external flow; a download would need
+        // `FOLLOW` to carry the bearer, which it never does) and were removed from the article; the
+        // detach IS one request, so it is declared — and pinned here, over the SHIPPED bytes, so
+        // the article's surviving `remove /slack/<ws>/files/<id>` recipe cannot drift from it.
+        let detach = shipped_slack_maps()
+            .into_iter()
+            .find(|m| m.verb == "REMOVE")
+            .expect("the shipped asset declares the file-detach REMOVE map");
+        assert_eq!(detach.path, "/slack/{ws}/files/{file}");
+        assert!(
+            detach.irreversible,
+            "a Slack file delete is irreversible and must ride the standard gate"
+        );
+
+        // The map binds the id from its OWN path segment, so an empty incoming row is the whole
+        // write — nothing about the file has to be carried in a row for `remove <path>` to work.
+        let incoming = qfs_core::RowBatch::new(
+            qfs_core::Schema::new(vec![]),
+            vec![qfs_core::Row::new(vec![])],
+        );
+        let write = qfs_exec::declared::eval_map_body(
+            &detach.body,
+            "slack",
+            "/slack/acme/files/F0123",
+            &[("file".to_string(), "F0123".to_string())],
+            &incoming,
+            &[],
+        )
+        .expect("the detach map evaluates");
+        assert_eq!(write.rest_path, "/rest/slack/files.delete");
+        // The MAP's verb is what a statement matches on; the BODY's verb is what reaches the wire,
+        // and Slack's methods are POSTs — the same split the five CALL maps already ride. A REMOVE
+        // body here would issue `DELETE /files.delete`, which Slack does not serve.
+        assert_eq!(
+            write.wire_kind,
+            qfs_core::EffectKind::Insert,
+            "the detach fires Slack's POST method, not an HTTP DELETE"
+        );
+
+        let d = DeclaredDriver {
+            name: "slack".into(),
+            base_url: "https://slack.com/api".into(),
+            auth: r#"{"kind":"bearer"}"#.into(),
+            pagination: None,
+            pushdown: None,
+            views: vec![],
+            lookups: Vec::new(),
+            maps: vec![detach.clone()],
+        };
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            br#"{"ok":true}"#.to_vec(),
+        ));
+        let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
+        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+
+        use qfs_runtime::SharedApplier as _;
+        let node = qfs_core::EffectNode::new(
+            qfs_core::NodeId(0),
+            write.wire_kind,
+            qfs_core::Target::new(
+                qfs_core::DriverId::new("rest"),
+                qfs_core::VfsPath::new(&write.rest_path),
+            ),
+        )
+        .with_args(qfs_driver_http::http_body_args(&write.bodies[0]));
+        driver
+            .rest_applier()
+            .apply_shared(&node)
+            .expect("the twin detaches");
+
+        let req = &mock.recorded()[0];
+        assert_eq!(req.method, qfs_driver_http::HttpMethod::Post);
+        assert_eq!(req.url, "https://slack.com/api/files.delete");
+        let posted: serde_json::Value =
+            serde_json::from_slice(req.body.as_deref().expect("a POST body")).expect("valid JSON");
+        assert_eq!(
+            posted,
+            serde_json::json!({ "file": "F0123" }),
+            "the MAP shaped the path segment into the exact files.delete body"
         );
     }
 
