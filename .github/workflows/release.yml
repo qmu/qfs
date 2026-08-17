@@ -108,3 +108,40 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publish the tagged commit's documentation to qfs.qmu.co.jp. `needs: [release]` is the whole
+  # point of the ordering: a failed binary build must not leave the production hostname
+  # advertising a version nobody can install. The site is built HERE, from the tagged checkout,
+  # so what is served is the tag's documentation and never `main`'s at deploy time.
+  #
+  # Staging (staging-qfs.qmu.co.jp) is the other half of this pair and is published from
+  # `.github/workflows/ci.yml` on a merge to `main`. A merge that is never tagged produces no
+  # release and reaches production through no path at all.
+  #
+  # This is the first secret consumer in this workflow, so the two Cloudflare secrets are scoped
+  # to this job rather than to the workflow — the four build jobs and the release job keep using
+  # only the auto-provided GITHUB_TOKEN.
+  docs-deploy-production:
+    name: publish docs to qfs.qmu.co.jp
+    needs: [release]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+      - run: npm install
+      - run: npm run docs:build
+      - name: Stamp the production build with its commit
+        run: bash scripts/stamp-docs-deploy.sh production
+      - name: Publish to qfs.qmu.co.jp
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm run docs:deploy:production
+          echo "Published ${GITHUB_REF_NAME} (${GITHUB_SHA}) to https://qfs.qmu.co.jp" >> "$GITHUB_STEP_SUMMARY"
