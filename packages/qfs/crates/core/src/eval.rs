@@ -1212,10 +1212,14 @@ impl<'r> Evaluator<'r> {
         let routed = self.mounts.resolve_path(&full);
         let (driver, vfs) = match &routed {
             Some((driver, sub)) => (driver.id(), format!("/{}/{}", driver.id().as_str(), sub)),
-            // An unrouted target is a path/mount concern; we still build a plan against
-            // the literal path so the verb/irreversible semantics are testable without a
-            // mount (deferred path resolution, ticket scope).
-            None => (DriverId::new(first_segment(&full)), full.clone()),
+            // An unrouted write target refuses at PLAN time, exactly as an unrouted READ
+            // source does above (ticket 20260816213014). The retired literal-path fallback
+            // built a plan against the bare path instead, so PREVIEW answered a write with
+            // nowhere to go with an ordinary effect row — `affected: {exact: 1}` — and the
+            // operator read "this will work" off the one instrument that exists to say
+            // otherwise. Deferred path resolution bought testability without a mount; the
+            // tests seed a mount instead, which is what production always has.
+            None => return Err(EvalError::UnroutedPath { path: full }),
         };
         let target = Target::new(driver, VfsPath::new(vfs));
 
@@ -1940,15 +1944,6 @@ fn structural_diff(ty: &str, asserted: &Schema, actual: &Schema) -> Result<(), E
             mismatched,
         })
     }
-}
-
-/// The first path segment (the conventional driver namespace) of a `/seg/seg` path.
-fn first_segment(path: &str) -> String {
-    path.trim_start_matches('/')
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_string()
 }
 
 /// Describe a node's schema via the driver's **pure** `describe` (no I/O). An

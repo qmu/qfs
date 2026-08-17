@@ -3404,6 +3404,57 @@ mod tests {
         assert_eq!(wrong_param.code(), "unknown_arg");
     }
 
+    /// Ticket `20260816213014`: PREVIEW is the instrument an operator reads before committing, so
+    /// a write the system cannot perform must refuse at PLAN time — never render an ordinary
+    /// effect row and leave the refusal (if any) to commit. Two shapes, one for each side of the
+    /// asymmetry the ticket measured, both proved against the SHIPPED slack declaration:
+    ///
+    /// 1. **Routed, verb not mapped.** `/slack/{ws}/files` is a declared VIEW with no write map
+    ///    (only `/slack/{ws}/files/{file}` carries `MAP REMOVE`), so an `UPSERT` there refuses
+    ///    naming the verbs the node *does* declare — the recovery information an agent needs.
+    /// 2. **Not routed at all.** The ticket's own probe missed shape 1 because `/slack/acme` was
+    ///    never CONNECTed, so nothing was mounted to have a capability. That write used to build a
+    ///    plan against its literal path and preview `affected: {exact: 1}`; it now refuses like the
+    ///    unrouted READ beside it always has.
+    #[test]
+    fn an_unperformable_declared_write_refuses_at_plan_time() {
+        let d = shipped_slack_declared_driver();
+        let mount = declared_describe_mount("/slack", &d).expect("the declared describe mount");
+        let mut reg = qfs_core::MountRegistry::new();
+        reg.register(Arc::new(mount)).expect("registers");
+        let plan = |src: &str| {
+            let stmt = qfs_exec::parse(src).expect("the statement parses");
+            qfs_core::Evaluator::new(&reg).eval(&stmt)
+        };
+
+        // 1. Routed, no map for the verb: refused, and the refusal names the declared verbs.
+        let unmapped = plan("UPSERT INTO /slack/W1/files VALUES (name) ('a.txt')")
+            .expect_err("an unmapped declared write must not plan");
+        assert_eq!(unmapped.code(), "unsupported_verb");
+        let rendered = unmapped.to_string();
+        assert!(
+            rendered.contains("/slack/W1/files") && rendered.contains("UPSERT"),
+            "the refusal names the path and the verb: {rendered}"
+        );
+        assert!(
+            rendered.contains("SELECT"),
+            "the refusal lists the verbs the node DOES declare: {rendered}"
+        );
+
+        // 2. Not routed at all: refused as the read side is, naming the path.
+        let unrouted = plan("INSERT INTO /nosuchdriver/x VALUES (a) ('1')")
+            .expect_err("an unrouted write target must not plan");
+        assert_eq!(unrouted.code(), "unrouted_path");
+        assert!(
+            unrouted.to_string().contains("/nosuchdriver/x"),
+            "the refusal names the path: {unrouted}"
+        );
+
+        // The control: a MAPPED declared write still plans, unchanged.
+        plan("INSERT INTO /slack/W1/C1/messages VALUES (text) ('hi')")
+            .expect("a mapped declared write still plans");
+    }
+
     #[test]
     fn declared_call_signature_parses_typed_and_untyped() {
         // The G5 grammar's two arms: a typed signature lifts to typed params; the no-signature
