@@ -66,3 +66,4 @@ tooling beyond what the survey ticket justifies.
 - 2026-08-17 — ticket archived — 20260817102723-survey-the-documentation-surface-and-map-it-against-what-ships-today.md
 - 2026-08-17 — ticket archived — 20260817102723-document-the-architecture-as-built-the-crate-map-the-engine-layering-the-state-stores-and-the-faces.md
 - 2026-08-17 — ticket archived — 20260817102723-document-the-repository-as-it-stands-both-packages-the-gates-the-anti-drift-generators-and-the-release-path.md
+- 2026-08-17 — All three tickets driven on work-20260817-104129: the documentation map, the architecture-as-built page and the repository page, each dated against 52b0410 / qfs 0.0.108 — work-20260817-104129.md
