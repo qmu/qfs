@@ -14,7 +14,8 @@ verification_handoff: Confirming the staging hostname serves the merged docs nee
 
 The first half of the ask: every merge to `main` publishes the documentation to
 `staging-qfs.qmu.co.jp`, with nobody running a command. `.github/workflows/ci.yml` already runs
-on every push and pull request but has no docs job at all; `release.yml` fires only on a `v*` tag.
+on every push and pull request and, since `84040bc`, carries a `docs-build` job that proves the
+production build — but nothing deploys what it built, and `release.yml` fires only on a `v*` tag.
 So the trigger this needs does not exist yet, and neither does the credential plumbing.
 
 This ticket adds only the staging trigger and its secrets, on top of the worker and scripts the
@@ -35,9 +36,10 @@ chain is pointed at the public hostname.
   triggered by `push` on `main` only.
 - `wrangler.toml` and the `docs:deploy:staging` script from the previous ticket — this workflow
   should call them, not re-implement the deploy.
-- `.github/workflows/ci.yml` — the reference for this repository's runner conventions
-  (`actions/checkout@v4`, per-job cache keys, `defaults.run.working-directory`); the docs job runs
-  at the repository root, not under `packages/qfs`.
+- `.github/workflows/ci.yml` — its `docs-build` job is both the reference for this repository's
+  runner conventions (`actions/checkout@v4`, per-job cache keys, `defaults.run.working-directory`)
+  and the exact build step this deploy should mirror; like it, the deploy runs at the repository
+  root, not under `packages/qfs`.
 - `CLAUDE.md` — the Deploy section, which currently states the deliverable is the GitHub Release
   only and must now also describe the docs deployment.
 

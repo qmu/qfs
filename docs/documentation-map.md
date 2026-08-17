@@ -103,7 +103,7 @@ All hand-written. None is on the docs site.
 | File | Claims | Last change | Does not reach |
 | --- | --- | --- | --- |
 | `README.md` | The qfs README: one grammar for every external service, install, the loop, the SemVer policy | 2026-07-15 | — |
-| `CLAUDE.md` | Agent guidance: what the monorepo is, the build/test gates, the generators, the per-PR patch bump, the release path | 2026-08-16 | Names `crates/qfs/tests/cookbook_skills.rs` as the ratchet that parse-checks every cookbook recipe. **That file does not exist** anywhere in the tree (`crates/qfs/tests/` does not exist; `faq_cli_surface.rs` refers to it as living in `crates/test/`, where it also is not). `gen-skills` does no parsing, and `crates/skill/tests/golden_corpus.rs` proves the *embedded* `SKILL.md` examples, not the cookbook articles. Also lists three anti-drift commands without saying that only `gen-docs` is enforced automatically |
+| `CLAUDE.md` | Agent guidance: what the monorepo is, the build/test gates, the generators, the per-PR patch bump, the release path | 2026-08-17 | — (was: named `crates/qfs/tests/cookbook_skills.rs` for the recipe ratchet, a path that never existed. The ratchet itself is real and does both checks it claims — it lives at `packages/qfs/xtask/tests/cookbook_skills.rs`, moved there from `crates/test/tests/` on 2026-08-16 when the column half started needing the compiled describe registry. Corrected 2026-08-17, with the ratchet's coverage limits now stated in both places) |
 | `packages/qfs/ARCHITECTURE.md` | The crate-boundary rules of the workspace: crate map, dependency spine, tokio confinement, decisions D1/D2, boundary rules, wasm-friendliness, cross-compile status, lints | 2026-07-15 | **The crate map is 20 crates against 48 on disk.** It predates `qfs-exec`, `qfs-http`, `qfs-mcp`, `qfs-oauth`, `qfs-store`, `qfs-session`, `qfs-identity`, `qfs-tunnel`, `qfs-watchtower`, `qfs-host`, `qfs-provision`, `qfs-skill`, `qfs-crypto-core`, `qfs-directory`-through-`qfs-driver-type` and the rest of the driver family. Its lints section names `clippy --all-features`, which `CLAUDE.md` now forbids (the `qfs-host` features are mutually exclusive). Boundary rules and decisions D1/D2 still hold |
 | `packages/qfs/crates/test/README.md` | `qfs-test`, the dev-dependency-only offline harness (no creds, no sockets) | 2026-07-15 | One crate's own README |
 | `packages/qfs/crates/skill/assets/SKILL.md` | The AI operating procedure embedded into the binary and printed by `qfs skill`; the source of the golden example corpus | 2026-08-13 | Hand-written but machine-proven: every worked example in it parses, evaluates, and matches a checked-in PREVIEW golden (`crates/skill/tests/golden_corpus.rs`) |
@@ -216,9 +216,12 @@ longer does. These are the map's conclusions.
 
 6. `packages/qfs/ARCHITECTURE.md` — a 20-crate map of a 48-crate workspace; `clippy --all-features`
    in its lints section.
-7. `CLAUDE.md` — the cookbook recipe ratchet it names (`crates/qfs/tests/cookbook_skills.rs`) does
-   not exist, so "a skill can never teach an agent a statement the binary rejects" is not currently
-   defended by anything.
+7. ~~`CLAUDE.md` — the cookbook recipe ratchet it names does not exist.~~ **Resolved 2026-08-17**
+   (ticket 20260817105331). The survey read the absence correctly and the conclusion wrongly: the
+   path `CLAUDE.md` gave (`crates/qfs/tests/cookbook_skills.rs`) never existed, but the ratchet does
+   — at `packages/qfs/xtask/tests/cookbook_skills.rs`, both checks real, run by
+   `cargo test --workspace` and so defended by CI's `build-test` job. The stale paths in `CLAUDE.md`
+   and `faq_cli_surface.rs` are corrected and the ratchet's coverage limits are now written down.
 8. `docs/README.md` — a `qfs connection` subcommand, ADR pages that are not in this tree, and a
    cookbook list missing two articles.
 9. `docs/guide/cli.md` — written before `agent` and `view` shipped, and unguarded.

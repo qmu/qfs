@@ -2,7 +2,7 @@
 created_at: 2026-08-17T13:22:27+00:00
 author: a@qmu.jp
 assignees: [a@qmu.jp]
-depends_on: [20260817110309-the-docs-site-production-build-fails-on-blueprint-md.md]
+depends_on:
 mission: the-docs-site-publishes-itself-staging-on-merge-to-main-production-on-release
 merge_policy:
 verification_handoff: Deploying the worker needs the Cloudflare account token for the qmu.co.jp zone, which an unattended run does not hold
@@ -24,10 +24,10 @@ It carries no trigger and no live deploy of its own: it must be provable with
 `wrangler deploy --dry-run` and a local preview, which is what keeps the two workflow tickets
 small.
 
-Note the mission's prerequisite: `npm run docs:build` currently **fails** on `docs/blueprint.md`
-(todo ticket `20260817110309-the-docs-site-production-build-fails-on-blueprint-md.md`). That fix
-is queued separately and is not re-proposed here; this ticket assumes it lands first and should
-not work around it.
+The prerequisite is already met: `npm run docs:build` failed on `docs/blueprint.md` when this
+was proposed, and the fix landed on `main` the same day (`84040bc`), which also added a
+`docs-build` job to `.github/workflows/ci.yml`. So the build this ticket packages is green and
+already gated on every push — reuse that job's shape rather than inventing a second one.
 
 ## Policies
 
@@ -107,4 +107,6 @@ not work around it.
   deployments supersede. Removing it is probably right, but it belongs to whoever still uses that
   tunnel — surface it, do not silently drop it.
 - `ignoreDeadLinks: true` in the VitePress config means a deployed site can ship broken links
-  silently. Related to the queued docs-build ticket's step 5; do not decide it twice.
+  silently — deliberately left true by `84040bc`, which recorded that the 8 dead links are
+  `blueprint.md` references to Rust source files and that how source should be linked is a
+  developer decision. Deploying does not change that; do not decide it here.

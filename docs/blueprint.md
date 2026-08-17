@@ -263,8 +263,9 @@ CREATE TABLE /sql/shop/customers OF customer
 ```
 
 - **The type literal** is §5.2's one production. `CREATE TABLE …(cols)` (implemented) is the
-  **anonymous** type literal; `CREATE TYPE <name> <literal>` names one; `CREATE TABLE <path> OF
-  <name>` attaches storage to a named one. `TYPE`/`OF` are contextual idents — zero new keywords.
+  **anonymous** type literal; `CREATE TYPE <name> <literal>` names one;
+  `CREATE TABLE <path> OF <name>` attaches storage to a named one. `TYPE`/`OF` are contextual
+  idents — zero new keywords.
 - **One name namespace.** A column's type is a base `ColumnType` token *or a declared type name* —
   `email email` above; base and refined types resolve in **one namespace** (a declared type may not
   shadow a base token; declare-time structured error). Names may be multi-segment where a catalog
@@ -348,8 +349,8 @@ Consequences, ruled here and applied by the sibling tickets:
   blueprint §15's `/transform/…` stage and DDL examples are corrected to the name form.
 - **Type references are name-ified**: `of customer` (not `of /type/customer`), a column type
   `email email` (not `email /type/email`), `create type customer` (not `create type
-  /type/customer` — the `TYPE` noun implies the `/type` mount, exactly as shipped `CREATE TRANSFORM
-  <name>` implies `/transform`). `INPUT OF message` in §15 likewise.
+  /type/customer` — the `TYPE` noun implies the `/type` mount, exactly as shipped
+  `CREATE TRANSFORM <name>` implies `/transform`). `INPUT OF message` in §15 likewise.
 - **Selector resolution is registry-scoped**: the stage/clause word names the registry the bare
   name resolves in (`decode` → codecs, `call` → procedures, `transform` → transforms, a type
   position → the type namespace) — so one short name is unambiguous per position, and the
@@ -365,8 +366,8 @@ Consequences, ruled here and applied by the sibling tickets:
 `of <name>` is a **general, any-position, plan-time-checked type assertion** — the `create table …
 of customer` vocabulary generalised, never a transform special case:
 
-- In DDL: `create table <path> of <name>`, `create view <path> of <name> as …` (§13), `INPUT OF
-  <name>` / `OUTPUT OF <name>` (§15) — attaches a named type as the contract.
+- In DDL: `create table <path> of <name>`, `create view <path> of <name> as …` (§13),
+  `INPUT OF <name>` / `OUTPUT OF <name>` (§15) — attaches a named type as the contract.
 - Mid-pipe: `… |> of customer |> …` (a named type) or `… |> of (priority text, reason text)` (an
   inline anonymous structural literal, the §5.2 column-list production) — asserts the relation's
   type at that point. The `transform triage |> of (…)` twin is exactly this stage following a

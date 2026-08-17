@@ -41,9 +41,11 @@ In scope: a deployable docs artifact and its worker, the two triggers (push to `
 plumbing those need. Out of scope: the content of the docs themselves, the parked qfs-host
 Workers entrypoint (a different artifact entirely), and any change to how releases are cut.
 
-**Prerequisite, already queued:** `npm run docs:build` currently fails on `docs/blueprint.md`
-(todo ticket `20260817110309-the-docs-site-production-build-fails-on-blueprint-md.md`). No
-deploy can be green before that lands, so this mission depends on it rather than re-proposing it.
+**Prerequisite, already met:** `npm run docs:build` failed on `docs/blueprint.md` when this
+mission was proposed; the fix landed on `main` the same day (`84040bc`, ticket
+`20260817110309-the-docs-site-production-build-fails-on-blueprint-md.md`, now archived), and
+`ci.yml` gained a `docs-build` job that walks the production build on every push. So a green
+build exists to deploy, and this mission builds on that gate rather than duplicating it.
 
 ## Experience
 
