@@ -72,6 +72,20 @@ struct Out {
     stderr: String,
 }
 
+/// A **routed, reversible** effect statement for the scenarios that exercise the CLI's plumbing —
+/// output format, exit codes, stdout/stderr separation — rather than any driver's behaviour.
+///
+/// It writes to `/sys/policies`, which the one-shot context always mounts (its describe facet is
+/// credential-free), so the plan resolves on a fresh host with nothing CONNECTed. These scenarios
+/// used to write to `/mail/drafts` instead, on a stale premise this module's own header carried:
+/// that a cred-free Google describe mount made `/mail/drafts` plan. Since the CONNECT model
+/// (t100040) nothing third-party is pre-mounted, so `/mail` routes nowhere on a fresh host — and
+/// the statement only planned because an unrouted effect target silently fell back to a plan
+/// against its literal path. Ticket `20260816213014` removed that fallback (an unrouted write now
+/// refuses at plan time, as an unrouted read always has), which is what these scenarios must not
+/// be measuring.
+const ROUTED_WRITE: &str = "INSERT INTO /sys/policies VALUES (name, allow) ('e2e', 'ALLOW INSERT')";
+
 /// A FRESH, harness-owned config home every spawned `qfs` child sees instead of the developer's
 /// real `~/.config/qfs` — these tests assert fresh-host behavior (nothing connected, no identity,
 /// no vault), so inheriting the host's real state would couple the suite to whatever the machine's
@@ -575,14 +589,15 @@ fn stdin_source_is_read_and_addressing_validated() {
 #[test]
 fn kind_to_exit_code_is_one_to_one() {
     // Pin the kind↔exit-code map an agent branches on: one kind ⇒ one exit code.
-    let cases: &[(&str, &str, i32)] = &[
-        ("this is not pipe sql", "parse", 2),
-        ("mail/inbox |> LIMIT 1", "usage", 2),
-        ("/mail/inbox |> LIMIT 1", "capability", 3),
-        ("REMOVE /mail/inbox", "commit_required", 4),
+    let (kept, kept_vfs) = local_temp_file("kind-map");
+    let cases: &[(String, &str, i32)] = &[
+        ("this is not pipe sql".to_string(), "parse", 2),
+        ("mail/inbox |> LIMIT 1".to_string(), "usage", 2),
+        ("/mail/inbox |> LIMIT 1".to_string(), "capability", 3),
+        (format!("REMOVE {kept_vfs}"), "commit_required", 4),
     ];
     for (stmt, kind, code) in cases {
-        let o = qfs(&["run", "-e", stmt, "--json"]);
+        let o = qfs(&["run", "-e", stmt.as_str(), "--json"]);
         assert_eq!(o.code, *code, "stmt {stmt:?} expected exit {code}");
         // commit_required renders its preview on stdout and the error on stderr.
         let v = json(&o.stderr);
@@ -591,23 +606,19 @@ fn kind_to_exit_code_is_one_to_one() {
             "stmt {stmt:?} expected kind {kind}"
         );
     }
+    let _ = std::fs::remove_dir_all(kept.parent().unwrap());
 }
 
 // ===================================================================================
 // Scenario 3: PREVIEW / COMMIT gate — via the REAL binary. Effect plans build against the
-// one-shot mounts (incl. the cred-free Google describe mounts, so `/mail/drafts` PLANS); the
-// commit then routes to the live apply registry, which has NO `mail` driver unless a Google
-// OAuth app + account are configured (fail closed), so a `--commit` here reaches `commit_failed`.
+// one-shot mounts, which on a fresh host are the system set only (`/local`, `/sys`, `/transform`,
+// `/type`, `/claude`) — nothing third-party is pre-mounted before a CONNECT. So the reversible
+// side uses `ROUTED_WRITE` (`/sys/policies`) and the irreversible side a real `/local` temp file.
 // ===================================================================================
 
 #[test]
 fn non_destructive_effect_previews_at_exit_zero_with_counts() {
-    let o = qfs(&[
-        "run",
-        "-e",
-        "INSERT INTO /mail/drafts VALUES (to, subject, body) ('a@b.example', 'Hi', 'Body')",
-        "--json",
-    ]);
+    let o = qfs(&["run", "-e", ROUTED_WRITE, "--json"]);
     assert_eq!(o.code, 0, "a non-destructive preview is exit 0");
     assert!(o.stderr.is_empty(), "no error on a clean preview");
     let v = json(&o.stdout);
@@ -622,11 +633,13 @@ fn non_destructive_effect_previews_at_exit_zero_with_counts() {
 
 #[test]
 fn destructive_set_without_commit_exits_four_but_still_previews() {
-    let o = qfs(&["run", "-e", "REMOVE /mail/inbox", "--json"]);
+    let (real, vfs) = local_temp_file("destructive-preview");
+    let o = qfs(&["run", "-e", &format!("REMOVE {vfs}"), "--json"]);
     assert_eq!(
         o.code, 4,
         "destructive set-wide plan without --commit is exit 4"
     );
+    assert!(real.exists(), "a blocked destructive plan applies nothing");
     // The PREVIEW is rendered on STDOUT so the operator/agent sees the affected counts.
     let preview = json(&o.stdout);
     assert_eq!(preview["committed"], false);
@@ -640,6 +653,7 @@ fn destructive_set_without_commit_exits_four_but_still_previews() {
     // The commit_required error is on STDERR (stdout/stderr separation).
     let err = json(&o.stderr);
     assert_eq!(err["error"]["kind"], "commit_required");
+    let _ = std::fs::remove_dir_all(real.parent().unwrap());
 }
 
 #[test]
@@ -648,16 +662,19 @@ fn irreversible_commit_without_ack_fails_closed_exit_four() {
     // (`RunMode::CliOneShot`) now FAILS CLOSED (exit 4, commit_required) without the explicit
     // `--commit-irreversible` ack — the IrreversibleGuard working as designed. The PREVIEW is
     // still rendered (zero effects applied); the error names the irreversible-ack requirement.
-    let o = qfs(&["run", "-e", "REMOVE /mail/inbox", "--json", "--commit"]);
+    let (real, vfs) = local_temp_file("no-ack");
+    let o = qfs(&["run", "-e", &format!("REMOVE {vfs}"), "--json", "--commit"]);
     assert_eq!(
         o.code, 4,
         "an irreversible --commit without the ack fails closed (exit 4)"
     );
     let v = json(&o.stdout);
     assert_eq!(v["committed"], false, "ZERO effects applied on the block");
+    assert!(real.exists(), "the blocked REMOVE deleted nothing");
     let err = json(&o.stderr);
     assert_eq!(err["error"]["kind"], "commit_required");
     assert_eq!(err["error"]["code"], "irreversible_ack_required");
+    let _ = std::fs::remove_dir_all(real.parent().unwrap());
 }
 
 /// Create a unique temp file and return both its real path and its `/local/...` VFS path (the
@@ -727,25 +744,21 @@ fn from_local_reads_a_real_directory() {
 #[test]
 fn reversible_commit_passes_the_irreversible_gate() {
     // The IrreversibleGuard must NOT over-fire on a reversible plan: a reversible INSERT with just
-    // `--commit` is not blocked by the gate (no ack required). It then reaches the apply stage;
-    // against a driver not wired into the binary's live registry it fails there (commit_failed) —
-    // crucially NOT `commit_required`/exit 4. So the assertion is "it got past the gate to apply".
-    let o = qfs(&[
-        "run",
-        "-e",
-        "INSERT INTO /mail/drafts VALUES (to, subject, body) ('a@b.example', 'Hi', 'Body')",
-        "--json",
-        "--commit",
-    ]);
+    // `--commit` is not blocked by the gate (no ack required) and reaches the apply stage —
+    // crucially NOT `commit_required`/exit 4. `/sys/policies` is mounted read AND apply on a fresh
+    // host, so "reached apply" is proved here by the apply SUCCEEDING; the assertion used to read
+    // a `commit_failed` off `/mail/drafts` instead, which proved the same thing only because no
+    // mail driver was in the live registry.
+    let o = qfs(&["run", "-e", ROUTED_WRITE, "--json", "--commit"]);
     assert_ne!(
         o.code, 4,
         "a reversible plan is not blocked by the irreversible gate"
     );
-    let err = json(&o.stderr);
+    assert_eq!(o.code, 0, "the reversible commit applied: {:?}", o.stderr);
     assert_eq!(
-        err["error"]["kind"], "commit_failed",
-        "reached the apply stage (no mail driver in the live registry yet): {:?}",
-        o.stderr
+        json(&o.stdout)["committed"],
+        true,
+        "past the gate and through the apply stage"
     );
 }
 
@@ -755,11 +768,13 @@ fn trailing_commit_keyword_irreversible_also_fails_closed() {
     // path as `--commit`, so the t37 IrreversibleGuard applies identically. A trailing-COMMIT of
     // an irreversible REMOVE therefore ALSO fails closed (exit 4) without the ack — the guard is a
     // property of the commit seam, not of which switch requested it (no bypass via the keyword).
-    let blocked = qfs(&["run", "-e", "COMMIT REMOVE /mail/inbox", "--json"]);
+    let (kept, kept_vfs) = local_temp_file("trailing-blocked");
+    let blocked = qfs(&["run", "-e", &format!("COMMIT REMOVE {kept_vfs}"), "--json"]);
     assert_eq!(
         blocked.code, 4,
         "trailing COMMIT of an irreversible plan fails closed too (no keyword bypass)"
     );
+    assert!(kept.exists(), "the blocked trailing COMMIT deleted nothing");
     assert_eq!(json(&blocked.stdout)["committed"], false);
     assert_eq!(
         json(&blocked.stderr)["error"]["code"],
@@ -787,6 +802,7 @@ fn trailing_commit_keyword_irreversible_also_fails_closed() {
         "the trailing-COMMIT REMOVE actually deleted the file"
     );
     let _ = std::fs::remove_dir_all(real.parent().unwrap());
+    let _ = std::fs::remove_dir_all(kept.parent().unwrap());
 }
 
 // ===================================================================================
@@ -798,11 +814,7 @@ fn trailing_commit_keyword_irreversible_also_fails_closed() {
 #[test]
 fn piped_default_is_json_no_flag() {
     // stdout is a pipe (captured) → json by default, no plan prompt, just the document.
-    let o = qfs(&[
-        "run",
-        "-e",
-        "INSERT INTO /mail/drafts VALUES (to, subject, body) ('a@b.example', 'Hi', 'Body')",
-    ]);
+    let o = qfs(&["run", "-e", ROUTED_WRITE]);
     assert_eq!(o.code, 0);
     let v = json(&o.stdout);
     assert!(
@@ -813,13 +825,7 @@ fn piped_default_is_json_no_flag() {
 
 #[test]
 fn explicit_format_table_overrides_pipe_default() {
-    let o = qfs(&[
-        "run",
-        "-e",
-        "INSERT INTO /mail/drafts VALUES (to, subject, body) ('a@b.example', 'Hi', 'Body')",
-        "--format",
-        "table",
-    ]);
+    let o = qfs(&["run", "-e", ROUTED_WRITE, "--format", "table"]);
     assert_eq!(o.code, 0);
     assert!(
         o.stdout.contains("PREVIEW") && o.stdout.contains("INSERT"),
@@ -834,12 +840,7 @@ fn explicit_format_table_overrides_pipe_default() {
 
 #[test]
 fn explicit_json_flag_is_machine_json() {
-    let o = qfs(&[
-        "run",
-        "-e",
-        "INSERT INTO /mail/drafts VALUES (to, subject, body) ('a@b.example', 'Hi', 'Body')",
-        "--json",
-    ]);
+    let o = qfs(&["run", "-e", ROUTED_WRITE, "--json"]);
     assert_eq!(o.code, 0);
     assert!(json(&o.stdout)["preview"].is_object());
 }
@@ -869,16 +870,13 @@ fn tty_default_is_table_via_pty() {
     }
     // `script -qec "<cmd>" /dev/null` runs <cmd> attached to a pty, capturing to /dev/null but
     // letting <cmd>'s own stdout flow to script's stdout (the pipe we capture).
-    let cmd = format!(
-        "{} run -e \"INSERT INTO /mail/drafts VALUES (to, subject, body) ('a@b.example', 'Hi', 'Body')\"",
-        qfs_bin().display()
-    );
+    let cmd = format!("{} run -e \"{ROUTED_WRITE}\"", qfs_bin().display());
     let out = Command::new(script)
         .args(["-qec", &cmd, "/dev/null"])
         .env("RUST_LOG", "off")
         // Hermetic config home (the module's fresh-host rule): without it the child inherits the
-        // developer's real ~/.config/qfs, so a CONNECTed `/mail` would route the draft write to the
-        // live Gmail driver — coupling this TTY-format check to whatever the operator has mounted.
+        // developer's real ~/.config/qfs, so the operator's own mounts and policies would decide
+        // what this write plans against — coupling a TTY-format check to their configuration.
         .env("XDG_CONFIG_HOME", hermetic_config_home())
         .output()
         .expect("spawn script");
@@ -1136,12 +1134,7 @@ fn which(bin: &str) -> Result<std::path::PathBuf, ()> {
 #[test]
 fn data_on_stdout_errors_on_stderr() {
     // A clean read-preview: data on stdout, nothing on stderr.
-    let ok = qfs(&[
-        "run",
-        "-e",
-        "INSERT INTO /mail/drafts VALUES (to, subject, body) ('a@b.example', 'Hi', 'Body')",
-        "--json",
-    ]);
+    let ok = qfs(&["run", "-e", ROUTED_WRITE, "--json"]);
     assert!(!ok.stdout.is_empty() && ok.stderr.is_empty());
     // An error: nothing on stdout, the error body on stderr.
     let bad = qfs(&["run", "-e", "/mail/inbox |> LIMIT 1", "--json"]);

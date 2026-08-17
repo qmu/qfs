@@ -588,14 +588,27 @@ fn transform_is_the_only_model_call_seam() {
     // statement is the only one that does. This test fails the instant a future change routes a
     // model call through any non-transform stage. Pure: plan SHAPE only — the `PanicApplier`
     // guarding `/db` and `/mail` proves no I/O and no model/network call occurs.
-    let reg = registry_with_transform(
+    let mut reg = registry_with_transform(
         "triage",
         Schema::new(vec![Column::new("name", ColumnType::Text, true)]),
         Schema::new(vec![Column::new("label", ColumnType::Text, true)]),
     );
+    // The two catalog mounts the DDL forms below desugar their INSERT onto — `CREATE TABLE
+    // /sql/<conn>/<t>` writes to `/sql/<conn>`, `CREATE TYPE <t>` to `/sys/drivers`. Both are
+    // mounted in the CLI; seeding them here is what makes the DDL cases routed writes, which an
+    // effect target must now be (ticket `20260816213014` — the unrouted-target fallback that used
+    // to carry them is gone, because it also let a real write with nowhere to go preview as fine).
+    for mount in ["/sql", "/sys"] {
+        reg.register(Arc::new(
+            TestDriver::new(mount)
+                .with_caps(Capabilities::none().select().insert())
+                .with_schema(Schema::new(vec![Column::new("id", ColumnType::Int, false)])),
+        ))
+        .unwrap();
+    }
 
-    // Each parses, resolves, and evaluates in the seeded registry. The DDL forms desugar to an
-    // (unrouted) catalog INSERT — still a plain effect plan, still no model call.
+    // Each parses, resolves, and evaluates in the seeded registry. The DDL forms desugar to a
+    // catalog INSERT — still a plain effect plan, still no model call.
     let non_transform = [
         "/db/users",                                         // a read
         "INSERT INTO /db/users VALUES (1, 'a', true)",       // a write
