@@ -90,6 +90,21 @@ qfs connect /chatwork TO chatwork SECRET 'vault:chatwork/work'
 
 `qfs describe /chatwork/rooms` then lists the declared views credential-free.
 
+### 3. Check later whether your installation is still current
+
+The rows you committed in step 1 **are** the driver from now on — the shipped `chatwork.qfs` is
+never read again. When a later qfs release corrects the declaration (this one has been corrected
+twice), your mount keeps running the text you installed. Ask:
+
+```qfs
+/sys/declarations |> where status == 'stale'
+```
+
+An empty answer means every installed declaration matches the one your binary ships. A `chatwork`
+row means it does not, and its `differs` column names the `CREATE …` statements to preview and
+commit again. Nothing is upgraded for you: re-installing is your write to make, so a declaration
+you customised is never silently overwritten. See the FAQ for the full three-value `status`.
+
 ## Read the latest messages in a room
 
 Address a room by its id (from `/chatwork/rooms`), newest first:

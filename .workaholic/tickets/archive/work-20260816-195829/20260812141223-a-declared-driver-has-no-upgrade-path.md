@@ -1,5 +1,6 @@
 ---
 created_at: 2026-08-12T14:12:23+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -116,3 +117,88 @@ the binary's own embedded assets.
   costs a parse; the install path already parses every statement, so the cost is already paid.
 - This generalises past Chatwork and Slack: every declared driver the project ships will hit it the
   first time it needs a fix, and the declared shape is meant to be *the normal way* to add a service.
+
+## Final Report
+
+Development completed as planned. The three rulings the ticket exists to force are settled and
+recorded in `docs/blueprint.md` §13.4, and the answering surface ships as `/sys/declarations`.
+
+**Resolved: the open question PR #59's survey left.** That survey settled two of the three rulings
+from the evidence (identity is derived, not stamped; upgrade is operator-initiated) and left the
+third — *which existing surface answers* — open, having read three candidates and found each
+blocked: `DescribeReport` carries no free-text slot and widening it ripples through every driver's
+output and the generated goldens; `driver_catalog` is deliberately built from the **compiled**
+registry only, so `gen-docs` stays a pure function of the binary; `/sys/drivers` is a real table
+whose columns are stored row data. Its recommendation was a CLI-level fact line beside `describe`,
+outside the core report. **That was resolved against, and the reason is the product's own thesis**:
+a fact reachable only from one CLI subcommand is not queryable, cannot be filtered, and cannot be
+joined. `SysNode` is documented as a closed set where "a new admin view adds a variant here, never a
+side-channel API (the one-engine constraint)", and `/sys/whoami` is the standing precedent for a
+`/sys` node whose rows are *derived* rather than read from the System DB. So the answer is a path,
+and `/sys/declarations |> where status == 'stale'` is an ordinary query. That also required no
+change to `DescribeReport`, no change to the driver catalog, and no migration.
+
+**What was built.**
+
+- `crates/qfs/src/declaration_currency.rs` — the derivation. Both sides reduce to the same
+  `(key, canonical value)` map, one entry per `CREATE DRIVER`/`TYPE`/`VIEW`/`MAP`/`LOOKUP`; the
+  installed side goes through the same newest-row-per-`(kind, name, verb)` resolution the live
+  registry applies, and the shipped side is the embedded asset parsed through the **production**
+  splitter (`qfs_core::ddl::document::split_document`) and grammar.
+- `SysNode::Declarations` (`/sys/declarations`), SELECT-only, columns `driver` / `status` /
+  `shipped` / `differs`, scanned in `crates/qfs/src/sys.rs`.
+- `qfs_skill::DECLARED_DRIVERS` — the manifest of shipped declaration programs. It carries the
+  asset label only; the driver name is derived by parsing, so the manifest cannot disagree with the
+  declaration it points at.
+- `docs/blueprint.md` §13.4, `docs/cookbook/faq.md`, `docs/cookbook/chatwork.md`, skills regenerated.
+
+**Quality gate, item by item.**
+
+| Gate item | Status |
+| --- | --- |
+| One question, three outcomes distinguished | `/sys/declarations` → `status` ∈ `current` / `stale` / `local`, with `shipped` NULL exactly for `local` |
+| The upgrade ruling recorded in the blueprint with its rejected alternative | §13.4 (3) — operator-initiated; automatic re-install rejected, with both reasons |
+| Hermetic tests: fresh install / drifted shipped text / locally authored / re-install | 11 tests in `declaration_currency` (10 pure + 1 end-to-end over a real `sys_drivers` table and the real shipped asset), plus the `/sys` node's describe/capability test. No network, no credentials |
+| `cargo test --workspace`, clippy, fmt, gen-docs, gen-skills, check-migrations | all exit 0 |
+
+Two gate items got more than the letter asked for. The ticket named four test cases; the suite also
+pins **install order is not identity**, **a `CREATE TYPE` change counts** (the Chatwork fix that
+provoked the ticket was a type change — a comparison reading only driver/view/map rows would have
+called that installation current, the exact untruth this node exists to prevent), **a statement
+removed upstream reports stale** (the case the ticket flags as unhandled by superseding), **one
+driver's declaration never reads another's rows**, and a ratchet asserting **every shipped
+declaration compares current against itself** — which fails loudly if an asset stops desugaring or
+the comparison reads a column the desugar does not write, rather than telling every operator their
+up-to-date installation is stale.
+
+### Discovered Insights
+
+- **Insight**: A `/sys` node whose rows are *derived per read* is an established shape, not a new
+  one — `/sys/whoami` resolves from the request principal and never touches the System DB, and its
+  doc comment says so explicitly.
+  **Context**: This is what made "no stamp, no migration, no new row kind" implementable rather than
+  merely preferable. Anything answerable from state qfs already holds can be a `/sys` relation
+  without becoming stored state, and the closed `SysNode` set is where it goes.
+
+- **Insight**: The binary takes no direct `qfs-parser` edge; the AST types it needs ride through
+  `qfs-exec` re-exports, each with a comment saying why (`Expr` for a refinement predicate,
+  `Statement` for a stored collection body). Reading a desugared row back out of a parsed statement
+  needed exactly two more (`EffectBody`, `Literal`).
+  **Context**: The existing re-exports say "the binary never inspects it; it round-trips the body".
+  This change is the first place the binary looks *inside* a statement, and it looks only at the
+  effect's declared `VALUES`. A future reader wondering why those two types are re-exported will
+  find the reason on the re-export itself.
+
+- **Insight**: Recognising a desugared declaration row by its **column set** rather than by its
+  `/sys/drivers` target path keeps the reader off the path AST entirely, and is more honest: the
+  column set is what the row *is*.
+  **Context**: The desugar writes exactly ten named columns for every `CREATE` form (`kind`, `name`,
+  `base_url`, `auth`, `pagination`, `of_type`, `verb`, `body`, `irreversible`, `pushdown`) and the
+  values carry column names, so the read maps by name and never depends on positional order.
+
+- **Insight**: `create.sh` for feedback records accepts `source` ∈ `meeting | slack | discussion`,
+  but `feedback/SKILL.md`'s schema block also lists `development`. Passing `development` is refused
+  with `{"created": false, "reason": "bad_source"}`.
+  **Context**: Hit twice this run while filing tooling feedback. The doc and the validator disagree;
+  the validator wins. Unrelated to this ticket's code, recorded here because the next run that
+  files a `kind: concern` from development will hit the same wall.

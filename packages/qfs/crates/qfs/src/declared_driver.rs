@@ -136,28 +136,52 @@ pub(crate) fn load_declared_drivers() -> Vec<DeclaredDriver> {
 }
 
 /// Row shape read back from `sys_drivers` (mirrors the desugar's columns, plus the rowid the
-/// newest-wins resolution keys on).
-struct DriverRow {
-    id: i64,
-    kind: String,
-    name: String,
-    base_url: Option<String>,
-    auth: Option<String>,
-    pagination: Option<String>,
-    of_type: Option<String>,
-    verb: Option<String>,
-    body: Option<String>,
-    irreversible: bool,
-    pushdown: Option<String>,
+/// newest-wins resolution keys on). Visible to the crate because the §13 currency check
+/// ([`crate::declaration_currency`]) compares installed rows against the rows a SHIPPED declaration
+/// desugars to — the same shape on both sides, by construction.
+#[derive(Debug, Clone)]
+pub(crate) struct DriverRow {
+    pub(crate) id: i64,
+    pub(crate) kind: String,
+    pub(crate) name: String,
+    pub(crate) base_url: Option<String>,
+    pub(crate) auth: Option<String>,
+    pub(crate) pagination: Option<String>,
+    pub(crate) of_type: Option<String>,
+    pub(crate) verb: Option<String>,
+    pub(crate) body: Option<String>,
+    pub(crate) irreversible: bool,
+    pub(crate) pushdown: Option<String>,
 }
 
-fn load_from_conn(conn: &rusqlite::Connection) -> Result<Vec<DeclaredDriver>, rusqlite::Error> {
+/// The declaration-row columns a `CREATE DRIVER`/`TYPE`/`VIEW`/`MAP`/`LOOKUP` desugars into, in the
+/// grammar's own order (`qfs_parser`'s `DRIVER_DECL_COLUMNS`). Repeated here rather than exported
+/// because the read below maps by NAME, so the list is a recogniser for "this insert is a
+/// declaration row", never a positional contract.
+const DECL_COLUMNS: [&str; 10] = [
+    "kind",
+    "name",
+    "base_url",
+    "auth",
+    "pagination",
+    "of_type",
+    "verb",
+    "body",
+    "irreversible",
+    "pushdown",
+];
+
+/// Read every `sys_drivers` row, install order. The raw rows before [`assemble`] — what the
+/// currency check compares and what the loader groups.
+pub(crate) fn rows_from_conn(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<DriverRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT kind, name, base_url, auth, pagination, of_type, verb, body, irreversible, \
                 pushdown, id \
          FROM sys_drivers ORDER BY id",
     )?;
-    let rows: Vec<DriverRow> = stmt
+    let rows = stmt
         .query_map([], |r| {
             Ok(DriverRow {
                 kind: r.get(0)?,
@@ -174,7 +198,61 @@ fn load_from_conn(conn: &rusqlite::Connection) -> Result<Vec<DeclaredDriver>, ru
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(assemble(rows))
+    Ok(rows)
+}
+
+/// Read one declaration row back out of a PARSED statement — the shipped side of the currency
+/// comparison. A statement is a declaration row iff it is an effect whose `VALUES` name exactly the
+/// declaration columns; that recogniser is used instead of matching the `/sys/drivers` target path
+/// because the column set is what the row IS, and it keeps this off the path-AST entirely.
+/// Anything else in a script (a `CONNECT`, a comment-only chunk) returns `None`.
+pub(crate) fn driver_row_from_statement(stmt: &qfs_exec::Statement, id: i64) -> Option<DriverRow> {
+    let qfs_exec::Statement::Effect(effect) = stmt else {
+        return None;
+    };
+    let qfs_exec::EffectBody::Values(values) = &effect.body else {
+        return None;
+    };
+    let columns = values.columns.as_ref()?;
+    if columns.len() != DECL_COLUMNS.len()
+        || !DECL_COLUMNS.iter().all(|c| columns.iter().any(|k| k == c))
+    {
+        return None;
+    }
+    let row = values.rows.first()?;
+    let at = |col: &str| -> Option<&qfs_exec::Expr> {
+        let i = columns.iter().position(|k| k == col)?;
+        row.get(i)
+    };
+    let text = |col: &str| -> Option<String> {
+        match at(col) {
+            Some(qfs_exec::Expr::Lit(qfs_exec::Literal::Str(s))) => Some(s.clone()),
+            _ => None,
+        }
+    };
+    let flag = |col: &str| -> bool {
+        matches!(
+            at(col),
+            Some(qfs_exec::Expr::Lit(qfs_exec::Literal::Bool(true)))
+        )
+    };
+    Some(DriverRow {
+        id,
+        kind: text("kind")?,
+        name: text("name")?,
+        base_url: text("base_url"),
+        auth: text("auth"),
+        pagination: text("pagination"),
+        of_type: text("of_type"),
+        verb: text("verb"),
+        body: text("body"),
+        irreversible: flag("irreversible"),
+        pushdown: text("pushdown"),
+    })
+}
+
+fn load_from_conn(conn: &rusqlite::Connection) -> Result<Vec<DeclaredDriver>, rusqlite::Error> {
+    Ok(assemble(rows_from_conn(conn)?))
 }
 
 /// Group flat `sys_drivers` rows into per-driver models. A `driver` row seeds a [`DeclaredDriver`];

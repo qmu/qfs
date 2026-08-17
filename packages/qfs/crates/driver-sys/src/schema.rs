@@ -79,6 +79,13 @@ pub enum SysNode {
     /// `/sys/connections` redaction contract): a consumer reads the principal as data through the
     /// one engine, never a bespoke side-channel API.
     Whoami,
+    /// `/sys/declarations` — the declared-driver **currency** view (ticket 20260812141223): for
+    /// every declared driver installed in `/sys/drivers`, whether it still matches the declaration
+    /// THIS binary ships. Like `/sys/whoami` its rows are **derived**, not stored: nothing is
+    /// stamped at install time, so the answer is a fact recomputed from the installed rows and the
+    /// embedded asset rather than a claim the installer once made. SELECT-only, credential-free by
+    /// construction (declaration identity + a difference list; structurally no secret column).
+    Declarations,
 }
 
 impl SysNode {
@@ -98,6 +105,7 @@ impl SysNode {
             "drivers" => Some(Self::Drivers),
             "accounts" => Some(Self::Accounts),
             "whoami" => Some(Self::Whoami),
+            "declarations" => Some(Self::Declarations),
             _ => None,
         }
     }
@@ -118,6 +126,7 @@ impl SysNode {
             Self::Drivers => "drivers",
             Self::Accounts => "accounts",
             Self::Whoami => "whoami",
+            Self::Declarations => "declarations",
         }
     }
 
@@ -286,6 +295,19 @@ pub fn sys_node_schema(node: SysNode) -> Schema {
         SysNode::Whoami => Schema::new(vec![
             col("signed_in", ColumnType::Bool, false),
             col("user", ColumnType::Text, true),
+        ]),
+        // The declared-driver currency view (20260812141223). `driver` is the installed
+        // declaration's name (the `CONNECT … TO <name>` target); `status` is the closed three-value
+        // answer the ticket asks for — `current` / `stale` / `local`; `shipped` names the embedded
+        // asset the comparison ran against (NULL for `local`, which HAS no shipped counterpart and
+        // must never read as stale); `differs` lists the declaration keys that disagree, so a stale
+        // row says WHICH statements to re-install rather than only that something moved. Derived
+        // per read — declaration text and selectors only, structurally no secret column.
+        SysNode::Declarations => Schema::new(vec![
+            col("driver", ColumnType::Text, false),
+            col("status", ColumnType::Text, false),
+            col("shipped", ColumnType::Text, true),
+            col("differs", ColumnType::Text, true),
         ]),
     }
 }
