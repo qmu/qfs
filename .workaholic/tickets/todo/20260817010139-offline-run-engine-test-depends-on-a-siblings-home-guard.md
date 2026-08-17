@@ -8,7 +8,7 @@ merge_policy: review
 verification_handoff:
 ---
 
-# `offline_run_engine_does_not_mount_server` passes only while a sibling test's `HomeGuard` happens to be live
+# `offline_run_engine_does_not_mount_server` is the tenth test with no config home of its own, and the sweep missed it
 
 ## Overview
 
@@ -24,23 +24,38 @@ the store resolved to the shared $HOME/.config/qfs (XDG_CONFIG_HOME unset) insid
   — wrap the test in `testenv::HomeGuard` so it uses an isolated config home
 ```
 
-`HomeGuard` sets `XDG_CONFIG_HOME` process-wide and restores it on drop, so whether this test sees
-the variable set is decided by which *other* test is running concurrently. It therefore passes on a
-busy scheduler and fails on a quiet one — the guard at `store.rs:54` exists precisely to make that
-class of accident loud, and here it is firing on a test that never opted into isolation.
+This is exactly the class `20260816205752-nine-qfs-unit-tests-depend-on-an-ambient-xdg-config-home.md`
+closed for nine tests one day earlier (PR #61, commit `66b57f4`, "cargo test --workspace is green
+with `XDG_CONFIG_HOME` unset as well as set"). That claim is not true yet: this test predates the
+sweep (it has been in `provision.rs` since `f9387de`) and the sweep did not reach it.
 
 Measured 2026-08-17 in the routine's container, on **unmodified `origin/main` at `cd8be38`**:
 
 ```
+$ echo "${XDG_CONFIG_HOME:-<unset>}"
+<unset>
 $ cargo test -p qfs --lib offline_run_engine_does_not_mount_server
-test result: FAILED. 0 passed; 1 failed          # alone: deterministic
+test result: FAILED. 0 passed; 1 failed
 
 $ cargo test -p qfs --lib
-test result: FAILED. 484 passed; 1 failed        # in the full lib suite, same test
+test result: FAILED. 484 passed; 1 failed        # the full lib suite, same single failure
+
+$ XDG_CONFIG_HOME=/tmp/x cargo test -p qfs --lib offline_run_engine_does_not_mount_server
+test result: ok. 1 passed; 0 failed
 ```
 
-GitHub Actions is green on that same commit (`ci.yml`, run 31981433022), which is the tell: nothing
-about the change under test differs, only the interleaving.
+So the result is decided by the ambient environment, not by the code under test. GitHub Actions is
+green on that same commit (`ci.yml`, run 31981433022), which is what has kept it invisible.
+`HomeGuard` also sets `XDG_CONFIG_HOME` process-wide for its lifetime, so a concurrently-running
+guarded sibling can mask the failure as well.
+
+## Related History
+
+The previous sweep of this exact class fixed nine tests and stopped short of the tenth; its own
+insight — "the reliable question is not *does this test touch the environment* but *can anything
+under it resolve a store path*" — is the one that would have caught this call chain.
+
+- [20260816205752-nine-qfs-unit-tests-depend-on-an-ambient-xdg-config-home.md](.workaholic/tickets/archive/work-20260816-210358/20260816205752-nine-qfs-unit-tests-depend-on-an-ambient-xdg-config-home.md) — the same defect, nine other tests (same `store.rs:54` guard)
 
 ## Policies
 
@@ -64,8 +79,8 @@ about the change under test differs, only the interleaving.
 
 ## Implementation Steps
 
-1. Reproduce: run the test alone (`cargo test -p qfs --lib offline_run_engine_does_not_mount_server`)
-   and confirm the `store.rs:54` panic with `XDG_CONFIG_HOME` unset.
+1. Reproduce with `XDG_CONFIG_HOME` unset (`env -u XDG_CONFIG_HOME cargo test -p qfs --lib
+   offline_run_engine_does_not_mount_server`) and confirm the `store.rs:54` panic.
 2. Sweep the crate for the same shape — every `#[test]` reaching `run_engine_and_reads`,
    `open_system_db`, or any other store opener without a `HomeGuard` in scope. Fix the class, not
    only the one that happened to be caught.
@@ -79,14 +94,17 @@ about the change under test differs, only the interleaving.
 
 **Acceptance criteria**
 
-- `cargo test -p qfs --lib offline_run_engine_does_not_mount_server` passes when run alone.
-- `cargo test -p qfs --lib -- --test-threads=1` passes, which is the ordering that removes every
-  accidental overlap.
+- With `XDG_CONFIG_HOME` **unset**: `cargo test -p qfs --lib offline_run_engine_does_not_mount_server`
+  passes when run alone.
+- With `XDG_CONFIG_HOME` **unset**: `cargo test --workspace` is green, and stays green under
+  `-- --test-threads=1` (the ordering that removes every accidental overlap).
 - No `#[test]` in the `qfs` crate reaches a store opener without a `HomeGuard` in scope.
 
 **Verification method**
 
-- The two `cargo test` invocations above, plus the sweep from step 2 recorded in the Final Report.
+- The `cargo test` invocations above run with `XDG_CONFIG_HOME` explicitly unset (`env -u
+  XDG_CONFIG_HOME …`) — the variable being set is what hides this defect — plus the sweep from
+  step 2 recorded in the Final Report.
 
 **Gate**
 
