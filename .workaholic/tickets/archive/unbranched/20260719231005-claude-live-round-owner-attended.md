@@ -1,5 +1,6 @@
 ---
 created_at: 2026-07-19T23:10:05+09:00
+status: icebox
 author: a@qmu.jp
 type: housekeeping
 layer: [Infrastructure]

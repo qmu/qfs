@@ -1,5 +1,6 @@
 ---
 created_at: 2026-08-17T10:27:23+00:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -93,3 +94,55 @@ hypotheses for the survey to confirm or correct, not its conclusions.
   then deleted. The three differ in what has to be maintained afterwards, and this proposal
   has no basis for choosing. The driving session resolves it explicitly and records the
   resolution in its Final Report.
+
+## Final Report
+
+Development completed as planned. The map is `docs/documentation-map.md`, dated 2026-08-17 and
+pinned to commit `52b0410` / binary `qfs 0.0.108`, added to the VitePress sidebar under a new
+"The project as built" section.
+
+### Open Decision resolved
+
+**Where the map lives, and whether it survives the mission** — resolved as a **durable page on the
+docs site** (`docs/documentation-map.md`, in the navigation), not a contributor-facing file outside
+the site and not a working artifact to delete.
+
+Reasoning: the mission's `## Experience` asks that "a reader can tell of any page whether it is
+generated from the binary or hand-written, and what it does not cover". That is this map, stated as
+a *reader-facing* requirement — so a file outside the published site could not satisfy it, and a
+working artifact deleted at the end would take the evidence the other two tickets were written
+against with it. The maintenance cost the fork was really about is bounded the same way the two
+sibling pages bound theirs: the page carries the commit and date it was taken against and says
+plainly that nothing checks it, so a reader can tell how old its claims are instead of trusting them
+indefinitely.
+
+### Discovered Insights
+
+- **Insight**: the repository has exactly three generated-file writers, and only one of them is
+  defended automatically. `gen-docs` drift is caught by a unit test inside `qfs::docs`
+  (`docs_drift_golden`), so `cargo test --workspace` and therefore CI enforce it; `gen-skills
+  --check` and `check-migrations` have no test and no CI step — `.github/workflows/ci.yml` never
+  invokes `xtask` at all.
+  **Context**: any future anti-drift generator must ship with a unit test in a workspace crate, not
+  just an `xtask` subcommand, or it is enforced only by whoever remembers to type it.
+
+- **Insight**: `docs/drivers.md` is generated but structurally incomplete, and for a reason worth
+  knowing. It renders the *compiled* cred-free describe registry, so `/sql`, `/git` and `/cf` are
+  absent because their describe needs a registered connection catalog / repo / D1 catalog first (a
+  registration requirement, not a credential one — `crates/qfs/src/describe.rs` documents the
+  fallback), and every declared driver is absent because a declaration is operator-installed data.
+  **Context**: "the driver catalog is generated from the binary, so it always matches" is true and
+  still leaves five shipped mounts undocumented; a reader needs the reason, not just the table.
+
+- **Insight**: the two packages are coupled in one direction only, and the coupling is recorded
+  solely inside the smaller one. `packages/qfs-viewer` locates a `qfs` binary rather than bundling
+  it and serves its corpus from qfs's markdown collection path (ADRs 0008 and 0009), while nothing
+  under `docs/` mentions the package except two blueprint sections.
+  **Context**: the qfs side of a real integration seam is undocumented, which is why the mission's
+  third ticket has to read that package's own tree rather than the blueprint sections about it.
+
+- **Insight**: `packages/qfs/ARCHITECTURE.md` is not merely out of date, it is out of date in a way
+  that misleads structurally — a 20-crate map of a 48-crate workspace, predating the whole
+  `qfs-exec` integration layer that now sits between `qfs-cmd` and the spine.
+  **Context**: a contributor reading it would place the read path in `qfs-core` and miss that
+  `qfs-exec` owns the end-to-end SELECT executor and the one-shot orchestration.
