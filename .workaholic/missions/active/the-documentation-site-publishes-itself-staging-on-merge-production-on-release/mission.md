@@ -9,7 +9,7 @@ author: noreply@anthropic.com
 assignees: [a@qmu.jp]
 assignee:
 predicted_hours:
-actual_hours:
+actual_hours: 0.3
 feedback: [20260817142308-auto-deploy-docs-to-staging-qfs-qmu-co-jp-on-merge-to-main-and-to-qfs-qmu-co-jp-on-release.md]
 tickets: []
 stories: []
@@ -48,3 +48,5 @@ and the repository documents the procedure the way it documents the GitHub Relea
 - 2026-08-17 — ticket archived — 20260817142443-a-merge-to-main-publishes-the-docs-site-to-staging-qfs-qmu-co-jp.md
 - 2026-08-17 — ticket archived — 20260817142443-a-release-publishes-the-docs-site-to-qfs-qmu-co-jp.md
 - 2026-08-17 — ticket archived — 20260817142443-the-docs-deployment-is-recorded-where-the-github-release-already-is.md
+- 2026-08-17 — run recorded (+0.3h) — work-20260817-163919
+- 2026-08-17 — story added — work-20260817-163919.md
