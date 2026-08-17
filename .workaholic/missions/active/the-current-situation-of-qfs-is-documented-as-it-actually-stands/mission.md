@@ -69,3 +69,4 @@ tooling beyond what the survey ticket justifies.
 - 2026-08-17 — All three tickets driven on work-20260817-104129: the documentation map, the architecture-as-built page and the repository page, each dated against 52b0410 / qfs 0.0.108 — work-20260817-104129.md
 - 2026-08-17 — ticket archived — 20260817105331-the-cookbook-recipe-ratchet-two-places-name-does-not-exist.md
 - 2026-08-17 — ticket archived — 20260817110309-the-docs-site-production-build-fails-on-blueprint-md.md
+- 2026-08-17 — ticket archived — 20260817111530-the-qfs-viewer-gate-cannot-pass-where-bun-is-installed.md

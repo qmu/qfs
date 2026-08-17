@@ -124,6 +124,15 @@ jobs:
   # (TypeScript, plgg family). One call to its canonical runner, identical to what a developer
   # runs locally, so the local and CI paths cannot drift — mirrors the standalone repo's old
   # run-tests.yml (setup-node 24.x + npm-install.sh + check-all.sh).
+  #
+  # RUNTIME COVERAGE: this job installs Node and nothing else, so the npx smoke's runtime loop
+  # skips bun and deno here and a green badge attests to NODE ONLY (2026-08-17, ticket
+  # 20260817111530 — the gate's meaning silently depended on which runtimes the machine carried).
+  # bun is deliberately NOT installed: the published `plgg-md` dist cannot be parsed by bun 1.3.11
+  # (see the dated exemption in scripts/smoke-npx.sh), so adding it would turn this job red on an
+  # unchanged tree for a defect in a third-party package. Revisit when that is fixed upstream —
+  # ticket 20260817131540. The claim is documented in packages/qfs-viewer/README.md and
+  # docs/guide/repository.md rather than left implicit.
   viewer-check-all:
     name: qfs-viewer check-all
     runs-on: ubuntu-latest
