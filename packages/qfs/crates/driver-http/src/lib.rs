@@ -60,7 +60,7 @@ use qfs_types::{Column, ColumnType, DriverId, Schema};
 pub use applier::RestApplier;
 pub use client::{redirect_allowed, HttpClient, MockHttpClient, ReqwestClient};
 pub use config::{
-    AuthStrategy, CodecId, Pagination, ResourceMap, RestApiConfig, RestVerb, SecretRef,
+    AuthStrategy, CodecId, NodeMap, Pagination, ResourceMap, RestApiConfig, RestVerb, SecretRef,
 };
 pub use effect::{HttpEffect, BODY_COL, HEADER_COL_PREFIX, URL_COL};
 pub use error::HttpError;
@@ -136,19 +136,34 @@ impl RestDriver {
         &self.applier
     }
 
-    /// The capability set for a `/rest/<api>/<resource>/...` node: exactly the verbs the
-    /// resource declares ([`ResourceMap::verbs`]). A path that names no configured resource
-    /// gets the empty set, so every verb is rejected at the parse-time gate.
+    /// The capability set for a `/rest/<api>/<resource>/...` node: exactly the verbs that node
+    /// declares. A path no configuration addresses gets the empty set, so every verb is rejected
+    /// at the parse-time gate.
+    ///
+    /// A **declared** mount (blueprint §13) answers from its per-node [`NodeMap`] table, matched
+    /// on the node's own path template: `REMOVE` mapped on `/slack/{ws}/files/{file}` says nothing
+    /// about `/slack/{ws}/users`. A **compiled** mount declares no nodes and keeps the
+    /// leading-segment answer ([`ResourceMap::verbs`]), which is the grain its configuration is
+    /// written in.
     fn caps_for(&self, path: &Path) -> Capabilities {
-        let Some(segment) = applier::resource_segment_of(path.as_str()) else {
-            return Capabilities::none();
-        };
-        let Some(resource) = self.applier.config().resource_for_segment(&segment) else {
-            return Capabilities::none();
+        let config = self.applier.config();
+        let verbs = if config.declares_nodes() {
+            let Some(resource_path) = applier::resource_path_of(path.as_str()) else {
+                return Capabilities::none();
+            };
+            config.verbs_for_path(&resource_path)
+        } else {
+            let Some(segment) = applier::resource_segment_of(path.as_str()) else {
+                return Capabilities::none();
+            };
+            let Some(resource) = config.resource_for_segment(&segment) else {
+                return Capabilities::none();
+            };
+            resource.verbs.clone()
         };
         let mut caps = Capabilities::none();
-        for verb in &resource.verbs {
-            caps = caps.with(rest_verb_to_verb(*verb));
+        for verb in verbs {
+            caps = caps.with(rest_verb_to_verb(verb));
         }
         caps
     }
@@ -182,18 +197,24 @@ impl Driver for RestDriver {
         &self.pushdown
     }
 
-    /// A write is irreversible iff the resource the path names marks that verb irreversible
-    /// (blueprint §7/§8) — a declared MAP's `IRREVERSIBLE` flag, lifted onto the resource config.
-    /// The planner ORs this onto the effect node, so `PREVIEW`/`COMMIT` gate it like a `REMOVE`.
+    /// A write is irreversible iff the node the path names marks that verb irreversible
+    /// (blueprint §7/§8) — a declared MAP's `IRREVERSIBLE` flag, lifted onto the config. Read per
+    /// node on a declared mount and per leading segment on a compiled one, the same split
+    /// [`RestDriver::caps_for`] makes. The planner ORs this onto the effect node, so
+    /// `PREVIEW`/`COMMIT` gate it like a `REMOVE`.
     fn write_irreversible(&self, path: &Path, verb: Verb) -> bool {
         let Some(rv) = verb_to_rest_verb(verb) else {
             return false;
         };
+        let config = self.applier.config();
+        if config.declares_nodes() {
+            return applier::resource_path_of(path.as_str())
+                .is_some_and(|p| config.irreversible_for_path(&p, rv));
+        }
         let Some(segment) = applier::resource_segment_of(path.as_str()) else {
             return false;
         };
-        self.applier
-            .config()
+        config
             .resource_for_segment(&segment)
             .is_some_and(|r| r.is_irreversible(rv))
     }

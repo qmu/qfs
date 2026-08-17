@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use qfs_driver_http::{
-    AuthStrategy, Pagination, ResourceMap, RestApiConfig, RestDriver, RestVerb, SecretRef,
+    AuthStrategy, NodeMap, Pagination, ResourceMap, RestApiConfig, RestDriver, RestVerb, SecretRef,
 };
 use qfs_secrets::{ConnectionRecord, CredentialKey, Secret, SecretError, Secrets};
 
@@ -324,6 +324,9 @@ impl DeclaredDriver {
     /// driver's own namespace (the token lives in the account layer, never in the row).
     pub(crate) fn rest_config(&self) -> RestApiConfig {
         let mut config = RestApiConfig::new(self.base_url.clone(), self.resources())
+            // The per-node capability table the plan-time verb gate reads. `resources` stays the
+            // leading-segment aggregate the wire layer resolves a resource with.
+            .with_nodes(self.declared_nodes())
             .with_auth(self.auth_strategy());
         if let Some(p) = self.pagination.as_deref().and_then(parse_pagination) {
             config = config.with_pagination(p);
@@ -397,13 +400,64 @@ impl DeclaredDriver {
             .map(|(seg, verbs, irr)| ResourceMap::new(seg, verbs).with_irreversible_verbs(irr))
             .collect()
     }
+
+    /// The driver's view/map nodes as a per-node capability table, keyed by each node's own path
+    /// **template** (`{ws}/files/{file}`) rather than by its leading segment. This is what the
+    /// plan-time verb gate reads: [`Self::resources`]'s segment aggregate answers the union of
+    /// every verb declared under a leading segment, which for a per-tenant declaration (Slack's
+    /// every node lives under `/slack/{ws}/…`) is every verb the driver declares anywhere — so
+    /// `REMOVE /slack/<ws>/users` passed a gate no `CREATE MAP` declares.
+    ///
+    /// A view contributes `SELECT`; a map contributes its mapped verb, and its `IRREVERSIBLE` flag
+    /// when it carries one. A `CALL` map contributes no universal verb (it is answered by the
+    /// procedure registry), exactly as in the segment aggregate.
+    fn declared_nodes(&self) -> Vec<NodeMap> {
+        // (template, verbs, irreversible subset), in declaration order.
+        let mut by_path: Vec<(String, Vec<RestVerb>, Vec<RestVerb>)> = Vec::new();
+        let mut add = |template: String, verb: RestVerb, irreversible: bool| {
+            if let Some(entry) = by_path.iter_mut().find(|(p, ..)| *p == template) {
+                if !entry.1.contains(&verb) {
+                    entry.1.push(verb);
+                }
+                if irreversible && !entry.2.contains(&verb) {
+                    entry.2.push(verb);
+                }
+            } else {
+                let irr = if irreversible { vec![verb] } else { Vec::new() };
+                by_path.push((template, vec![verb], irr));
+            }
+        };
+        for v in &self.views {
+            if let Some(p) = resource_path(&self.name, &v.path) {
+                add(p.to_string(), RestVerb::Select, false);
+            }
+        }
+        for m in &self.maps {
+            if let (Some(p), Some(verb)) = (resource_path(&self.name, &m.path), map_verb(&m.verb)) {
+                add(p.to_string(), verb, m.irreversible);
+            }
+        }
+        by_path
+            .into_iter()
+            .map(|(p, verbs, irr)| NodeMap::new(p, verbs).with_irreversible_verbs(irr))
+            .collect()
+    }
+}
+
+/// The node path relative to its driver mount (`chatwork`, `/chatwork/rooms/{room}/files` →
+/// `rooms/{room}/files`) — the coordinate space a [`NodeMap`] template is written in, and the one
+/// an inbound `/rest/<name>/<resource…>` path reduces to. `None` if the path does not mount under
+/// the driver, or names the mount root alone.
+fn resource_path<'a>(driver: &str, path: &'a str) -> Option<&'a str> {
+    let rest = path.trim_start_matches('/').strip_prefix(driver)?;
+    let rest = rest.trim_start_matches('/');
+    (!rest.is_empty()).then_some(rest)
 }
 
 /// The resource segment of a node path relative to its driver mount (`chatwork`, `/chatwork/rooms/…`
 /// → `rooms`). `None` if the path does not mount under the driver.
 fn resource_segment<'a>(driver: &str, path: &'a str) -> Option<&'a str> {
-    let rest = path.trim_start_matches('/').strip_prefix(driver)?;
-    rest.trim_start_matches('/')
+    resource_path(driver, path)?
         .split('/')
         .next()
         .filter(|s| !s.is_empty())
@@ -1750,7 +1804,10 @@ mod tests {
             cfg.pagination,
             Pagination::Cursor { max_pages: 50, .. }
         ));
-        // One resource `rooms` aggregating SELECT (from the view) and INSERT (from the map).
+        // One resource `rooms` aggregating SELECT (from the view) and INSERT (from the map). The
+        // segment aggregate is deliberate and unchanged: it is what the wire layer resolves a
+        // resource with (`resource_for_segment`), and here the whole declaration IS one node, so
+        // the aggregate and the per-node answer agree.
         assert_eq!(cfg.resources.len(), 1);
         assert_eq!(cfg.resources[0].segment, "rooms");
         assert!(
@@ -1759,6 +1816,15 @@ mod tests {
         );
         // A reversible map leaves the resource ungated.
         assert!(!cfg.resources[0].is_irreversible(RestVerb::Insert));
+        // And the per-node table the plan-time gate reads, keyed by the node's own template.
+        assert_eq!(cfg.nodes.len(), 1);
+        assert_eq!(cfg.nodes[0].path, "rooms");
+        assert_eq!(
+            cfg.verbs_for_path("rooms"),
+            vec![RestVerb::Select, RestVerb::Insert]
+        );
+        assert!(cfg.verbs_for_path("rooms/1/messages").is_empty());
+        assert!(!cfg.irreversible_for_path("rooms", RestVerb::Insert));
         // Every declared driver carries the versioned binary User-Agent (GitHub's live API
         // rejects UA-less requests).
         assert!(cfg
@@ -1803,6 +1869,13 @@ mod tests {
         assert!(
             !notes.is_irreversible(RestVerb::Upsert),
             "a reversible map leaves its verb ungated"
+        );
+        // The same marking on the per-node table the gate reads, node by node.
+        assert!(cfg.irreversible_for_path("post", RestVerb::Insert));
+        assert!(!cfg.irreversible_for_path("notes", RestVerb::Upsert));
+        assert!(
+            !cfg.irreversible_for_path("notes", RestVerb::Insert),
+            "the gated INSERT belongs to `post` alone"
         );
     }
 
@@ -2773,52 +2846,7 @@ mod tests {
     /// and the `IRREVERSIBLE` flag — read from the SHIPPED bytes, so the effect-equivalence proofs
     /// below cannot drift from the declaration an operator actually installs.
     fn shipped_slack_maps() -> Vec<DeclaredMap> {
-        let maps: Vec<DeclaredMap> =
-            shipped_statements_of_kind(qfs_skill::SLACK_DRIVER, "CREATE MAP ")
-                .iter()
-                .map(|stmt| {
-                    // The declaration wraps across lines; collapse it to one line so the `AS` seam and
-                    // the signature parens are found the same way wherever the author broke the line.
-                    let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
-                    let (head, tail) = stmt
-                        .split_once(" AS ")
-                        .expect("a MAP declares `AS <effect>`");
-                    let (body_src, irreversible) = match tail.trim().strip_suffix("IRREVERSIBLE") {
-                        Some(b) => (b.trim(), true),
-                        None => (tail.trim(), false),
-                    };
-                    let head = head.trim_start_matches("CREATE MAP ").trim();
-                    // `CALL <drv>.<action> ( <sig> ) /<node>` or `<VERB> /<node>`. The verb label is
-                    // rendered canonically (no space before the signature, `, `-joined params) — the
-                    // shape `declared_proc_sig`/`call_action` read, asserted against the compiled
-                    // registry in `shipped_slack_call_maps_carry_typed_g5_signatures`.
-                    let (verb, path) = match head.split_once('(') {
-                        Some((call_head, rest)) => {
-                            let (sig, path) = rest.split_once(')').expect("a signature closes");
-                            let sig = sig
-                                .split(',')
-                                .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            (format!("{}({sig})", call_head.trim()), path.trim())
-                        }
-                        None => {
-                            let (verb, path) =
-                                head.split_once(' ').expect("a verb then a node path");
-                            (verb.trim().to_string(), path.trim())
-                        }
-                    };
-                    DeclaredMap {
-                        path: path.to_string(),
-                        verb,
-                        body: serde_json::to_string(
-                            &qfs_exec::parse(body_src).expect("body parses"),
-                        )
-                        .expect("body serializes"),
-                        irreversible,
-                    }
-                })
-                .collect();
+        let maps = shipped_maps(qfs_skill::SLACK_DRIVER);
         assert_eq!(
             maps.len(),
             7,
@@ -2827,12 +2855,64 @@ mod tests {
         maps
     }
 
+    /// The same lift for any SHIPPED declaration — the per-asset helpers above pin their own
+    /// counts on top of it.
+    fn shipped_maps(script: &str) -> Vec<DeclaredMap> {
+        shipped_statements_of_kind(script, "CREATE MAP ")
+            .iter()
+            .map(|stmt| {
+                // The declaration wraps across lines; collapse it to one line so the `AS` seam and
+                // the signature parens are found the same way wherever the author broke the line.
+                let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
+                let (head, tail) = stmt
+                    .split_once(" AS ")
+                    .expect("a MAP declares `AS <effect>`");
+                let (body_src, irreversible) = match tail.trim().strip_suffix("IRREVERSIBLE") {
+                    Some(b) => (b.trim(), true),
+                    None => (tail.trim(), false),
+                };
+                let head = head.trim_start_matches("CREATE MAP ").trim();
+                // `CALL <drv>.<action> ( <sig> ) /<node>` or `<VERB> /<node>`. The verb label is
+                // rendered canonically (no space before the signature, `, `-joined params) — the
+                // shape `declared_proc_sig`/`call_action` read, asserted against the compiled
+                // registry in `shipped_slack_call_maps_carry_typed_g5_signatures`.
+                let (verb, path) = match head.split_once('(') {
+                    Some((call_head, rest)) => {
+                        let (sig, path) = rest.split_once(')').expect("a signature closes");
+                        let sig = sig
+                            .split(',')
+                            .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        (format!("{}({sig})", call_head.trim()), path.trim())
+                    }
+                    None => {
+                        let (verb, path) = head.split_once(' ').expect("a verb then a node path");
+                        (verb.trim().to_string(), path.trim())
+                    }
+                };
+                DeclaredMap {
+                    path: path.to_string(),
+                    verb,
+                    body: serde_json::to_string(&qfs_exec::parse(body_src).expect("body parses"))
+                        .expect("body serializes"),
+                    irreversible,
+                }
+            })
+            .collect()
+    }
+
     /// Every `CREATE VIEW` the SHIPPED `slack_driver.qfs` declares, as the [`DeclaredNode`] rows an
     /// install writes. The §13.1 G9 reverse lookup searches a DECLARED VIEW, so the write facet needs
     /// these for a CALL map's `LET` to resolve at all — read from the shipped bytes for the same
     /// reason the maps are.
     fn shipped_slack_views() -> Vec<DeclaredNode> {
-        shipped_statements_of_kind(qfs_skill::SLACK_DRIVER, "CREATE VIEW ")
+        shipped_views(qfs_skill::SLACK_DRIVER)
+    }
+
+    /// The same lift for any SHIPPED declaration.
+    fn shipped_views(script: &str) -> Vec<DeclaredNode> {
+        shipped_statements_of_kind(script, "CREATE VIEW ")
             .iter()
             .map(|stmt| {
                 let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -3441,6 +3521,21 @@ mod tests {
             "the refusal lists the verbs the node DOES declare: {rendered}"
         );
 
+        // 1b. Routed, and the verb IS declared — on a DIFFERENT node under the same leading
+        // segment. `CREATE MAP REMOVE` exists for `/slack/{ws}/files/{file}` only, so a REMOVE of
+        // the user list is a write no declaration performs. The verbs answer per NODE, so it
+        // refuses naming what `/slack/{ws}/users` does declare (ticket 20260817001110; while the
+        // gate keyed on the leading segment, every `/slack/<ws>/…` path inherited the union
+        // `SELECT INSERT REMOVE` and this planned).
+        let foreign_verb = plan("remove /slack/W1/users")
+            .expect_err("a REMOVE declared on another node must not plan here");
+        assert_eq!(foreign_verb.code(), "unsupported_verb");
+        let rendered = foreign_verb.to_string();
+        assert!(
+            rendered.contains("/slack/W1/users") && rendered.contains("SELECT"),
+            "the refusal names the path and the node's own verbs: {rendered}"
+        );
+
         // 2. Not routed at all: refused as the read side is, naming the path.
         let unrouted = plan("INSERT INTO /nosuchdriver/x VALUES (a) ('1')")
             .expect_err("an unrouted write target must not plan");
@@ -3450,9 +3545,184 @@ mod tests {
             "the refusal names the path: {unrouted}"
         );
 
-        // The control: a MAPPED declared write still plans, unchanged.
+        // The controls: every MAPPED declared write still plans, on its own node.
         plan("INSERT INTO /slack/W1/C1/messages VALUES (text) ('hi')")
             .expect("a mapped declared write still plans");
+        plan("remove /slack/W1/files/F1").expect("the mapped file detach still plans");
+    }
+
+    /// A concrete path addressing the declared template `t`: every `{param}` segment bound to a
+    /// distinct placeholder, every literal segment kept. The placeholders are deliberately unlike
+    /// any literal segment the shipped declarations use, so the concretization of one node cannot
+    /// accidentally address another.
+    fn concrete_path_of(t: &str) -> String {
+        let bound: Vec<String> = t
+            .trim_start_matches('/')
+            .split('/')
+            .enumerate()
+            .map(|(i, seg)| {
+                if seg.starts_with('{') && seg.ends_with('}') {
+                    format!("Xp{i}")
+                } else {
+                    seg.to_string()
+                }
+            })
+            .collect();
+        format!("/{}", bound.join("/"))
+    }
+
+    /// The universal verb a lifted wire verb gates (the test-side twin of driver-http's private
+    /// `rest_verb_to_verb`).
+    fn rest_verb_as_verb(v: RestVerb) -> qfs_core::Verb {
+        match v {
+            RestVerb::Select => qfs_core::Verb::Select,
+            RestVerb::Insert => qfs_core::Verb::Insert,
+            RestVerb::Upsert => qfs_core::Verb::Upsert,
+            RestVerb::Remove => qfs_core::Verb::Remove,
+            _ => unreachable!("the wire verb set is closed"),
+        }
+    }
+
+    /// Whether the declared template `t` addresses the concrete path `p` — the test's own,
+    /// deliberately obvious re-derivation of the match the config performs.
+    fn template_addresses(t: &str, p: &str) -> bool {
+        let t: Vec<&str> = t.trim_matches('/').split('/').collect();
+        let p: Vec<&str> = p.trim_matches('/').split('/').collect();
+        t.len() == p.len()
+            && t.iter()
+                .zip(p.iter())
+                .all(|(ts, ps)| (ts.starts_with('{') && ts.ends_with('}')) || ts == ps)
+    }
+
+    /// A [`DeclaredDriver`] lifted from a SHIPPED `.qfs` asset's own bytes — the views and maps an
+    /// install writes into `/sys/drivers`. `base_url`/`auth` are immaterial to the capability
+    /// surface these tests read and are left at the declaration-free defaults.
+    fn shipped_declared_driver(name: &str, script: &str) -> DeclaredDriver {
+        DeclaredDriver {
+            name: name.into(),
+            base_url: format!("https://api.{name}.example"),
+            auth: r#"{"kind":"none"}"#.into(),
+            pagination: None,
+            pushdown: None,
+            views: shipped_views(script),
+            lookups: Vec::new(),
+            maps: shipped_maps(script),
+        }
+    }
+
+    #[test]
+    fn every_declared_node_answers_exactly_its_own_verbs() {
+        // Ticket 20260817001110. The plan-time capability answer is per DECLARED NODE, not per
+        // leading path segment: a node answers the verbs its own `CREATE VIEW` / `CREATE MAP`
+        // declares, never the union of every verb declared under the segment it happens to start
+        // with. Walked over all three SHIPPED declarations, from their own bytes.
+        use qfs_core::{Path, Verb};
+        let all_verbs = [Verb::Select, Verb::Insert, Verb::Upsert, Verb::Remove];
+        for (name, script) in [
+            ("slack", qfs_skill::SLACK_DRIVER),
+            ("chatwork", qfs_skill::CHATWORK_DRIVER),
+            ("cloudflare", qfs_skill::CLOUDFLARE_DRIVER),
+        ] {
+            let d = shipped_declared_driver(name, script);
+            assert!(
+                !d.views.is_empty() && !d.maps.is_empty(),
+                "{name} ships views and maps to walk"
+            );
+            let mount = declared_describe_mount(&format!("/{name}"), &d)
+                .expect("the declared describe mount");
+            // The declaration's own answer: which verbs each template declares, from the rows.
+            let mut declared: Vec<(String, Verb)> = Vec::new();
+            for v in &d.views {
+                declared.push((v.path.clone(), Verb::Select));
+            }
+            for m in &d.maps {
+                if let Some(rv) = map_verb(&m.verb) {
+                    declared.push((m.path.clone(), rest_verb_as_verb(rv)));
+                }
+            }
+            for (template, _) in &declared {
+                let concrete = concrete_path_of(template);
+                let path = Path::new(&concrete);
+                for verb in all_verbs {
+                    let node_declares = declared
+                        .iter()
+                        .any(|(t, v)| *v == verb && template_addresses(t, &concrete));
+                    assert_eq!(
+                        qfs_core::check_capability(&mount, &path, verb).is_ok(),
+                        node_declares,
+                        "{concrete} answers {verb:?} iff a declaration addressing it says so \
+                         (declared: {declared:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_declared_node_does_not_inherit_a_sibling_nodes_verb() {
+        // The regression this closes, stated as the one pair that used to pass and must not: the
+        // shipped Slack declaration's every node lives under `/slack/{ws}/…`, so the leading
+        // segment's union answered SELECT + INSERT + REMOVE for every path alike. `CREATE MAP
+        // REMOVE` is declared for `/slack/{ws}/files/{file}` ONLY.
+        use qfs_core::{Path, Verb};
+        let d = shipped_declared_driver("slack", qfs_skill::SLACK_DRIVER);
+        let mount = declared_describe_mount("/slack", &d).expect("the declared describe mount");
+        // The coarse answer that used to be given to every path under the mount.
+        let segment_union = d.resources();
+        assert_eq!(
+            segment_union.len(),
+            1,
+            "one leading segment: {segment_union:?}"
+        );
+        assert!(
+            segment_union[0].supports(RestVerb::Remove)
+                && segment_union[0].supports(RestVerb::Insert),
+            "the segment aggregate still unions the whole declaration: {segment_union:?}"
+        );
+        // The per-node answer, on three nodes of that one segment.
+        assert!(
+            qfs_core::check_capability(&mount, &Path::new("/slack/W1/users"), Verb::Remove)
+                .is_err(),
+            "the user list declares no REMOVE — a file detach elsewhere does not lend it one"
+        );
+        assert!(
+            qfs_core::check_capability(&mount, &Path::new("/slack/W1/users"), Verb::Insert)
+                .is_err(),
+            "the user list declares no INSERT either"
+        );
+        assert!(
+            qfs_core::check_capability(&mount, &Path::new("/slack/W1/users"), Verb::Select).is_ok(),
+            "and it keeps the SELECT its view declares"
+        );
+        assert!(
+            qfs_core::check_capability(&mount, &Path::new("/slack/W1/files/F1"), Verb::Remove)
+                .is_ok(),
+            "the node the REMOVE map is declared on keeps it"
+        );
+        // A path no declaration addresses answers nothing, rather than the segment's union.
+        assert!(
+            qfs_core::check_capability(&mount, &Path::new("/slack/W1/nosuchnode"), Verb::Select)
+                .is_err(),
+            "an undeclared node advertises no verb at all"
+        );
+        // The irreversible marking travels with the node too: the detach is gated, the post is not.
+        let driver = declared_describe_mount("/slack", &d).expect("mount");
+        assert!(
+            qfs_core::Driver::write_irreversible(
+                &driver,
+                &Path::new("/slack/W1/files/F1"),
+                Verb::Remove
+            ),
+            "the declared IRREVERSIBLE detach stays gated"
+        );
+        assert!(
+            !qfs_core::Driver::write_irreversible(
+                &driver,
+                &Path::new("/slack/W1/C1/messages"),
+                Verb::Insert
+            ),
+            "the reversible message post does not inherit the detach's gate"
+        );
     }
 
     #[test]
