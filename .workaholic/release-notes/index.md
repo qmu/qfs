@@ -38,4 +38,5 @@
 * [ENCODE form makes a form-parameter REST API writable through a declaration etc](work-20260801-044839.md)
 * [A declared write resolves a name, and the compiled Slack driver is retired](work-20260803-213737.md)
 * [The Chatwork room-messages readings each get their own name](work-20260803-221340.md)
+* [Added .claude/hooks/session-start.sh as a byte-for-byte copy of the workaholic canonical bootstrap, etc](work-20260815-130504.md)
 <!-- okf:generated:end -->
