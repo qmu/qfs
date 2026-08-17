@@ -16,7 +16,7 @@ stories: []
 gate_type: documentation
 gate_target: /guide/architecture
 gate_assert: The docs site serves a current-architecture page that renders and reads correctly, naming the crates, the engine layering, the state stores and the faces the binary actually serves, with the date and source it was verified against.
-claim: work-20260817-104129
+claim: work-20260817-124626
 ---
 
 # The current situation of qfs is documented as it actually stands
