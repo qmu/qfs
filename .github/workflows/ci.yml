@@ -96,6 +96,30 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: cargo build --workspace --target ${{ matrix.target }}
 
+  # docs/: the VitePress PRODUCTION build. `docker compose up docs` runs `vitepress dev`, which
+  # compiles pages ON DEMAND — a page nobody opens never compiles, so a page that cannot build was
+  # invisible to every check this repository had. On 2026-08-17 `docs/blueprint.md` had been
+  # unbuildable for an unknown length of time (an inline code span whose backticks straddled a
+  # newline never forms, so its `<path>`/`<name>` reached the Vue compiler as unclosed elements —
+  # ticket 20260817110309). Only the production build walks every page, so this job runs it.
+  #
+  # `ignoreDeadLinks: true` is still set in docs/.vitepress/config.mts, so this job proves every page
+  # COMPILES, not that every link resolves. Turning that off is a separate, developer-owned decision.
+  docs-build:
+    name: docs site production build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+      - run: npm install
+      - run: npm run docs:build
+
   # packages/qfs-viewer: the fresh-clone BACKSTOP gate for the imported qfs-viewer project
   # (TypeScript, plgg family). One call to its canonical runner, identical to what a developer
   # runs locally, so the local and CI paths cannot drift — mirrors the standalone repo's old
