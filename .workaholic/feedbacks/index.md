@@ -98,5 +98,6 @@
 * [Unbound-plugin fallback path only resolves inside the qmu/workaholic checkout](20260816152200-unbound-plugin-fallback-path-only-resolves-inside-the-qmu-workaholic-checkout.md)
 * [Resolved: The preview-time malformed-reference refusal was declined, not implemented](20260816195555-resolved-the-preview-time-malformed-reference-refusal.md)
 * [Add a full documentation of the current situation, starting with a mission ticket](20260817102418-add-a-full-documentation-of-the-current-situation-starting-with-a-mission-ticket.md)
+* [Resolved: The cookbook ratchet only parses, so it cannot catch a fabricated column](20260817131548-resolved-the-cookbook-ratchet-only-parses-so.md)
 * [Bootstrap installs the plugin but does not guarantee it is bound](20260817184536-bootstrap-installs-the-plugin-but-does.md)
 <!-- okf:generated:end -->
