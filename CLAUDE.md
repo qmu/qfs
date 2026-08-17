@@ -86,8 +86,13 @@ is in the README; this operational rule says bump the patch on every shipped PR 
 
 ## Deploy
 
-There is no separate server deployment — **the deliverable is the published GitHub Release**.
-To deploy a shipped change after the PR merges to `main`:
+There are **two** deployment targets, recorded in `.workaholic/deployments/`. There is still no
+server to run: one target is a published artifact, the other a static site that publishes itself.
+
+### The binary — the published GitHub Release (`deployments/github-release.md`)
+
+**The deliverable is the published GitHub Release.** To deploy a shipped change after the PR
+merges to `main`:
 
 1. Ensure the patch version was bumped (above).
 2. Tag and push: `git tag -a vX.Y.Z -m "qfs vX.Y.Z" && git push origin vX.Y.Z`.
@@ -96,3 +101,19 @@ To deploy a shipped change after the PR merges to `main`:
 
 The Cloudflare Workers wasm artifact is parked (no cdylib entrypoint yet), so releases ship native
 binaries only.
+
+### The documentation site — two hostnames, no deploy command (`deployments/docs-site.md`)
+
+`docs/` publishes itself to a Cloudflare Workers static-assets target (`docs/wrangler.toml`,
+two environments) on the two events the repository already distinguishes:
+
+| Environment | Hostname | Trigger | Where |
+| --- | --- | --- | --- |
+| staging | `staging-qfs.qmu.co.jp` | every merge to `main` | `ci.yml`, job `docs-build` (guarded to `main`) |
+| production | `qfs.qmu.co.jp` | a `v*` tag, after the Release publishes | `release.yml`, job `docs-deploy-production` |
+
+Every deploy stamps the build with `version.json` (commit, ref, environment, build time), so
+`curl https://<host>/version.json` says which commit a hostname carries. Staging is public but
+non-indexable; production is indexable. Both deploys read `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` — repository secrets, scoped to the deploying job. `npm run
+docs:deploy:dry-run` checks both environments without credentials.
