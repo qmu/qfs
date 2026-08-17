@@ -93,4 +93,8 @@
 * [The branch-safety commit-size findings are recorded, not work](20260812141520-the-branch-safety-commit-size-findings-are-recorded-not-work.md)
 * [The Slack-as-example test concern is moot, verified in the tree](20260812141521-the-slack-as-example-test-concern-is-moot-verified-in-the-tree.md)
 * [The default qfs auth session TTL must be two weeks, not 8 hours](20260813033130-the-default-qfs-auth-session-ttl-must-be-two-weeks-not-8-hours.md)
+* [Unbound-plugin fallback path only resolves inside the qmu/workaholic checkout](20260816152200-unbound-plugin-fallback-path-only-resolves-inside-the-qmu-workaholic-checkout.md)
+* [Resolved: The preview-time malformed-reference refusal was declined, not implemented](20260816195555-resolved-the-preview-time-malformed-reference-refusal.md)
+* [heartbeat.sh consumes an in-progress merge and drops its resolution](20260817014653-heartbeat-sh-consumes-an-in-progress-merge-and-drops-its-resolution.md)
+* [A re-landed claim branch loses its artifact attribution](20260817014809-a-re-landed-claim-branch-loses-its-artifact-attribution.md)
 <!-- okf:generated:end -->

@@ -141,7 +141,14 @@ struct CommitRequest {
 /// The `engine` is the injected [`McpEngine`] the binary already built for the MCP face — reused
 /// verbatim so the two faces share one engine path (no second executor).
 #[must_use]
-pub fn serve_dashboard(engine: &dyn McpEngine, req: &HttpRequest) -> Option<HttpResponse> {
+/// `ctx` is the request's resolved principal (the M2 seam), supplied by the composition root from
+/// the SAME injected `PrincipalResolver` the endpoint face reads. The read leg adjudicates under
+/// it; every other bridge route is unaffected by it today.
+pub fn serve_dashboard(
+    engine: &dyn McpEngine,
+    req: &HttpRequest,
+    ctx: &qfs_core::RequestContext,
+) -> Option<HttpResponse> {
     match req.method {
         // The shell page itself.
         Method::Get if req.path == DASHBOARD_ROOT => Some(index_response()),
@@ -149,7 +156,7 @@ pub fn serve_dashboard(engine: &dyn McpEngine, req: &HttpRequest) -> Option<Http
         Method::Get if req.path.starts_with(ASSET_PREFIX) => Some(asset_response(&req.path)),
         // The thin JSON bridge — preview/read only, through the SAME engine the CLI/MCP use.
         Method::Post if req.path == API_DESCRIBE => Some(describe_response(engine, &req.body)),
-        Method::Post if req.path == API_RUN => Some(run_response(engine, &req.body)),
+        Method::Post if req.path == API_RUN => Some(run_response(engine, &req.body, ctx)),
         // The gated commit bridge (t52): apply through the one commit path (gate + guard).
         Method::Post if req.path == API_COMMIT => Some(commit_response(engine, &req.body)),
         // Any other method/path under the reserved bridge prefix → a legible JSON 404 (the shell
@@ -213,7 +220,11 @@ fn describe_response(engine: &dyn McpEngine, body: &[u8]) -> HttpResponse {
 /// envelope `{ schema, rows, meta }` (blueprint §16 "The face, named" — the reconcile CLI reads
 /// `/server/<collection>` through this). A `commit` mode is REFUSED (the apply path is the
 /// dedicated, gated `/api/commit`).
-fn run_response(engine: &dyn McpEngine, body: &[u8]) -> HttpResponse {
+fn run_response(
+    engine: &dyn McpEngine,
+    body: &[u8],
+    ctx: &qfs_core::RequestContext,
+) -> HttpResponse {
     let req: RunRequest = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(e) => return bad_request(&e),
@@ -225,7 +236,7 @@ fn run_response(engine: &dyn McpEngine, body: &[u8]) -> HttpResponse {
         // The read leg: execute the read and return the §14 envelope. Zero effects by
         // construction (a write statement fails to plan as a read).
         Some("read") => {
-            return match engine.read_rows(&req.statement) {
+            return match engine.read_rows(&req.statement, ctx) {
                 Ok(envelope) => json_ok(&envelope),
                 Err(e) => json_error(engine_status(&e), &e),
             }
@@ -325,6 +336,10 @@ fn json_refused(
 fn engine_status(e: &EngineError) -> u16 {
     match e.code.as_str() {
         "unknown_mount" => 404,
+        // A read the bridge's policy does not grant is a REFUSAL, not a malformed request — the
+        // same 403 the commit leg's `policy_denied` outcome returns, so one status means one thing
+        // across both legs of the bridge.
+        "policy_denied" => 403,
         "internal" => 500,
         _ => 422,
     }
@@ -397,6 +412,12 @@ mod tests {
         }
     }
 
+    /// Drive the bridge as the anonymous (not-signed-in) principal — the fail-closed default
+    /// every test below shares unless it is specifically about who is asking.
+    fn serve_anon(engine: &dyn McpEngine, req: &HttpRequest) -> Option<HttpResponse> {
+        serve_dashboard(engine, req, &qfs_core::RequestContext::anonymous())
+    }
+
     fn get(path: &str) -> HttpRequest {
         HttpRequest::new(Method::Get, path)
     }
@@ -409,7 +430,7 @@ mod tests {
 
     #[test]
     fn root_serves_the_html_shell_with_the_right_content_type() {
-        let resp = serve_dashboard(&StubEngine, &get("/")).expect("/ is owned");
+        let resp = serve_anon(&StubEngine, &get("/")).expect("/ is owned");
         assert_eq!(resp.status, 200);
         assert_eq!(resp.content_type, "text/html; charset=utf-8");
         let html = resp.body_text();
@@ -426,7 +447,7 @@ mod tests {
 
     #[test]
     fn assets_are_served_with_correct_content_types() {
-        let css = serve_dashboard(&StubEngine, &get("/assets/app.css")).expect("css owned");
+        let css = serve_anon(&StubEngine, &get("/assets/app.css")).expect("css owned");
         assert_eq!(css.status, 200);
         assert_eq!(css.content_type, "text/css; charset=utf-8");
         assert!(
@@ -436,14 +457,14 @@ mod tests {
             "assets carry a Cache-Control header"
         );
 
-        let js = serve_dashboard(&StubEngine, &get("/assets/app.js")).expect("js owned");
+        let js = serve_anon(&StubEngine, &get("/assets/app.js")).expect("js owned");
         assert_eq!(js.status, 200);
         assert_eq!(js.content_type, "application/javascript; charset=utf-8");
     }
 
     #[test]
     fn an_unknown_asset_404s() {
-        let resp = serve_dashboard(&StubEngine, &get("/assets/missing.png")).expect("owned");
+        let resp = serve_anon(&StubEngine, &get("/assets/missing.png")).expect("owned");
         assert_eq!(resp.status, 404);
         let v: Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(v["error"]["code"], "not_found");
@@ -451,7 +472,7 @@ mod tests {
 
     #[test]
     fn describe_bridge_returns_the_describe_json_shape() {
-        let resp = serve_dashboard(
+        let resp = serve_anon(
             &StubEngine,
             &post("/api/describe", json!({ "path": "/status" })),
         )
@@ -465,7 +486,7 @@ mod tests {
 
     #[test]
     fn describe_unknown_mount_is_a_404() {
-        let resp = serve_dashboard(
+        let resp = serve_anon(
             &StubEngine,
             &post("/api/describe", json!({ "path": "/nope" })),
         )
@@ -477,7 +498,7 @@ mod tests {
 
     #[test]
     fn run_bridge_returns_a_preview_json_shape() {
-        let resp = serve_dashboard(
+        let resp = serve_anon(
             &StubEngine,
             &post(
                 "/api/run",
@@ -494,7 +515,7 @@ mod tests {
 
     #[test]
     fn run_bridge_defaults_to_preview_when_mode_is_absent() {
-        let resp = serve_dashboard(
+        let resp = serve_anon(
             &StubEngine,
             &post("/api/run", json!({ "statement": "SELECT 1" })),
         )
@@ -509,7 +530,7 @@ mod tests {
         // §16 read leg: `mode: "read"` drives McpEngine::read_rows (never the preview). The stub
         // wires no read executor, so the DEFAULT impl's structured `unsupported` refusal surfaces
         // — proving the routing without a live engine.
-        let resp = serve_dashboard(
+        let resp = serve_anon(
             &StubEngine,
             &post(
                 "/api/run",
@@ -552,7 +573,7 @@ mod tests {
     fn run_bridge_refuses_a_commit_mode_with_no_apply_path() {
         // The one-engine safety floor: the shell has NO commit shortcut. A commit mode is refused
         // BEFORE the plan is even built — `StubEngine::apply` panics if ever reached.
-        let resp = serve_dashboard(
+        let resp = serve_anon(
             &StubEngine,
             &post(
                 "/api/run",
@@ -567,7 +588,7 @@ mod tests {
 
     #[test]
     fn an_engine_error_is_a_secret_free_422() {
-        let resp = serve_dashboard(
+        let resp = serve_anon(
             &StubEngine,
             &post(
                 "/api/run",
@@ -584,7 +605,7 @@ mod tests {
     fn a_malformed_body_is_a_400_without_echoing_input() {
         let mut req = HttpRequest::new(Method::Post, "/api/run");
         req.body = b"not json at all {{".to_vec();
-        let resp = serve_dashboard(&StubEngine, &req).expect("owned");
+        let resp = serve_anon(&StubEngine, &req).expect("owned");
         assert_eq!(resp.status, 400);
         let v: Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(v["error"]["code"], "bad_request");
@@ -600,8 +621,7 @@ mod tests {
         // The shell owns the whole `/api/` namespace; a connections probe is a plain 404 (the
         // redacted-or-not credential listing is NOT exposed to the browser in this slice). The stub's
         // `connections` panics if ever reached — proving the route never touches it.
-        let resp =
-            serve_dashboard(&StubEngine, &post("/api/connections", json!({}))).expect("owned");
+        let resp = serve_anon(&StubEngine, &post("/api/connections", json!({}))).expect("owned");
         assert_eq!(resp.status, 404);
     }
 
@@ -609,9 +629,9 @@ mod tests {
     fn non_dashboard_paths_fall_through() {
         // `/mcp`, `/hooks/...`, and a declared endpoint are NOT the dashboard's — it returns None so
         // the rest of the fallback chain (then the 404) handles them.
-        assert!(serve_dashboard(&StubEngine, &get("/mcp")).is_none());
-        assert!(serve_dashboard(&StubEngine, &get("/hooks/x")).is_none());
-        assert!(serve_dashboard(&StubEngine, &post("/mcp", json!({}))).is_none());
+        assert!(serve_anon(&StubEngine, &get("/mcp")).is_none());
+        assert!(serve_anon(&StubEngine, &get("/hooks/x")).is_none());
+        assert!(serve_anon(&StubEngine, &post("/mcp", json!({}))).is_none());
     }
 
     // ---- t52: the gated `/api/commit` approval-card bridge -------------------------------------
@@ -686,7 +706,7 @@ mod tests {
     }
 
     fn commit_resp(engine: &CommitStub, body: Value) -> (HttpResponse, Value) {
-        let resp = serve_dashboard(engine, &post("/api/commit", body)).expect("/api/commit owned");
+        let resp = serve_anon(engine, &post("/api/commit", body)).expect("/api/commit owned");
         let v: Value = serde_json::from_slice(&resp.body).unwrap();
         (resp, v)
     }
@@ -802,7 +822,7 @@ mod tests {
     fn commit_malformed_body_is_a_400() {
         let mut req = HttpRequest::new(Method::Post, "/api/commit");
         req.body = b"not json at all {{".to_vec();
-        let resp = serve_dashboard(&CommitStub::default(), &req).expect("owned");
+        let resp = serve_anon(&CommitStub::default(), &req).expect("owned");
         assert_eq!(resp.status, 400);
         let v: Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(v["error"]["code"], "bad_request");

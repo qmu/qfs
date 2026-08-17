@@ -47,9 +47,11 @@ Generated reference docs (`docs/{language,drivers,server}.md`) are rendered from
 The Claude Code **Agent Skills** (`plugins/qfs/skills/qfs-*/SKILL.md`) are generated from the human
 cookbook articles (`docs/cookbook/*.md`, each carrying `skill_name` + `skill_description`
 frontmatter) by `cargo run -p xtask -- gen-skills` — never hand-edit a `SKILL.md`; edit the article
-and regenerate. Every `qfs` recipe in an article is parse-checked by
-`crates/test/tests/cookbook_skills.rs` (the verified-true ratchet), so a skill can never teach an
-agent a statement the binary rejects.
+and regenerate. Every `qfs` recipe in an article goes through the verified-true ratchet
+(`crates/qfs/tests/cookbook_skills.rs`), which holds it to two checks — it **parses** on the shipped
+grammar, and the columns it names **exist** on the node it addresses, resolved through the binary's
+own cred-free describe registry. So a skill can never teach an agent a statement the binary rejects,
+nor a column the driver does not carry.
 
 **Re-version the plugin when a shipped PR changes any CLI surface the skills mention.** The plugin
 carries its own version line (`plugins/qfs/.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,

@@ -203,6 +203,12 @@ pub struct ResourceMap {
     pub irreversible_verbs: Vec<RestVerb>,
 }
 
+/// Whether a resource segment is a declared **parameter token** (`{ws}`, `{account}`) rather than
+/// a literal path segment — the wildcard arm of [`RestApiConfig::resource_for_segment`].
+fn is_param_token(segment: &str) -> bool {
+    segment.len() > 2 && segment.starts_with('{') && segment.ends_with('}')
+}
+
 impl ResourceMap {
     /// Construct a resource map for `segment` supporting `verbs`.
     #[must_use]
@@ -365,8 +371,28 @@ impl RestApiConfig {
 
     /// Resolve the [`ResourceMap`] a `/rest/<api>/<segment>/...` path names, matching the
     /// segment immediately after the api segment. Returns `None` if no resource matches.
+    ///
+    /// An exact match wins; failing that, a resource whose own segment is a **`{param}` token**
+    /// matches any concrete segment. A declared driver aggregates its nodes under their leading
+    /// segment, and that segment is a parameter whenever the service is per-tenant — Slack's every
+    /// node lives under `/slack/{ws}/…`, so its ONE resource is keyed `{ws}` and no concrete
+    /// workspace id could ever match it. Without this arm `capabilities()` was empty for every
+    /// such path, which the plan-time verb gate reads as "this node supports nothing": measured
+    /// 2026-08-17, `INSERT INTO /slack/<ws>/<channel>/messages` — a write the shipped declaration
+    /// maps — was refused `unsupported_verb; supported: []`, and the refusal for a genuinely
+    /// unmapped verb could name no declared verb either (ticket `20260816213014`, whose acceptance
+    /// asks the refusal to list them). Reads never noticed: the read path does not consult
+    /// capabilities.
+    ///
+    /// The match stays **leading-segment coarse**, deliberately: this layer's contract is that a
+    /// driver's nodes collapse under their leading segment and their verbs aggregate there (see
+    /// the cloudflare `accounts` case). Per-node precision — `REMOVE` mapped on
+    /// `/slack/{ws}/files/{file}` but not on `/slack/{ws}/files` — is a separate change.
     #[must_use]
     pub fn resource_for_segment(&self, segment: &str) -> Option<&ResourceMap> {
-        self.resources.iter().find(|r| r.segment == segment)
+        self.resources
+            .iter()
+            .find(|r| r.segment == segment)
+            .or_else(|| self.resources.iter().find(|r| is_param_token(&r.segment)))
     }
 }
