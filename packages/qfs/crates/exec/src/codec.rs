@@ -26,7 +26,7 @@
 //! than silently mis-ordering.
 
 use qfs_core::{CodecRegistry, Column, ColumnType, PushdownProfile, Row, RowBatch, Schema, Value};
-use qfs_engine::{CombineEngine, MiniEvaluator, ScanResults};
+use qfs_engine::{CombineEngine, EngineError, MiniEvaluator, ScanResults};
 use qfs_parser::{PipeOp, Pipeline, Source, Statement};
 use qfs_pushdown::{lower_query, partition_by_source, SourceId, SourceRegistry};
 
@@ -156,7 +156,7 @@ fn run_trailing_ops(
         usage(
             "codec_then_query",
             format!(
-                "a stage after DECODE/ENCODE cannot be evaluated over the decoded relation: {e:?}"
+                "a stage after DECODE/ENCODE cannot be evaluated over the decoded relation: {e}"
             ),
         )
     })?;
@@ -165,17 +165,35 @@ fn run_trailing_ops(
     let physical = partition_by_source(&logical, &reg).map_err(|e| {
         usage(
             "codec_then_query",
-            format!("could not plan the post-decode stages: {e:?}"),
+            format!("could not plan the post-decode stages: {e}"),
         )
     })?;
     MiniEvaluator::new()
         .execute(&physical, ScanResults::new(vec![batch]))
-        .map_err(|e| {
-            usage(
-                "codec_then_query",
-                format!("post-decode evaluation failed: {e:?}"),
-            )
-        })
+        .map_err(post_decode_error)
+}
+
+/// Surface a post-decode engine failure the way the operator met it **before** the decode.
+///
+/// The engine's two structured stage refusals — `unknown_column` and `not_expandable` — are the
+/// same mistakes on either side of a codec, so they keep their own stable `code` and their own
+/// prose here rather than being re-labelled `codec_then_query`. An agent branching on `code` (which
+/// `docs/cookbook/faq.md` promises it can) would otherwise see one mistake under two identities,
+/// and the operator would read a `Debug`-formatted struct instead of the sentence that names the
+/// available columns (ticket 20260816175149).
+///
+/// `codec_then_query` survives for what it actually names: a post-decode failure that is **not**
+/// one of those refusals — and it too renders through `Display`, never `{:?}`.
+fn post_decode_error(e: EngineError) -> ExecError {
+    let code = match e {
+        EngineError::UnknownColumn { .. } | EngineError::NotExpandable { .. } => e.code(),
+        _ => "codec_then_query",
+    };
+    let message = match code {
+        "codec_then_query" => format!("post-decode evaluation failed: {e}"),
+        _ => e.to_string(),
+    };
+    ExecError::new(ErrorKind::Usage, code, message)
 }
 
 /// `DECODE <fmt>[.<relation>]` over a content-bearing batch: decode **each row's** `content` bytes
@@ -406,6 +424,58 @@ mod tests {
         assert!(
             yaml.contains("k: 1"),
             "yaml encodes the decoded object: {yaml:?}"
+        );
+    }
+
+    #[test]
+    fn a_post_decode_stage_refusal_keeps_its_own_code_and_prose() {
+        // Ticket 20260816175149. `unknown_column` and `not_expandable` are the engine's two
+        // structured stage refusals, and they are the SAME mistake on either side of a codec. They
+        // used to be re-labelled `codec_then_query` here and rendered with `{:?}`, so one mistake
+        // had two stable codes and the operator read `UnknownColumn { stage: "where", … }` instead
+        // of the sentence naming the available columns — while `docs/cookbook/faq.md` promises an
+        // agent can branch on `code`.
+        for (query, code, needle) in [
+            (
+                "/local/config.json |> decode json |> where nope == 1",
+                "unknown_column",
+                "which this relation does not carry",
+            ),
+            (
+                "/local/config.json |> decode json |> expand k",
+                "not_expandable",
+                "not an array or a struct",
+            ),
+        ] {
+            let stmt = parse_statement(query).unwrap();
+            let err = apply_codecs(blob_batch(b"{\"k\":1}\n"), &stmt)
+                .expect_err("the stage names something the decoded relation cannot satisfy");
+            assert_eq!(err.code, code, "`{query}` keeps its own code: {err:?}");
+            assert!(
+                err.message.contains(needle),
+                "`{query}` renders prose, not a Debug struct: {:?}",
+                err.message
+            );
+            assert!(
+                !err.message.contains(" { "),
+                "no operator-facing message carries Rust Debug struct syntax: {:?}",
+                err.message
+            );
+        }
+
+        // The control: a post-decode failure that is NOT one of those two refusals still reports
+        // `codec_then_query` — the code keeps naming exactly what it always named — and it too
+        // renders through `Display`.
+        let stmt =
+            parse_statement("/local/config.json |> decode json |> join /local/other on k == k")
+                .unwrap();
+        let err = apply_codecs(blob_batch(b"{\"k\":1}\n"), &stmt)
+            .expect_err("a cross-source stage after a codec is not supported");
+        assert_eq!(err.code, "codec_then_query", "{err:?}");
+        assert!(
+            !err.message.contains(" { "),
+            "the residual arm renders prose too: {:?}",
+            err.message
         );
     }
 

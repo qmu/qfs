@@ -53,8 +53,8 @@ pub use error::{problem_body, HttpError, ProblemBody};
 pub use handler::{dispatch, EndpointCtx, PrincipalResolver};
 pub use params::{BindError, QueryArgs};
 pub use policy::{
-    assert_plan_allowed, assert_read_only, assert_select_allowed, resolve_endpoint_policy,
-    PolicyError,
+    assert_plan_allowed, assert_read_only, assert_select_allowed, decision_for,
+    resolve_endpoint_policy, PolicyError,
 };
 pub use route::{compile_endpoint, CompileError, CompiledRoute, RoutePattern, Router};
 pub use serve::{

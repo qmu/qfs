@@ -375,8 +375,12 @@ of customer` vocabulary generalised, never a transform special case:
   structured error (`of_assertion_failed`) naming the differing columns — the missing, the
   unexpected, and the type-mismatched. §5.3's rules make the schema known at every seam **except
   one**: a codec seam deliberately reports `Schema::empty()` (a decode's columns are undescribable
-  until the bytes are read), so `… |> decode <fmt> |> of <type>` is compared against an empty
-  schema and there is nothing plan time can honestly prove there. A named type is resolved
+  until the bytes are read), so there is nothing plan time can honestly prove at
+  `… |> decode <fmt> |> of <type>` — and the structural half therefore stays **late-bound** there,
+  riding to the next materialising boundary with the refinement half, exactly as `select`, `where`,
+  `expand` and the transform input check already do over an undescribable relation. Diffing against
+  the empty schema instead would report every asserted column as missing, before the decode that
+  produces exactly those columns. A named type is resolved
   from the plan-time declared-type registry (the `transform_defs` twin; the pure planner cannot read
   the System DB), so an unknown name is a structured `of_type_unresolved`. Where the asserted type
   carries a refinement, the structural half is plan-checked and the predicate half is membership at
@@ -589,13 +593,22 @@ resolves the request's principal, resolves the endpoint's bound policy **by its 
 fail-closed (absent or dangling ⇒ default-deny), and adjudicates every scan target the bound
 statement would read as a `SELECT` under that actor — the `FOR`, `AT` and `WHERE` axes all bite on
 reads — **before** any driver runs. A read the policy does not grant is a `403` structured refusal,
-never an empty relation at `200`. Still open on this axis: (a) the gate runs *ahead of* the scan, so
-adjudication is **whole-path** — `ReadDriver::scan` does carry a `RequestContext` (the M2 principal
-seam), but no driver consults it to narrow rows at the source, so there is no row-level who-axis
-*inside* a driver; (b) the statement bridge's read leg (`POST /api/run` with `mode: read`) is a
-second serve face that resolves no policy at all and still hardcodes an anonymous principal, so one
-policy does not yet govern *every* face reached through the serve seam; (c) role-derived grants,
-above. **Open** — the finer policy semantics: explicit-deny precedence, the evaluation point when a
+never an empty relation at `200`.
+
+**The statement bridge's read leg is gated the same way** *(2026-08-16, ticket 20260725110500)*:
+`POST /api/run` with `mode: read` was the second serve face, and the more permissive one — it parsed
+a **caller-supplied** statement and ran it under a hardcoded anonymous context with no policy
+resolution at all, so a caller an endpoint's policy refused could read the same path through the
+bridge. It now resolves its own named `/server/policies` row — **`bridge`**, deliberately not the
+coarse `api` row that already gates MCP, the dashboard and reconcile together — and adjudicates the
+statement's scan leaves through the **same** `scan_targets` → `evaluate_reads_with_context`
+procedure the endpoint face uses, under the request's resolved principal. Fail-closed in every
+degraded direction: an absent row, an unreadable state lock, or no live `/server` seam all deny. The
+loopback-only default bind stays a deployment posture and is not counted as mitigation. Still open on
+this axis: (a) the gate runs *ahead of* the scan, so adjudication is **whole-path** —
+`ReadDriver::scan` does carry a `RequestContext` (the M2 principal seam), but no driver consults it
+to narrow rows at the source, so there is no row-level who-axis *inside* a driver; (b) role-derived
+grants, above. **Open** — the finer policy semantics: explicit-deny precedence, the evaluation point when a
 trail crosses a derived reverse edge, and the permissions of the management paths themselves.
 
 **Policy grants are path-aware** *(implemented 2026-07-04, ticket 20260704110923)*:
@@ -1174,12 +1187,27 @@ Three things are ruled, and each rules out an alternative that looked equivalent
   refused **at declaration time**. Reusing the declared view is what settles paging without
   restating it: the view's cursor pagination and its `OF <type>` contract apply as written, so a
   match on page two resolves rather than reporting "not found".
-- **Time — COMMIT, in the confined applier, immediately before the effect leg; PREVIEW additionally
-  refuses a *malformed* reference with no I/O.** The collection is fetched **once per statement** and
-  matched **locally per row** — the compiled oracle's own shape, which is what makes equivalence
-  provable on shared fixtures rather than merely asserted. A name matching nothing, or matching more
-  than one row, is a structured refusal **before the effect leg fires**; the effect leg is never
-  issued.
+- **Time — COMMIT, in the confined applier, immediately before the effect leg; PREVIEW performs no
+  I/O and therefore resolves nothing and refuses nothing.** The collection is fetched **once per
+  statement** and matched **locally per row** — the compiled oracle's own shape, which is what makes
+  equivalence provable on shared fixtures rather than merely asserted. A name matching nothing, or
+  matching more than one row, is a structured refusal **before the effect leg fires**; the effect leg
+  is never issued, so no wire write ever carries a guessed id.
+
+  *(**Amended 2026-08-16, ticket `20260812141224`.** This clause used to promise that PREVIEW would
+  *additionally* refuse a **malformed** reference with no I/O. The implementation declined that
+  second clause and was right to: "malformed" presupposes a **shape rule** — a way to tell a
+  legal-but-unknown reference from an illegal one without asking the service — and the shipped
+  resolution matches against **data** instead (`WHERE name == row.channel OR id == row.channel`)
+  precisely so a generic engine never has to know that a Slack channel id looks like `C0…`. That is
+  what let the declared twin reproduce the compiled driver's behaviour without importing its
+  `C`/`G`/`D` prefix heuristic, and it leaves no malformed-versus-merely-unknown line to draw at
+  preview time. The same answer governs every other declared name resolution — drive's path→id,
+  mail's label→id — for the same reason: a shape heuristic is service knowledge, and a generic
+  engine declares and refuses rather than guessing. The property that IS true is pinned by
+  `preview_of_a_name_addressed_call_performs_no_io_at_all`
+  (`packages/qfs/crates/qfs/src/declared_driver.rs`): PREVIEW records **zero** wire requests for a
+  name-addressed CALL.)*
 
 Purity is preserved rather than traded away: the evaluator stays a pure function of its inputs, the
 applier performs the one fetch, and the resolved values are bound as **additional columns** before

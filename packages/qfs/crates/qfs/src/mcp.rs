@@ -28,6 +28,15 @@ use qfs_secrets::Secrets;
 /// ⇒ the default-deny posture is unchanged (fail-closed: no declared grant, no network write).
 const BRIDGE_POLICY: &str = "api";
 
+/// The **statement-bridge READ policy handle** (ticket `20260725110500`, the developer's ruling of
+/// 2026-07-26): the `/server/policies` row `POST /api/run` with `mode: "read"` is adjudicated
+/// under. It is deliberately its OWN row rather than [`BRIDGE_POLICY`] — the `api` row today gates
+/// MCP, the dashboard and reconcile together, and the tracked `one-coarse-api-policy-row-for`
+/// concern is that coarseness; widening it further would deepen exactly the risk being tracked.
+/// Absent row ⇒ default-deny, the same fail-closed answer the endpoint face gives for an absent or
+/// dangling `policy:` ref.
+const BRIDGE_READ_POLICY: &str = "bridge";
+
 /// The live `/server` seam the statement bridge's write leg drives (blueprint §16): the shared
 /// state lock + the runtime reconfigure channel + the boot-config path for the post-commit
 /// re-emission. Built by the serve composition; absent for a bridge with no live daemon half
@@ -66,6 +75,25 @@ impl ServeMcpEngine {
     pub fn with_live_server(mut self, live: LiveServer) -> Self {
         self.live = Some(live);
         self
+    }
+
+    /// The [`qfs_mcp::Policy`] the statement bridge's READ leg is adjudicated under, resolved LIVE
+    /// per request from the [`BRIDGE_READ_POLICY`] row of the same `/server/policies` table the
+    /// boot config populates.
+    ///
+    /// **Fail closed, in every degraded direction** (the ruling of 2026-07-26): no live daemon
+    /// half, an unreadable state lock, or an absent row all resolve to the default-deny policy —
+    /// so a bridge read is granted only by a declared, named row, never by the deployment's
+    /// posture. The loopback-only default bind is not counted as mitigation.
+    fn read_policy(&self) -> qfs_mcp::Policy {
+        if let Some(live) = &self.live {
+            if let Ok(guard) = live.handle.state().read() {
+                if let Some(def) = guard.policies.get(BRIDGE_READ_POLICY) {
+                    return qfs_mcp::policy_from_def(def);
+                }
+            }
+        }
+        qfs_mcp::default_deny_policy()
     }
 
     /// Re-emit the post-commit `ServerState` to the daemon's boot-config path (atomic
@@ -162,23 +190,51 @@ impl McpEngine for ServeMcpEngine {
         qfs_mcp::default_deny_policy()
     }
 
-    fn read_rows(&self, statement: &str) -> Result<serde_json::Value, EngineError> {
+    fn read_rows(
+        &self,
+        statement: &str,
+        ctx: &qfs_core::RequestContext,
+    ) -> Result<serde_json::Value, EngineError> {
         // The bridge's `mode: "read"` leg (§16 read leg): execute the read statement through the
         // serve engine + read registry and return the §14 result envelope. Offloaded to a
         // dedicated OS thread because `block_on_read` builds its own current-thread runtime
         // (calling it on the listener's reactor thread would panic) — the same isolation `apply`
         // uses below.
         let stmt = qfs_exec::parse(statement).map_err(|e| map_exec_err(&e))?;
+        // The policy gate (ticket 20260725110500). This leg reads whatever statement the caller
+        // sends — strictly wider than an endpoint, which serves one pre-registered query — so it
+        // is adjudicated through the SAME machinery the endpoint face uses: the scan leaves of the
+        // very plan the executor will run, evaluated as SELECT effects under the request's
+        // resolved principal. Pure, and BEFORE the worker thread is spawned, so a denial costs no
+        // thread and touches no driver.
+        // Planning failures keep their own code: `scan_targets` mirrors `execute_read`'s planning
+        // steps, so an unplannable statement raises exactly the error it raised before the gate
+        // existed — only earlier.
+        let targets =
+            qfs_exec::scan_targets(&stmt, &self.engine.mounts).map_err(|e| map_exec_err(&e))?;
+        qfs_http::assert_select_allowed(
+            &targets,
+            &self.read_policy(),
+            &qfs_http::decision_for(ctx),
+        )
+        .map_err(|e| {
+            // A structured refusal, never an empty envelope (the honesty rule ticket
+            // 20260724013200 pinned for the endpoint face): the secret-free reason names the
+            // verb, the driver and the rule index, and the hint names the row an operator
+            // must declare — a denial nobody can act on is a denial that gets worked around.
+            EngineError::new(
+                "policy_denied",
+                format!(
+                    "the statement bridge reads a path ({}) the `{BRIDGE_READ_POLICY}` POLICY \
+                         does not grant: {} (declare a `{BRIDGE_READ_POLICY}` policy in \
+                         /server/policies to grant this read)",
+                    e.effect, e.reason
+                ),
+            )
+        })?;
         let result = std::thread::scope(|s| {
-            s.spawn(|| {
-                qfs_exec::block_on_read(
-                    &stmt,
-                    &self.engine.mounts,
-                    &self.reads,
-                    &qfs_core::RequestContext::anonymous(),
-                )
-            })
-            .join()
+            s.spawn(|| qfs_exec::block_on_read(&stmt, &self.engine.mounts, &self.reads, ctx))
+                .join()
         });
         match result {
             Ok(Ok(rows)) => serde_json::to_value(&rows)
@@ -598,5 +654,258 @@ mod tests {
             "the challenge survived the adapter: {:?}",
             http_resp.headers
         );
+    }
+}
+
+#[cfg(test)]
+mod read_gate_tests {
+    //! The statement bridge's READ leg is policy-gated (ticket `20260725110500`).
+    //!
+    //! `POST /api/run` with `mode: "read"` parses a **caller-supplied** statement — strictly wider
+    //! than an endpoint, which serves one pre-registered query — so it is adjudicated through the
+    //! same shared decision procedure the endpoint face uses, under the request's resolved
+    //! principal. Hermetic: an in-memory `/mock` source, no socket, no credential.
+
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, RwLock};
+
+    use qfs_core::{
+        Archetype, Capabilities, CfsError, Column, ColumnType, DriverId, Engine, NodeDesc, Path,
+        PushdownProfile, RequestContext, Row, RowBatch, Schema, Value,
+    };
+    use qfs_exec::{ReadDriver, ReadRegistry};
+    use qfs_http::{PolicyDef, ServerState};
+    use qfs_mcp::McpEngine;
+    use qfs_pushdown::ScanNode;
+
+    use super::{LiveServer, ServeMcpEngine, BRIDGE_READ_POLICY};
+
+    fn items_schema() -> Schema {
+        Schema::new(vec![
+            Column::new("id", ColumnType::Int, false),
+            Column::new("name", ColumnType::Text, true),
+        ])
+    }
+
+    /// The in-memory `/mock` source, with every scan COUNTED so a test can prove a refusal landed
+    /// BEFORE the driver ran (a gate, not a post-hoc filter of rows already fetched).
+    struct CountingItems {
+        scans: Arc<AtomicUsize>,
+    }
+
+    struct NoopApplier;
+    impl qfs_core::PlanApplier for NoopApplier {
+        fn apply(
+            &mut self,
+            node: &qfs_core::EffectNode,
+        ) -> Result<qfs_core::AppliedEffect, qfs_core::ApplyError> {
+            Ok(qfs_core::AppliedEffect::new(node.id, 0))
+        }
+    }
+
+    impl qfs_core::Driver for CountingItems {
+        fn mount(&self) -> &str {
+            "/mock"
+        }
+        fn describe(&self, _path: &Path) -> Result<NodeDesc, CfsError> {
+            Ok(NodeDesc::new(Archetype::RelationalTable, items_schema()))
+        }
+        fn capabilities(&self, _path: &Path) -> Capabilities {
+            Capabilities::none().select()
+        }
+        fn procedures(&self) -> &[qfs_core::ProcSig] {
+            &[]
+        }
+        fn pushdown(&self) -> &PushdownProfile {
+            &PushdownProfile::None
+        }
+        fn applier(&self) -> &dyn qfs_core::PlanApplier {
+            Box::leak(Box::new(NoopApplier))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ReadDriver for CountingItems {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &RequestContext,
+        ) -> Result<RowBatch, CfsError> {
+            self.scans.fetch_add(1, Ordering::SeqCst);
+            Ok(RowBatch::new(
+                items_schema(),
+                vec![Row::new(vec![Value::Int(1), Value::Text("alpha".into())])],
+            ))
+        }
+    }
+
+    /// A live bridge engine over the `/mock` source, with `allow` seeded as the named bridge READ
+    /// policy row. `None` seeds NO row at all — the fail-closed shape a deployment that never
+    /// declared one has.
+    struct Fixture {
+        engine: ServeMcpEngine,
+        scans: Arc<AtomicUsize>,
+        // Held so the shared state (and the reconfigure channel's receiver) outlive the engine.
+        _state: Arc<RwLock<ServerState>>,
+        _rx: qfs_http::ReconfigureRx,
+    }
+
+    impl Fixture {
+        fn scan_count(&self) -> usize {
+            self.scans.load(Ordering::SeqCst)
+        }
+    }
+
+    fn fixture(allow: Option<&[&str]>) -> Fixture {
+        let scans = Arc::new(AtomicUsize::new(0));
+        let mut engine = Engine::new();
+        engine
+            .mounts
+            .register(Arc::new(CountingItems {
+                scans: Arc::clone(&scans),
+            }))
+            .unwrap();
+        engine.codecs = qfs_core::CodecRegistry::with_builtins();
+        let reads = Arc::new(ReadRegistry::new().with(
+            DriverId::new("mock"),
+            Arc::new(CountingItems {
+                scans: Arc::clone(&scans),
+            }),
+        ));
+
+        let mut state = ServerState::new();
+        if let Some(rules) = allow {
+            state.policies.insert(
+                BRIDGE_READ_POLICY.to_string(),
+                PolicyDef {
+                    name: BRIDGE_READ_POLICY.to_string(),
+                    handler: String::new(),
+                    allow: rules.iter().map(|r| (*r).to_string()).collect(),
+                },
+            );
+        }
+        let state = Arc::new(RwLock::new(state));
+        let (handle, rx) = qfs_http::reconfigure_channel(Arc::clone(&state));
+        let engine = ServeMcpEngine::new(Arc::new(engine), reads).with_live_server(LiveServer {
+            handle,
+            config_path: std::path::PathBuf::from("/nonexistent/config.qfs"),
+        });
+        Fixture {
+            engine,
+            scans,
+            _state: state,
+            _rx: rx,
+        }
+    }
+
+    /// The headline behaviour: the bridge's read leg is gated, and a denial precedes the driver
+    /// scan — so it is a genuine gate, not a filter applied to rows already fetched. Direction 2
+    /// also pins the refusal SHAPE: a structured, secret-free `policy_denied`, never an empty
+    /// envelope at 200.
+    #[test]
+    fn bridge_read_is_gated_and_denial_precedes_the_driver_scan() {
+        // Granted: the declared row admits the read and the §14 envelope is unchanged.
+        let granted = fixture(Some(&["ALLOW SELECT ON mock"]));
+        let envelope = granted
+            .engine
+            .read_rows("/mock/items", &RequestContext::anonymous())
+            .expect("a granted read serves");
+        assert!(envelope.get("schema").is_some(), "§14 envelope: {envelope}");
+        assert!(envelope.get("rows").is_some(), "§14 envelope: {envelope}");
+        assert!(
+            envelope.to_string().contains("alpha"),
+            "the granted read returned its rows: {envelope}"
+        );
+        assert!(
+            granted.scan_count() >= 1,
+            "the granted read reached the driver"
+        );
+
+        // Denied: an explicit earlier DENY wins over a later ALLOW (first-match), and nothing read.
+        let denied = fixture(Some(&["DENY SELECT", "ALLOW SELECT"]));
+        let err = denied
+            .engine
+            .read_rows("/mock/items", &RequestContext::anonymous())
+            .expect_err("a denied read is refused");
+        assert_eq!(err.code, "policy_denied", "{err:?}");
+        assert!(
+            err.message.contains(BRIDGE_READ_POLICY),
+            "the refusal names the governing row: {}",
+            err.message
+        );
+        assert_eq!(
+            denied.scan_count(),
+            0,
+            "the refusal must precede the driver scan — nothing was read"
+        );
+
+        // A grant for ANOTHER driver leaves this read default-denied.
+        let unmatched = fixture(Some(&["ALLOW SELECT ON other"]));
+        assert_eq!(
+            unmatched
+                .engine
+                .read_rows("/mock/items", &RequestContext::anonymous())
+                .expect_err("no matching rule ⇒ default-deny")
+                .code,
+            "policy_denied"
+        );
+        assert_eq!(unmatched.scan_count(), 0);
+    }
+
+    /// No declared row at all is the fail-closed case the developer's ruling named explicitly:
+    /// the bridge denies, exactly as the endpoint face does for an absent or dangling `policy:`
+    /// ref. The loopback-only bind is a deployment posture and is NOT the authorization control.
+    #[test]
+    fn a_bridge_with_no_declared_policy_row_reads_nothing() {
+        let none = fixture(None);
+        assert_eq!(
+            none.engine
+                .read_rows("/mock/items", &RequestContext::anonymous())
+                .expect_err("no row ⇒ default-deny")
+                .code,
+            "policy_denied"
+        );
+        assert_eq!(none.scan_count(), 0);
+    }
+
+    /// The gate consumes the REQUEST's resolved principal, not the hardcoded anonymous context the
+    /// leg carried before: a rule narrowed with `FOR user:alice` admits Alice's read and
+    /// contributes nothing to anyone else's — the same rule, both directions.
+    #[test]
+    fn bridge_read_gate_evaluates_the_resolved_principal_both_directions() {
+        let rules: &[&str] = &["ALLOW SELECT ON mock FOR user:alice"];
+
+        let alice = fixture(Some(rules));
+        assert!(
+            alice
+                .engine
+                .read_rows(
+                    "/mock/items",
+                    &RequestContext::for_user("alice".to_string())
+                )
+                .is_ok(),
+            "the narrowed rule must bite for the resolved principal"
+        );
+
+        let anon = fixture(Some(rules));
+        assert_eq!(
+            anon.engine
+                .read_rows("/mock/items", &RequestContext::anonymous())
+                .expect_err("the same rule contributes nothing to an anonymous read")
+                .code,
+            "policy_denied"
+        );
+        assert_eq!(anon.scan_count(), 0);
+
+        let bob = fixture(Some(rules));
+        assert_eq!(
+            bob.engine
+                .read_rows("/mock/items", &RequestContext::for_user("bob".to_string()))
+                .expect_err("a rule for Alice does not grant Bob")
+                .code,
+            "policy_denied"
+        );
+        assert_eq!(bob.scan_count(), 0);
     }
 }

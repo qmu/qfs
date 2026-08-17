@@ -418,6 +418,135 @@ impl EvalError {
     }
 }
 
+/// Every plan-time refusal reads as a sentence (ticket `20260816183441`). The `Debug` form was the
+/// machine-facing message until 2026-08-16, and it reached operators as `OfAssertionFailed { ty:
+/// "(inline)", … }` — a dump, where every other error type in the workspace (`EngineError`,
+/// `LowerError`, `PlanError`, `CfsError`, `TypeError`, `HostScopeError`) already renders prose.
+/// The match is **exhaustive with no `_` arm** so a new variant cannot silently regress to one.
+impl std::fmt::Display for EvalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // The four delegating arms carry a structured inner error that renders itself.
+            EvalError::Resolve(e) => e.fmt(f),
+            EvalError::Type(e) => e.fmt(f),
+            EvalError::Fn(e) => e.fmt(f),
+            EvalError::HostScope(e) => e.fmt(f),
+            EvalError::UnroutedPath { path } => write!(
+                f,
+                "path `{path}` routes to no mounted driver, so no schema can be described for it"
+            ),
+            EvalError::SelectionNotLowered { path } => write!(
+                f,
+                "path `{path}` carries a selection segment (`@`) in a position this lowering does \
+                 not cover; address the row with an explicit `WHERE <key> == …` instead"
+            ),
+            EvalError::NonLiteralValues { detail } => write!(
+                f,
+                "`INSERT … VALUES` takes constants only, but a cell is {detail}; use \
+                 `INSERT … FROM <query>` for computed rows"
+            ),
+            EvalError::DriverWrite { detail } => {
+                write!(f, "the driver cannot lower this write: {detail}")
+            }
+            EvalError::WriteFilterUnsupported { path, detail } => write!(
+                f,
+                "the `WHERE` filter on `{path}` cannot be carried to the applier as complete \
+                 equality keys ({detail}); dropping part of it would widen the write, so this \
+                 refuses"
+            ),
+            EvalError::IrreversibleInTransaction { effect } => write!(
+                f,
+                "`{effect}` is irreversible and cannot run inside a `TRANSACTION` block, which \
+                 promises all-or-nothing rollback; lift it out of the block"
+            ),
+            EvalError::LambdaArity { expected, found } => write!(
+                f,
+                "this lambda declares {expected} parameter(s), but was applied to {found} \
+                 argument(s)"
+            ),
+            EvalError::NotAFunction { detail } => write!(
+                f,
+                "a function or lambda is required in function position, but {detail} was given"
+            ),
+            EvalError::UnknownTypeAnnotation { name, accepted } => write!(
+                f,
+                "unknown type annotation `{name}`; accepted: [{}]",
+                accepted.join(", ")
+            ),
+            EvalError::TransformNotExecutable { name } => write!(
+                f,
+                "transform '{name}' is not installed here: no `CREATE TRANSFORM` defines it"
+            ),
+            EvalError::TransformInputMissing { name, column } => write!(
+                f,
+                "transform '{name}' declares INPUT column '{column}', which the incoming relation \
+                 does not carry"
+            ),
+            EvalError::SwitchNotTerminal => write!(
+                f,
+                "`SWITCH` routes rows to effect arms, so it is only legal as the LAST stage of a \
+                 top-level query pipeline"
+            ),
+            EvalError::FollowOutsideDeclaredBody => write!(
+                f,
+                "`FOLLOW` is a declared-driver body stage and has no meaning in a general query"
+            ),
+            EvalError::PostOutsideDeclaredBody => write!(
+                f,
+                "`POST` is a declared-driver body stage and has no meaning in a general query"
+            ),
+            EvalError::SwitchShape { detail } => {
+                write!(f, "this `SWITCH` arm list is ill-shaped: {detail}")
+            }
+            EvalError::SwitchDiscriminantUnknown { column, available } => write!(
+                f,
+                "`SWITCH` names discriminant column '{column}', which this relation does not \
+                 carry; available: [{}]",
+                available.join(", ")
+            ),
+            EvalError::SwitchArmNotEffect { label } => write!(
+                f,
+                "`SWITCH` arm '{label}' is not effect-terminal; every arm must end in an \
+                 `INSERT`/`UPSERT INTO` write or an effect `CALL`"
+            ),
+            EvalError::SwitchArmOpUnsupported { label, op } => write!(
+                f,
+                "`SWITCH` arm '{label}' uses `{op}`, which an arm continuation does not route"
+            ),
+            EvalError::OfTypeUnresolved { name } => write!(
+                f,
+                "`of` names declared type '{name}', which no `/type/{name}` catalog row defines"
+            ),
+            EvalError::OfAssertionFailed {
+                ty,
+                missing,
+                unexpected,
+                mismatched,
+            } => {
+                write!(f, "`of {ty}` does not match this relation")?;
+                if !missing.is_empty() {
+                    write!(f, "; missing: [{}]", missing.join(", "))?;
+                }
+                if !unexpected.is_empty() {
+                    write!(f, "; undeclared: [{}]", unexpected.join(", "))?;
+                }
+                if !mismatched.is_empty() {
+                    let pairs: Vec<String> = mismatched
+                        .iter()
+                        .map(|(column, expected, actual)| {
+                            format!("{column}: asserted {expected}, is {actual}")
+                        })
+                        .collect();
+                    write!(f, "; mismatched: [{}]", pairs.join("; "))?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for EvalError {}
+
 impl From<ResolveError> for EvalError {
     fn from(e: ResolveError) -> Self {
         EvalError::Resolve(e)
@@ -995,6 +1124,15 @@ impl<'r> Evaluator<'r> {
     /// equality plus, for columns known on both sides, type equality — an `unknown` on either side is
     /// conservatively skipped (the honest gap meter). `of` never coerces; a mismatch names the
     /// differing columns.
+    ///
+    /// Over an **undescribable** relation (an undescribing driver, or anything after a codec) the
+    /// structural half stays late-bound, exactly as `select` / `where` / `expand` and the transform
+    /// input check already do: the asserted type is still RESOLVED (an unknown name is
+    /// `of_type_unresolved` whatever the incoming schema is), but it is not diffed against a schema
+    /// that is empty by construction. Comparing there reported every asserted column as missing —
+    /// a plan-time `of_assertion_failed` whose content is false, fired before the decode that would
+    /// have produced exactly those columns (ticket 20260725143200; the same false claim ticket
+    /// 20260717180300 removed from the codec node itself).
     fn check_of_assertion(&self, oref: &OfRef, actual: &Schema) -> Result<(), EvalError> {
         let (ty_label, asserted) = match &oref.target {
             OfTarget::Inline(cols) => (
@@ -1020,6 +1158,12 @@ impl<'r> Evaluator<'r> {
                 (name.clone(), def.schema.clone())
             }
         };
+        // Undescribable incoming relation: nothing to diff against. The refinement half already
+        // rides to the next materialising boundary (§5.4's honest split); over an empty schema the
+        // structural half rides with it.
+        if actual.columns.is_empty() {
+            return Ok(());
+        }
         structural_diff(&ty_label, &asserted, actual)
     }
 
@@ -1068,10 +1212,14 @@ impl<'r> Evaluator<'r> {
         let routed = self.mounts.resolve_path(&full);
         let (driver, vfs) = match &routed {
             Some((driver, sub)) => (driver.id(), format!("/{}/{}", driver.id().as_str(), sub)),
-            // An unrouted target is a path/mount concern; we still build a plan against
-            // the literal path so the verb/irreversible semantics are testable without a
-            // mount (deferred path resolution, ticket scope).
-            None => (DriverId::new(first_segment(&full)), full.clone()),
+            // An unrouted write target refuses at PLAN time, exactly as an unrouted READ
+            // source does above (ticket 20260816213014). The retired literal-path fallback
+            // built a plan against the bare path instead, so PREVIEW answered a write with
+            // nowhere to go with an ordinary effect row — `affected: {exact: 1}` — and the
+            // operator read "this will work" off the one instrument that exists to say
+            // otherwise. Deferred path resolution bought testability without a mount; the
+            // tests seed a mount instead, which is what production always has.
+            None => return Err(EvalError::UnroutedPath { path: full }),
         };
         let target = Target::new(driver, VfsPath::new(vfs));
 
@@ -1796,15 +1944,6 @@ fn structural_diff(ty: &str, asserted: &Schema, actual: &Schema) -> Result<(), E
             mismatched,
         })
     }
-}
-
-/// The first path segment (the conventional driver namespace) of a `/seg/seg` path.
-fn first_segment(path: &str) -> String {
-    path.trim_start_matches('/')
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_string()
 }
 
 /// Describe a node's schema via the driver's **pure** `describe` (no I/O). An
