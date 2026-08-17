@@ -9,14 +9,14 @@ author: a@qmu.jp
 assignees: [a@qmu.jp]
 assignee:
 predicted_hours:
-actual_hours:
+actual_hours: 0.6
 feedback: [20260817102418-add-a-full-documentation-of-the-current-situation-starting-with-a-mission-ticket.md]
 tickets: []
 stories: []
 gate_type: documentation
 gate_target: /guide/architecture
 gate_assert: The docs site serves a current-architecture page that renders and reads correctly, naming the crates, the engine layering, the state stores and the faces the binary actually serves, with the date and source it was verified against.
-claim: work-20260817-104129
+claim: work-20260817-124626
 ---
 
 # The current situation of qfs is documented as it actually stands
@@ -67,3 +67,8 @@ tooling beyond what the survey ticket justifies.
 - 2026-08-17 — ticket archived — 20260817102723-document-the-architecture-as-built-the-crate-map-the-engine-layering-the-state-stores-and-the-faces.md
 - 2026-08-17 — ticket archived — 20260817102723-document-the-repository-as-it-stands-both-packages-the-gates-the-anti-drift-generators-and-the-release-path.md
 - 2026-08-17 — All three tickets driven on work-20260817-104129: the documentation map, the architecture-as-built page and the repository page, each dated against 52b0410 / qfs 0.0.108 — work-20260817-104129.md
+- 2026-08-17 — ticket archived — 20260817105331-the-cookbook-recipe-ratchet-two-places-name-does-not-exist.md
+- 2026-08-17 — ticket archived — 20260817110309-the-docs-site-production-build-fails-on-blueprint-md.md
+- 2026-08-17 — ticket archived — 20260817111530-the-qfs-viewer-gate-cannot-pass-where-bun-is-installed.md
+- 2026-08-17 — run recorded (+0.6h) — run-20260817-124626
+- 2026-08-17 — Three follow-ups closed: the recipe ratchet claim re-pointed at its real file, the docs site production build fixed and gated in CI, and the viewer gate's runtime coverage stated with a narrow dated bun exemption — work-20260817-124626.md

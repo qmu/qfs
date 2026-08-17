@@ -168,6 +168,21 @@ The smoke's runtime matrix is why this gate is environment-sensitive in one dire
 with bun or deno installed runs the packed bin under them too, and a failure there is a real failure
 of the published artifact under that runtime — not of the change under test.
 
+**What a green run of this gate actually proves, as of 2026-08-17.** CI's `viewer-check-all` job
+installs Node 24 and nothing else, so the runtimes it exercises are narrower than a developer's, and
+until this was written down neither the README nor `CLAUDE.md` said so:
+
+| Runtime | In CI | Locally |
+| --- | --- | --- |
+| node | Installed — this is what a green CI run attests to | Proven |
+| bun | Absent, so skipped out loud | **Broken upstream**, and reported as `NOT COVERED` under a dated exemption: bun 1.3.11 cannot parse `plgg-md`'s published dist — one regex class written with raw control characters that node accepts and bun rejects as "range out of order". Present in `plgg-md` 0.0.2 and 0.0.3, so no bump fixes it. Revisit after 2026-11-17; filing it against `qmu/plgg` is ticket `20260817131540` |
+| deno | Absent, so skipped out loud | Unproven — absent from the container this was measured on |
+
+The exemption is deliberately narrow: it matches that one error signature in that one dependency, does
+not count bun as covered, and any other bun failure still fails the gate. Dropping bun from the loop
+instead was rejected — `smoke-npx.sh`'s own comments record that a silent skip is how bun stayed broken
+for a whole session.
+
 ## The three anti-drift generators
 
 Each owns a set of files that must never be hand-edited: edit the source, run the generator. All
