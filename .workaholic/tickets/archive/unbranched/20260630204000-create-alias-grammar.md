@@ -1,5 +1,6 @@
 ---
 created_at: 2026-06-30T20:40:00+09:00
+status: abandoned
 author: a@qmu.jp
 type: enhancement
 layer: [Domain, UX]

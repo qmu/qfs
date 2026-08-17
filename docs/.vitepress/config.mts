@@ -96,6 +96,17 @@ export default defineConfig({
         ],
       },
       {
+        // The project as it actually stands — description read from the source and dated, as
+        // opposed to the Design section below, which states intent. Keep the two apart: a page
+        // here may never restate a `blueprint`/`parked` blueprint section as current fact.
+        text: 'The project as built',
+        items: [
+          { text: 'The architecture as built', link: '/guide/architecture' },
+          { text: 'The repository as it stands', link: '/guide/repository' },
+          { text: 'Documentation map', link: '/documentation-map' },
+        ],
+      },
+      {
         text: 'Design',
         items: [
           { text: 'Blueprint', link: '/blueprint' },
