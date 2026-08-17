@@ -97,5 +97,6 @@
 * [Resolved: A declared lookup cannot be shared across maps, so the §13.2 conciseness bar moved](20260815131415-resolved-c-d90ea764.md)
 * [Unbound-plugin fallback path only resolves inside the qmu/workaholic checkout](20260816152200-unbound-plugin-fallback-path-only-resolves-inside-the-qmu-workaholic-checkout.md)
 * [Resolved: The preview-time malformed-reference refusal was declined, not implemented](20260816195555-resolved-the-preview-time-malformed-reference-refusal.md)
+* [Add a full documentation of the current situation, starting with a mission ticket](20260817102418-add-a-full-documentation-of-the-current-situation-starting-with-a-mission-ticket.md)
 * [Bootstrap installs the plugin but does not guarantee it is bound](20260817184536-bootstrap-installs-the-plugin-but-does.md)
 <!-- okf:generated:end -->
