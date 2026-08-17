@@ -102,6 +102,7 @@ export default defineConfig({
         text: 'The project as built',
         items: [
           { text: 'The architecture as built', link: '/guide/architecture' },
+          { text: 'The repository as it stands', link: '/guide/repository' },
           { text: 'Documentation map', link: '/documentation-map' },
         ],
       },
