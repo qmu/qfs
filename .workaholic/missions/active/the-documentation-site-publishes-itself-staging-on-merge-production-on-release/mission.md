@@ -44,3 +44,4 @@ and the repository documents the procedure the way it documents the GitHub Relea
 ## Changelog
 
 - 2026-08-17 — Proposed from feedback 20260817142308 (issue #69).
+- 2026-08-17 — ticket archived — 20260817142443-the-docs-site-has-a-worker-deploy-target-it-can-be-published-to.md
