@@ -27,11 +27,21 @@ Two things at the repository root belong to the qfs product rather than to the m
 is the qfs README, and `docs/` is the documentation site you are reading
 (VitePress; `docker compose up docs` serves it at `localhost:5173`, the only service in
 `docker-compose.yml`). The root
-`package.json` exists solely for that site (`docs:dev`, `docs:build`, `docs:preview`).
+`package.json` exists solely for that site (`docs:dev`, `docs:build`, `docs:preview`, and the
+three `docs:deploy:*` commands below).
+
+The site is also **published, twice, without anyone running a deploy command**: a merge to `main`
+puts it on `staging-qfs.qmu.co.jp`, and a `v*` tag puts the tagged commit's documentation on
+`qfs.qmu.co.jp`. `docs/wrangler.toml` declares both environments (Cloudflare Workers static
+assets) and `.workaholic/deployments/docs-site.md` is the full procedure. Which commit a hostname
+carries is a `curl https://<host>/version.json` away — every deploy stamps it. Staging is
+publicly reachable and refuses crawlers; production is indexable.
 
 Also at the root: `plugins/qfs/` (the Claude Code / Codex plugin and its generated skills),
 `containers/` (two turnkey live-round boxes), `deploy/dev/` (a Postgres + MariaDB dev stack for
-live SQL work), and `.workaholic/` (the engineering queue — tickets, missions, stories, feedback).
+live SQL work), `scripts/` (repository-wide scripts — today `stamp-docs-deploy.sh`, which both
+publish jobs call), and `.workaholic/` (the engineering queue — tickets, missions, stories,
+feedback).
 
 ### How qfs-viewer got here
 
@@ -142,9 +152,25 @@ cargo run -p xtask -- check-migrations
 | the three `xtask` checks | Anti-drift; see below | — |
 
 CI (`.github/workflows/ci.yml`) runs `fmt`, `clippy` (three invocations), `build + test`, two
-cross-compiles, a wasm32 host-core build, and the viewer gate. It does **not** invoke `xtask` at
-all, so of the three anti-drift checks only `gen-docs` is defended automatically — by that
-docs-drift unit test, not by the command.
+cross-compiles, a wasm32 host-core build, the docs site production build, and the viewer gate. It
+does **not** invoke `xtask` at all, so of the three anti-drift checks only `gen-docs` is defended
+automatically — by that docs-drift unit test, not by the command.
+
+`ci.yml` is `on: push: branches: ["**"]` plus `pull_request`, and a **tag** push matches neither, so
+nothing in it re-checks a tagged tree. That matters for one property only: `release.yml`'s
+`docs-deploy-production` publishes the tag's `docs/` to `qfs.qmu.co.jp`, where a drifted reference
+page would contradict the binary `install.sh` installs from the same tag. `release.yml` therefore
+carries its own `docs-drift` job — `cargo run -p xtask -- gen-docs --check`, the command this time —
+and the publish `needs` it. A drifted tag still publishes its GitHub Release (the binary is not at
+fault) and leaves `qfs.qmu.co.jp` serving the previous version; the fix is to regenerate on `main`
+and re-tag.
+
+The `docs-build` job does double duty: on any branch it proves every documentation page compiles,
+and on a push to `main` it also publishes the built site to `staging-qfs.qmu.co.jp`. The publish
+steps are guarded by `github.event_name == 'push' && github.ref == 'refs/heads/main'`, so a topic
+branch and a pull request build the site and publish nothing. Production is unreachable from this
+workflow: it is published by `release.yml`'s `docs-deploy-production` job, on the `v*` tag, after
+the GitHub Release succeeds.
 
 ### `packages/qfs-viewer/` — the TypeScript gate
 
@@ -190,7 +216,7 @@ three are `xtask` subcommands, run from `packages/qfs`.
 
 | Generator | Owns | Source of truth | Why never hand-edited |
 | --- | --- | --- | --- |
-| `cargo run -p xtask -- gen-docs` | `docs/language.md`, `docs/drivers.md`, `docs/server.md` | The binary's own registries: the frozen reserved-keyword set, the cred-free compiled describe registry, the server binding forms | A hand-edited reference can claim a keyword, a column or a verb the binary does not have. Fix the prose in `crates/qfs/src/docs.rs` and regenerate. Enforced automatically by the docs-drift golden test inside `qfs::docs`, so `cargo test --workspace` fails on drift |
+| `cargo run -p xtask -- gen-docs` | `docs/language.md`, `docs/drivers.md`, `docs/server.md` | The binary's own registries: the frozen reserved-keyword set, the cred-free compiled describe registry, the server binding forms | A hand-edited reference can claim a keyword, a column or a verb the binary does not have. Fix the prose in `crates/qfs/src/docs.rs` and regenerate. Enforced automatically twice: the docs-drift golden test inside `qfs::docs` makes `cargo test --workspace` (and so CI's `build-test`) fail on drift for a branch or PR, and `release.yml`'s `docs-drift` job runs `gen-docs --check` on a `v*` tag before the production docs publish is allowed to run |
 | `cargo run -p xtask -- gen-skills` | The 14 `plugins/qfs/skills/*/SKILL.md`, plus the `.claude/skills/<name>` symlinks | `docs/cookbook/*.md` — each article carries `skill_name` + `skill_description` front matter, and the skill is that front matter plus the article body verbatim | A skill is what an agent loads; a hand-edited one drifts from the article a human maintains. **Not enforced by any test or CI step** — `--check` catches it only when someone runs it |
 | `cargo run -p xtask -- check-migrations` | Nothing — it is a guard, not a writer | `crates/store/src/schema/*.sql` versus their content at the last release tag | An already-shipped migration body edited in place would leave existing installations with a recorded checksum that no longer matches, and the runtime heal path cannot fire on a fresh CI database. Changing a shipped body needs an audited `SUPERSEDED_BODIES` entry. **It needs release tags**: with none reachable it returns clean rather than failing, so a shallow clone or a fork without tags cannot verify this gate |
 

@@ -108,3 +108,78 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The anti-drift gate for the PRODUCTION docs publish, and only for it (ticket 20260817164716).
+  #
+  # `docs/language.md`, `docs/drivers.md` and `docs/server.md` are rendered from the binary's own
+  # registries by `cargo run -p xtask -- gen-docs`. On a BRANCH that drift is already fatal: the
+  # `committed_docs_match_generated_output` golden inside `qfs::docs` runs under
+  # `cargo test --workspace`, so ci.yml's `build-test` job is red on any hand-edited generated page
+  # (measured 2026-08-18 — the golden and `gen-docs --check` fail on the same edit). No second Rust
+  # build was added to ci.yml for that reason: the property is gated there already.
+  #
+  # This workflow is the gap. ci.yml is `on: push: branches: ["**"]` plus `pull_request`, and a TAG
+  # push matches neither — so on `v*` nothing re-checks the tagged tree, and `docs-deploy-production`
+  # below would publish whatever `docs/` the tag carries to qfs.qmu.co.jp, the same hostname whose
+  # reference pages must agree with the binary `install.sh` installs from that very tag.
+  #
+  # Placement: its own job that the docs publish `needs`, not a step inside it and not a gate on
+  # `release`. A step would put a Rust toolchain and a cold `xtask` build in front of a Node-only
+  # deploy job and lengthen the critical path; gating `release` would refuse a perfectly good binary
+  # release over a documentation defect. As its own job it runs in parallel with `build`, and its
+  # failure is a red check that names `gen-docs --check` rather than a generic build failure.
+  #
+  # What a failure looks like to whoever pushed the tag: the GitHub Release still publishes (the
+  # binary is not at fault), this job is red, and `docs-deploy-production` is skipped — so
+  # qfs.qmu.co.jp keeps serving the previously published version instead of a page that contradicts
+  # the binary. Recovery: run `cargo run -p xtask -- gen-docs` on `main`, commit, and re-tag.
+  docs-drift:
+    name: docs anti-drift (gen-docs --check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/qfs
+          key: docs-drift
+      - name: Install toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - run: cargo run -p xtask -- gen-docs --check
+
+  # Publish the tagged commit's documentation to qfs.qmu.co.jp. `needs: [release, docs-drift]` is
+  # the whole point of the ordering: a failed binary build must not leave the production hostname
+  # advertising a version nobody can install, and a tagged tree whose generated reference pages
+  # have drifted from the binary must not reach it at all. The site is built HERE, from the tagged
+  # checkout, so what is served is the tag's documentation and never `main`'s at deploy time.
+  #
+  # Staging (staging-qfs.qmu.co.jp) is the other half of this pair and is published from
+  # `.github/workflows/ci.yml` on a merge to `main`. A merge that is never tagged produces no
+  # release and reaches production through no path at all.
+  #
+  # This is the first secret consumer in this workflow, so the two Cloudflare secrets are scoped
+  # to this job rather than to the workflow — the four build jobs and the release job keep using
+  # only the auto-provided GITHUB_TOKEN.
+  docs-deploy-production:
+    name: publish docs to qfs.qmu.co.jp
+    needs: [release, docs-drift]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+      - run: npm install
+      - run: npm run docs:build
+      - name: Stamp the production build with its commit
+        run: bash scripts/stamp-docs-deploy.sh production
+      - name: Publish to qfs.qmu.co.jp
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm run docs:deploy:production
+          echo "Published ${GITHUB_REF_NAME} (${GITHUB_SHA}) to https://qfs.qmu.co.jp" >> "$GITHUB_STEP_SUMMARY"
