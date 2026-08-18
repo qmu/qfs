@@ -27,7 +27,8 @@ concerns: []
 gate_type: live-app
 gate_target: /claude/sessions
 gate_assert: An HTTP endpoint bound over the sessions query, served on the worktree's dev port, returns one row per live Claude Code session read from the real on-disk store — including the session driving the check — each carrying a non-empty last_message.
-actual_hours: 0.4
+actual_hours: 1.9
+claim: work-20260816-154228
 ---
 
 # Claude Code sessions are queryable and steerable as qfs paths
@@ -223,7 +224,7 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
       running session with a truthful `last_message` (`schema.rs:117`), read from the real store —
       closing owner-named capabilities 1 and 3 *(done 2026-07-17: verified live over the gate
       endpoint — 37 rows = the 37 live registry records on this box, zero empty `last_message`)*
-- [ ] **Steering reaches a real session via the teams inbox.** An INSERT into
+- [x] **Steering reaches a real session via the teams inbox.** An INSERT into
       `/hosts/<host>/claude/sessions/<id>/instructions` is observed by the target session by
       **appending a message to that session's teams inbox** (`~/.claude/teams/<session>/inboxes/
       <member>.json` — a durable per-recipient JSON array the running session drains), rather than
@@ -239,7 +240,19 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
       closes this item (#20260805113200-steering-live-fire-reaches-a-real-session.md). The item is
       marked with the LIVE FIRE alone, deliberately: archiving an earlier ticket must not tick a
       criterion it only half meets)*
-- [ ] **Launching a session is designed, then shipped.** Greenfield: no grammar, no capability, no
+      *(**the medium named above is wrong, and the item is met anyway** — 2026-08-16. The spike
+      ticket put the teams inbox to a live Claude Code 2.1.233 session and it is **never drained**
+      for a session that has not formed a team: no `teams/` directory is created at all, and ten
+      planted inbox files across every plausible team/member spelling sat unread for 75 s. What a
+      live session actually reads is its **peer-messaging Unix domain socket**, whose path and token
+      the session publishes in the `sessions/<pid>.json` liveness record this mission's reader
+      already parses. Two newline-delimited JSON lines steer it. The live fire ran on that medium: a
+      real qfs INSERT made a real session write a file and narrate doing so. Everything else this
+      item demanded holds unchanged — non-process-killing by construction, the retired pty/tmux
+      transport still unused, the proof confined to an isolated container. The recorded observations
+      are in `design-brief-steering-transport.md`; the scope is **wider**, not narrower, since the
+      socket steers any live session and not only a team-formed one)*
+- [x] **Launching a session is designed, then shipped.** Greenfield: no grammar, no capability, no
       prior design. Needs a design brief first (what a launch *is*, whether it is irreversible and
       therefore gated, what identity it runs under, how its id becomes addressable) — closing
       owner-named capability 2 *(hermetic design + implementation done 2026-07-19, commit a73fa01 /
@@ -423,3 +436,14 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-08-05 — mission replanned — mission.md
 - 2026-08-06 — blocked — blocked-20260806-container-spike-has-no-credential.md
 - 2026-08-06 — run recorded (+0.4h) — drive-20260806-213952
+- 2026-08-16 — ticket archived — 20260805113000-capture-the-teams-inbox-contract-in-a-container.md
+- 2026-08-16 — ticket archived — 20260805113100-append-instruction-writes-the-lead-teams-inbox.md
+- 2026-08-16 — ticket archived — 20260805113200-steering-live-fire-reaches-a-real-session.md
+- 2026-08-16 — ticket archived — 20260805113300-launch-live-fire-spawns-an-addressable-session.md
+- 2026-08-16 — run recorded (+0.9h) — run-20260816-154228
+- 2026-08-16 — steering medium corrected — teams inbox disproven, peer socket proven — design-brief-steering-transport.md
+- 2026-08-16 — story written — work-20260816-154228.md
+- 2026-08-18 — ticket archived — 20260816161143-launcher-captures-the-name-not-the-session-id.md
+- 2026-08-18 — ticket archived — 20260816161144-last-message-reads-null-for-a-tool-heavy-session.md
+- 2026-08-18 — ticket archived — 20260816161145-status-reads-unknown-for-an-interactive-session.md
+- 2026-08-18 — run recorded (+0.6h) — session_01XW34NxhnCKHuHMseJjwq2E

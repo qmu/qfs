@@ -190,6 +190,38 @@ qfs auth
 qfs auth --lock
 ```
 
+## Is my declared driver still the shipped one?
+
+A **declared** driver (`/chatwork`, `/cloudflare`, `/slack`) is installed by committing its
+statements to `/sys/drivers`, and from then on **the installed rows are the driver** — the shipped
+file is never read again. So when a shipped declaration is corrected in a later qfs release, your
+installation keeps running the old text. Ask which of yours are behind:
+
+```qfs
+/sys/declarations
+```
+
+One row per installed declaration, with a three-value `status`:
+
+| `status` | Meaning | What to do |
+| --- | --- | --- |
+| `current` | Your installation matches the declaration this binary ships | Nothing |
+| `stale` | It names a shipped declaration and differs from it | Re-install the statements named in `differs` (an ordinary preview → `--commit`) |
+| `local` | You authored this declaration yourself — nothing shipped declares that name | Nothing. `local` is **not** "out of date"; there is no shipped counterpart to be behind |
+
+`shipped` names the asset compared against (`chatwork.qfs`), and `differs` lists the statements that
+disagree — so a stale row tells you *which* `CREATE …` to re-run, not just that something moved. To
+see only what needs attention:
+
+```qfs
+/sys/declarations |> where status == 'stale'
+```
+
+The check is **local and offline**: it compares your rows against the declaration text embedded in
+your own `qfs` binary, so it resolves with no network and no credentials. Nothing is upgraded for
+you — re-installing is an ordinary previewed-and-committed write you choose to make, because a
+declaration you edited on purpose must not be silently overwritten (blueprint §13.4).
+
 ## Common errors & fixes
 
 | You see | What it means | Fix |
@@ -199,7 +231,8 @@ qfs auth --lock
 | A write "affected 1" but nothing changed | You saw a **PREVIEW** — writes change nothing without `--commit` | Re-run with `--commit` |
 | `--commit` of a send/remove is refused | The plan is **irreversible** and a one-shot needs the explicit extra ack | Add `--commit-irreversible` |
 | An `auth` error resolving a secret | The vault is locked, or the account's credential was revoked | `qfs auth` to unlock; `qfs account rotate <provider> <label>` to re-mint |
-| `` `where` names column 'nope', which this relation does not carry `` (`code: unknown_column`, `kind: usage`, exit 2) | A stage named a column the relation has no such thing as. This is **not** "nothing matched" — a typo now refuses instead of quietly answering zero rows, so the two are distinguishable | `qfs describe <path>` and use a real column; the message lists the available ones |
+| `` `where` names column 'nope', which this relation does not carry `` (`code: unknown_column`, `kind: usage`, exit 2) | A stage named a column the relation has no such thing as. This is **not** "nothing matched" — a typo now refuses instead of quietly answering zero rows, so the two are distinguishable. `where`, `expand` and `select` all refuse it, on every source: the same statement refuses identically whether the driver runs the projection natively (`/sql`) or qfs runs it locally | `qfs describe <path>` and use a real column; the message lists the available ones |
+| `` `select` names column 'nope', which this relation does not carry `` (`code: unknown_column`, `kind: usage`, exit 2) | A **projection** named a column the relation does not carry. It used to be dropped, so `\|> select nope` answered the row count with an empty schema — rows of `{}` at exit 0. `select *` (and no `select` at all) still means every column | `qfs describe <path>` for the column list, or drop the stage |
 | `` `expand` cannot explode column 'path': it is a scalar (text), not an array or a struct `` (`code: not_expandable`, `kind: usage`, exit 2) | `expand` was pointed at a column that carries no nested rows to explode | `qfs describe <path>` and expand an array or struct column instead |
 
 **Exit codes** are stable so an agent can branch on them:

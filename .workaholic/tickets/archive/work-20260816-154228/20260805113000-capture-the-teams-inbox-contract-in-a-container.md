@@ -1,5 +1,6 @@
 ---
 created_at: 2026-08-05T11:30:00+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 type: enhancement
@@ -93,3 +94,59 @@ sessions and driving this against them has crashed sessions before.
 - The container needs a working Claude Code with credentials. If that cannot be provisioned, this is
   a genuine external blocker (a credential a third party must issue) — record it as blocked with the
   exact failure, do not fall back to the host.
+
+## Final Report
+
+Development completed as planned, with one substitution the ticket itself sanctioned.
+
+The spike ran in an ephemeral Claude Code on the web execution container against a real Claude Code
+2.1.233 session in an isolated `HOME`, and answered all four questions. The record is
+`design-brief-steering-transport.md`, beside `mission.md`.
+
+**Q1 — does an unsolicited inbox get drained for a solo session? NO**, explicitly, as the gate
+demands. A real `claude --bg` session created no `teams/` directory at all; ten planted inbox files
+(two team spellings × five member spellings), each schema-valid, sat byte-identical for 75 s while
+the session stayed live and provably steerable by other means.
+
+**Q2 — the message schema** was read verbatim out of the 2.1.233 bundle's `TeammateMailbox`
+validator: `{type?, from, text, timestamp, read?, color?, summary?}`, required `from`/`text`/
+`timestamp`, `type` defaulted to `"message"`, schema-invalid entries pruned.
+
+**Q3 — drain semantics** could not be observed and is moot: it needs a team-formed session, and
+2.1.233 offers no non-interactive way to form one. Rather than record "unclear" for the medium the
+implementation would use, the spike found the medium that *is* observable and proved it end to end.
+
+**Q4 — the id mapping** via `config.json`/`leadSessionId` could not be confirmed, because no
+`teams/` directory exists for a solo session. The mapping that *is* confirmed needs none:
+session UUID → `sessions/<pid>.json` → `messagingSocketPath` + the sibling `<pid>.<hash>.key`'s
+`peerToken`.
+
+**The finding that mattered**: the medium a live session actually reads is its peer-messaging Unix
+domain socket. Two newline-delimited JSON lines (auth, then a user message) made a real session act
+— it wrote the requested file and said in its own words it was acting "as requested by the peer
+session".
+
+Isolation held: the container's own `~/.claude/sessions/` was byte- and mtime-identical across the
+run (15:38:06, eight minutes before the spike began), no `teams/` directory was created outside the
+scratch `HOME`, and the only `claude` process outside the scratch daemon was this session itself.
+
+### Discovered Insights
+
+- **Insight**: The ticket's premise was not merely unproven, it was false — and the *reason* it
+  looked plausible is that the teams-inbox machinery still ships in the CLI bundle. Grepping a
+  vendor binary proves a mechanism exists; it cannot prove anything reads it.
+  **Context**: `packages/qfs/crates/qfs/src/teams_inbox.rs` was built against exactly this
+  inference and was one schema capture away from being wired. Its doc comment now records the
+  disproof so nobody wires it.
+
+- **Insight**: The steering address was inside the record the reader already parses. `scan_sessions`
+  has been reading `sessions/<pid>.json` since the layout was corrected in July; `messagingSocketPath`
+  sits in that same object, three fields from `cwd`.
+  **Context**: A year of "steering is not wired" rested on looking for a new store rather than
+  reading the whole of the one already open.
+
+- **Insight**: The bundle documents its own injection protocol in a log string — `[uds-messaging]
+  Inject messages (auth line REQUIRED here): { echo '{"type":"auth",…}'; echo '{"type":"user",…}'; }
+  | socat - UNIX-CONNECT:<sock>`.
+  **Context**: When an external format must be learned, its own diagnostic strings are a first-class
+  source, and cheaper than inference from minified code.

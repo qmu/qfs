@@ -156,7 +156,7 @@ fn push_chain(
     }
 
     let mut acc = Acc::new(source.clone(), scan_path(plan), profile);
-    let schema = walk_chain(plan, &mut acc);
+    let schema = walk_chain(plan, &mut acc)?;
     Ok(acc.finish(schema))
 }
 
@@ -232,11 +232,14 @@ impl<'p> Acc<'p> {
 /// Walk a single-source chain post-order, pushing each stage when the source supports it
 /// (and nothing has yet been forced local), else forcing it local. Returns the chain's
 /// resolved output schema (for the scan node).
-fn walk_chain(plan: &LogicalPlan, acc: &mut Acc) -> Schema {
-    match plan {
+///
+/// Fallible since ticket 20260725113000: a `SELECT` naming a column the described relation does
+/// not carry is refused here rather than pushed to a driver that would silently narrow it away.
+fn walk_chain(plan: &LogicalPlan, acc: &mut Acc) -> Result<Schema, PlanError> {
+    Ok(match plan {
         LogicalPlan::Scan { schema, .. } => schema.clone(),
         LogicalPlan::Filter { input, predicate } => {
-            let schema = walk_chain(input, acc);
+            let schema = walk_chain(input, acc)?;
             if !acc.local_pinned() && acc.profile.supports_where() {
                 acc.pushed.filter =
                     Some(and_predicate(acc.pushed.filter.take(), predicate.clone()));
@@ -246,7 +249,20 @@ fn walk_chain(plan: &LogicalPlan, acc: &mut Acc) -> Schema {
             schema
         }
         LogicalPlan::Project { input, columns } => {
-            let schema = walk_chain(input, acc);
+            let schema = walk_chain(input, acc)?;
+            // `*` (and an empty list) is identity, and identity is not a stage: it is neither
+            // pushed nor kept as a residual op. Pushing it used to hand the driver a projection
+            // naming one column literally called `*`, which no row carries — so
+            // `/local<dir> |> select *` answered rows with an EMPTY schema (measured 2026-08-16).
+            if is_identity_projection(columns) {
+                return Ok(schema);
+            }
+            // Ticket 20260725113000: refuse a projection naming a column the described relation
+            // does not carry, BEFORE it is pushed. A driver honouring the projection narrows to
+            // what it can find and has no channel to report the miss, so the stage used to mean
+            // nothing at exit 0 — the same wrong-answer-at-exit-0 class `where` and `expand`
+            // already refuse.
+            check_project_columns(&schema, columns)?;
             let out = project_schema(&schema, columns);
             if !acc.local_pinned() && acc.profile.supports_project() {
                 acc.pushed.project = Some(columns.clone());
@@ -256,20 +272,20 @@ fn walk_chain(plan: &LogicalPlan, acc: &mut Acc) -> Schema {
             out
         }
         LogicalPlan::ProjectExpr { input, projections } => {
-            walk_chain(input, acc);
+            walk_chain(input, acc)?;
             // A computed projection is never pushed (a driver cannot build a struct); always
             // a local residual over the scan's rows.
             acc.force_local(CombineOp::ProjectExpr(projections.clone()));
             project_expr_schema(projections)
         }
         LogicalPlan::Extend { input, assignments } => {
-            let schema = walk_chain(input, acc);
+            let schema = walk_chain(input, acc)?;
             let out = extend_schema(&schema, assignments);
             acc.force_local(CombineOp::Extend(assignments.clone()));
             out
         }
         LogicalPlan::Limit { input, n } => {
-            let schema = walk_chain(input, acc);
+            let schema = walk_chain(input, acc)?;
             if !acc.local_pinned() && acc.profile.supports_limit() {
                 acc.pushed.limit = Some(*n);
             } else {
@@ -278,7 +294,7 @@ fn walk_chain(plan: &LogicalPlan, acc: &mut Acc) -> Schema {
             schema
         }
         LogicalPlan::Sort { input, keys } => {
-            let schema = walk_chain(input, acc);
+            let schema = walk_chain(input, acc)?;
             if !acc.local_pinned() && acc.profile.supports_order() {
                 acc.pushed.order = keys.iter().map(PushedOrder::from).collect();
             } else {
@@ -287,7 +303,7 @@ fn walk_chain(plan: &LogicalPlan, acc: &mut Acc) -> Schema {
             schema
         }
         LogicalPlan::Distinct { input } => {
-            let schema = walk_chain(input, acc);
+            let schema = walk_chain(input, acc)?;
             if !acc.local_pinned() && acc.profile.supports_distinct() {
                 acc.pushed.distinct = true;
             } else {
@@ -300,7 +316,7 @@ fn walk_chain(plan: &LogicalPlan, acc: &mut Acc) -> Schema {
             group_by,
             aggregates,
         } => {
-            walk_chain(input, acc);
+            walk_chain(input, acc)?;
             let out = aggregate_schema(group_by, aggregates);
             let can_push = !acc.local_pinned()
                 && acc.profile.supports_aggregate()
@@ -317,7 +333,7 @@ fn walk_chain(plan: &LogicalPlan, acc: &mut Acc) -> Schema {
             out
         }
         LogicalPlan::Expand { input, field } => {
-            let schema = walk_chain(input, acc);
+            let schema = walk_chain(input, acc)?;
             // EXPAND is never pushed (no driver declares it); always a local combine.
             acc.force_local(CombineOp::Expand(field.clone()));
             // The expanded field may be late-bound (Unknown); the input schema is a
@@ -333,7 +349,7 @@ fn walk_chain(plan: &LogicalPlan, acc: &mut Acc) -> Schema {
             output_schema,
             mode,
         } => {
-            walk_chain(input, acc);
+            walk_chain(input, acc)?;
             acc.force_local(CombineOp::Transform {
                 name: name.clone(),
                 output_schema: output_schema.clone(),
@@ -344,7 +360,7 @@ fn walk_chain(plan: &LogicalPlan, acc: &mut Acc) -> Schema {
         // `single_source_chain` already excluded JOIN/SetOp, so these never reach here.
         // Returning an empty schema keeps the function total without a panic.
         LogicalPlan::Join { .. } | LogicalPlan::SetOp { .. } => Schema::empty(),
-    }
+    })
 }
 
 /// Federate a cross-source (or join/set) node: recurse into each side via
@@ -457,8 +473,40 @@ fn and_predicate(existing: Option<Predicate>, next: Predicate) -> Predicate {
 }
 
 /// The projected schema for a column list (`*` / `["*"]` / empty is identity).
+/// Whether a name-only projection is the identity — `*`, or nothing at all.
+fn is_identity_projection(columns: &[Name]) -> bool {
+    columns.is_empty() || columns == ["*".to_string()]
+}
+
+/// Refuse a caller-written `SELECT` naming a column the **described, non-empty** schema does not
+/// carry (ticket 20260725113000, developer's ruling 2026-07-26).
+///
+/// The leniencies are the ones `where` and `expand` already keep, and this fold must not tighten
+/// them:
+///
+/// - an **empty** schema is late-bound or undescribable (a declared driver with no `OF`, the codec
+///   seam's deliberately-undetermined post-decode schema) — never refused here; the engine refuses
+///   over the batch the driver actually delivered instead;
+/// - `*` never reaches this function ([`is_identity_projection`] answers first), so a bare star is
+///   never mistaken for a missing column.
+fn check_project_columns(input: &Schema, columns: &[Name]) -> Result<(), PlanError> {
+    if input.columns.is_empty() {
+        return Ok(());
+    }
+    for name in columns {
+        if name.as_str() != "*" && input.column(name).is_none() {
+            return Err(PlanError::unknown_column(
+                "select",
+                name.as_str(),
+                input.column_names(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn project_schema(input: &Schema, columns: &[Name]) -> Schema {
-    if columns.is_empty() || columns == ["*".to_string()] {
+    if is_identity_projection(columns) {
         return input.clone();
     }
     let cols = columns

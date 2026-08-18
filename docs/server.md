@@ -9,7 +9,7 @@
 
 | binding | shape | what causes the plan to run |
 |---------|-------|-----------------------------|
-| `create endpoint` | `endpoint <name> do <stmt>` | an HTTP `fetch` to the endpoint route |
+| `create endpoint` | `endpoint <name> on '<METHOD> /<route>' [policy <name>] as <stmt>` | an HTTP `fetch` to the endpoint route |
 | `create trigger` | `trigger <name> on <event> do <stmt>` | an event/watcher firing |
 | `create job` | `job <name> every <interval> do <stmt>` | a saved plan an EXTERNAL scheduler runs (`qfs job run` from OS cron; Cloudflare Cron Triggers) |
 | `create view` | `[materialized] view <name> as <pipeline>` | a query against the view |
@@ -22,12 +22,14 @@
 
 **Credentials are never inline in a config**: a binding references a stored connection by handle (`qfs account add <provider> <label>`), and no token is ever written to a config, a log, or a generated doc. Examples below use placeholder handles only.
 
+**Every statement ends with `;`**: a config is a `;`-separated document, not one statement per line. Two `;`-less bindings on two lines are read as a single statement and rejected — the parse error names the line the offending word sits on, which is the second binding's line, not the file's first.
+
 ```qfs
-create policy readmail ALLOW select ON mail
-create endpoint recent on 'GET /recent' policy readmail as /mail/inbox |> limit 5
-create trigger notify on /mail/inbox do insert into /slack/acme/general/messages values (NEW.subject)
-create job nightly every '1h' do remove /tmp/scratch where age > 7
-create policy api ALLOW select DENY insert, update, remove, call
+create policy readmail ALLOW select ON mail;
+create endpoint recent on 'GET /recent' policy readmail as /mail/inbox |> limit 5;
+create trigger notify on /mail/inbox do insert into /slack/acme/general/messages values (NEW.subject);
+create job nightly every '1h' do remove /tmp/scratch where age > 7;
+create policy api ALLOW select DENY insert, update, remove, call;
 ```
 
 ## Deployment targets

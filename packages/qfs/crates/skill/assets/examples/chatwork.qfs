@@ -22,17 +22,31 @@ CREATE DRIVER chatwork
 
 -- Stable outward row shapes (the `OF` contract); conformance reconciles these against what the
 -- live API delivers. Extra API fields are dropped to these columns; missing ones surface as drift.
+--
+-- The counts and times below are NOT decoration: without `unread_num`/`mention_num` the question
+-- "which conversations have something new" degrades into listing every room and reading names, and
+-- without the sender columns you cannot tell who wrote a row in any room with more than two people.
 CREATE TYPE chatwork/room (
   room_id text PRIMARY KEY,
   name text NOT NULL,
   type text,
-  role text
+  role text,
+  unread_num int,
+  mention_num int,
+  message_num int,
+  last_update_time timestamp
 );
 
+-- `account_id`/`account_name` are the sender, lifted out of the endpoint's nested `account` object
+-- by the view's projection below — the reply recipe (docs/cookbook/chatwork.md) needs the id, and
+-- attribution needs the name.
 CREATE TYPE chatwork/message (
   message_id text PRIMARY KEY,
   body text NOT NULL,
-  send_time timestamp
+  send_time timestamp,
+  update_time timestamp,
+  account_id text,
+  account_name text
 );
 
 CREATE TYPE chatwork/file (
@@ -52,11 +66,20 @@ CREATE VIEW /chatwork/rooms OF chatwork/room AS
 -- So the two readings get two names instead of one path silently picking one: `…/messages` asks for
 -- the room's latest messages on every read (`force=1`), and `…/messages/unread` is the cheap default
 -- call, named for what it actually returns.
+--
+-- The sender rides a NESTED `account` object on each message, so each body lifts `account.account_id`
+-- and `account.name` to top-level columns the `OF` contract can name (§4 path access, no flattening).
 CREATE VIEW /chatwork/rooms/{room}/messages OF chatwork/message AS
-  /http/chatwork/rooms/{room}/messages?force=1 |> DECODE json;
+  /http/chatwork/rooms/{room}/messages?force=1
+  |> DECODE json
+  |> SELECT message_id, body, send_time, update_time,
+            account.account_id AS account_id, account.name AS account_name;
 
 CREATE VIEW /chatwork/rooms/{room}/messages/unread OF chatwork/message AS
-  /http/chatwork/rooms/{room}/messages |> DECODE json;
+  /http/chatwork/rooms/{room}/messages
+  |> DECODE json
+  |> SELECT message_id, body, send_time, update_time,
+            account.account_id AS account_id, account.name AS account_name;
 
 CREATE VIEW /chatwork/rooms/{room}/files OF chatwork/file AS
   /http/chatwork/rooms/{room}/files |> DECODE json;

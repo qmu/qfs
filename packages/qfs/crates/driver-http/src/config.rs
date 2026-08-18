@@ -204,9 +204,65 @@ pub struct ResourceMap {
 }
 
 /// Whether a resource segment is a declared **parameter token** (`{ws}`, `{account}`) rather than
-/// a literal path segment — the wildcard arm of [`RestApiConfig::resource_for_segment`].
+/// a literal path segment — the wildcard arm of [`RestApiConfig::resource_for_segment`] and the
+/// placeholder arm of [`NodeMap`]'s template match.
 fn is_param_token(segment: &str) -> bool {
     segment.len() > 2 && segment.starts_with('{') && segment.ends_with('}')
+}
+
+/// One **declared node** within a `/rest/<api>` mount: the mount-relative path *template* that
+/// addresses it and the verbs that node — not its leading segment — declares (blueprint §13).
+///
+/// [`ResourceMap`] answers per leading segment, which is the right grain for a compiled `/rest`
+/// mount (`things`, `issues`) and too coarse for a declared one: a declaration's nodes commonly
+/// share a leading `{tenant}` parameter, so the segment's verb union is every verb the driver
+/// declares anywhere. This table is the per-node answer, consulted first by
+/// [`crate::RestDriver`]'s capability gate. A mount that declares none (every compiled config)
+/// keeps the segment answer unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeMap {
+    /// The node's path template **relative to the api segment** — `{ws}/files/{file}` for a node
+    /// declared at `/slack/{ws}/files/{file}`, i.e. the same coordinate space the inbound
+    /// `/rest/<api>/<resource…>` path reduces to. `{param}` segments match any one segment.
+    pub path: String,
+    /// The universal verbs this node declares (a view contributes `SELECT`; a map its own verb).
+    pub verbs: Vec<RestVerb>,
+    /// The subset of `verbs` whose write is **irreversible** — a declared `MAP … IRREVERSIBLE`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub irreversible_verbs: Vec<RestVerb>,
+}
+
+impl NodeMap {
+    /// Construct a node map for the mount-relative template `path` declaring `verbs`.
+    #[must_use]
+    pub fn new(path: impl Into<String>, verbs: Vec<RestVerb>) -> Self {
+        Self {
+            path: path.into(),
+            verbs,
+            irreversible_verbs: Vec::new(),
+        }
+    }
+
+    /// Builder: mark `verbs` (a subset of this node's verbs) as irreversible writes.
+    #[must_use]
+    pub fn with_irreversible_verbs(mut self, verbs: Vec<RestVerb>) -> Self {
+        self.irreversible_verbs = verbs;
+        self
+    }
+
+    /// Whether this node's template addresses `resource_path` — segment count equal, every
+    /// literal segment equal, every `{param}` segment matching whatever stands there.
+    #[must_use]
+    pub fn matches(&self, resource_path: &str) -> bool {
+        let template: Vec<&str> = self.path.trim_matches('/').split('/').collect();
+        let concrete: Vec<&str> = resource_path.trim_matches('/').split('/').collect();
+        template.len() == concrete.len()
+            && !template.iter().any(|s| s.is_empty())
+            && template
+                .iter()
+                .zip(concrete.iter())
+                .all(|(t, c)| is_param_token(t) || t == c)
+    }
 }
 
 impl ResourceMap {
@@ -285,6 +341,12 @@ pub struct RestApiConfig {
     pub default_codec: CodecId,
     /// The resources (path segments) this mount exposes and the verbs each supports.
     pub resources: Vec<ResourceMap>,
+    /// **Declared nodes** (blueprint §13): the per-node capability table a declared driver lifts
+    /// from its own view/map declarations, keyed by each node's path template rather than by its
+    /// leading segment. Empty (every compiled `/rest` mount) leaves the capability answer on
+    /// `resources` exactly as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<NodeMap>,
     /// **Host confinement** (blueprint §13): the hosts this mount may address. `EMPTY = unconfined`
     /// (the default — compiled `/rest` and the `http.get` TVF are not host-pinned). A **declared**
     /// driver populates this with its own `AT` host, so a request to any host outside the set is a
@@ -320,8 +382,17 @@ impl RestApiConfig {
             pagination: Pagination::None,
             default_codec: CodecId::default(),
             resources,
+            nodes: Vec::new(),
             allowed_hosts: Vec::new(),
         }
+    }
+
+    /// Builder: attach the per-node declared capability table (blueprint §13). Passing an empty
+    /// list keeps the mount on the leading-segment answer, which is what every compiled config does.
+    #[must_use]
+    pub fn with_nodes(mut self, nodes: Vec<NodeMap>) -> Self {
+        self.nodes = nodes;
+        self
     }
 
     /// Builder: set the auth strategy.
@@ -386,13 +457,54 @@ impl RestApiConfig {
     ///
     /// The match stays **leading-segment coarse**, deliberately: this layer's contract is that a
     /// driver's nodes collapse under their leading segment and their verbs aggregate there (see
-    /// the cloudflare `accounts` case). Per-node precision — `REMOVE` mapped on
-    /// `/slack/{ws}/files/{file}` but not on `/slack/{ws}/files` — is a separate change.
+    /// the cloudflare `accounts` case), and the applier still resolves a wire resource this way.
+    /// Per-node precision — `REMOVE` mapped on `/slack/{ws}/files/{file}` but not on
+    /// `/slack/{ws}/users` — is [`RestApiConfig::verbs_for_path`] over the [`NodeMap`] table, which
+    /// the capability gate consults **first** whenever a mount declares one.
     #[must_use]
     pub fn resource_for_segment(&self, segment: &str) -> Option<&ResourceMap> {
         self.resources
             .iter()
             .find(|r| r.segment == segment)
             .or_else(|| self.resources.iter().find(|r| is_param_token(&r.segment)))
+    }
+
+    /// Whether this mount carries a per-node declared capability table ([`NodeMap`]) — true for a
+    /// declared driver, false for every compiled `/rest` config, which answers per segment.
+    #[must_use]
+    pub fn declares_nodes(&self) -> bool {
+        !self.nodes.is_empty()
+    }
+
+    /// The verbs the declared nodes addressing `resource_path` (the `/rest/<api>/…` path with the
+    /// `rest` and api segments dropped) themselves declare — the per-node answer this mount's
+    /// capability gate reads when [`RestApiConfig::declares_nodes`] holds. Empty means no declared
+    /// node addresses that path, which is a refusal rather than a fallback.
+    ///
+    /// Every matching node contributes, deliberately: the apply seam picks the **first** declared
+    /// map matching the path *for the verb being written*, so a verb is performable exactly when
+    /// some matching node declares it. A narrower rule (most-literal-segments wins) would refuse
+    /// writes the applier would then have performed, and this layer must not invent a precedence
+    /// the seams below it do not have.
+    #[must_use]
+    pub fn verbs_for_path(&self, resource_path: &str) -> Vec<RestVerb> {
+        let mut verbs: Vec<RestVerb> = Vec::new();
+        for node in self.nodes.iter().filter(|n| n.matches(resource_path)) {
+            for v in &node.verbs {
+                if !verbs.contains(v) {
+                    verbs.push(*v);
+                }
+            }
+        }
+        verbs
+    }
+
+    /// Whether a declared node addressing `resource_path` marks `verb`'s write irreversible.
+    #[must_use]
+    pub fn irreversible_for_path(&self, resource_path: &str, verb: RestVerb) -> bool {
+        self.nodes
+            .iter()
+            .filter(|n| n.matches(resource_path))
+            .any(|n| n.irreversible_verbs.contains(&verb))
     }
 }

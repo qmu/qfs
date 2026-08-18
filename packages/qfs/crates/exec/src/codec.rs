@@ -162,12 +162,7 @@ fn run_trailing_ops(
     })?;
     let mut reg = SourceRegistry::new();
     reg.register(SourceId::new(DECODED_SOURCE), PushdownProfile::None);
-    let physical = partition_by_source(&logical, &reg).map_err(|e| {
-        usage(
-            "codec_then_query",
-            format!("could not plan the post-decode stages: {e}"),
-        )
-    })?;
+    let physical = partition_by_source(&logical, &reg).map_err(post_decode_plan_error)?;
     MiniEvaluator::new()
         .execute(&physical, ScanResults::new(vec![batch]))
         .map_err(post_decode_error)
@@ -184,6 +179,26 @@ fn run_trailing_ops(
 ///
 /// `codec_then_query` survives for what it actually names: a post-decode failure that is **not**
 /// one of those refusals — and it too renders through `Display`, never `{:?}`.
+/// The plan-time twin of [`post_decode_error`]: a post-decode stage refused while the planner was
+/// still looking at the decoded relation's schema.
+///
+/// `select` refuses there rather than in the engine (ticket 20260725113000 — the planner is where a
+/// projection's columns are checked, since a pushed projection never reaches the engine at all), so
+/// without this the same mistake carried `unknown_column` before a decode and `codec_then_query`
+/// after one — exactly the two-identities defect ticket 20260816175149 removed at the runtime seam.
+fn post_decode_plan_error(e: qfs_pushdown::PlanError) -> ExecError {
+    match &e {
+        qfs_pushdown::PlanError::UnknownColumn { .. } => {
+            ExecError::new(ErrorKind::Usage, e.code(), e.to_string())
+        }
+        _ => ExecError::new(
+            ErrorKind::Usage,
+            "codec_then_query",
+            format!("could not plan the post-decode stages: {e}"),
+        ),
+    }
+}
+
 fn post_decode_error(e: EngineError) -> ExecError {
     let code = match e {
         EngineError::UnknownColumn { .. } | EngineError::NotExpandable { .. } => e.code(),
@@ -462,6 +477,21 @@ mod tests {
                 err.message
             );
         }
+
+        // A post-decode `select` is refused by the PLANNER, not the engine (ticket
+        // 20260725113000: a projection's columns are checked where the schema is still in hand),
+        // so its plan-time error has to keep the same code and prose the runtime refusals above
+        // keep — otherwise this ticket would have re-created the two-identities defect on the
+        // stage it added.
+        let stmt = parse_statement("/local/config.json |> decode json |> select nope").unwrap();
+        let err = apply_codecs(blob_batch(b"{\"k\":1}\n"), &stmt)
+            .expect_err("the projection names a column the decoded relation does not carry");
+        assert_eq!(err.code, "unknown_column", "{err:?}");
+        assert!(
+            err.message.contains("`select` names column 'nope'") && !err.message.contains(" { "),
+            "prose, not a Debug dump: {:?}",
+            err.message
+        );
 
         // The control: a post-decode failure that is NOT one of those two refusals still reports
         // `codec_then_query` — the code keeps naming exactly what it always named — and it too

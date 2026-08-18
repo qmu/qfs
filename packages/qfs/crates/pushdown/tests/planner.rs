@@ -386,3 +386,113 @@ fn explain_is_deterministic() {
     assert_eq!(a, b);
     assert_eq!(a, "Scan[db] pushed=[order(age desc)]\n");
 }
+
+// ---- `SELECT` on an unknown column (ticket 20260725113000, developer's ruling 2026-07-26) ----
+
+/// `/x |> SELECT <cols>` over a source that describes `rel_schema()`.
+fn select_plan(src: &str, columns: &[&str]) -> LogicalPlan {
+    LogicalPlan::Project {
+        input: Box::new(scan(src)),
+        columns: columns.iter().map(|c| (*c).to_string()).collect(),
+    }
+}
+
+#[test]
+fn select_on_a_column_absent_from_a_described_schema_is_refused() {
+    // The defect: the projection resolved its columns with a `filter_map` and dropped the ones it
+    // could not find, so `|> select nosuchcol` returned the row COUNT with an empty schema — two
+    // rows of nothing, at exit 0. `where` and `expand` refuse the same mistake; so does `/sql`.
+    let reg = SourceRegistry::new().with(SourceId::new("db"), partial_where_project());
+    let err = partition_by_source(&select_plan("db", &["nosuchcol"]), &reg).unwrap_err();
+    assert_eq!(err.code(), "unknown_column");
+    match &err {
+        PlanError::UnknownColumn {
+            stage,
+            name,
+            available,
+        } => {
+            assert_eq!(*stage, "select");
+            assert_eq!(name, "nosuchcol");
+            assert_eq!(
+                available,
+                &vec!["id".to_string(), "name".into(), "age".into()]
+            );
+        }
+        other => panic!("expected UnknownColumn, got {other:?}"),
+    }
+    // The refusal reads as a sentence naming the correction, never a Debug dump.
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("`select` names column 'nosuchcol'")
+            && rendered.contains("[id, name, age]"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_mixed_projection_is_refused_for_its_unknown_half() {
+    // The subtler half of the defect: `select name, nosuchcol` answered rows carrying only `name`,
+    // so the query looked like it had succeeded and the caller silently lost a column.
+    let reg = SourceRegistry::new().with(SourceId::new("db"), partial_where_project());
+    let err = partition_by_source(&select_plan("db", &["name", "nosuchcol"]), &reg).unwrap_err();
+    assert_eq!(err.code(), "unknown_column");
+}
+
+#[test]
+fn select_refuses_whether_the_projection_is_pushed_or_local() {
+    // The refusal is a property of the QUESTION, not of who answers it: a source that honours the
+    // projection natively and one that leaves it as a local residual must refuse alike, or the
+    // same typo would answer differently per driver.
+    for (label, profile) in [("pushed", partial_where_project()), ("local", none())] {
+        let reg = SourceRegistry::new().with(SourceId::new("db"), profile);
+        let err = partition_by_source(&select_plan("db", &["nosuchcol"]), &reg).expect_err(label);
+        assert_eq!(err.code(), "unknown_column", "{label}");
+    }
+}
+
+#[test]
+fn a_real_projection_still_plans_and_keeps_its_columns() {
+    // The control that makes the refusal meaningful: a projection naming real columns is untouched.
+    let reg = SourceRegistry::new().with(SourceId::new("db"), partial_where_project());
+    let phys = partition_by_source(&select_plan("db", &["id", "name"]), &reg).unwrap();
+    assert_eq!(explain(&phys), "Scan[db] pushed=[project(id,name)]\n");
+}
+
+#[test]
+fn star_and_the_empty_projection_stay_identity_and_are_never_pushed() {
+    // Quality-gate item 3, and a live defect this ticket also removes: `*` used to be PUSHED as a
+    // projection naming one column literally called `*`, which no row carries — so
+    // `/local<dir> |> select *` answered rows with an EMPTY schema (measured 2026-08-16 on
+    // qfs 0.0.102). Identity is not a stage: it is neither pushed nor kept as a residual.
+    let reg = SourceRegistry::new().with(SourceId::new("db"), partial_where_project());
+    for columns in [vec!["*"], vec![]] {
+        let phys = partition_by_source(&select_plan("db", &columns), &reg).unwrap();
+        assert_eq!(
+            explain(&phys),
+            "Scan[db] pushed=[]\n",
+            "an identity projection is a no-op, not a pushed `{columns:?}`"
+        );
+        match &phys {
+            PhysicalPlan::Scan(node) => assert_eq!(
+                node.schema.column_names(),
+                vec!["id".to_string(), "name".into(), "age".into()],
+                "identity keeps the whole relation"
+            ),
+            other => panic!("expected a bare scan, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_late_bound_relation_is_never_refused_at_plan_time() {
+    // Quality-gate item 4, and the leniency `where`/`expand` already keep: an EMPTY schema means
+    // undescribable (a declared driver with no `OF`, the codec seam's deliberately-undetermined
+    // post-decode schema), not "carries no columns". Refusing there would break every late-bound
+    // read; the engine refuses over the batch the driver actually delivered instead.
+    let reg = SourceRegistry::new().with(SourceId::new("late"), partial_where_project());
+    let plan = LogicalPlan::Project {
+        input: Box::new(LogicalPlan::scan(SourceId::new("late"), Schema::empty())),
+        columns: vec!["anything".to_string()],
+    };
+    partition_by_source(&plan, &reg).expect("a late-bound relation is not refused at plan time");
+}

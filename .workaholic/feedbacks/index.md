@@ -97,6 +97,8 @@
 * [Resolved: A declared lookup cannot be shared across maps, so the §13.2 conciseness bar moved](20260815131415-resolved-c-d90ea764.md)
 * [Unbound-plugin fallback path only resolves inside the qmu/workaholic checkout](20260816152200-unbound-plugin-fallback-path-only-resolves-inside-the-qmu-workaholic-checkout.md)
 * [Resolved: The preview-time malformed-reference refusal was declined, not implemented](20260816195555-resolved-the-preview-time-malformed-reference-refusal.md)
+* [heartbeat.sh consumes an in-progress merge and drops its resolution](20260817014653-heartbeat-sh-consumes-an-in-progress-merge-and-drops-its-resolution.md)
+* [A re-landed claim branch loses its artifact attribution](20260817014809-a-re-landed-claim-branch-loses-its-artifact-attribution.md)
 * [Add a full documentation of the current situation, starting with a mission ticket](20260817102418-add-a-full-documentation-of-the-current-situation-starting-with-a-mission-ticket.md)
 * [Resolved: The cookbook ratchet only parses, so it cannot catch a fabricated column](20260817131548-resolved-the-cookbook-ratchet-only-parses-so.md)
 * [Auto-deploy docs to staging-qfs.qmu.co.jp on merge to main, and to qfs.qmu.co.jp on release](20260817142308-auto-deploy-docs-to-staging-qfs-qmu-co-jp-on-merge-to-main-and-to-qfs-qmu-co-jp-on-release.md)

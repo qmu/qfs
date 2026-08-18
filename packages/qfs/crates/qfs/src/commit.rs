@@ -338,9 +338,10 @@ fn live_registry(local_root: &Path) -> DriverRegistry {
     // instructions` is the steering verb (the canonical hosts-realm address, ticket
     // 20260717010400; a REVERSIBLE append — steering an agent never removes
     // state). Wired only when a session source is configured (QFS_CLAUDE_SESSIONS, opt-in); an
-    // unconfigured `/claude` commit fails closed (no driver). NOTE: even configured, the source's
-    // append itself currently fails closed — the retired on-disk append-log was read by no session
-    // (rewire ticket 20260717010500); see src/claude.rs. The on-disk SessionSource lives in the
+    // unconfigured `/claude` commit fails closed (no driver). The append now reaches a real
+    // session: it writes the addressed session's own peer-messaging socket, read out of the same
+    // liveness record the scan reads (ticket 20260805113100); see src/claude.rs. An unreachable
+    // target is a named refusal there, never a silent success. The on-disk SessionSource lives in the
     // binary (src/claude.rs); the driver crate stays tokio-free, with its applier bridged here
     // like every other runtime leaf. Decision W: the `/claude` applier hands the agent a message —
     // it calls no LLM. (qfs's model-calling surface is `|> transform`, §15; the `/transform` DDL

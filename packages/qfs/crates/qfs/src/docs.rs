@@ -251,7 +251,7 @@ pub fn render_server() -> String {
     let _ = writeln!(s, "|---------|-------|-----------------------------|");
     let _ = writeln!(
         s,
-        "| `create endpoint` | `endpoint <name> do <stmt>` | an HTTP `fetch` to the endpoint route |"
+        "| `create endpoint` | `endpoint <name> on '<METHOD> /<route>' [policy <name>] as <stmt>` | an HTTP `fetch` to the endpoint route |"
     );
     let _ = writeln!(
         s,
@@ -298,12 +298,19 @@ pub fn render_server() -> String {
     );
     let _ = writeln!(
         s,
+        "**Every statement ends with `;`**: a config is a `;`-separated document, not one \
+         statement per line. Two `;`-less bindings on two lines are read as a single statement and \
+         rejected — the parse error names the line the offending word sits on, which is the second \
+         binding's line, not the file's first.\n"
+    );
+    let _ = writeln!(
+        s,
         "```qfs\n\
-         create policy readmail ALLOW select ON mail\n\
-         create endpoint recent on 'GET /recent' policy readmail as /mail/inbox |> limit 5\n\
-         create trigger notify on /mail/inbox do insert into /slack/acme/general/messages values (NEW.subject)\n\
-         create job nightly every '1h' do remove /tmp/scratch where age > 7\n\
-         create policy api ALLOW select DENY insert, update, remove, call\n\
+         create policy readmail ALLOW select ON mail;\n\
+         create endpoint recent on 'GET /recent' policy readmail as /mail/inbox |> limit 5;\n\
+         create trigger notify on /mail/inbox do insert into /slack/acme/general/messages values (NEW.subject);\n\
+         create job nightly every '1h' do remove /tmp/scratch where age > 7;\n\
+         create policy api ALLOW select DENY insert, update, remove, call;\n\
          ```\n"
     );
 
