@@ -101,4 +101,5 @@
 * [Resolved: The cookbook ratchet only parses, so it cannot catch a fabricated column](20260817131548-resolved-the-cookbook-ratchet-only-parses-so.md)
 * [Auto-deploy docs to staging-qfs.qmu.co.jp on merge to main, and to qfs.qmu.co.jp on release](20260817142308-auto-deploy-docs-to-staging-qfs-qmu-co-jp-on-merge-to-main-and-to-qfs-qmu-co-jp-on-release.md)
 * [Bootstrap installs the plugin but does not guarantee it is bound](20260817184536-bootstrap-installs-the-plugin-but-does.md)
+* [The Prepare Release routine cannot write its draft release note: invalid GH_TOKEN in the routine container](20260818095333-the-prepare-release-routine-cannot-write-its-draft-release-note-invalid-gh-token-in-the-routine-container.md)
 <!-- okf:generated:end -->
