@@ -85,3 +85,57 @@ which is the irreducible permission of a docs-publishing job.
 - `docs/wrangler.toml`
 - `.workaholic/deployments/docs-site.md`
 - `.github/workflows/ci.yml`, `.github/workflows/release.yml` (secret consumers; unchanged)
+
+## Blocked — 2026-08-18 (work-20260818-194054)
+
+**Blocker: minting a Cloudflare API token, replacing a GitHub Actions repository secret and
+revoking the old token are console acts outside this repository, and this runner holds neither
+credential.** The repository-side work is done and verified; step 2 is all that is left, and it
+is not a change to any file.
+
+### What is already landed
+
+Steps 1 and 3 shipped ahead of this ticket, in commit `db0a1ee` ("Stop declaring the docs custom
+domains", PR #85, merged 2026-08-18) — the same finding, driven under the mission before this
+ticket was reached:
+
+- `docs/wrangler.toml` declares no `routes` in either environment; both env blocks keep an
+  explicit `workers_dev = false`, which is load-bearing once the routes are gone.
+- `.workaholic/deployments/docs-site.md` records that the hostnames are attached out of band and
+  that re-attaching one needs the wide scope the CI secret is meant to shed.
+
+### Step 4, verified
+
+The `curl` in the Implementation section is unreachable from this container — outbound HTTPS to
+both hostnames is refused by the proxy (`curl: (56) CONNECT tunnel failed, response 403`), so the
+deployment record's other stated check was used instead: inspect the workflow run for the merge.
+
+`ci.yml` run [32177242086](https://github.com/qmu/qfs/actions/runs/32177242086), the push of
+`c17cdf1` — the merge commit that carries the routes removal — completed `success`, and inside it
+the `docs site production build` job ran **Stamp the staging build with its commit** and
+**Publish to staging-qfs.qmu.co.jp**, both `success`, finishing 2026-08-18T19:33:38Z. A normal
+merge therefore still publishes with no routes declared, which is what step 4 asks. The
+production leg is likewise proven: `release.yml` run
+[32141202957](https://github.com/qmu/qfs/actions/runs/32141202957) for `v0.0.111` published
+`qfs.qmu.co.jp` successfully at 13:21:27Z, so the production Worker and its custom domain exist
+and this ticket's `depends_on` is satisfied.
+
+### Why step 2 cannot be done here
+
+Two checked facts, not a forecast:
+
+1. **No Cloudflare credential exists in this environment.** `env | grep -ci cloudflare` → `0`, and
+   the repository root carries only `.env.example`. There is nothing to authenticate a
+   token-minting or token-revoking API call with.
+2. **This runner cannot write a GitHub Actions repository secret.** No secret-writing tool is
+   exposed to it, and writes through this session's GitHub proxy are refused in general — observed
+   verbatim on an in-scope repository during the previous unit: `{"message":"Write access to this
+   GitHub API path is not permitted through this proxy."}` (HTTP 403).
+
+### What unblocks it
+
+A person with the Cloudflare account and the repository's secret settings: mint a token holding
+only **Account → Workers Scripts: Edit** and **Account → Account Settings: Read**, replace
+`CLOUDFLARE_API_TOKEN` with it, revoke the wide token, then let one merge to `main` publish to
+confirm. The deployment record now states this as outstanding where an operator reads it, so the
+narrow scope in its Credentials table is not mistaken for the scope the live secret has.

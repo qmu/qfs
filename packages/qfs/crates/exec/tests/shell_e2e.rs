@@ -27,8 +27,18 @@ struct FakeNs {
     names: Vec<String>,
 }
 
+/// The listing schema this fake describes AND delivers: the four columns `ls` projects over a
+/// blob namespace. It carries all of them on purpose — since ticket 20260725113000 a `SELECT`
+/// naming an undescribed column is refused, so a namespace that describes only `name` makes `ls`
+/// fall back to the bare read (pinned separately in `shell::desugar`'s own tests) and the
+/// builtin ≡ typed-statement equivalence below would compare two different questions.
 fn ns_schema() -> Schema {
-    Schema::new(vec![Column::new("name", ColumnType::Text, false)])
+    Schema::new(vec![
+        Column::new("name", ColumnType::Text, false),
+        Column::new("size", ColumnType::Int, true),
+        Column::new("is_dir", ColumnType::Bool, false),
+        Column::new("modified", ColumnType::Timestamp, true),
+    ])
 }
 
 impl Driver for FakeNs {
@@ -67,7 +77,14 @@ impl ReadDriver for FakeNs {
         let rows = self
             .names
             .iter()
-            .map(|n| Row::new(vec![Value::Text(n.clone())]))
+            .map(|n| {
+                Row::new(vec![
+                    Value::Text(n.clone()),
+                    Value::Null,
+                    Value::Bool(false),
+                    Value::Null,
+                ])
+            })
             .collect();
         Ok(RowBatch::new(ns_schema(), rows))
     }

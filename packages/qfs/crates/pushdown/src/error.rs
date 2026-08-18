@@ -25,6 +25,20 @@ pub enum PlanError {
         /// A stable label for the denied operation (e.g. `SELECT`, `aggregate`).
         op: &'static str,
     },
+    /// A caller-written `SELECT` named a column the relation's **described, non-empty** schema
+    /// does not carry (ticket 20260725113000). Refused at plan time because a name-only
+    /// projection is normally *pushed* to the driver, which narrows to what it can find and
+    /// therefore has no channel to report the miss: the query used to answer rows of nothing at
+    /// exit 0. A relation whose schema is empty (late-bound, post-decode) is never refused here —
+    /// the engine refuses it at runtime over the batch the driver actually delivered.
+    UnknownColumn {
+        /// The stage that named it — `select` today, the only plan-time projection.
+        stage: &'static str,
+        /// The column the stage named.
+        name: String,
+        /// The columns the relation does carry, for the operator to correct against.
+        available: Vec<String>,
+    },
 }
 
 impl PlanError {
@@ -34,6 +48,9 @@ impl PlanError {
         match self {
             PlanError::UnknownSource { .. } => "unknown_source",
             PlanError::CapabilityDenied { .. } => "capability_denied",
+            // The SAME code the engine's runtime refusal carries: one mistake, one identity,
+            // whichever side of the plan/execute line the operator meets it on.
+            PlanError::UnknownColumn { .. } => "unknown_column",
         }
     }
 
@@ -49,6 +66,14 @@ impl PlanError {
             op,
         }
     }
+
+    pub(crate) fn unknown_column(stage: &'static str, name: &str, available: Vec<String>) -> Self {
+        PlanError::UnknownColumn {
+            stage,
+            name: name.to_string(),
+            available,
+        }
+    }
 }
 
 impl std::fmt::Display for PlanError {
@@ -60,6 +85,18 @@ impl std::fmt::Display for PlanError {
             PlanError::CapabilityDenied { source, op } => {
                 write!(f, "source `{source}` denies operation `{op}`")
             }
+            // Word-for-word the engine's `EngineError::UnknownColumn` sentence: the operator
+            // must not be able to tell which seam refused, only what to fix.
+            PlanError::UnknownColumn {
+                stage,
+                name,
+                available,
+            } => write!(
+                f,
+                "`{stage}` names column '{name}', which this relation does not carry; \
+                 available: [{}]",
+                available.join(", ")
+            ),
         }
     }
 }
