@@ -346,9 +346,8 @@ fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> Re
     // a `|> of <name>` assertion's structural schema + refinement at plan time (the same reason
     // transform defs are pre-loaded — the planner cannot read the System DB). Empty when no System DB
     // resolves, so a named `of` then reports `of_type_unresolved` rather than silently passing.
-    engine
-        .mounts
-        .set_declared_types(crate::declared_driver::load_declared_type_defs());
+    let declared_type_defs = crate::declared_driver::load_declared_type_defs();
+    engine.mounts.set_declared_types(declared_type_defs.clone());
     // Claude sessions (mission claude-code-sessions-…): register the `/claude` introspective
     // mount UNCONDITIONALLY, like `/sys` and `/transform` — describe is pure and credential-free,
     // and without this registration the planner raised `unknown_source` before the read facet was
@@ -450,7 +449,9 @@ fn register_cloud_and_sys_mounts(engine: &mut Engine, reads: ReadRegistry) -> Re
         );
         // The view specs (tier 2): reading a declared mount evaluates the matched view's stored body.
         let views = crate::declared_eval::view_specs(&d, &declared_types);
-        let Some(driver) = crate::declared_driver::live_rest_driver(&d, client, secrets) else {
+        let Some(driver) =
+            crate::declared_driver::live_rest_driver(&d, &declared_type_defs, client, secrets)
+        else {
             continue;
         };
         let facet = crate::read_facets::RestReadDriver::new(

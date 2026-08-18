@@ -1,6 +1,6 @@
 [package]
 name = "qfs"
-version = "0.0.122"
+version = "0.0.123"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

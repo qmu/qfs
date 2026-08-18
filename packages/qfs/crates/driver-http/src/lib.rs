@@ -63,7 +63,7 @@ use qfs_types::{Column, ColumnType, DriverId, Schema};
 pub use applier::RestApplier;
 pub use client::{redirect_allowed, HttpClient, MockHttpClient, ReqwestClient};
 pub use config::{
-    AuthStrategy, CodecId, NodeMap, Pagination, ResourceMap, RestApiConfig, RestVerb, SecretRef,
+    AuthStrategy, CodecId, Pagination, ResourceMap, RestApiConfig, RestVerb, SecretRef,
 };
 pub use effect::{HttpEffect, BODY_COL, HEADER_COL_PREFIX, URL_COL};
 pub use error::HttpError;
@@ -106,6 +106,11 @@ pub struct DeclaredNodeDesc {
     /// write verb from a `CREATE MAP`). Per NODE, so a node only ever advertises the verbs its own
     /// declarations gave it.
     pub verbs: Vec<Verb>,
+    /// The subset of `verbs` a `CREATE MAP … IRREVERSIBLE` marked irreversible (blueprint §7/§8).
+    /// Per NODE for the same reason `verbs` is: the Slack file detach is declared `IRREVERSIBLE` on
+    /// `/slack/{ws}/files/{file}` alone, and the message post on `/slack/{ws}/{channel}/messages`
+    /// must not inherit its gate.
+    pub irreversible_verbs: Vec<Verb>,
 }
 
 /// The outward row contract a declared node delivers `OF` — the declared type's name and the
@@ -187,13 +192,30 @@ impl RestDriver {
         self
     }
 
-    /// The declared node `path` names exactly, if any (`{param}` segments match a concrete value).
-    fn declared_node(&self, path: &str) -> Option<&DeclaredNodeDesc> {
+    /// Every declared node whose template addresses `path` exactly (`{param}` segments match a
+    /// concrete value), in declaration order.
+    ///
+    /// ALL matches contribute, deliberately: the apply seam picks the **first** declared map
+    /// matching the path *for the verb being written*, so a verb is performable exactly when some
+    /// matching node declares it. A first-match-wins rule here would refuse writes the applier
+    /// would then have performed, and this layer must not invent a precedence the seams below it do
+    /// not have. (Two distinct templates can address one concrete path — `{tenant}/things` and
+    /// `acme/things` — which is the only case where the two rules differ.)
+    fn declared_nodes_for(&self, path: &str) -> Vec<&DeclaredNodeDesc> {
         let actual = segments(path);
-        self.nodes.iter().find(|n| {
-            let template = segments(&n.template);
-            template.len() == actual.len() && template_covers(&template, &actual)
-        })
+        self.nodes
+            .iter()
+            .filter(|n| {
+                let template = segments(&n.template);
+                template.len() == actual.len() && template_covers(&template, &actual)
+            })
+            .collect()
+    }
+
+    /// The first declared node `path` names, if any — the one whose `OF` contract and child key
+    /// `describe` reports. Capability answers read [`RestDriver::declared_nodes_for`] instead.
+    fn declared_node(&self, path: &str) -> Option<&DeclaredNodeDesc> {
+        self.declared_nodes_for(path).into_iter().next()
     }
 
     /// The declared child locations one segment beneath `path`, in declaration order, deduplicated.
@@ -234,33 +256,25 @@ impl RestDriver {
         &self.applier
     }
 
-    /// The capability set for a `/rest/<api>/<resource>/...` node: exactly the verbs that node
-    /// declares. A path no configuration addresses gets the empty set, so every verb is rejected
-    /// at the parse-time gate.
+    /// The COMPILED `/rest` mount's capability set for a `/rest/<api>/<resource>/...` node: the
+    /// verbs its leading resource segment declares ([`ResourceMap::verbs`]), which is the grain its
+    /// configuration is written in. A path no configuration addresses gets the empty set, so every
+    /// verb is rejected at the parse-time gate.
     ///
-    /// A **declared** mount (blueprint §13) answers from its per-node [`NodeMap`] table, matched
-    /// on the node's own path template: `REMOVE` mapped on `/slack/{ws}/files/{file}` says nothing
-    /// about `/slack/{ws}/users`. A **compiled** mount declares no nodes and keeps the
-    /// leading-segment answer ([`ResourceMap::verbs`]), which is the grain its configuration is
-    /// written in.
+    /// A **declared** mount (blueprint §13) never reaches here: it answers per node from
+    /// [`DeclaredNodeDesc`], matched on the node's own path template — `REMOVE` mapped on
+    /// `/slack/{ws}/files/{file}` says nothing about `/slack/{ws}/users` — and that is the one
+    /// table its irreversibility answer reads too, so the two cannot drift.
     fn caps_for(&self, path: &Path) -> Capabilities {
         let config = self.applier.config();
-        let verbs = if config.declares_nodes() {
-            let Some(resource_path) = applier::resource_path_of(path.as_str()) else {
-                return Capabilities::none();
-            };
-            config.verbs_for_path(&resource_path)
-        } else {
-            let Some(segment) = applier::resource_segment_of(path.as_str()) else {
-                return Capabilities::none();
-            };
-            let Some(resource) = config.resource_for_segment(&segment) else {
-                return Capabilities::none();
-            };
-            resource.verbs.clone()
+        let Some(segment) = applier::resource_segment_of(path.as_str()) else {
+            return Capabilities::none();
+        };
+        let Some(resource) = config.resource_for_segment(&segment) else {
+            return Capabilities::none();
         };
         let mut caps = Capabilities::none();
-        for verb in verbs {
+        for verb in resource.verbs.clone() {
             caps = caps.with(rest_verb_to_verb(verb));
         }
         caps
@@ -319,10 +333,13 @@ impl Driver for RestDriver {
         if self.nodes.is_empty() {
             return self.caps_for(path);
         }
-        match self.declared_node(path.as_str()) {
-            Some(node) => Capabilities::from_verbs(&node.verbs),
-            None => Capabilities::none(),
+        let mut caps = Capabilities::none();
+        for node in &self.declared_nodes_for(path.as_str()) {
+            for verb in &node.verbs {
+                caps = caps.with(*verb);
+            }
         }
+        caps
     }
 
     fn children(&self, path: &Path) -> Vec<ChildNode> {
@@ -338,19 +355,22 @@ impl Driver for RestDriver {
     }
 
     /// A write is irreversible iff the node the path names marks that verb irreversible
-    /// (blueprint §7/§8) — a declared MAP's `IRREVERSIBLE` flag, lifted onto the config. Read per
-    /// node on a declared mount and per leading segment on a compiled one, the same split
+    /// (blueprint §7/§8) — a declared MAP's `IRREVERSIBLE` flag. A declared mount answers from the
+    /// SAME per-node table [`RestDriver::capabilities`] reads, so the two can never disagree; a
+    /// compiled `/rest` mount keeps the per-leading-segment answer, the same split
     /// [`RestDriver::caps_for`] makes. The planner ORs this onto the effect node, so
     /// `PREVIEW`/`COMMIT` gate it like a `REMOVE`.
     fn write_irreversible(&self, path: &Path, verb: Verb) -> bool {
+        if !self.nodes.is_empty() {
+            return self
+                .declared_nodes_for(path.as_str())
+                .iter()
+                .any(|n| n.irreversible_verbs.contains(&verb));
+        }
         let Some(rv) = verb_to_rest_verb(verb) else {
             return false;
         };
         let config = self.applier.config();
-        if config.declares_nodes() {
-            return applier::resource_path_of(path.as_str())
-                .is_some_and(|p| config.irreversible_for_path(&p, rv));
-        }
         let Some(segment) = applier::resource_segment_of(path.as_str()) else {
             return false;
         };
