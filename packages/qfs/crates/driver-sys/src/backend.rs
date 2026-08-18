@@ -115,6 +115,17 @@ pub trait SysBackend: Send + Sync {
     /// [`SysError::Backend`] on an I/O failure.
     fn remove_driver(&self, name: &str) -> Result<u64, SysError>;
 
+    /// Apply a `REMOVE VIEW|MAP|SQL|TYPE|DRIVER` (ticket 20260729163000): uninstall the ONE declared
+    /// registration keyed by `(kind, name)`, transactionally appending the audit + `ddl_event`.
+    /// Idempotent (a missing row affects 0 rows). Keying on `kind` as well as `name` is what makes
+    /// `REMOVE VIEW /x` and `REMOVE MAP /x` drop different rows when a view and a map share a node
+    /// path — [`remove_driver`](Self::remove_driver) (the reconcile authoritative destroy) keys on
+    /// `name` alone and stays the provisioning path.
+    ///
+    /// # Errors
+    /// [`SysError::Backend`] on an I/O failure.
+    fn remove_declaration(&self, kind: &str, name: &str) -> Result<u64, SysError>;
+
     /// Apply a single-row `INSERT INTO /sys/drivers` (blueprint §13) to the System DB
     /// **transactionally** — installing one declared-driver declaration (driver/type/view/map) —
     /// appending the corresponding t76 audit row in the SAME transaction (administration observes
@@ -174,6 +185,15 @@ pub enum SysError {
     #[error("malformed /sys write effect: {reason}")]
     MalformedEffect {
         /// A secret-free reason.
+        reason: String,
+    },
+    /// A well-formed write was refused because removing a declaration would orphan something that
+    /// still depends on it — a driver still mounting views/maps, or a live `CONNECT` targeting it
+    /// (ticket 20260729163000). The `reason` names the dependents so a caller can clear them first
+    /// (design 「推測するな、宣言して拒否せよ」: declare and refuse, never silently cascade).
+    #[error("refused: {reason}")]
+    DependencyRefused {
+        /// A secret-free reason naming the dependents.
         reason: String,
     },
     /// An underlying System-DB I/O failure (the binary maps its rusqlite error in here as a
