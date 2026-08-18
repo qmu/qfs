@@ -45,10 +45,11 @@ runner cannot redden a merge commit.
 
 - [x] A shutdown signal delivered during boot takes the graceful path (exit 0, ledger
       drained), not the default disposition — covered by a test that signals mid-boot. (#20260818132305-a-shutdown-signal-arriving-during-boot-takes-the-graceful-path.md)
-- [ ] No serve e2e test decides readiness with a fixed sleep; each waits on an observable
+- [x] No serve e2e test decides readiness with a fixed sleep; each waits on an observable
       readiness signal with a bounded timeout that fails loudly. (#20260818132310-the-serve-e2e-tests-wait-for-observable-readiness-never-a-fixed-sleep.md)
 
 ## Changelog
 
 <!-- Append-only, dated timeline. One line per event; never rewrite past lines. -->
 - 2026-08-18 — ticket archived — 20260818132305-a-shutdown-signal-arriving-during-boot-takes-the-graceful-path.md
+- 2026-08-18 — ticket archived — 20260818132310-the-serve-e2e-tests-wait-for-observable-readiness-never-a-fixed-sleep.md

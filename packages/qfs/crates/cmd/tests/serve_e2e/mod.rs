@@ -18,7 +18,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
 use std::io::Read;
-use std::process::ChildStderr;
+use std::process::{Child, ChildStderr, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -27,6 +27,44 @@ use std::time::{Duration, Instant};
 /// How often the waiter re-reads the accumulating buffer. A poll interval inside a bounded
 /// wait, never a guess about the child's speed.
 const POLL: Duration = Duration::from_millis(5);
+
+/// The line that means **`qfs serve` will take a shutdown signal gracefully**.
+///
+/// It is `server running` — logged inside `Runtime::run`, so it says the run loop was reached —
+/// and it became a *true* readiness signal only once the daemon started arming its handlers
+/// before boot (ticket `20260818132305`). Until then the line was printed before the listener
+/// was installed, so waiting on it narrowed the window without closing it; a wait keyed on it
+/// today is deterministic because the property it claims now holds strictly earlier than the
+/// line itself.
+pub const SERVE_READY: &str = "server running";
+
+/// The line the daemon prints the instant its SIGINT/SIGTERM handlers are installed — before
+/// boot, and therefore before [`SERVE_READY`]. A test that wants to signal *during* boot waits
+/// for this one instead.
+pub const SHUTDOWN_ARMED: &str = "shutdown signal armed";
+
+/// The budget for a readiness wait. Generous by design: the timeout exists to turn a child that
+/// never reaches the awaited line into a loud failure, not to police how fast a runner is.
+pub const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The budget for a shutdown to complete once the signal has been delivered.
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Wait for a signalled child to exit, returning its status — a bounded poll whose failure names
+/// what it was waiting out.
+pub fn wait_for_exit(child: &mut Child, after: &str) -> ExitStatus {
+    let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+    loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "`qfs serve` did not exit within {SHUTDOWN_TIMEOUT:?} after {after}"
+        );
+        std::thread::sleep(POLL);
+    }
+}
 
 /// A live capture of a spawned `qfs serve`'s stderr, readable while the child is still running.
 pub struct ServeLog {

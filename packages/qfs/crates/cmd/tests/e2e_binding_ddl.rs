@@ -49,10 +49,8 @@
 // Test code: assertions and setup may panic/expect/unwrap freely.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
 use qfs_core::{
     desugar_to_insert, parse_server_binding_ddl, preview, Affected, DesugarToInsert, EffectKind,
@@ -170,21 +168,6 @@ fn write_wide_fixture(tag: &str, n: usize) -> PathBuf {
 /// The number of `/server` mutations [`write_wide_fixture`] emits.
 const WIDE_FIXTURE_STATEMENTS: usize = 200;
 
-/// Wait for the child to exit, returning its status (a bounded poll, never an unbounded wait).
-fn wait_for_exit(child: &mut std::process::Child, what: &str) -> std::process::ExitStatus {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Some(status) = child.try_wait().expect("try_wait") {
-            return status;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "server did not exit after {what}"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
 /// Scenario 10's body: boot a wide fixture, signal the daemon the instant its shutdown listener
 /// reports itself armed — which is BEFORE the config replay finishes — and return the full log
 /// plus the exit status.
@@ -207,19 +190,15 @@ fn signal_during_boot(signal: &str, tag: &str) -> (std::process::ExitStatus, Str
     // point is to signal before that. It is "the handlers are installed", the first thing the
     // serve composition root does, so from here the process is inside boot with the graceful
     // path already live.
-    log.wait_for("shutdown signal armed", READINESS_TIMEOUT);
+    log.wait_for(serve_e2e::SHUTDOWN_ARMED, serve_e2e::READINESS_TIMEOUT);
     send_signal(child.id(), signal);
 
-    let status = wait_for_exit(&mut child, signal);
+    let status = serve_e2e::wait_for_exit(&mut child, signal);
     let text = log.finish();
     let _ = std::fs::remove_file(&fixture);
     let _ = std::fs::remove_dir_all(&state_dir);
     (status, text)
 }
-
-/// The readiness-wait budget. Generous by design: the timeout exists to turn a child that never
-/// reaches the awaited line into a loud failure, not to police how fast a runner is.
-const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // Scenario 1 — all five frozen forms desugar to exactly one /server INSERT
@@ -754,33 +733,25 @@ fn serve_boots_mixed_fixture_and_drains_audit_on_sigint() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn qfs serve");
-    let mut stderr = child.stderr.take().expect("child stderr");
+    let log = serve_e2e::ServeLog::pump(child.stderr.take().expect("child stderr"));
 
-    std::thread::sleep(Duration::from_millis(800));
+    // The site the flake was reported on: a `sleep(800ms)` guess about how long boot takes,
+    // followed by a liveness check that cannot tell "in the run loop" from "still booting".
+    // Waiting for the daemon's own readiness line answers both.
+    log.wait_for(serve_e2e::SERVE_READY, serve_e2e::READINESS_TIMEOUT);
     assert!(
         child.try_wait().expect("try_wait").is_none(),
         "server must still be running (blocked in the run loop), not self-exited"
     );
 
     send_sigint(child.id());
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        if let Some(s) = child.try_wait().expect("try_wait") {
-            break s;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "server did not exit after SIGINT"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let status = serve_e2e::wait_for_exit(&mut child, "SIGINT");
     assert!(
         status.success(),
         "clean shutdown on SIGINT must exit 0, got {status:?}"
     );
 
-    let mut log = String::new();
-    stderr.read_to_string(&mut log).expect("read stderr");
+    let log = log.finish();
     assert!(log.contains("boot complete"), "boot must complete:\n{log}");
     assert!(
         log.contains("server running"),
