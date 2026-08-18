@@ -156,3 +156,21 @@ was recorded at creation rather than discovered here.
 **Unaffected by the block:** the consumer-side exemption in `packages/qfs-viewer/scripts/smoke-npx.sh`
 is already in place and cites this ticket, so the gate is green and the defect is visible in the
 smoke's output meanwhile. Its 2026-11-17 revisit date is the backstop if this ticket is not picked up.
+
+## Still blocked — 2026-08-18 (work-20260818-224038)
+
+Re-checked by an unattended `/implement` run. The blocker is unchanged and no part of the ticket
+became runnable; recorded here so the wait is dated rather than assumed.
+
+What was actually run this time:
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Has a fixed `plgg-md` been published? | `npm view plgg-md versions --json` | `["0.0.1","0.0.2","0.0.3"]`, `dist-tags.latest = 0.0.3` — no new release, so steps 3 and 4 stay blocked on the upstream publish |
+| Is deno available to close the matrix gap named in Considerations? | `which deno` | not found (`bun` 1.3.11 and `node` present) — deno's leg stays unproven, not broken |
+| Can this runner reach `qmu/plgg`? | not attempted | the session's stated scope is still `qmu/qfs` alone; issuing a call the runner is instructed not to make is not evidence-gathering (unchanged from the 2026-08-17 entry) |
+
+So step 1 still needs a person or session with write access to `qmu/plgg`, and steps 2-4 still
+follow from it. Nothing in the paste-ready report body above has gone stale: `0.0.3` is still the
+newest published version, so the "no version bump fixes it" claim and the `smoke-npx.sh` exemption
+that cites it both remain true as written.
