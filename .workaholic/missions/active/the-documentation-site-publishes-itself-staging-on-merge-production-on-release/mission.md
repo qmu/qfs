@@ -52,3 +52,6 @@ and the repository documents the procedure the way it documents the GitHub Relea
 - 2026-08-17 — story added — work-20260817-163919.md
 - 2026-08-18 — ticket archived — 20260817164716-a-tag-can-publish-reference-docs-that-drifted-from-the-binary.md
 - 2026-08-18 — run recorded (+0.4h) — session_01XW34NxhnCKHuHMseJjwq2E
+- 2026-08-18 — concern deferred (stuck) — 20260818215719-merging-before-the-cloudflare-secrets-exist.md
+- 2026-08-18 — concern deferred (stuck) — 20260818215719-one-deployment-record-carries-two-environments.md
+- 2026-08-18 — concern deferred (stuck) — 20260818215719-wrangler-is-installed-on-every-branch.md
