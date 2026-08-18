@@ -1557,6 +1557,66 @@ silent exception rides the conversions. Re-verified against the compiled driver 
   `/type`, `/transform`, `/markdown` are internal/local qfs surfaces, not external services. None is
   a hidden exception — they are simply outside the slack/github/drive/mail conversion set.
 
+### 13.4 The upgrade path — an installed declaration answers whether it is current *(ruled 2026-08-17, ticket `20260812141223`)*
+
+Installing a declared driver commits its statements to `/sys/drivers`, and **from then on the
+installed rows are the driver** — the shipped file is never consulted again. That is the property
+that makes a declaration ordinary local state (§13), and it is also the gap: when a shipped
+declaration is corrected (the Chatwork `force=1` fix, the Slack `CREATE LOOKUP` rewrite), an
+operator who installed the old text keeps running it and has no way to find out. Three things are
+ruled here.
+
+**(1) Identity is DERIVED from the installed rows, never stamped at install time.** The obvious
+design — record the declaration's identity (a content hash) as the script is installed — is
+**rejected**, for two reasons. Structurally, the desugar sees one `CREATE …` statement at a time and
+never the document, so a whole-script stamp cannot be written on the previewed-and-committed path at
+all; writing it anywhere else is the side-channel write §13 forbids. Semantically, a stamp is a
+*claim the installer made* while a derivation is a *fact about what is installed* — and only the
+derivation answers the case the ticket flags as unhandled, a statement **removed** from the shipped
+script, whose row is superseded by nothing and which a stamp would still call current. The
+derivation costs no new row kind, no column, and no migration; a hashing crate is not pulled either
+(§11 per-dependency rule), because a direct comparison of the desugared rows is both cheaper than
+the parse a hash would need and more precise than the single bit a hash returns.
+
+**Compared per declaration ITEM, not per script.** Both sides — the operator's `/sys/drivers` rows
+and the embedded asset parsed through the same splitter and grammar the install path uses — reduce
+to one entry per `CREATE DRIVER`/`TYPE`/`VIEW`/`MAP`/`LOOKUP`, keyed by that statement's address and
+valued by the columns that carry declared meaning. Install order is not identity; a re-install that
+appends a newer row on the same key resolves newest-per-key exactly as the live registry does; a
+comment-only edit to the asset is not a change. What the comparison reports is therefore the set of
+**statements to re-install**, not a bare "something moved".
+
+**(2) The answer is a path: `/sys/declarations`.** A new admin relation on the closed `/sys` realm
+(§3.4), SELECT-only, with one row per installed declaration and the three outcomes the ticket
+requires as a closed `status` vocabulary: `current`, `stale`, and `local` — a locally authored
+declaration the binary ships nothing for, which **must never be reported as stale** (「推測するな、
+宣言して拒否せよ」: "there is no shipped counterpart" is a different fact from "yours is older",
+and conflating them sends an operator looking for an upgrade that does not exist). `shipped` names
+the asset compared against and is `NULL` exactly for `local`; `differs` lists the disagreeing keys.
+Like `/sys/whoami`, its rows are **derived per read** rather than stored, so the answer cannot go
+stale relative to the registry it describes. *Rejected alternatives:* a field on `DescribeReport`
+(it carries no free-text slot, and adding one ripples through every driver's describe output and the
+generated goldens for a fact that concerns one driver kind); the driver catalog (deliberately built
+from the **compiled** registry only, so `gen-docs` stays a pure function of the binary — a live
+declared mount may not enter it); a derived column on `/sys/drivers` (a real table, whose columns are
+stored row data). A path was chosen over a CLI-only line because the answer is then queryable in the
+one language — `/sys/declarations |> WHERE status == 'stale'` — which is the whole thesis.
+
+**(3) Upgrade is OPERATOR-INITIATED, never automatic.** Re-installing on mismatch is **rejected**:
+it would make a *read* perform a silent write to the operator's System DB, and `DESCRIBE` and the
+`/sys` reads are pure, credential-free and I/O-free by contract (§3). It would also mean a binary
+upgrade silently rewriting declarations the operator may have deliberately customised — the local
+edit is the point of a declared driver, and there is no signal that distinguishes "stale because
+upstream moved" from "deliberately diverged". So the check reports, and the operator re-installs
+through the ordinary previewed-and-committed `/sys/drivers` write, on the same path every other
+config change rides. The accepted cost is stated plainly: a known-stale mount keeps running until
+somebody acts, which is why the fact is queryable rather than buried in a log line.
+
+**Out of scope, deliberately** (unchanged from the ticket): removing the leftover rows of a
+statement that vanished upstream — the check *reports* such a key, and uninstalling it is a separate
+ruling — and any network fetch of a declaration. The comparison is always against this binary's own
+embedded assets, so it answers offline.
+
 ## 13b. The markdown collection path — *implemented (documents/links tables, full section context); relation-vocabulary typing blueprint*
 
 *(Mission `markdown-trees-are-queryable-as-documents-and-links-tables`.)* A markdown tree is a

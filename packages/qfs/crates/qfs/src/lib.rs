@@ -35,6 +35,7 @@ pub mod connection;
 pub mod connections_config;
 pub mod console;
 pub mod dashboard;
+pub mod declaration_currency;
 pub mod declared_driver;
 pub mod declared_eval;
 pub mod describe;
