@@ -16,7 +16,7 @@ stories: []
 gate_type:
 gate_assert:
 gate_target:
-claim: work-20260817-163919
+claim: work-20260818-143402
 ---
 
 # The documentation site publishes itself: staging on merge, production on release
