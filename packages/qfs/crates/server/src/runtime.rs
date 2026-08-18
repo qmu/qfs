@@ -32,6 +32,18 @@ use crate::error::ServerError;
 use crate::lower::lower_statement;
 use crate::state::ServerState;
 
+/// How many line breaks sit before byte `at` in `src` — the offset from a statement's first line
+/// to the line its parse error is on. Counts over bytes rather than slicing `&str`, so an `at`
+/// past the end (an EOF error) or off a char boundary attributes to the last line rather than
+/// panicking.
+fn newlines_before(src: &str, at: usize) -> usize {
+    let end = at.min(src.len());
+    src.as_bytes()[..end]
+        .iter()
+        .filter(|b| **b == b'\n')
+        .count()
+}
+
 /// The real `/server` COMMIT applier (blueprint §7): a [`PlanApplier`] that takes the shared
 /// [`ServerState`] write guard and applies each [`EffectKind::ServerConfigWrite`] to it —
 /// the **only** way `ServerState` changes. Collects the per-apply [`ConfigChange`]s so the
@@ -333,7 +345,10 @@ impl Runtime {
     /// [`ServerError`] — line-located — on parse / lower / unsupported-verb / commit failure.
     pub fn apply_source(&mut self, who: &str, line: usize, src: &str) -> Result<(), ServerError> {
         let stmt = parse_statement(src).map_err(|e| ServerError::Parse {
-            line,
+            // `line` is where the STATEMENT starts; `e.at` is a byte offset INTO it. A statement
+            // spans as many lines as it likes (a `;`-less config makes one out of the whole file),
+            // so reporting the statement's first line sends the reader to a line that parses.
+            line: line + newlines_before(src, e.at),
             code: e.code.as_str().to_string(),
             message: e.message.clone(),
         })?;
