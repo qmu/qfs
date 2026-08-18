@@ -218,7 +218,36 @@ pub(crate) fn filter_checked(batch: RowBatch, p: &Predicate) -> Result<RowBatch,
     Ok(filter(batch, p))
 }
 
-/// Project a batch to a column list (`*`/empty is identity). Unknown columns are dropped.
+/// [`project`] for a **caller-written `SELECT`**: refuse an unknown column against a described
+/// schema instead of answering the rows-of-nothing a typo would otherwise produce.
+///
+/// The runtime twin of the planner's plan-time refusal (ticket 20260725113000). Both exist because
+/// a projection reaches the rows by two roads: normally it is *pushed* and the planner is the last
+/// place that still sees the described schema, but a post-decode or post-`expand` projection is a
+/// local residual over a batch whose schema only exists here. An empty schema stays lenient in both
+/// — late-bound is not wrong.
+///
+/// # Errors
+/// [`MissingColumn`] when the projection names a column the (non-empty) batch schema does not carry.
+pub(crate) fn project_checked(
+    batch: RowBatch,
+    columns: &[Name],
+) -> Result<RowBatch, MissingColumn> {
+    if !batch.schema.columns.is_empty() {
+        for name in columns {
+            if name != "*" && batch.schema.column(name).is_none() {
+                return Err(MissingColumn {
+                    name: name.clone(),
+                    available: batch.schema.column_names(),
+                });
+            }
+        }
+    }
+    Ok(project(batch, columns))
+}
+
+/// Project a batch to a column list (`*`/empty is identity). Unknown columns are dropped — the
+/// total form. The caller-written `SELECT` goes through [`project_checked`].
 #[must_use]
 pub(crate) fn project(batch: RowBatch, columns: &[Name]) -> RowBatch {
     if columns.is_empty() || columns == ["*".to_string()] {

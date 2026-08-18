@@ -256,10 +256,9 @@ mail.reply(...)`: a `CALL`'s arguments are literals, so only the `INSERT … FRO
 attachments from another service.)
 
 ::: tip The same shape on other services
-**Slack** — posting a channel message works, but sending a file to Slack is a recorded gap: its
-upload is a three-call external flow a declared map cannot express, so a Slack file-share is not yet
-expressible (see [what the file surface does not
-do](/cookbook/slack#what-the-file-surface-does-not-do)). **Chatwork** — posting a room message
+**Slack** — share a cross-sourced file *into a channel* with `… |> upsert into /slack/<ws>/files`
+and a `channel` column (see the [Slack cookbook](/cookbook/slack#upload-a-file-to-slack-and-detach));
+a *threaded* file-reply (`thread_ts`) is a recorded follow-up. **Chatwork** — posting a room message
 reply works, but attaching a file is a recorded gap (it needs a generic multipart-upload primitive
 in the declared driver), so a Chatwork file-reply is not yet expressible.
 :::
@@ -360,9 +359,14 @@ create transform triage
 |> switch route {
      'urgent' => select subject as text |> insert into /slack/acme/ops-alerts/messages,
      'report' => select subject, snippet |> insert into /sql/pg/triage_log,
-     else     => select subject, snippet |> insert into /mail/drafts
+     else     => select subject, snippet as body |> insert into /mail/drafts
    }
 ```
+
+The projection names `snippet` because that is what a message row *carries* — `qfs describe
+/mail/inbox` lists it, and a `select` naming a column the relation does not carry is refused at
+exit 2 rather than silently dropped. The draft arm renames it (`snippet as body`) because the
+compose form's column is `body`.
 
 Read left to right: `transform triage` adds the model's per-row choice as the `route` column;
 `switch route { … }` **partitions** the rows by that value and each arm's continuation runs over

@@ -2662,3 +2662,173 @@ mod expand_refuses_what_it_cannot_expand {
         );
     }
 }
+
+/// `SELECT` on an unknown column is refused, end to end (ticket `20260725113000`, developer's
+/// ruling 2026-07-26 — "Refuse").
+///
+/// The last stage that could mean nothing: `where` and `expand` refuse an absent column, `/sql`
+/// has always refused one, and projection alone dropped it — `|> select nosuchcol` answered the
+/// row COUNT with an empty schema at exit 0, so a consumer branching on `row_count` read "2
+/// results" while every row was `{}`. These pin the refusal at the seam an operator meets: the
+/// whole parse → plan → scan → engine pipeline, with the exit code the envelope carries.
+mod select_refuses_an_unknown_column {
+    use super::*;
+    use qfs_exec::ErrorKind;
+
+    fn rel_schema() -> Schema {
+        Schema::new(vec![
+            Column::new("id", ColumnType::Int, false),
+            Column::new("name", ColumnType::Text, true),
+        ])
+    }
+
+    /// Two fixtures, one shape: `Rows<false>` leaves the projection as a local residual (the
+    /// engine refuses); `Rows<true>` honours it natively (the planner refuses before the scan).
+    /// A typo must not answer differently per driver.
+    struct Rows<const PUSHES: bool>;
+
+    impl<const PUSHES: bool> qfs_core::Driver for Rows<PUSHES> {
+        fn mount(&self) -> &str {
+            if PUSHES {
+                "/pushes"
+            } else {
+                "/local_only"
+            }
+        }
+        fn describe(&self, _p: &Path) -> Result<NodeDesc, CfsError> {
+            Ok(NodeDesc::new(Archetype::RelationalTable, rel_schema()))
+        }
+        fn capabilities(&self, _p: &Path) -> Capabilities {
+            Capabilities::none().select()
+        }
+        fn procedures(&self) -> &[qfs_core::ProcSig] {
+            &[]
+        }
+        fn pushdown(&self) -> &PushdownProfile {
+            if PUSHES {
+                &PushdownProfile::Partial {
+                    where_: false,
+                    project: true,
+                    limit: false,
+                    order: false,
+                    join: false,
+                    aggregate: false,
+                    distinct: false,
+                    group_by: false,
+                }
+            } else {
+                &PushdownProfile::None
+            }
+        }
+        fn applier(&self) -> &dyn PlanApplier {
+            Box::leak(Box::new(NoopApplier))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl<const PUSHES: bool> ReadDriver for Rows<PUSHES> {
+        async fn scan(
+            &self,
+            scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
+            // A driver that honours the projection narrows to it — which is exactly why it has no
+            // channel to report a column it could not find.
+            let batch = RowBatch::new(
+                rel_schema(),
+                vec![
+                    Row::new(vec![Value::Int(1), Value::Text("ann".into())]),
+                    Row::new(vec![Value::Int(2), Value::Text("bob".into())]),
+                ],
+            );
+            let Some(cols) = &scan.pushed.project else {
+                return Ok(batch);
+            };
+            let picks: Vec<usize> = cols
+                .iter()
+                .filter_map(|n| batch.schema.columns.iter().position(|c| &c.name == n))
+                .collect();
+            let schema = Schema::new(
+                picks
+                    .iter()
+                    .map(|i| batch.schema.columns[*i].clone())
+                    .collect(),
+            );
+            let rows = batch
+                .rows
+                .iter()
+                .map(|r| Row::new(picks.iter().map(|i| r.values[*i].clone()).collect()))
+                .collect();
+            Ok(RowBatch::new(schema, rows))
+        }
+    }
+
+    fn read<const PUSHES: bool>(query: &str) -> Result<qfs_exec::RowSet, qfs_exec::ExecError> {
+        let mut engine = Engine::new();
+        engine.mounts.register(Arc::new(Rows::<PUSHES>)).unwrap();
+        let driver = if PUSHES { "pushes" } else { "local_only" };
+        let reads = ReadRegistry::new().with(DriverId::new(driver), Arc::new(Rows::<PUSHES>));
+        block_on_read(
+            &parse(query).unwrap(),
+            &engine.mounts,
+            &reads,
+            &qfs_core::RequestContext::anonymous(),
+        )
+    }
+
+    #[test]
+    fn an_only_unknown_projection_is_refused_at_exit_2() {
+        // The sharpest measured case: two rows of nothing, at success.
+        for err in [
+            read::<false>("/local_only |> select nosuchcol").expect_err("local residual refuses"),
+            read::<true>("/pushes |> select nosuchcol").expect_err("a pushed projection refuses"),
+        ] {
+            assert_eq!(err.code, "unknown_column", "{err:?}");
+            assert_eq!(err.kind, ErrorKind::Usage, "{err:?}");
+            assert_eq!(err.exit_code() as i32, 2, "{err:?}");
+            assert!(
+                err.message.contains("'nosuchcol'") && err.message.contains("[id, name]"),
+                "the refusal names the column and the correction: {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn a_mixed_projection_is_refused_rather_than_silently_halved() {
+        for err in [
+            read::<false>("/local_only |> select name, nosuchcol").expect_err("local"),
+            read::<true>("/pushes |> select name, nosuchcol").expect_err("pushed"),
+        ] {
+            assert_eq!(err.code, "unknown_column", "{err:?}");
+        }
+    }
+
+    #[test]
+    fn a_real_projection_still_answers() {
+        // The control: the stage still narrows, in the order asked, on both roads.
+        for out in [
+            read::<false>("/local_only |> select name").expect("local"),
+            read::<true>("/pushes |> select name").expect("pushed"),
+        ] {
+            assert_eq!(out.schema.column_names(), vec!["name".to_string()]);
+            assert_eq!(out.len(), 2);
+        }
+    }
+
+    #[test]
+    fn star_is_identity_and_keeps_every_column() {
+        // Quality-gate item 3 at the operator's seam: `select *` used to be pushed as a projection
+        // naming a column literally called `*`, so it answered rows with an EMPTY schema.
+        for out in [
+            read::<false>("/local_only |> select *").expect("local"),
+            read::<true>("/pushes |> select *").expect("pushed"),
+        ] {
+            assert_eq!(
+                out.schema.column_names(),
+                vec!["id".to_string(), "name".into()]
+            );
+            assert_eq!(out.len(), 2);
+        }
+    }
+}
