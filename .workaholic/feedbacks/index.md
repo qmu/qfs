@@ -101,4 +101,5 @@
 * [Resolved: The cookbook ratchet only parses, so it cannot catch a fabricated column](20260817131548-resolved-the-cookbook-ratchet-only-parses-so.md)
 * [Auto-deploy docs to staging-qfs.qmu.co.jp on merge to main, and to qfs.qmu.co.jp on release](20260817142308-auto-deploy-docs-to-staging-qfs-qmu-co-jp-on-merge-to-main-and-to-qfs-qmu-co-jp-on-release.md)
 * [Bootstrap installs the plugin but does not guarantee it is bound](20260817184536-bootstrap-installs-the-plugin-but-does.md)
+* [The stuck reminder's digest changes every tick, so its one-post-per-state gate never fires](20260818125607-the-stuck-reminder-s-digest-changes-every-tick-so-its-one-post-per-state-gate-never-fires.md)
 <!-- okf:generated:end -->
