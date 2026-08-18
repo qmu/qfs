@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260818-210148
 ---
 
 # A declared mount now carries two independent per-node tables, and which one answers depends on which mount you ask
