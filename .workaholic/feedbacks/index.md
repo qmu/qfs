@@ -109,6 +109,7 @@
 * [create.sh refuses source: development, which its own header and the corpus use](20260818085734-create-sh-refuses-source-development-which-its-own-header-and-the-corpus-use.md)
 * [The Prepare Release routine cannot write its draft release note: invalid GH_TOKEN in the routine container](20260818095333-the-prepare-release-routine-cannot-write-its-draft-release-note-invalid-gh-token-in-the-routine-container.md)
 * [The stuck-prs read cap shrinks the count as the loop files its own clean pull requests](20260818105743-the-stuck-prs-read-cap-shrinks-the-count-as-the-loop-files-its-own-clean-pull-requests.md)
+* [The stuck reminder's digest changes every tick, so its one-post-per-state gate never fires](20260818125607-the-stuck-reminder-s-digest-changes-every-tick-so-its-one-post-per-state-gate-never-fires.md)
 * [A SIGINT shutdown e2e test flakes and reddens main](20260818131946-a-sigint-shutdown-e2e-test-flakes-and-reddens-main.md)
 * [Every feedback publication edits the same two indexes, so the loop's own pull requests conflict by construction](20260818135713-every-feedback-publication-edits-the-same-two-indexes-so-the-loop-s-own-pull-requests-conflict-by-construction.md)
 * [Merging before the Cloudflare secrets exist turns `main` red](20260818215719-merging-before-the-cloudflare-secrets-exist.md)
