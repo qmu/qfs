@@ -263,8 +263,11 @@ fn eval_combine(
         // 20260725113000). Its plan-time twin refuses a *pushed* projection in the planner.
         CombineOp::Project(cols) => eval::project_checked(unary(inputs, cursor, transform)?, cols)
             .map_err(|missing| EngineError::unknown_column("select", missing)),
+        // The renaming/computed `SELECT` residual: refused here on the same terms as the name-only
+        // one above (ticket 20260816191500), so the two spellings of one question answer alike.
         CombineOp::ProjectExpr(terms) => {
-            Ok(eval::project_expr(unary(inputs, cursor, transform)?, terms))
+            eval::project_expr_checked(unary(inputs, cursor, transform)?, terms)
+                .map_err(|missing| EngineError::unknown_column("select", missing))
         }
         CombineOp::Extend(asgns) => Ok(eval::extend(unary(inputs, cursor, transform)?, asgns)),
         CombineOp::Limit(n) => Ok(eval::limit(unary(inputs, cursor, transform)?, *n)),
