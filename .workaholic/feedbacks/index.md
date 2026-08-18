@@ -101,4 +101,6 @@
 * [Resolved: The cookbook ratchet only parses, so it cannot catch a fabricated column](20260817131548-resolved-the-cookbook-ratchet-only-parses-so.md)
 * [Auto-deploy docs to staging-qfs.qmu.co.jp on merge to main, and to qfs.qmu.co.jp on release](20260817142308-auto-deploy-docs-to-staging-qfs-qmu-co-jp-on-merge-to-main-and-to-qfs-qmu-co-jp-on-release.md)
 * [Bootstrap installs the plugin but does not guarantee it is bound](20260817184536-bootstrap-installs-the-plugin-but-does.md)
+* [Two of the inbound sweep's four surfaces are unreadable in a routine container](20260818065528-two-of-the-inbound-sweep-s-four-surfaces-are-unreadable-in-a-routine-container.md)
+* [The stuck-prs dedup digest flaps with GitHub's lazy mergeability](20260818065547-the-stuck-prs-dedup-digest-flaps-with-github-s-lazy-mergeability.md)
 <!-- okf:generated:end -->
