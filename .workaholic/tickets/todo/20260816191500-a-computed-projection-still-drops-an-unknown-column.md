@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260818-212751
 ---
 
 # A computed projection still answers nulls for a column that does not exist
