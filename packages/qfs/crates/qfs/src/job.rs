@@ -226,6 +226,7 @@ mod tests {
     /// `<abs>` — the tempdir is on the big disk via TMPDIR.
     #[test]
     fn job_run_commits_a_defined_plan_once() {
+        let _home = crate::testenv::HomeGuard::new();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let victim = dir.path().join("victim.txt");
         std::fs::write(&victim, b"bye").unwrap();
@@ -247,6 +248,7 @@ mod tests {
     /// refused (fail-closed, RunMode::Server), and nothing is applied.
     #[test]
     fn job_run_irreversible_without_ack_is_blocked() {
+        let _home = crate::testenv::HomeGuard::new();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let victim = dir.path().join("keep.txt");
         std::fs::write(&victim, b"stay").unwrap();
@@ -269,6 +271,7 @@ mod tests {
     /// PREVIEW by default: no `--commit` applies nothing, even with a permissive policy.
     #[test]
     fn job_run_previews_without_commit() {
+        let _home = crate::testenv::HomeGuard::new();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let victim = dir.path().join("preview.txt");
         std::fs::write(&victim, b"intact").unwrap();
@@ -289,6 +292,7 @@ mod tests {
     /// atomic abort — nothing applied.
     #[test]
     fn job_run_policy_denied_aborts() {
+        let _home = crate::testenv::HomeGuard::new();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let victim = dir.path().join("denied.txt");
         std::fs::write(&victim, b"safe").unwrap();
