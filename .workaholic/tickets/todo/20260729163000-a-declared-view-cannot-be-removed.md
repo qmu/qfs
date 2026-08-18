@@ -8,6 +8,7 @@ commit_hash:
 category: Added
 depends_on:
 mission:
+claim: work-20260818-200743
 ---
 
 # A declared view cannot be removed, so a mistaken declaration is permanent in local config
