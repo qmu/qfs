@@ -110,10 +110,11 @@ impl SysApplier {
                 let key = required_key(&node.args, "key", "REMOVE /sys/settings")?;
                 self.backend.remove_setting(&key)
             }
-            (EffectKind::Remove, SysNode::Drivers) => {
-                let name = required_key(&node.args, "name", "REMOVE /sys/drivers")?;
-                self.backend.remove_driver(&name)
-            }
+            // `REMOVE VIEW|MAP|SQL|TYPE|DRIVER` (ticket 20260729163000) and the reconcile
+            // authoritative destroy both land here. The user surface carries `name` AND `kind` on
+            // the WHERE selector and drops exactly that `(kind, name)` row after the dependency
+            // refusal; the reconcile path carries `name` in args alone and drops by name.
+            (EffectKind::Remove, SysNode::Drivers) => self.remove_declared(node),
             // Declared drivers are install/uninstall only: a driver *edit* is refused (remove and
             // re-add to change one). An honest structured rejection, never a silent duplicate.
             (EffectKind::Update, SysNode::Drivers) => Err(SysError::MalformedEffect {
@@ -185,6 +186,110 @@ impl SysApplier {
             })
             .collect())
     }
+
+    /// Uninstall a declared registration (ticket 20260729163000). Two callers land here: the user
+    /// surface (`REMOVE VIEW|MAP|SQL|TYPE|DRIVER`) carries `name` AND `kind` on the WHERE selector,
+    /// and the reconcile authoritative destroy carries `name` in the args row alone. A kind-scoped
+    /// removal drops exactly the `(kind, name)` row — so a view and a map sharing a node path never
+    /// remove each other — and refuses a driver removal that would orphan its views/maps or a live
+    /// CONNECT; the reconcile path stays a by-name drop with no refusal (it is authoritative).
+    fn remove_declared(&self, node: &EffectNode) -> Result<u64, SysError> {
+        let name = node
+            .selector_text("name")
+            .or_else(|| arg_text(&node.args, "name"))
+            .ok_or_else(|| SysError::MalformedEffect {
+                reason: "REMOVE /sys/drivers needs a name — REMOVE VIEW|MAP|SQL /<path> or \
+                         REMOVE TYPE|DRIVER <name>"
+                    .into(),
+            })?;
+        match node.selector_text("kind") {
+            Some(kind) => {
+                if kind == "driver" {
+                    self.refuse_if_driver_has_dependents(&name)?;
+                }
+                self.backend.remove_declaration(&kind, &name)
+            }
+            None => self.backend.remove_driver(&name),
+        }
+    }
+
+    /// Refuse a `REMOVE DRIVER <name>` that would orphan something (ticket 20260729163000, items
+    /// 3–4). A declared view/map/sql/lookup mounts under the driver's leading path segment, and a
+    /// `CONNECT` may target the driver by name; removing the driver while either stands would leave
+    /// a surface `describe` still advertises resolving against a dead driver. Both are named in the
+    /// refusal so the operator can clear them first, never silently cascaded.
+    fn refuse_if_driver_has_dependents(&self, driver: &str) -> Result<(), SysError> {
+        let rows = self.backend.scan(SysNode::Drivers)?;
+        if let (Some(ki), Some(ni)) = (col_index(&rows, "kind"), col_index(&rows, "name")) {
+            let mut dependents: Vec<String> = rows
+                .rows
+                .iter()
+                .filter_map(|r| {
+                    let kind = match r.values.get(ki) {
+                        Some(Value::Text(k)) => k.as_str(),
+                        _ => return None,
+                    };
+                    if !matches!(kind, "view" | "map" | "sql" | "lookup") {
+                        return None;
+                    }
+                    let name = match r.values.get(ni) {
+                        Some(Value::Text(n)) => n.clone(),
+                        _ => return None,
+                    };
+                    (declared_leading_segment(&name) == Some(driver))
+                        .then(|| format!("{kind} {name}"))
+                })
+                .collect();
+            dependents.sort();
+            if !dependents.is_empty() {
+                return Err(SysError::DependencyRefused {
+                    reason: format!(
+                        "driver '{driver}' still has dependent declaration(s): {} — remove them \
+                         first (REMOVE VIEW|MAP|SQL <path>)",
+                        dependents.join(", ")
+                    ),
+                });
+            }
+        }
+        // The `/sys/paths` scan names its columns per `sys_node_schema` — the driver reference is
+        // `driver` (the underlying `path_binding.driver_id`), and the mount is `path`.
+        let paths = self.backend.scan(SysNode::Paths)?;
+        if let Some(di) = col_index(&paths, "driver") {
+            let pi = col_index(&paths, "path");
+            let mut bound: Vec<String> = paths
+                .rows
+                .iter()
+                .filter_map(|r| match r.values.get(di) {
+                    Some(Value::Text(d)) if d == driver => {
+                        Some(match pi.and_then(|i| r.values.get(i)) {
+                            Some(Value::Text(p)) => p.clone(),
+                            _ => "<unknown>".to_string(),
+                        })
+                    }
+                    _ => None,
+                })
+                .collect();
+            bound.sort();
+            if !bound.is_empty() {
+                return Err(SysError::DependencyRefused {
+                    reason: format!(
+                        "driver '{driver}' is still connected at: {} — DISCONNECT first",
+                        bound.join(", ")
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The leading path segment of a declared registration's `name` — the driver a view/map/sql/lookup
+/// mounts under. A view/map/sql name is a PATH (`/chatwork/rooms_raw` → `chatwork`); a lookup name
+/// is a bare qualified key (`chatwork/msg` → `chatwork`). Returns `None` for an empty stem.
+fn declared_leading_segment(name: &str) -> Option<&str> {
+    let rest = name.trim_start_matches('/');
+    let seg = rest.split('/').next().unwrap_or("");
+    (!seg.is_empty()).then_some(seg)
 }
 
 /// Reconstruct the user-defined path from a `REMOVE /sys/paths/<path…>` target (t100020). The
@@ -291,6 +396,12 @@ mod tests {
         /// (provider, account) rows that `scan(Accounts)` returns — the registry a filter-based
         /// `REMOVE /sys/accounts WHERE account == '<value>'` resolves the provider against.
         accounts: Mutex<Vec<(String, String)>>,
+        /// (kind, name) rows that `scan(Drivers)` returns — the declared registry the dependency
+        /// refusal (ticket 20260729163000) reads to find a driver's dependent views/maps.
+        drivers: Mutex<Vec<(String, String)>>,
+        /// (path, driver) rows that `scan(Paths)` returns — the CONNECT bindings the refusal reads
+        /// to find a live binding still targeting a driver.
+        paths: Mutex<Vec<(String, String)>>,
     }
 
     impl SysBackend for FakeBackend {
@@ -306,6 +417,36 @@ mod tests {
                     .unwrap()
                     .iter()
                     .map(|(p, a)| Row::new(vec![Value::Text(p.clone()), Value::Text(a.clone())]))
+                    .collect();
+                return Ok(RowBatch::new(schema, rows));
+            }
+            if matches!(node, SysNode::Drivers) {
+                let schema = Schema::new(vec![
+                    Column::new("kind", ColumnType::Text, false),
+                    Column::new("name", ColumnType::Text, false),
+                ]);
+                let rows = self
+                    .drivers
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, n)| Row::new(vec![Value::Text(k.clone()), Value::Text(n.clone())]))
+                    .collect();
+                return Ok(RowBatch::new(schema, rows));
+            }
+            if matches!(node, SysNode::Paths) {
+                // Column named `driver` per `sys_node_schema(Paths)` (the underlying
+                // `path_binding.driver_id`), so the refusal's `col_index("driver")` finds it.
+                let schema = Schema::new(vec![
+                    Column::new("path", ColumnType::Text, false),
+                    Column::new("driver", ColumnType::Text, true),
+                ]);
+                let rows = self
+                    .paths
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(p, d)| Row::new(vec![Value::Text(p.clone()), Value::Text(d.clone())]))
                     .collect();
                 return Ok(RowBatch::new(schema, rows));
             }
@@ -360,6 +501,10 @@ mod tests {
         }
         fn remove_driver(&self, name: &str) -> Result<u64, SysError> {
             self.removed.lock().unwrap().push(format!("driver:{name}"));
+            Ok(1)
+        }
+        fn remove_declaration(&self, kind: &str, name: &str) -> Result<u64, SysError> {
+            self.removed.lock().unwrap().push(format!("{kind}:{name}"));
             Ok(1)
         }
     }
@@ -655,6 +800,116 @@ mod tests {
         assert!(
             backend.removed.lock().unwrap().is_empty(),
             "nothing was removed on any rejected filter"
+        );
+    }
+
+    #[test]
+    fn remove_declared_view_drops_the_kind_scoped_row() {
+        // `REMOVE VIEW /chatwork/rooms_raw` carries name AND kind on the selector, and drops exactly
+        // that (kind, name) row via `remove_declaration` — not the by-name reconcile destroy (ticket
+        // 20260729163000).
+        let backend = Arc::new(FakeBackend::default());
+        let applier = SysApplier::new(backend.clone());
+        let node = filter_effect(
+            "/sys/drivers",
+            &[("name", "/chatwork/rooms_raw"), ("kind", "view")],
+        );
+        applier.apply_shared(&node).expect("view removal applies");
+        assert_eq!(
+            backend.removed.lock().unwrap().as_slice(),
+            &["view:/chatwork/rooms_raw".to_string()],
+            "the kind-scoped remove_declaration seam ran, not the by-name remove_driver"
+        );
+    }
+
+    #[test]
+    fn remove_declared_driver_with_no_dependents_drops_it() {
+        let backend = Arc::new(FakeBackend {
+            drivers: Mutex::new(vec![("driver".into(), "chatwork".into())]),
+            ..Default::default()
+        });
+        let applier = SysApplier::new(backend.clone());
+        let node = filter_effect("/sys/drivers", &[("name", "chatwork"), ("kind", "driver")]);
+        applier.apply_shared(&node).expect("driver removal applies");
+        assert_eq!(
+            backend.removed.lock().unwrap().as_slice(),
+            &["driver:chatwork".to_string()]
+        );
+    }
+
+    #[test]
+    fn remove_driver_is_refused_while_a_view_still_mounts_under_it() {
+        // The honest-surfaces refusal (items 3): a driver with a live view/map cannot be removed —
+        // it would leave the view resolving against a dead driver. The error names the dependents
+        // and nothing is removed.
+        let backend = Arc::new(FakeBackend {
+            drivers: Mutex::new(vec![
+                ("driver".into(), "chatwork".into()),
+                ("view".into(), "/chatwork/rooms_raw".into()),
+                ("map".into(), "/chatwork/rooms_raw".into()),
+            ]),
+            ..Default::default()
+        });
+        let applier = SysApplier::new(backend.clone());
+        let node = filter_effect("/sys/drivers", &[("name", "chatwork"), ("kind", "driver")]);
+        let err = applier
+            .apply_shared(&node)
+            .expect_err("a driver with dependents is refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("dependent declaration")
+                && msg.contains("view /chatwork/rooms_raw")
+                && msg.contains("map /chatwork/rooms_raw"),
+            "the refusal names the dependents: {msg}"
+        );
+        assert!(
+            backend.removed.lock().unwrap().is_empty(),
+            "nothing is removed on a refused driver drop"
+        );
+    }
+
+    #[test]
+    fn remove_driver_is_refused_while_a_connect_still_targets_it() {
+        // The honest-surfaces refusal (item 4): a driver a CONNECT still binds cannot be removed —
+        // the binding is named and DISCONNECT is required first.
+        let backend = Arc::new(FakeBackend {
+            drivers: Mutex::new(vec![("driver".into(), "acme".into())]),
+            paths: Mutex::new(vec![("/acme/data".into(), "acme".into())]),
+            ..Default::default()
+        });
+        let applier = SysApplier::new(backend.clone());
+        let node = filter_effect("/sys/drivers", &[("name", "acme"), ("kind", "driver")]);
+        let err = applier
+            .apply_shared(&node)
+            .expect_err("a connected driver is refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("still connected at") && msg.contains("/acme/data"),
+            "the refusal names the binding: {msg}"
+        );
+        assert!(backend.removed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn removing_a_view_under_a_driver_is_never_refused() {
+        // The refusal is a driver-removal guard only: removing the view itself must always be
+        // allowed (it is how an operator clears the dependents the driver refusal names).
+        let backend = Arc::new(FakeBackend {
+            drivers: Mutex::new(vec![
+                ("driver".into(), "chatwork".into()),
+                ("view".into(), "/chatwork/rooms_raw".into()),
+            ]),
+            ..Default::default()
+        });
+        let applier = SysApplier::new(backend.clone());
+        let node = filter_effect(
+            "/sys/drivers",
+            &[("name", "/chatwork/rooms_raw"), ("kind", "view")],
+        );
+        applier.apply_shared(&node).expect("view removal applies");
+        assert_eq!(
+            backend.removed.lock().unwrap().as_slice(),
+            &["view:/chatwork/rooms_raw".to_string()]
         );
     }
 

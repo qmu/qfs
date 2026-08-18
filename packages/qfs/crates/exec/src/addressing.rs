@@ -23,6 +23,16 @@ use crate::error::ExecError;
 /// the leading source is validated by position instead (see [`validate`]).
 const ADDRESSING_KEYWORDS: &[&str] = &["INTO", "UPDATE", "REMOVE"];
 
+/// `REMOVE <noun> /<path>` definition-drops whose target is an ADDRESS: the check skips the noun
+/// and validates the path after it (absolute or `id:`). `TABLE` (ADR 0009) plus the §13
+/// declared-registration drops that name a mount (ticket 20260729163000).
+const REMOVE_PATH_NOUNS: &[&str] = &["TABLE", "VIEW", "MAP", "SQL"];
+
+/// `REMOVE <noun> <name>` definition-drops whose target is a bare definition NAME, never a path —
+/// so the check skips the noun AND its target. A name may be slash-qualified (`REMOVE TYPE
+/// chatwork/message`, `OF chatwork/message`'s inverse), which must not read as a relative path.
+const REMOVE_NAME_NOUNS: &[&str] = &["TYPE", "DRIVER", "TRANSFORM"];
+
 /// Statement-leading keywords that are **not** a source: when the first token is one of these,
 /// the pipeline source (if any) comes later and is addressed by one of the write-target keywords
 /// above, so the leading-source check is skipped.
@@ -58,15 +68,23 @@ pub fn validate(src: &str) -> Result<(), ExecError> {
         let Some(mut next) = tokens.get(i + 1) else {
             continue;
         };
-        // `REMOVE TABLE /sql/<conn>/<table>` (ADR 0009 definition-layer drop): `TABLE` is a
-        // contextual noun, not the address — the absolute path follows it. Skip the noun so the
-        // check lands on the real path token, not on `TABLE` (which would misfire as a relative
-        // path and reject the documented drop spelling in one-shot mode).
-        if upper == "REMOVE" && next.eq_ignore_ascii_case("TABLE") {
-            let Some(after) = tokens.get(i + 2) else {
+        // A definition-layer drop names its target after a contextual NOUN, not directly: `REMOVE
+        // TABLE /sql/<conn>/<table>` (ADR 0009), and `REMOVE VIEW|MAP|SQL /<path>` / `REMOVE
+        // TYPE|DRIVER|TRANSFORM <name>` (ticket 20260729163000). Split by what the target IS: a
+        // NAME noun's target is a bare (possibly slash-qualified) definition name, never a path —
+        // skip both the noun and the name so `REMOVE TYPE chatwork/message` is not read as a
+        // relative path. A PATH noun's target IS an address — skip the noun and validate the path.
+        if upper == "REMOVE" {
+            let noun = next.to_ascii_uppercase();
+            if REMOVE_NAME_NOUNS.contains(&noun.as_str()) {
                 continue;
-            };
-            next = after;
+            }
+            if REMOVE_PATH_NOUNS.contains(&noun.as_str()) {
+                let Some(after) = tokens.get(i + 2) else {
+                    continue;
+                };
+                next = after;
+            }
         }
         // An `INTO VALUES` / `INTO (subquery)` form carries no path address.
         let next_upper = next.to_ascii_uppercase();
@@ -213,5 +231,25 @@ mod tests {
         assert!(validate("REMOVE /sql/shop WHERE name == 'items'").is_ok());
         let err = validate("REMOVE sql/shop WHERE name == 'items'").unwrap_err();
         assert_eq!(err.path.as_deref(), Some("sql/shop"));
+    }
+
+    #[test]
+    fn remove_declared_nouns_are_not_relative_paths() {
+        // `REMOVE VIEW|MAP|SQL /<path>` and `REMOVE TYPE|DRIVER <name>` (ticket 20260729163000):
+        // the noun sits between REMOVE and the target, and a bare definition name is not a path —
+        // neither may be rejected as a relative address in one-shot mode.
+        assert!(validate("REMOVE VIEW /chatwork/rooms_raw").is_ok());
+        assert!(validate("REMOVE MAP /chatwork/rooms_raw").is_ok());
+        assert!(validate("REMOVE SQL /shop/catalog").is_ok());
+        assert!(validate("REMOVE TYPE chatwork/message").is_ok());
+        assert!(validate("REMOVE DRIVER chatwork").is_ok());
+    }
+
+    #[test]
+    fn remove_view_with_a_relative_path_still_rejected() {
+        // The guard still fires on an actual relative path token after the noun.
+        let err = validate("REMOVE VIEW chatwork/rooms_raw").unwrap_err();
+        assert_eq!(err.kind.as_str(), "usage");
+        assert_eq!(err.path.as_deref(), Some("chatwork/rooms_raw"));
     }
 }

@@ -2879,6 +2879,81 @@ fn remove_transform_desugars_to_a_transform_remove_with_name_filter() {
     assert!(matches!(rhs.as_ref(), Expr::Lit(Literal::Str(s)) if s == "classify"));
 }
 
+/// A `REMOVE VIEW|MAP|SQL|TYPE|DRIVER` desugars to `REMOVE /sys/drivers WHERE name == '<name>' AND
+/// kind == '<kind>'` (ticket 20260729163000) — the declared registry addressed by the same
+/// `(kind, name)` key a `CREATE …` wrote. Both leaves ride the WHERE selector.
+fn assert_remove_declared(src: &str, expect_name: &str, expect_kind: &str) {
+    let Statement::Effect(e) = parse_ok(src) else {
+        panic!("expected the desugared Effect for `{src}`")
+    };
+    assert_eq!(e.verb, EffectVerb::Remove);
+    let segs: Vec<&str> = e.target.segments.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(segs, vec!["sys", "drivers"], "`{src}` targets /sys/drivers");
+    let EffectBody::SetWhere { set, filter } = &e.body else {
+        panic!("expected a SetWhere body for `{src}`")
+    };
+    assert!(set.is_empty());
+    // `name == '<name>' AND kind == '<kind>'` — a conjunction of two equality leaves.
+    let Some(Expr::Binary { op, lhs, rhs }) = filter.as_ref() else {
+        panic!("expected the conjoined name/kind filter for `{src}`")
+    };
+    assert_eq!(*op, Op::And);
+    let leaf = |e: &Expr| -> (String, String) {
+        let Expr::Binary { op, lhs, rhs } = e else {
+            panic!("expected an equality leaf")
+        };
+        assert_eq!(*op, Op::Eq);
+        let Expr::Col(c) = lhs.as_ref() else {
+            panic!("lhs is a column")
+        };
+        let Expr::Lit(Literal::Str(s)) = rhs.as_ref() else {
+            panic!("rhs is a string literal")
+        };
+        (c.clone(), s.clone())
+    };
+    let (nc, nv) = leaf(lhs);
+    let (kc, kv) = leaf(rhs);
+    assert_eq!(nc, "name");
+    assert_eq!(nv, expect_name);
+    assert_eq!(kc, "kind");
+    assert_eq!(kv, expect_kind);
+}
+
+#[test]
+fn remove_declared_registrations_desugar_to_sys_drivers_with_kind() {
+    assert_remove_declared(
+        "REMOVE VIEW /chatwork/rooms_raw",
+        "/chatwork/rooms_raw",
+        "view",
+    );
+    assert_remove_declared(
+        "REMOVE MAP /chatwork/rooms_raw",
+        "/chatwork/rooms_raw",
+        "map",
+    );
+    assert_remove_declared("REMOVE SQL /shop/catalog", "/shop/catalog", "sql");
+    // `REMOVE TYPE` canonicalizes its name through the SAME `type_name` `CREATE TYPE` uses, so the
+    // stored `/type/<name>` key matches by construction.
+    assert_remove_declared(
+        "REMOVE TYPE chatwork/message",
+        "/type/chatwork/message",
+        "type",
+    );
+    assert_remove_declared("REMOVE DRIVER chatwork", "chatwork", "driver");
+}
+
+#[test]
+fn drop_is_rejected_with_a_pointer_to_remove() {
+    // `DROP` is not a qfs verb; the error names the `REMOVE` forms rather than the reserved-keyword
+    // complaint the pipeline parser would otherwise raise on the noun (ticket 20260729163000).
+    let err = parse_statement("DROP VIEW /chatwork/rooms_raw").expect_err("DROP is not a verb");
+    assert!(
+        err.message.contains("DROP is not a qfs verb") && err.message.contains("REMOVE VIEW"),
+        "got {:?}",
+        err.message
+    );
+}
+
 #[test]
 fn create_table_requires_a_catalog_qualified_path_and_columns() {
     // Too-short path (no connection segment) is rejected.

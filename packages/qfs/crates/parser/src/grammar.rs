@@ -46,6 +46,14 @@ const CREATE_CONNECTION_RETIRED: &str = "CREATE CONNECTION is retired; declare a
      `CONNECT /<family>/<name> TO <driver> AT '<locator>' [SECRET '<ref>']` (e.g. `CONNECT \
      /sql/shop TO sqlite AT '/data/shop.db'`), or run `qfs connect`";
 
+/// The parse-error message a SQL-style `DROP …` carries (ticket 20260729163000, item 5). qfs has no
+/// `DROP` verb — `REMOVE` is the one destructive verb — so a `DROP VIEW /x` used to die deep in the
+/// pipeline parser complaining that the reserved `VIEW` cannot be an identifier, naming the wrong
+/// problem. This points at the real capability (surfaced by [`map_error`] via [`StrContext::Label`]).
+const DROP_IS_NOT_A_VERB: &str = "DROP is not a qfs verb; use `REMOVE VIEW|MAP|SQL /<path>` or \
+     `REMOVE TYPE|DRIVER <name>` to drop a declared registration (e.g. `REMOVE VIEW \
+     /chatwork/rooms_raw`)";
+
 /// The parser input stream: a slice of spanned tokens (winnow drives this directly).
 type Stream<'a> = &'a [Spanned<Token>];
 /// The winnow modal error used internally; never escapes this module.
@@ -1404,6 +1412,48 @@ fn update_stmt(input: &mut Stream<'_>) -> ModalResult<EffectStmt> {
     })
 }
 
+/// Build the `REMOVE /sys/drivers WHERE name == '<name>' AND kind == '<kind>'` a `REMOVE
+/// VIEW/MAP/SQL/TYPE/DRIVER` desugars to (ticket 20260729163000). Both leaves ride the WHERE
+/// selector (never the write payload): `name` addresses the declared row, `kind` disambiguates the
+/// declaration family so two kinds sharing a name (a view and a map on the same node) never remove
+/// each other. The applier reads both off the selector, enforces the dependency refusal, and drops
+/// the row — appending the same `ddl_event` every `/sys/drivers` write records.
+fn remove_declared_row(kind: &str, name: String, span: Span) -> EffectStmt {
+    let eq = |col: &str, val: String| Expr::Binary {
+        op: Op::Eq,
+        lhs: Box::new(Expr::Col(col.to_string())),
+        rhs: Box::new(Expr::Lit(Literal::Str(val))),
+    };
+    let filter = Expr::Binary {
+        op: Op::And,
+        lhs: Box::new(eq("name", name)),
+        rhs: Box::new(eq("kind", kind.to_string())),
+    };
+    EffectStmt {
+        verb: EffectVerb::Remove,
+        target: PathExpr {
+            segments: vec![plain_segment("sys"), plain_segment("drivers")],
+            as_of: None,
+            span,
+        },
+        body: EffectBody::SetWhere {
+            set: Vec::new(),
+            filter: Some(filter),
+        },
+        returning: None,
+    }
+}
+
+/// `DROP …` → a pointed, committed error (ticket 20260729163000, item 5). Matches the bare `DROP`
+/// ident and, once seen, fails with the [`DROP_IS_NOT_A_VERB`] label naming the `REMOVE` forms —
+/// never a fallthrough, so the SQL spelling can never be mistaken for a source name.
+fn drop_is_not_a_verb(input: &mut Stream<'_>) -> ModalResult<Statement> {
+    let _ = word("DROP").parse_next(input)?;
+    cut_err(fail::<_, Statement, _>)
+        .context(StrContext::Label(DROP_IS_NOT_A_VERB))
+        .parse_next(input)
+}
+
 fn remove_stmt(input: &mut Stream<'_>) -> ModalResult<EffectStmt> {
     let remove = kw(Keyword::Remove).parse_next(input)?;
     // `REMOVE TRANSFORM <name>` — the definition-layer drop for a transform (blueprint §15):
@@ -1461,6 +1511,35 @@ fn remove_stmt(input: &mut Stream<'_>) -> ModalResult<EffectStmt> {
             },
             returning: None,
         });
+    }
+    // `REMOVE VIEW /<path>` / `REMOVE MAP /<path>` / `REMOVE SQL /<path>` / `REMOVE TYPE <name>` /
+    // `REMOVE DRIVER <name>` — the definition-layer drop for a §13 declared declaration (ticket
+    // 20260729163000). `REMOVE` is the one frozen destructive verb; the noun is contextual (`VIEW`
+    // is a frozen keyword, the rest are contextual idents), mirroring `REMOVE TABLE`/`REMOVE
+    // TRANSFORM` rather than inventing a `DROP` keyword. Each desugars to `REMOVE /sys/drivers WHERE
+    // name == '<name>' AND kind == '<kind>'` — the declared registry addressed by the same
+    // `(kind, name)` key its rows carry, so the removal hits exactly the row a `CREATE …` wrote and
+    // no sibling kind that happens to share a name. The dependency refusal (a driver still mounting
+    // views, a CONNECT still targeting it) is the applier's, evaluated against live state.
+    if opt(kw(Keyword::View)).parse_next(input)?.is_some() {
+        let path = cut_err(path_expr).parse_next(input)?;
+        return Ok(remove_declared_row("view", canonical_path(&path), remove));
+    }
+    if opt(word("MAP")).parse_next(input)?.is_some() {
+        let path = cut_err(path_expr).parse_next(input)?;
+        return Ok(remove_declared_row("map", canonical_path(&path), remove));
+    }
+    if opt(word("SQL")).parse_next(input)?.is_some() {
+        let path = cut_err(path_expr).parse_next(input)?;
+        return Ok(remove_declared_row("sql", canonical_path(&path), remove));
+    }
+    if opt(word("TYPE")).parse_next(input)?.is_some() {
+        let name = cut_err(type_name).parse_next(input)?;
+        return Ok(remove_declared_row("type", name, remove));
+    }
+    if opt(word("DRIVER")).parse_next(input)?.is_some() {
+        let name = cut_err(ident).parse_next(input)?.node;
+        return Ok(remove_declared_row("driver", name, remove));
     }
     let target = path_expr(input)?;
     let filter = opt(preceded(kw(Keyword::Where), expr)).parse_next(input)?;
@@ -3465,6 +3544,11 @@ fn inner_statement(input: &mut Stream<'_>) -> ModalResult<Statement> {
         plan_wrap,
         // A `TRANSACTION { … }` block (M6, t62): a distinct leading keyword, so order-independent.
         transaction_block,
+        // `DROP …` — not a qfs verb. `DROP` is a bare ident (never a keyword), so without this arm
+        // `DROP VIEW /x` fails deep in the pipeline parser with `RESERVED_AS_IDENTIFIER` naming the
+        // reserved `VIEW`, which points at the wrong problem (ticket 20260729163000, item 5). Probed
+        // first so the SQL-muscle-memory spelling gets a pointed, capability-naming error instead.
+        drop_is_not_a_verb,
         // `CREATE TABLE` (ADR 0009): the relational definition-layer statement, probed before the
         // server-DDL family so the contextual `TABLE` noun is claimed here. Backtracks cleanly
         // when the noun after `CREATE` is a server-DDL kind.
