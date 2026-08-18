@@ -3814,8 +3814,12 @@ mod tests {
                 !d.views.is_empty() && !d.maps.is_empty(),
                 "{name} ships views and maps to walk"
             );
-            let mount = declared_describe_mount(&format!("/{name}"), &d)
-                .expect("the declared describe mount");
+            let mount = declared_describe_mount_with_types(
+                &format!("/{name}"),
+                &d,
+                &qfs_core::DeclaredTypeDefs::new(),
+            )
+            .expect("the declared describe mount");
             // The declaration's own answer: which verbs each template declares, from the rows.
             let mut declared: Vec<(String, Verb)> = Vec::new();
             for v in &d.views {
@@ -3852,7 +3856,9 @@ mod tests {
         // REMOVE` is declared for `/slack/{ws}/files/{file}` ONLY.
         use qfs_core::{Path, Verb};
         let d = shipped_declared_driver("slack", qfs_skill::SLACK_DRIVER);
-        let mount = declared_describe_mount("/slack", &d).expect("the declared describe mount");
+        let mount =
+            declared_describe_mount_with_types("/slack", &d, &qfs_core::DeclaredTypeDefs::new())
+                .expect("the declared describe mount");
         // The coarse answer that used to be given to every path under the mount.
         let segment_union = d.resources();
         assert_eq!(
@@ -3892,7 +3898,9 @@ mod tests {
             "an undeclared node advertises no verb at all"
         );
         // The irreversible marking travels with the node too: the detach is gated, the post is not.
-        let driver = declared_describe_mount("/slack", &d).expect("mount");
+        let driver =
+            declared_describe_mount_with_types("/slack", &d, &qfs_core::DeclaredTypeDefs::new())
+                .expect("mount");
         assert!(
             qfs_core::Driver::write_irreversible(
                 &driver,
