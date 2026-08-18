@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260818-144000
 ---
 
 # `ci.yml`'s `release-artifacts` job can never run
