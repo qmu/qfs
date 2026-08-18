@@ -101,4 +101,8 @@
 * [Resolved: The cookbook ratchet only parses, so it cannot catch a fabricated column](20260817131548-resolved-the-cookbook-ratchet-only-parses-so.md)
 * [Auto-deploy docs to staging-qfs.qmu.co.jp on merge to main, and to qfs.qmu.co.jp on release](20260817142308-auto-deploy-docs-to-staging-qfs-qmu-co-jp-on-merge-to-main-and-to-qfs-qmu-co-jp-on-release.md)
 * [Bootstrap installs the plugin but does not guarantee it is bound](20260817184536-bootstrap-installs-the-plugin-but-does.md)
+* [A SIGINT shutdown e2e test flakes and reddens main](20260818131946-a-sigint-shutdown-e2e-test-flakes-and-reddens-main.md)
+* [Merging before the Cloudflare secrets exist turns `main` red](20260818215719-merging-before-the-cloudflare-secrets-exist.md)
+* [One deployment record carries two environments](20260818215719-one-deployment-record-carries-two-environments.md)
+* [`wrangler` is installed on every branch push](20260818215719-wrangler-is-installed-on-every-branch.md)
 <!-- okf:generated:end -->
