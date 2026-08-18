@@ -1,11 +1,13 @@
 ---
 created_at: 2026-08-16T16:11:43+00:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260818-195336
 ---
 
 # The server guide's config example does not parse: missing `;` and a `do` the parser rejects
@@ -95,3 +97,40 @@ not in the rendered file.
 - Check whether other generated guides (`docs/language.md`, `docs/drivers.md`) carry examples with
   the same untested status; the ratchet may be worth widening rather than scoping to one page
   (`packages/qfs/crates/test/tests/cookbook_skills.rs`).
+
+## Final Report
+
+Development completed as planned. All three defects reproduced against the built binary, fixed at
+the generator source, and covered by a new ratchet.
+
+- **Reproduced** all three before touching anything: the `;`-less two-statement file was rejected
+  `RESERVED_AS_IDENTIFIER` while the identical file with semicolons booted; `create endpoint live do
+  …` parsed but died at lower time with `CREATE ENDPOINT requires ON '<method> /route'`; the
+  `;`-less file's error was reported at `line 1` when line 1 parses alone.
+- **Fixed the generator** (`crates/qfs/src/docs.rs`, never the rendered page): every config example
+  now ends with `;`; the bindings table's endpoint shape reads
+  `endpoint <name> on '<METHOD> /<route>' [policy <name>] as <stmt>`; and a sentence above the fence
+  states that a config is a `;`-separated document, not one statement per line.
+- **Fixed the line attribution** (`crates/server/src/runtime.rs`): a statement can span many lines,
+  so `apply_source` now adds the newline count before the parse error's byte offset to the
+  statement's first line. The `;`-less two-liner now reports `line 2`, where the offending `create`
+  actually sits.
+- **Added the ratchet** (`xtask/tests/server_guide_config.rs`, modeled on `cookbook_skills.rs`):
+  every `.qfs` fence in `docs/server.md` is split with the real `split_document` and each statement
+  parsed on the shipped grammar; a second test proves a `;`-less pair is one un-parseable statement,
+  so the ratchet can never go vacuous. Confirmed it fails when a `;` is deleted from the page.
+
+### Discovered Insights
+
+- **Insight**: `gen-docs --check` proves the rendered page matches the generator, never that what
+  the generator renders is *true*. A generated example can be false and the golden stays green — the
+  ratchet is a separate, content-level check, which is exactly why `cookbook_skills.rs` already
+  exists and why this ticket needed a sibling rather than a stronger golden.
+  **Context**: anyone adding a documented, runnable example to a generated page must add or extend a
+  ratchet; the drift check alone will not catch a wrong example.
+- **Insight**: the endpoint `do` form fails at *lower* time, not parse time — `create endpoint x do
+  /p` is a syntactically valid statement that `lower_statement` rejects. A fence-scoped parse
+  ratchet cannot catch it; only booting (e2e) or the human-read table can. The table fix plus
+  `e2e_serve.rs` cover it, and the new ratchet's doc-comment says so rather than pretending to.
+  **Context**: parse-checking documented DDL is necessary but not sufficient; effect-shape errors
+  live one layer down.
