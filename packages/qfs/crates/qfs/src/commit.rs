@@ -1004,6 +1004,7 @@ mod tests {
 
     #[test]
     fn a_gdrive_named_mount_registers_a_lazy_apply_driver_under_the_outer_id() {
+        let _home = crate::testenv::HomeGuard::new();
         let mount = crate::cloud_mounts::CloudMount {
             path: "/gdrive".into(),
             kind: "gdrive".into(),
@@ -1028,6 +1029,7 @@ mod tests {
 
     #[test]
     fn a_drive_kind_mount_is_accepted_as_an_alias_for_gdrive() {
+        let _home = crate::testenv::HomeGuard::new();
         let mount = crate::cloud_mounts::CloudMount {
             path: "/gdrive".into(),
             kind: "drive".into(),

@@ -1125,6 +1125,7 @@ mod tests {
     /// unwritable — the `/out.txt` check below is a read-only witness, not the mechanism.
     #[test]
     fn repl_commit_targets_the_session_root_not_the_filesystem_root() {
+        let _home = crate::testenv::HomeGuard::new();
         let (dir, engine, reads) = fixture();
         let transcript = run_script_committing(
             &engine,
