@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260818-214011
 ---
 
 # One qfs unit test still reads the shared config home, so the suite result is a race
