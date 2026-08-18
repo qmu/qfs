@@ -101,4 +101,6 @@
 * [Resolved: The cookbook ratchet only parses, so it cannot catch a fabricated column](20260817131548-resolved-the-cookbook-ratchet-only-parses-so.md)
 * [Auto-deploy docs to staging-qfs.qmu.co.jp on merge to main, and to qfs.qmu.co.jp on release](20260817142308-auto-deploy-docs-to-staging-qfs-qmu-co-jp-on-merge-to-main-and-to-qfs-qmu-co-jp-on-release.md)
 * [Bootstrap installs the plugin but does not guarantee it is bound](20260817184536-bootstrap-installs-the-plugin-but-does.md)
+* [The persist unions by section, so a tick's filed lines never reach the base](20260818085719-the-persist-unions-by-section-so-a-tick-s-filed-lines-never-reach-the-base.md)
+* [create.sh refuses source: development, which its own header and the corpus use](20260818085734-create-sh-refuses-source-development-which-its-own-header-and-the-corpus-use.md)
 <!-- okf:generated:end -->
