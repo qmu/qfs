@@ -2831,4 +2831,146 @@ mod select_refuses_an_unknown_column {
             assert_eq!(out.len(), 2);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Ticket 20260816191500 — the projection's OTHER road: a rename or a
+    // computed term lowers to `ProjectExpr`, which passed neither refusal
+    // above and answered one `null` per row at exit 0.
+    // -----------------------------------------------------------------------
+
+    /// A relation whose schema is genuinely **late-bound**: `describe` states no columns and the
+    /// scan delivers a batch with no schema either. Neither seam may refuse against it — "no
+    /// columns described" is not "carries no columns" (the leniency `where`/`expand` keep, and the
+    /// codec seam's deliberately-undetermined post-decode schema).
+    struct LateBound;
+
+    impl qfs_core::Driver for LateBound {
+        fn mount(&self) -> &str {
+            "/late"
+        }
+        fn describe(&self, _p: &Path) -> Result<NodeDesc, CfsError> {
+            Ok(NodeDesc::new(
+                Archetype::RelationalTable,
+                Schema::new(Vec::new()),
+            ))
+        }
+        fn capabilities(&self, _p: &Path) -> Capabilities {
+            Capabilities::none().select()
+        }
+        fn procedures(&self) -> &[qfs_core::ProcSig] {
+            &[]
+        }
+        fn pushdown(&self) -> &PushdownProfile {
+            &PushdownProfile::None
+        }
+        fn applier(&self) -> &dyn PlanApplier {
+            Box::leak(Box::new(NoopApplier))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ReadDriver for LateBound {
+        async fn scan(
+            &self,
+            _scan: &ScanNode,
+            _ctx: &qfs_core::RequestContext,
+        ) -> Result<RowBatch, CfsError> {
+            Ok(RowBatch::new(
+                Schema::new(Vec::new()),
+                vec![Row::new(vec![])],
+            ))
+        }
+    }
+
+    fn read_late(query: &str) -> Result<qfs_exec::RowSet, qfs_exec::ExecError> {
+        let mut engine = Engine::new();
+        engine.mounts.register(Arc::new(LateBound)).unwrap();
+        let reads = ReadRegistry::new().with(DriverId::new("late"), Arc::new(LateBound));
+        block_on_read(
+            &parse(query).unwrap(),
+            &engine.mounts,
+            &reads,
+            &qfs_core::RequestContext::anonymous(),
+        )
+    }
+
+    #[test]
+    fn a_renamed_unknown_projection_is_refused_like_the_name_only_one() {
+        // The whole point of the ticket: two spellings of one question must answer alike, and the
+        // forgiving one was the spelling an operator reaches for to name the output column.
+        for err in [
+            read::<false>("/local_only |> select nosuchcol as x").expect_err("local residual"),
+            read::<true>("/pushes |> select nosuchcol as x").expect_err("pushed source"),
+        ] {
+            assert_eq!(err.code, "unknown_column", "{err:?}");
+            assert_eq!(err.kind, ErrorKind::Usage, "{err:?}");
+            assert_eq!(err.exit_code() as i32, 2, "{err:?}");
+            assert!(
+                err.message.contains("'nosuchcol'") && err.message.contains("[id, name]"),
+                "the refusal names the column and the correction: {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn a_computed_constructor_over_an_unknown_column_is_refused() {
+        // The constructor arms recurse: a typo nested inside `{ }` or `[ ]` hides just as well as
+        // a bare one, so `col_refs` walks the whole structure.
+        for query in [
+            "/local_only |> select {n: nosuchcol} as s",
+            "/local_only |> select [name, nosuchcol] as xs",
+            "/local_only |> select {outer: {inner: nosuchcol}} as s",
+            "/local_only |> select name as n, {n: nosuchcol} as s",
+        ] {
+            let err = read::<false>(query)
+                .err()
+                .unwrap_or_else(|| panic!("{query} must refuse"));
+            assert_eq!(err.code, "unknown_column", "{query}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn a_real_renamed_or_computed_projection_still_answers() {
+        // The control on this road: naming a column that DOES exist still renames and still builds.
+        let out = read::<false>("/local_only |> select name as who").expect("rename answers");
+        assert_eq!(out.schema.column_names(), vec!["who".to_string()]);
+        assert_eq!(out.len(), 2);
+
+        let out = read::<false>("/local_only |> select {a: id, b: name} as pair")
+            .expect("constructor answers");
+        assert_eq!(out.schema.column_names(), vec!["pair".to_string()]);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn a_late_bound_relation_is_never_refused_on_either_road() {
+        // Quality-gate item 3. An undescribable relation stays lenient for the renaming road
+        // exactly as it does for the name-only one — the refusal is against a schema that exists.
+        for query in [
+            "/late |> select nosuchcol",
+            "/late |> select nosuchcol as x",
+            "/late |> select {n: nosuchcol} as s",
+        ] {
+            assert!(
+                read_late(query).is_ok(),
+                "{query}: a late-bound relation must not be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn extend_over_an_unknown_column_is_unchanged() {
+        // Quality-gate item 4, and the reason the check sits at the projection site rather than
+        // inside `eval_value`: `EXTEND`/`SET` share that resolver and keep its total form, which is
+        // deliberate for a late-bound row. Widening the refusal to them is a different question.
+        let out = read::<false>("/local_only |> extend x = nosuchcol")
+            .expect("EXTEND keeps the total resolution");
+        assert!(out.schema.column_names().contains(&"x".to_string()));
+        assert_eq!(out.len(), 2);
+
+        let out =
+            read::<false>("/local_only |> set name = nosuchcol").expect("SET is unchanged too");
+        assert_eq!(out.len(), 2);
+    }
 }
