@@ -132,7 +132,7 @@ touch log** with `UNION`, normalized to a single shape and sorted newest first:
 
 ```qfs
 /mail/inbox
-|> select from as contact, 'email' as channel, subject as detail, received_at as at
+|> select from as contact, 'email' as channel, subject as detail, date as at
 |> union
    /slack/acme/support/messages
 |> select user as contact, 'slack' as channel, text as detail, ts as at
