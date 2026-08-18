@@ -9,14 +9,14 @@ author: noreply@anthropic.com
 assignees: [a@qmu.jp]
 assignee:
 predicted_hours:
-actual_hours: 0.7
+actual_hours: 1.1
 feedback: [20260817142308-auto-deploy-docs-to-staging-qfs-qmu-co-jp-on-merge-to-main-and-to-qfs-qmu-co-jp-on-release.md]
 tickets: []
 stories: []
 gate_type:
 gate_assert:
 gate_target:
-claim: work-20260817-163919
+claim: work-20260818-143402
 ---
 
 # The documentation site publishes itself: staging on merge, production on release
@@ -55,3 +55,5 @@ and the repository documents the procedure the way it documents the GitHub Relea
 - 2026-08-18 — concern deferred (stuck) — 20260818215719-merging-before-the-cloudflare-secrets-exist.md
 - 2026-08-18 — concern deferred (stuck) — 20260818215719-one-deployment-record-carries-two-environments.md
 - 2026-08-18 — concern deferred (stuck) — 20260818215719-wrangler-is-installed-on-every-branch.md
+- 2026-08-18 — story added — work-20260818-143402.md
+- 2026-08-18 — run recorded (+0.4h) — session_01TgM27Y8Bz21tWg2j3DoxS7

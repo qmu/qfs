@@ -9,18 +9,36 @@
 #
 # TWO ENVIRONMENTS, NEITHER OF THEM THE DEFAULT
 # ---------------------------------------------
-# `[env.staging]` and `[env.production]` are separate Workers with separate custom domains, and
-# each one is only reachable through an explicit `--env`. The top-level worker below carries no
-# route at all, so a bare `wrangler deploy` cannot land on either hostname — it publishes a
-# routeless worker instead of guessing which environment was meant. The two npm scripts
-# (`docs:deploy:staging`, `docs:deploy:production`) always pass `--env`.
+# `[env.staging]` and `[env.production]` are separate Workers, each serving its own custom domain,
+# and each one is only reachable through an explicit `--env`. No environment carries a route, so a
+# bare `wrangler deploy` cannot land on either hostname — it publishes a routeless worker instead
+# of guessing which environment was meant. The two npm scripts (`docs:deploy:staging`,
+# `docs:deploy:production`) always pass `--env`.
+#
+# NO ROUTES — DELIBERATE, AND WHAT IT BUYS
+# ----------------------------------------
+# Both hostnames are attached to their Worker as Cloudflare **custom domains**, out of band, once.
+# They are NOT declared here, because wrangler re-asserts a configured custom domain on EVERY
+# deploy: `triggersDeploy` calls `publishCustomDomains` whenever any `custom_domain` route is
+# configured (there is no "already attached, skip" branch), and a non-TTY run — which CI always is
+# — skips the changeset diff and issues `PUT /accounts/{id}/workers/scripts/{name}/domains/records`
+# with `override_existing_origin`. A configured route also makes each deploy read
+# `/zones/{zone}/workers/routes`. Both need zone-scoped permissions, and `Workers Routes: Edit`
+# cannot be scoped below a whole zone — so declaring the routes here is what would force the CI
+# token to be able to attach a Worker to ANY hostname on qmu.co.jp, the apex included.
+# (Measured against the wrangler 4.123.0 bundle `package.json` pins; re-verify on a major bump.)
+#
+# The cost accepted in exchange: this file no longer states which hostname each environment serves
+# in an executable form, and a deleted-and-recreated Worker does not get its domain back on the
+# next deploy. `.workaholic/deployments/docs-site.md` carries the re-attach procedure.
 #
 # WHO DEPLOYS, AND WITH WHAT
 # --------------------------
 # The account-level inputs are supplied by the environment, never by this file:
 #
-#   CLOUDFLARE_API_TOKEN   API token with `Account → Workers Scripts → Edit` (plus
-#                          `Zone → Workers Routes → Edit` on qmu.co.jp for the custom domains).
+#   CLOUDFLARE_API_TOKEN   API token with `Account → Workers Scripts → Edit` and
+#                          `Account → Account Settings → Read`. No zone scope: with no routes
+#                          declared, a steady-state deploy never touches the zone.
 #   CLOUDFLARE_ACCOUNT_ID  The Cloudflare account the two Workers live in.
 #
 # Both are GitHub Actions repository secrets of those exact names, set on the deploying job
@@ -39,20 +57,25 @@ directory = ".vitepress/dist"
 not_found_handling = "404-page"
 
 # Staging — the tip of `main`, published by CI on every merge.
+# Serves https://staging-qfs.qmu.co.jp. The custom domain is attached OUT OF BAND and is
+# deliberately not re-asserted here (see NO ROUTES above).
 [env.staging]
 name = "qfs-docs-staging"
+# Explicit, and load-bearing: `workers_dev` defaults to `routes.length === 0`, so with the routes
+# gone this line is the only thing keeping a `workers.dev` hostname from being published.
 workers_dev = false
-routes = [{ pattern = "staging-qfs.qmu.co.jp", custom_domain = true }]
 
 [env.staging.assets]
 directory = ".vitepress/dist"
 not_found_handling = "404-page"
 
 # Production — the documentation of the version `install.sh` installs, published from a `v*` tag.
+# Serves https://qfs.qmu.co.jp. The custom domain is attached OUT OF BAND and is deliberately not
+# re-asserted here (see NO ROUTES above).
 [env.production]
 name = "qfs-docs-production"
+# Explicit, and load-bearing — same reason as staging above.
 workers_dev = false
-routes = [{ pattern = "qfs.qmu.co.jp", custom_domain = true }]
 
 [env.production.assets]
 directory = ".vitepress/dist"
