@@ -1,0 +1,6 @@
+# qfs.qmu.co.jp — the released documentation, indexable.
+#
+# The staging hostname (staging-qfs.qmu.co.jp) replaces this file at deploy time with a full
+# disallow, and adds `X-Robots-Tag: noindex, nofollow`; see scripts/stamp-docs-deploy.sh.
+User-agent: *
+Allow: /
