@@ -139,3 +139,22 @@ only **Account → Workers Scripts: Edit** and **Account → Account Settings: R
 `CLOUDFLARE_API_TOKEN` with it, revoke the wide token, then let one merge to `main` publish to
 confirm. The deployment record now states this as outstanding where an operator reads it, so the
 narrow scope in its Credentials table is not mistaken for the scope the live secret has.
+
+## Still blocked — 2026-08-18 22:4x UTC (work-20260818-224556)
+
+Re-checked by a later unattended `/implement` run. Step 2 is still the only thing left and is still
+a set of console acts this runner cannot perform; what did move is the evidence under step 4, which
+now rests on a merge two hours newer than the one the entry above cites.
+
+What was actually run this time:
+
+| Check | Command / source | Result |
+| --- | --- | --- |
+| Is a Cloudflare credential present now? | `env \| grep -ci cloudflare` | `0`; the repository root still carries only `.env.example` — nothing to mint or revoke a token with |
+| Can the published hostnames be read directly? | `curl -sS https://staging-qfs.qmu.co.jp/version.json`, same for `qfs.qmu.co.jp` | `curl: (56) CONNECT tunnel failed, response 403` on both — outbound HTTPS to them is still refused by this container's proxy, so the workflow-run check stays the substitute |
+| Does a routeless merge still publish? | `ci.yml` run [32191206355](https://github.com/qmu/qfs/actions/runs/32191206355), the push of `94bb6e7` (merge of #97) | job **docs site production build** `success`; its steps **Stamp the staging build with its commit** and **Publish to staging-qfs.qmu.co.jp** both `success`, finishing 2026-08-18T22:07:48Z |
+
+So the routes removal is not merely "was fine once": every merge since has published, the newest
+being two hours old at the time of this check. The exposure the ticket exists to close is unchanged
+— `CLOUDFLARE_API_TOKEN` still holds `Zone → Workers Routes → Edit` on `qmu.co.jp` until a person
+mints the narrow replacement, swaps the repository secret and revokes the wide one.
