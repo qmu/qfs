@@ -198,35 +198,8 @@ jobs:
       # The parked host-workers scaffold also builds for wasm32 (the archetype->primitive mapping).
       - run: cargo build -p qfs-host --target wasm32-unknown-unknown --features host-workers
 
-  # t36 RELEASE job: emit the deployment artifacts — static musl binaries (both arches), the
-  # qfs.wasm size-optimized module, the wrangler.toml template, and a SHA256SUMS. Gated on a tag
-  # push so a normal CI run does not produce release artifacts. The musl static link is CI-ONLY
-  # (the local trip host has no x86_64 musl cross-linker — t01/A2); this job installs `musl-tools`
-  # + the cross-linkers so the static binaries link here.
-  release-artifacts:
-    name: release artifacts (musl + wasm + wrangler + checksums)
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: packages/qfs
-          key: release-artifacts
-      - name: Add release targets
-        run: |
-          rustup target add x86_64-unknown-linux-musl
-          rustup target add aarch64-unknown-linux-musl
-          rustup target add wasm32-unknown-unknown
-      - name: Install musl + cross linkers
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
-      - name: Build release artifacts
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-        run: bash deploy/release.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: qfs-release
-          path: packages/qfs/dist/
+# NOTE — there is deliberately no release job here. This workflow's `on:` block selects BRANCH
+# pushes and pull requests only, so `github.ref` is never `refs/tags/*` and a tag-gated job in this
+# file could never execute. The release pipeline is `.github/workflows/release.yml`, which triggers
+# on a `v*` tag and builds the four native tarballs via `cargo run -p xtask -- dist`. Adding
+# `tags:` here would only duplicate that build.
