@@ -7,8 +7,13 @@ url: https://github.com/qmu/qfs/releases
 
 ## Procedure
 
-qfs is **deploy-on-merge / release-on-tag** — there is no separate server. The published
+qfs is **deploy-on-merge / release-on-tag** — no server is run for it. The published
 GitHub Release IS the deliverable; `install.sh` consumes its native tarballs.
+
+This record covers **the binary**. The documentation site is a second deployment target with
+its own record (`docs-site.md`): a merge to `main` publishes it to staging-qfs.qmu.co.jp, and
+the `v*` tag pushed in step 3 below also publishes the tagged documentation to qfs.qmu.co.jp,
+after the Release job here succeeds. A change touching both travels this record first.
 
 1. **Pre-merge readiness (branch-level proof).** All gates green on the branch and the patch
    version bumped:

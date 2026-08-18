@@ -100,6 +100,7 @@ cannot expand, codec errors name post-decode columns, and `describe`'s pushdown 
 - 2026-07-28 — concern deferred (stuck) — the-cookbook-ratchet-only-parses-so.md
 - 2026-07-28 — concern deferred (stuck) — select-on-an-unknown-column-is.md
 - 2026-07-28 — mission achieved — mission.md
+- 2026-08-17 — concern resolved (unstuck) — 20260728125539-the-cookbook-ratchet-only-parses-so.md
 ## Reflection
 
 ### 2026-07-25 run 20260725-101714

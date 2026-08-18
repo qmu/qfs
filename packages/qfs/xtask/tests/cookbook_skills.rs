@@ -25,6 +25,32 @@
 //! `query-cookbook.md` catalogue). Testing the ARTICLES rather than the generated skills keeps the
 //! check independent of whether `gen-skills` has been run, and the skill body equals the article
 //! body by construction.
+//!
+//! # What this does NOT cover
+//!
+//! Stated here so an uncovered recipe is a known gap rather than a silent pass (ticket
+//! 20260817105331). Ratchet 1 sees every ` ```qfs ` statement in every article; ratchet 2 is the
+//! narrower one:
+//!
+//! - **Sources with no compiled describe surface are skipped** — anything whose schema comes from a
+//!   live registration rather than a compiled type: `/sql/<conn>[/<table>]`, `/git/<repo>/…`,
+//!   `/slack/<workspace>/…`, `/server/…`, and every declared (`.qfs`) mount (`/chatwork/…`,
+//!   `/cloudflare/…`). At the time of writing that is 19 of the 81 query sources in the articles,
+//!   leaving 62 typechecked. Skips are PRINTED by path (the `skipped` report in
+//!   [`every_cookbook_skill_recipe_names_columns_that_exist`]) and floored by `MIN_TYPECHECKED`, so
+//!   "skipped everything" can never read as green.
+//! - **Only the checkable PREFIX of a pipeline is checked** — the walk stops at the first stage that
+//!   reshapes the relation from somewhere this test does not model
+//!   (see [`ends_the_checkable_prefix`]: a codec, join, set op, `CALL`, `TRANSFORM`, `SWITCH`,
+//!   `FOLLOW`, `POST`). Columns named after such a stage are unchecked.
+//! - **Only queries** — `Statement::Query`. Effects (`UPSERT`/`REMOVE`/`CALL`) and DDL are
+//!   parse-checked by ratchet 1 and typechecked by neither.
+//! - **`known` only ever grows**, so an alias introduced by `SELECT … AS`/`EXTEND`/`SET`/`AS` is
+//!   accepted everywhere afterwards rather than scoped to where it is in fact defined. The check can
+//!   under-report; it must never invent a red on a true recipe.
+//! - **Shell examples are not recipes.** A ` ```sh ` block's `qfs …` invocations are invisible here;
+//!   `crates/cmd/tests/faq_cli_surface.rs` holds those (in `docs/cookbook/faq.md`) against the real
+//!   clap surface.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use qfs_core::{Path as QfsPath, Schema};
