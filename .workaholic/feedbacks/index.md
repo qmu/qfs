@@ -101,5 +101,13 @@
 * [Resolved: The cookbook ratchet only parses, so it cannot catch a fabricated column](20260817131548-resolved-the-cookbook-ratchet-only-parses-so.md)
 * [Auto-deploy docs to staging-qfs.qmu.co.jp on merge to main, and to qfs.qmu.co.jp on release](20260817142308-auto-deploy-docs-to-staging-qfs-qmu-co-jp-on-merge-to-main-and-to-qfs-qmu-co-jp-on-release.md)
 * [Bootstrap installs the plugin but does not guarantee it is bound](20260817184536-bootstrap-installs-the-plugin-but-does.md)
+* [Two of the inbound sweep's four surfaces are unreadable in a routine container](20260818065528-two-of-the-inbound-sweep-s-four-surfaces-are-unreadable-in-a-routine-container.md)
+* [The stuck-prs dedup digest flaps with GitHub's lazy mergeability](20260818065547-the-stuck-prs-dedup-digest-flaps-with-github-s-lazy-mergeability.md)
+* [The tick log's -filed lines never reach the base, so dedup is dead](20260818065737-the-tick-log-s-filed-lines-never-reach-the-base-so-dedup-is-dead.md)
 * [The merge-conflicts step reports unknown mergeability as none conflicted](20260818075621-the-merge-conflicts-step-reports-unknown-mergeability-as-none-conflicted.md)
+* [A SIGINT shutdown e2e test flakes and reddens main](20260818131946-a-sigint-shutdown-e2e-test-flakes-and-reddens-main.md)
+* [Every feedback publication edits the same two indexes, so the loop's own pull requests conflict by construction](20260818135713-every-feedback-publication-edits-the-same-two-indexes-so-the-loop-s-own-pull-requests-conflict-by-construction.md)
+* [Merging before the Cloudflare secrets exist turns `main` red](20260818215719-merging-before-the-cloudflare-secrets-exist.md)
+* [One deployment record carries two environments](20260818215719-one-deployment-record-carries-two-environments.md)
+* [`wrangler` is installed on every branch push](20260818215719-wrangler-is-installed-on-every-branch.md)
 <!-- okf:generated:end -->
