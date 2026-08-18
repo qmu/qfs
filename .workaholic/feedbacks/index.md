@@ -105,6 +105,8 @@
 * [The stuck-prs dedup digest flaps with GitHub's lazy mergeability](20260818065547-the-stuck-prs-dedup-digest-flaps-with-github-s-lazy-mergeability.md)
 * [The tick log's -filed lines never reach the base, so dedup is dead](20260818065737-the-tick-log-s-filed-lines-never-reach-the-base-so-dedup-is-dead.md)
 * [The merge-conflicts step reports unknown mergeability as none conflicted](20260818075621-the-merge-conflicts-step-reports-unknown-mergeability-as-none-conflicted.md)
+* [The persist unions by section, so a tick's filed lines never reach the base](20260818085719-the-persist-unions-by-section-so-a-tick-s-filed-lines-never-reach-the-base.md)
+* [create.sh refuses source: development, which its own header and the corpus use](20260818085734-create-sh-refuses-source-development-which-its-own-header-and-the-corpus-use.md)
 * [A SIGINT shutdown e2e test flakes and reddens main](20260818131946-a-sigint-shutdown-e2e-test-flakes-and-reddens-main.md)
 * [Every feedback publication edits the same two indexes, so the loop's own pull requests conflict by construction](20260818135713-every-feedback-publication-edits-the-same-two-indexes-so-the-loop-s-own-pull-requests-conflict-by-construction.md)
 * [Merging before the Cloudflare secrets exist turns `main` red](20260818215719-merging-before-the-cloudflare-secrets-exist.md)
