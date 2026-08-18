@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use qfs_driver_http::{
-    AuthStrategy, NodeMap, Pagination, ResourceMap, RestApiConfig, RestDriver, RestVerb, SecretRef,
+    AuthStrategy, Pagination, ResourceMap, RestApiConfig, RestDriver, RestVerb, SecretRef,
 };
 use qfs_secrets::{ConnectionRecord, CredentialKey, Secret, SecretError, Secrets};
 
@@ -402,9 +402,6 @@ impl DeclaredDriver {
     /// driver's own namespace (the token lives in the account layer, never in the row).
     pub(crate) fn rest_config(&self) -> RestApiConfig {
         let mut config = RestApiConfig::new(self.base_url.clone(), self.resources())
-            // The per-node capability table the plan-time verb gate reads. `resources` stays the
-            // leading-segment aggregate the wire layer resolves a resource with.
-            .with_nodes(self.declared_nodes())
             .with_auth(self.auth_strategy());
         if let Some(p) = self.pagination.as_deref().and_then(parse_pagination) {
             config = config.with_pagination(p);
@@ -478,52 +475,10 @@ impl DeclaredDriver {
             .map(|(seg, verbs, irr)| ResourceMap::new(seg, verbs).with_irreversible_verbs(irr))
             .collect()
     }
-
-    /// The driver's view/map nodes as a per-node capability table, keyed by each node's own path
-    /// **template** (`{ws}/files/{file}`) rather than by its leading segment. This is what the
-    /// plan-time verb gate reads: [`Self::resources`]'s segment aggregate answers the union of
-    /// every verb declared under a leading segment, which for a per-tenant declaration (Slack's
-    /// every node lives under `/slack/{ws}/…`) is every verb the driver declares anywhere — so
-    /// `REMOVE /slack/<ws>/users` passed a gate no `CREATE MAP` declares.
-    ///
-    /// A view contributes `SELECT`; a map contributes its mapped verb, and its `IRREVERSIBLE` flag
-    /// when it carries one. A `CALL` map contributes no universal verb (it is answered by the
-    /// procedure registry), exactly as in the segment aggregate.
-    fn declared_nodes(&self) -> Vec<NodeMap> {
-        // (template, verbs, irreversible subset), in declaration order.
-        let mut by_path: Vec<(String, Vec<RestVerb>, Vec<RestVerb>)> = Vec::new();
-        let mut add = |template: String, verb: RestVerb, irreversible: bool| {
-            if let Some(entry) = by_path.iter_mut().find(|(p, ..)| *p == template) {
-                if !entry.1.contains(&verb) {
-                    entry.1.push(verb);
-                }
-                if irreversible && !entry.2.contains(&verb) {
-                    entry.2.push(verb);
-                }
-            } else {
-                let irr = if irreversible { vec![verb] } else { Vec::new() };
-                by_path.push((template, vec![verb], irr));
-            }
-        };
-        for v in &self.views {
-            if let Some(p) = resource_path(&self.name, &v.path) {
-                add(p.to_string(), RestVerb::Select, false);
-            }
-        }
-        for m in &self.maps {
-            if let (Some(p), Some(verb)) = (resource_path(&self.name, &m.path), map_verb(&m.verb)) {
-                add(p.to_string(), verb, m.irreversible);
-            }
-        }
-        by_path
-            .into_iter()
-            .map(|(p, verbs, irr)| NodeMap::new(p, verbs).with_irreversible_verbs(irr))
-            .collect()
-    }
 }
 
 /// The node path relative to its driver mount (`chatwork`, `/chatwork/rooms/{room}/files` →
-/// `rooms/{room}/files`) — the coordinate space a [`NodeMap`] template is written in, and the one
+/// `rooms/{room}/files`) — the coordinate space the wire layer resolves a resource in, and the one
 /// an inbound `/rest/<name>/<resource…>` path reduces to. `None` if the path does not mount under
 /// the driver, or names the mount root alone.
 fn resource_path<'a>(driver: &str, path: &'a str) -> Option<&'a str> {
@@ -549,25 +504,37 @@ pub(crate) fn declared_node_descs(
     use qfs_driver_http::{DeclaredNodeDesc, DeclaredNodeType};
 
     let mut out: Vec<DeclaredNodeDesc> = Vec::new();
-    let mut push =
-        |template: String, of: Option<DeclaredNodeType>, verb: Option<qfs_core::Verb>| {
-            if let Some(existing) = out.iter_mut().find(|n| n.template == template) {
-                if let Some(verb) = verb {
-                    if !existing.verbs.contains(&verb) {
-                        existing.verbs.push(verb);
-                    }
+    // `irreversible` marks the verb it arrives with, never the node: a node reached by several
+    // declarations keeps each one's own marking, which is what lets the Slack detach be gated on
+    // `/slack/{ws}/files/{file}` while a reversible verb declared on the same node is not.
+    let mut push = |template: String,
+                    of: Option<DeclaredNodeType>,
+                    verb: Option<qfs_core::Verb>,
+                    irreversible: bool| {
+        let gated = verb.filter(|_| irreversible);
+        if let Some(existing) = out.iter_mut().find(|n| n.template == template) {
+            if let Some(verb) = verb {
+                if !existing.verbs.contains(&verb) {
+                    existing.verbs.push(verb);
                 }
-                if existing.of.is_none() {
-                    existing.of = of;
-                }
-                return;
             }
-            out.push(DeclaredNodeDesc {
-                template,
-                of,
-                verbs: verb.into_iter().collect(),
-            });
-        };
+            if let Some(verb) = gated {
+                if !existing.irreversible_verbs.contains(&verb) {
+                    existing.irreversible_verbs.push(verb);
+                }
+            }
+            if existing.of.is_none() {
+                existing.of = of;
+            }
+            return;
+        }
+        out.push(DeclaredNodeDesc {
+            template,
+            of,
+            verbs: verb.into_iter().collect(),
+            irreversible_verbs: gated.into_iter().collect(),
+        });
+    };
 
     for v in &d.views {
         let Some(template) = rest_template(&d.name, &v.path) else {
@@ -589,14 +556,19 @@ pub(crate) fn declared_node_descs(
                     .collect(),
             })
         });
-        push(template, of, Some(qfs_core::Verb::Select));
+        push(template, of, Some(qfs_core::Verb::Select), false);
     }
     for m in &d.maps {
         let Some(template) = rest_template(&d.name, &m.path) else {
             continue;
         };
         // A `CALL` mapping contributes a PROCEDURE, not a node verb (it rides `with_procs`).
-        push(template, None, declared_map_universal_verb(&m.verb));
+        push(
+            template,
+            None,
+            declared_map_universal_verb(&m.verb),
+            m.irreversible,
+        );
     }
     out
 }
@@ -1533,15 +1505,26 @@ pub(crate) fn declared_http_client(d: &DeclaredDriver) -> Arc<dyn qfs_driver_htt
 /// read/apply facets. The reconstructed `RestApiConfig` carries the host-confinement `allowed_hosts`,
 /// so its wire pipeline is pinned to its own declared host. Hermetic tests inject a `MockHttpClient`
 /// + an in-memory secret store here.
+///
+/// It is given the SAME `declared_node_descs` table the describe mount gets, so the two mounts
+/// answer `capabilities` and `write_irreversible` from one list rather than from two independent
+/// derivations of the same declarations (ticket `20260818201507`). `types` is the caller's declared
+/// type registry: it only fills each node's `OF` contract, which the live mount's capability and
+/// irreversibility answers do not read, so a caller with none may pass an empty registry.
 pub(crate) fn live_rest_driver(
     d: &DeclaredDriver,
+    types: &qfs_core::DeclaredTypeDefs,
     client: Arc<dyn qfs_driver_http::HttpClient>,
     secrets: Arc<dyn qfs_secrets::Secrets>,
 ) -> Option<RestDriver> {
     let json = qfs_core::CodecRegistry::with_builtins()
         .resolve("json")
         .ok()?;
-    Some(RestDriver::new(d.rest_config(), json, client, secrets).with_procs(d.procedures()))
+    Some(
+        RestDriver::new(d.rest_config(), json, client, secrets)
+            .with_procs(d.procedures())
+            .with_declared_nodes(declared_node_descs(d, types)),
+    )
 }
 
 /// Parse a stored declared-map verb label into a typed [`ProcSig`] (blueprint §13.1 **G5**). The
@@ -1993,15 +1976,18 @@ mod tests {
         );
         // A reversible map leaves the resource ungated.
         assert!(!cfg.resources[0].is_irreversible(RestVerb::Insert));
-        // And the per-node table the plan-time gate reads, keyed by the node's own template.
-        assert_eq!(cfg.nodes.len(), 1);
-        assert_eq!(cfg.nodes[0].path, "rooms");
+        // And the ONE per-node table both mounts read, keyed by the node's own template.
+        let nodes = declared_node_descs(&d, &qfs_core::DeclaredTypeDefs::new());
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].template, "/rest/chatwork/rooms");
         assert_eq!(
-            cfg.verbs_for_path("rooms"),
-            vec![RestVerb::Select, RestVerb::Insert]
+            nodes[0].verbs,
+            vec![qfs_core::Verb::Select, qfs_core::Verb::Insert]
         );
-        assert!(cfg.verbs_for_path("rooms/1/messages").is_empty());
-        assert!(!cfg.irreversible_for_path("rooms", RestVerb::Insert));
+        assert!(
+            nodes[0].irreversible_verbs.is_empty(),
+            "a reversible map gates nothing"
+        );
         // Every declared driver carries the versioned binary User-Agent (GitHub's live API
         // rejects UA-less requests).
         assert!(cfg
@@ -2047,11 +2033,20 @@ mod tests {
             !notes.is_irreversible(RestVerb::Upsert),
             "a reversible map leaves its verb ungated"
         );
-        // The same marking on the per-node table the gate reads, node by node.
-        assert!(cfg.irreversible_for_path("post", RestVerb::Insert));
-        assert!(!cfg.irreversible_for_path("notes", RestVerb::Upsert));
+        // The same marking on the per-node table both mounts read, node by node.
+        let nodes = declared_node_descs(&d, &qfs_core::DeclaredTypeDefs::new());
+        let irreversible = |template: &str, verb: qfs_core::Verb| {
+            nodes
+                .iter()
+                .find(|n| n.template == template)
+                .expect("the declaration carries this node")
+                .irreversible_verbs
+                .contains(&verb)
+        };
+        assert!(irreversible("/rest/slack/post", qfs_core::Verb::Insert));
+        assert!(!irreversible("/rest/slack/notes", qfs_core::Verb::Upsert));
         assert!(
-            !cfg.irreversible_for_path("notes", RestVerb::Insert),
+            !irreversible("/rest/slack/notes", qfs_core::Verb::Insert),
             "the gated INSERT belongs to `post` alone"
         );
     }
@@ -2304,7 +2299,13 @@ mod tests {
             br#"{"ok":true,"messages":[{"ts":"3","user":"U3","text":"hey"}],"response_metadata":{"next_cursor":""}}"#.to_vec(),
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
-        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+        let driver = live_rest_driver(
+            &d,
+            &qfs_core::DeclaredTypeDefs::new(),
+            client,
+            seeded_slack_secrets(),
+        )
+        .expect("live twin");
 
         let of: Vec<String> = ["ts", "user", "text", "thread_ts", "subtype"]
             .iter()
@@ -2423,7 +2424,13 @@ mod tests {
             fixture.as_bytes().to_vec(),
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
-        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+        let driver = live_rest_driver(
+            &d,
+            &qfs_core::DeclaredTypeDefs::new(),
+            client,
+            seeded_slack_secrets(),
+        )
+        .expect("live twin");
         let params = qfs_exec::declared::match_template(view_path, concrete_path)
             .expect("the concrete path matches the declared template");
         let of: Vec<String> = of_columns.iter().map(|s| (*s).to_string()).collect();
@@ -3232,7 +3239,13 @@ mod tests {
             br#"{"ok":true}"#.to_vec(),
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
-        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+        let driver = live_rest_driver(
+            &d,
+            &qfs_core::DeclaredTypeDefs::new(),
+            client,
+            seeded_slack_secrets(),
+        )
+        .expect("live twin");
         let remap = declared_remap("/slack", "slack").expect("remap");
         let facet = crate::apply_facets::RestApplyDriver::new(
             Arc::new(qfs_driver_http::rest_apply_driver(&driver)),
@@ -3328,7 +3341,13 @@ mod tests {
             br#"{"ok":true}"#.to_vec(),
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
-        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+        let driver = live_rest_driver(
+            &d,
+            &qfs_core::DeclaredTypeDefs::new(),
+            client,
+            seeded_slack_secrets(),
+        )
+        .expect("live twin");
         let remap = declared_remap("/slack", "slack").expect("remap");
         let facet = crate::apply_facets::RestApplyDriver::new(
             Arc::new(qfs_driver_http::rest_apply_driver(&driver)),
@@ -3431,7 +3450,13 @@ mod tests {
         let d = shipped_slack_declared_driver();
         let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
-        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+        let driver = live_rest_driver(
+            &d,
+            &qfs_core::DeclaredTypeDefs::new(),
+            client,
+            seeded_slack_secrets(),
+        )
+        .expect("live twin");
         let remap = declared_remap("/slack", "slack").expect("remap");
         let facet = crate::apply_facets::RestApplyDriver::new(
             Arc::new(qfs_driver_http::rest_apply_driver(&driver)),
@@ -3920,6 +3945,108 @@ mod tests {
     }
 
     #[test]
+    fn the_live_and_describe_mounts_answer_from_one_declared_node_table() {
+        // Ticket 20260818201507. `main` briefly carried TWO per-node tables built from the same
+        // declarations — `DeclaredNodeDesc` on the describe mount and a second per-node list
+        // carried on `RestApiConfig` — and which one answered depended on which mount was asked,
+        // because only the describe mount was given the first. They agreed then; the hazard was
+        // that the next edit to either one is when they stop agreeing. The second list is deleted
+        // and both mounts read `DeclaredNodeDesc`, so this walks every declared node of all three
+        // SHIPPED declarations through BOTH mounts and requires the same answer for capabilities
+        // and irreversibility.
+        use qfs_core::{Path, Verb};
+        let all_verbs = [
+            Verb::Select,
+            Verb::Insert,
+            Verb::Upsert,
+            Verb::Update,
+            Verb::Remove,
+        ];
+        for (name, script) in [
+            ("slack", qfs_skill::SLACK_DRIVER),
+            ("chatwork", qfs_skill::CHATWORK_DRIVER),
+            ("cloudflare", qfs_skill::CLOUDFLARE_DRIVER),
+        ] {
+            let d = shipped_declared_driver(name, script);
+            let types = qfs_core::DeclaredTypeDefs::new();
+            let describe = declared_describe_mount_with_types(&format!("/{name}"), &d, &types)
+                .expect("the declared describe mount");
+            let live = live_rest_driver(
+                &d,
+                &types,
+                Arc::new(qfs_driver_http::MockHttpClient::new()),
+                Arc::new(qfs_secrets::InMemoryStore::new()),
+            )
+            .expect("the live twin");
+
+            // Every node the declaration addresses, by its own template spelling (a `{param}`
+            // segment matches its own literal, so no concrete id has to be invented).
+            let mut templates: Vec<String> = Vec::new();
+            for path in d
+                .views
+                .iter()
+                .map(|v| &v.path)
+                .chain(d.maps.iter().map(|m| &m.path))
+            {
+                if !templates.contains(path) {
+                    templates.push(path.clone());
+                }
+            }
+            assert!(!templates.is_empty(), "{name} declares nodes to walk");
+
+            for template in &templates {
+                let outer = Path::new(template);
+                let inner = Path::new(
+                    rest_template(&d.name, template).expect("a declared path mounts under it"),
+                );
+                for verb in all_verbs {
+                    assert_eq!(
+                        qfs_core::check_capability(&describe, &outer, verb).is_ok(),
+                        qfs_core::check_capability(&live, &inner, verb).is_ok(),
+                        "{name} {template}: the two mounts disagree on {verb:?}"
+                    );
+                    assert_eq!(
+                        qfs_core::Driver::write_irreversible(&describe, &outer, verb),
+                        qfs_core::Driver::write_irreversible(&live, &inner, verb),
+                        "{name} {template}: the two mounts disagree on {verb:?} irreversibility"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_live_mount_keeps_the_declared_irreversible_gate() {
+        // The property PR #64 added, preserved through the collapse and asserted on the LIVE
+        // mount, which before this ticket read a table the describe mount never consulted.
+        use qfs_core::{Path, Verb};
+        let d = shipped_declared_driver("slack", qfs_skill::SLACK_DRIVER);
+        let live = live_rest_driver(
+            &d,
+            &qfs_core::DeclaredTypeDefs::new(),
+            Arc::new(qfs_driver_http::MockHttpClient::new()),
+            Arc::new(qfs_secrets::InMemoryStore::new()),
+        )
+        .expect("the live twin");
+        assert!(
+            qfs_core::Driver::write_irreversible(
+                &live,
+                &Path::new("/rest/slack/{ws}/files/{file}"),
+                Verb::Remove
+            ),
+            "the declared IRREVERSIBLE detach stays gated on the live mount"
+        );
+        assert!(
+            !qfs_core::Driver::write_irreversible(
+                &live,
+                &Path::new("/rest/slack/{ws}/{channel}/messages"),
+                Verb::Insert
+            ),
+            "the reversible message post does not inherit the detach's gate"
+        );
+    }
+
+    #[test]
     fn declared_call_signature_parses_typed_and_untyped() {
         // The G5 grammar's two arms: a typed signature lifts to typed params; the no-signature
         // shorthand still parses and yields an untyped (param-less) procedure — today's behaviour,
@@ -4045,7 +4172,8 @@ mod tests {
                 .unwrap();
             Arc::new(store)
         };
-        let driver = live_rest_driver(&d, client, secrets).expect("live twin");
+        let driver = live_rest_driver(&d, &qfs_core::DeclaredTypeDefs::new(), client, secrets)
+            .expect("live twin");
 
         let of: Vec<String> = ["id", "body"].iter().map(|s| (*s).to_string()).collect();
         let batch = qfs_exec::declared::eval_view_body(
@@ -4167,7 +4295,8 @@ mod tests {
                 .unwrap();
             Arc::new(store)
         };
-        let driver = live_rest_driver(&d, client, secrets).expect("live twin");
+        let driver = live_rest_driver(&d, &qfs_core::DeclaredTypeDefs::new(), client, secrets)
+            .expect("live twin");
         let of: Vec<String> = ["id", "body", "attempts"]
             .iter()
             .map(|s| (*s).to_string())
@@ -4340,7 +4469,13 @@ mod tests {
             br#"{"ok":true}"#.to_vec(),
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
-        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+        let driver = live_rest_driver(
+            &d,
+            &qfs_core::DeclaredTypeDefs::new(),
+            client,
+            seeded_slack_secrets(),
+        )
+        .expect("live twin");
 
         use qfs_runtime::SharedApplier as _;
         let node = qfs_core::EffectNode::new(
@@ -4428,7 +4563,13 @@ mod tests {
             br#"{"ok":true}"#.to_vec(),
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
-        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+        let driver = live_rest_driver(
+            &d,
+            &qfs_core::DeclaredTypeDefs::new(),
+            client,
+            seeded_slack_secrets(),
+        )
+        .expect("live twin");
 
         use qfs_runtime::SharedApplier as _;
         let node = qfs_core::EffectNode::new(
@@ -4471,7 +4612,8 @@ mod tests {
         mock.push_response(qfs_driver_http::HttpResponse::new(201, b"{}".to_vec()));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
         let secrets: Arc<dyn qfs_secrets::Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
-        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+        let driver = live_rest_driver(&d, &qfs_core::DeclaredTypeDefs::new(), client, secrets)
+            .expect("live driver");
         let remap = declared_remap("/chatwork", "chatwork").expect("remap");
         let bridge = qfs_driver_http::rest_apply_driver(&driver);
         let registry = DriverRegistry::new().with(
@@ -4562,7 +4704,13 @@ mod tests {
             br#"{"ok":true}"#.to_vec(),
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
-        let driver = live_rest_driver(&d, client, seeded_slack_secrets()).expect("live twin");
+        let driver = live_rest_driver(
+            &d,
+            &qfs_core::DeclaredTypeDefs::new(),
+            client,
+            seeded_slack_secrets(),
+        )
+        .expect("live twin");
 
         // Wire exactly as `crate::commit` does: the stock bridge, wrapped in the §13 write facet,
         // wrapped in the mount remap.
@@ -4684,7 +4832,8 @@ mod tests {
             let arc: Arc<dyn qfs_secrets::Secrets> = Arc::new(store);
             arc
         };
-        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+        let driver = live_rest_driver(&d, &qfs_core::DeclaredTypeDefs::new(), client, secrets)
+            .expect("live driver");
 
         let facet = crate::read_facets::RestReadDriver::new(
             driver.rest_applier().clone(),
@@ -4773,7 +4922,8 @@ mod tests {
         mock.push_response(qfs_driver_http::HttpResponse::new(200, b"{}".to_vec()));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
         let secrets: Arc<dyn qfs_secrets::Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
-        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+        let driver = live_rest_driver(&d, &qfs_core::DeclaredTypeDefs::new(), client, secrets)
+            .expect("live driver");
 
         let remap = declared_remap("/chatwork", "chatwork").expect("remap");
         let bridge = qfs_driver_http::rest_apply_driver(&driver);
@@ -4893,7 +5043,8 @@ mod tests {
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
         let secrets: Arc<dyn qfs_secrets::Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
-        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+        let driver = live_rest_driver(&d, &qfs_core::DeclaredTypeDefs::new(), client, secrets)
+            .expect("live driver");
 
         let remap = declared_remap("/chatwork", "chatwork").expect("remap");
         let bridge = qfs_driver_http::rest_apply_driver(&driver);
@@ -5012,7 +5163,8 @@ mod tests {
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
         let secrets: Arc<dyn qfs_secrets::Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
-        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+        let driver = live_rest_driver(&d, &qfs_core::DeclaredTypeDefs::new(), client, secrets)
+            .expect("live driver");
 
         let remap = declared_remap("/slack", "slack").expect("remap");
         let facet = crate::apply_facets::RestApplyDriver::new(
@@ -5147,7 +5299,8 @@ mod tests {
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
         let secrets: Arc<dyn qfs_secrets::Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
-        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+        let driver = live_rest_driver(&d, &qfs_core::DeclaredTypeDefs::new(), client, secrets)
+            .expect("live driver");
 
         let remap = declared_remap("/slack", "slack").expect("remap");
         let facet = crate::apply_facets::RestApplyDriver::new(
@@ -5259,7 +5412,8 @@ mod tests {
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
         let secrets: Arc<dyn qfs_secrets::Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());
-        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+        let driver = live_rest_driver(&d, &qfs_core::DeclaredTypeDefs::new(), client, secrets)
+            .expect("live driver");
         let remap = declared_remap("/slack", "slack").expect("remap");
         let facet = crate::apply_facets::RestApplyDriver::new(
             Arc::new(qfs_driver_http::rest_apply_driver(&driver)),
@@ -5677,7 +5831,8 @@ mod tests {
             let arc: Arc<dyn qfs_secrets::Secrets> = Arc::new(store);
             arc
         };
-        let driver = live_rest_driver(&d, client, secrets).expect("live driver");
+        let driver = live_rest_driver(&d, &qfs_core::DeclaredTypeDefs::new(), client, secrets)
+            .expect("live driver");
         let facet = crate::read_facets::RestReadDriver::new(
             driver.rest_applier().clone(),
             "chatwork".to_string(),

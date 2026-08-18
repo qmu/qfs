@@ -349,8 +349,7 @@ fn host_of_url(url: &str) -> Option<String> {
 
 /// The resource path of a `/rest/<api>/<resource>/...` VFS path — everything after the api
 /// segment (segments 2..). Returns `None` if the path has no resource segment. This is the
-/// coordinate space a declared [`crate::NodeMap`]'s template is written in, so the capability
-/// gate matches nodes against exactly this.
+/// coordinate space the wire layer resolves a declared map's template in.
 pub(crate) fn resource_path_of(vfs: &str) -> Option<String> {
     // /rest/<api>/<resource>/<rest...>  → join from the 3rd non-empty segment onward.
     let segments: Vec<&str> = vfs.split('/').filter(|s| !s.is_empty()).collect();
