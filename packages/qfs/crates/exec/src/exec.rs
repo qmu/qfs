@@ -212,7 +212,12 @@ fn map_engine_error(err: qfs_engine::EngineError) -> ExecError {
 /// lowering failure (a malformed query the planner cannot represent) is a parse/usage class.
 fn map_pushdown_error(err: qfs_core::PushdownError) -> ExecError {
     use qfs_core::PushdownError;
-    let kind = match err {
+    let kind = match &err {
+        // A `SELECT` naming a column the relation does not carry is a malformed QUERY, not an
+        // unavailable source: it is the same mistake, and must carry the same usage class and
+        // exit code, as the engine's runtime refusal of the same projection (ticket
+        // 20260725113000) and as `where`/`expand`.
+        PushdownError::Plan(qfs_pushdown::PlanError::UnknownColumn { .. }) => ErrorKind::Usage,
         // PlanError::CapabilityDenied / UnknownSource — both "this source/op is unavailable".
         PushdownError::Plan(_) => ErrorKind::Capability,
         // A host-realm canon violation (retired bare path, non-local host) is "this address is
