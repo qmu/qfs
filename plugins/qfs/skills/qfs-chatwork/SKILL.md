@@ -53,18 +53,30 @@ CREATE DRIVER chatwork
 CREATE TYPE chatwork/message (
   message_id text PRIMARY KEY,
   body text NOT NULL,
-  send_time timestamp
+  send_time timestamp,
+  update_time timestamp,
+  account_id text,
+  account_name text
 )
 ```
 
+The sender arrives as a **nested** `account` object on each message, so the view lifts
+`account.account_id` and `account.name` into the top-level columns the `OF` contract names:
+
 ```qfs
 CREATE VIEW /chatwork/rooms/{room}/messages OF chatwork/message AS
-  /http/chatwork/rooms/{room}/messages?force=1 |> DECODE json
+  /http/chatwork/rooms/{room}/messages?force=1
+  |> DECODE json
+  |> SELECT message_id, body, send_time, update_time,
+            account.account_id AS account_id, account.name AS account_name
 ```
 
 ```qfs
 CREATE VIEW /chatwork/rooms/{room}/messages/unread OF chatwork/message AS
-  /http/chatwork/rooms/{room}/messages |> DECODE json
+  /http/chatwork/rooms/{room}/messages
+  |> DECODE json
+  |> SELECT message_id, body, send_time, update_time,
+            account.account_id AS account_id, account.name AS account_name
 ```
 
 ```qfs
@@ -88,14 +100,71 @@ qfs account add chatwork work        # paste the x-chatworktoken value (stdin, i
 qfs connect /chatwork TO chatwork SECRET 'vault:chatwork/work'
 ```
 
-`qfs describe /chatwork/rooms` then lists the declared views credential-free.
+## Discover the surface with `describe`
+
+Start at the mount root — `describe` names the children beneath it, so the surface is walkable
+without reading the declaration's source:
+
+```text
+qfs describe /chatwork
+```
+
+```text
+path:      /chatwork
+archetype: relational (SELECT JOIN INSERT UPDATE UPSERT)
+columns:   (none declared — this node states no row type; run it to see its columns)
+children:
+  /chatwork/rooms
+verbs:     (none)
+procedures: (none)
+aliases:   (none)
+pushdown:  limit
+```
+
+The root bears no rows and answers no verb of its own — `verbs:` is the authoritative line, and the
+parenthesised archetype vocabulary is the shape hint, not a claim about this node.
+
+Walk down one segment at a time. A `{param}` child is legible as a parameter — substitute a real
+value for it:
+
+```text
+qfs describe /chatwork/rooms      # children: /chatwork/rooms/{room}  (room — substitute a value)
+qfs describe /chatwork/rooms/123456   # children: …/messages, …/files
+```
+
+At a leaf, `describe` reports the declared `OF` columns — the **same** columns `run` delivers, so
+you can build the next statement straight from them:
+
+```text
+qfs describe /chatwork/rooms/123456/messages
+```
+
+```text
+path:      /chatwork/rooms/123456/messages
+archetype: relational (SELECT INSERT)
+columns:   (declared OF /type/chatwork/message)
+  | name         | type      | null
+  | ------------ | --------- | ----
+  | message_id   | Text      | yes
+  | body         | Text      | no
+  | send_time    | Timestamp | yes
+  | update_time  | Timestamp | yes
+  | account_id   | Text      | yes
+  | account_name | Text      | yes
+verbs:     SELECT INSERT
+pushdown:  limit
+```
+
+A node declaring no row type says exactly that instead of reporting a placeholder column — the blob
+view below is one, and its columns are whatever the wire delivers.
 
 ## Read the latest messages in a room
 
-Address a room by its id (from `/chatwork/rooms`), newest first:
+Address a room by its id (from `/chatwork/rooms`), newest first, attributed to their senders:
 
 ```qfs
 /chatwork/rooms/123456/messages
+|> select send_time, account_name, body
 |> order by send_time DESC
 |> limit 20
 ```
@@ -118,6 +187,53 @@ The unread reading is the API's cheap default call, and it keeps a name of its o
 This one **consumes**: Chatwork marks the returned messages read, so the next read of the same room
 returns only what arrived in between. Reach for it when you want "what is new since I last looked";
 reach for `…/messages` when you want the room's latest messages.
+
+## Find the conversations with something new
+
+The room type carries Chatwork's own counters, so "what needs my attention" is one query rather
+than a scan of every room's name:
+
+```qfs
+/chatwork/rooms
+|> where mention_num > 0 or unread_num > 0
+|> select name, mention_num, unread_num, last_update_time
+|> order by mention_num DESC
+```
+
+## Read only what arrived since you last looked
+
+`send_time` is a column, so an incremental poll is a `where` on it:
+
+```qfs
+/chatwork/rooms/123456/messages
+|> where send_time > 1700000000
+|> select send_time, account_name, body
+```
+
+`describe` reports `pushdown: limit` for these nodes, and that is the honest answer: Chatwork's
+messages endpoint takes no "since" parameter, so the filter runs **locally** in qfs over the page
+the API returns. The query is still the right one to write — it just does not save the round trip.
+
+## Reply to a message
+
+A Chatwork reply is an ordinary message whose body carries a reply prefix naming the account being
+replied to and the message being replied to. Both ids are columns, so the prefix composes from a row
+you already read:
+
+```text
+[rp aid=<account_id> to=<room_id>-<message_id>] <your text>
+```
+
+Read the message you are answering, then post the composed body:
+
+```qfs
+/chatwork/rooms/123456/messages
+|> where message_id == '1000000000'
+|> select CONCAT('[rp aid=', account_id, ' to=123456-', message_id, '] On it') as body
+|> insert into /chatwork/rooms/123456/messages
+```
+
+Without `account_id` this is not expressible — which is why the message type carries the sender.
 
 ## List the files shared in a room
 

@@ -87,8 +87,8 @@ pub use qfs_codec::{
 };
 pub use qfs_driver::{
     check_capability, navigable_by_default, resolve_proc, AliasFn, Archetype, Capabilities,
-    CfsError, Driver, NodeCategory, NodeDesc, Param, Path, ProcSig, PushdownProfile, Verb,
-    VersionSupport,
+    CfsError, ChildNode, Driver, NodeCategory, NodeDesc, Param, Path, ProcSig, PushdownProfile,
+    SchemaContract, Verb, VersionSupport,
 };
 pub use qfs_lang::{grammar_ebnf, language_model_reference, RESERVED_KEYWORDS};
 pub use qfs_plan::{
