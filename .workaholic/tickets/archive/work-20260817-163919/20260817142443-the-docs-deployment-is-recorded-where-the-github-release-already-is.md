@@ -1,8 +1,9 @@
 ---
 created_at: 2026-08-17T14:24:43+00:00
+status: done
 author: noreply@anthropic.com
 assignees: [a@qmu.jp]
-depends_on: a-release-publishes-the-docs-site-to-qfs-qmu-co-jp
+depends_on: [20260817142443-a-release-publishes-the-docs-site-to-qfs-qmu-co-jp.md]
 mission: the-documentation-site-publishes-itself-staging-on-merge-production-on-release
 merge_policy:
 verification_handoff:
@@ -72,3 +73,53 @@ reconstructing it from workflow YAML.
 - This ticket is last on purpose: written before the workflows land, the record would
   describe an intention rather than a deployment, which is the failure mode a deployment
   record exists to prevent.
+
+## Final Report
+
+Development completed as planned. `.workaholic/deployments/docs-site.md` records both
+environments — trigger, procedure, the two secrets by name, the by-hand recovery path, and a
+per-environment confirmation check — and joins the area index. `CLAUDE.md`'s Deploy section now
+carries both targets instead of asserting there is only one.
+
+Two corrections went beyond the listed steps, both because the old prose became false rather
+than merely incomplete:
+
+- `.workaholic/deployments/github-release.md` opened with "there is no separate server". Left
+  alone it would have contradicted the record filed next to it, so it now scopes itself to the
+  binary and points at `docs-site.md` for the site. The claim it makes is narrowed, not
+  reversed: no server is run for qfs, and that is still true.
+- `docs/guide/repository.md`'s CI paragraph described `docs-build` as a compile check. That job
+  now also publishes staging, so a contributor reading the old sentence would not know a merge
+  deploys anything.
+
+The ticket's fifth step — say plainly which record applies to which change — is answered in both
+directions: `docs-site.md` has a *Which record applies to your change* paragraph, and
+`github-release.md` says the tag it tells you to push also publishes the documentation.
+
+The frontmatter carried `depends_on: a-release-publishes-the-docs-site-to-qfs-qmu-co-jp`, a
+mission-ticket slug rather than a ticket filename, which `hooks/validate-ticket.sh` rejects. It
+is corrected in place to the filename form. Its sibling
+`20260817142443-a-merge-to-main-publishes-…` carried the same shape and is now archived with it
+intact, as history.
+
+### Discovered Insights
+
+- **Insight**: `ship/scripts/read-deployments.sh` gives a record `has_confirmation: true` only
+  when it has both a `confirmation_method` field *and* a non-empty `## Confirmation` body, and
+  that flag is what `/ship` §1-4 halts on. A record with a beautifully written procedure and an
+  empty Confirmation section is invisible to the gate that exists to catch exactly that.
+  **Context**: `bash <src>/skills/ship/scripts/read-deployments.sh` is the cheap way to check a
+  new record is actually seen — it reported `count 2, has_confirmation true` here.
+
+- **Insight**: One record covers both hostnames because the frontmatter carries a single
+  `environment`, so the file is filed as `production` and staging is documented in its body.
+  **Context**: If staging ever needs to be a `/ship` target in its own right — something to
+  release *to* rather than a byproduct of merging — it needs its own file, not a second
+  frontmatter block. The current shape is right while staging is defined as "whatever `main`
+  is" and nothing is promoted from it.
+
+- **Insight**: `okf/scripts/refresh-index.sh` regenerates every area index from the documents
+  present, so a new record is added to `deployments/index.md` by running it rather than by
+  hand-editing between the `okf:generated` markers.
+  **Context**: A hand-added line survives until the next refresh reorders or drops it; the
+  script sorts by filename, which is why `docs-site.md` now precedes `github-release.md`.

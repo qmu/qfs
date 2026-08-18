@@ -1,5 +1,6 @@
 ---
 created_at: 2026-08-17T14:24:43+00:00
+status: done
 author: noreply@anthropic.com
 assignees: [a@qmu.jp]
 depends_on: the-docs-site-has-a-worker-deploy-target-it-can-be-published-to
@@ -85,3 +86,47 @@ reusing that build rather than adding a second one.
   — the guard is the whole safety of this ticket, not a detail.
 - The `main` branch auto-merges propose/implement pull requests, so staging will move
   often; this is intended, and it is the reason production is tied to a tag instead.
+
+## Final Report
+
+Development completed as planned. The publish is a guarded pair of steps inside CI's existing
+`docs-build` job — the ticket's preferred option — so one build produces both the compile
+proof and the published bytes.
+
+### Open Decision resolved: staging is public, and non-indexable
+
+The ticket left open whether staging-qfs.qmu.co.jp is publicly reachable or access-restricted.
+**Resolved: public, with crawling and indexing refused.**
+
+The reasoning, recorded because the ticket required it rather than a silent pick: the two
+options were weighed against what restriction would actually protect. This repository is
+public, `main` is public, and the released documentation is public — so the content staging
+serves is already readable by anyone who can read the repository. Access restriction would
+therefore protect nothing that is not already open, while adding a second credential to hold
+and a login between a contributor and the page they are checking. The one harm the ticket did
+name is real, though: a search engine ranking unreleased documentation above the released
+pages. That is an *indexing* problem, not an *access* problem, and it is answered directly —
+`scripts/stamp-docs-deploy.sh staging` writes a `Disallow: /` `robots.txt` and an `_headers`
+file setting `X-Robots-Tag: noindex, nofollow` on every path, both applied to the staging build
+only. Production ships the tracked `docs/public/robots.txt` and stays indexable.
+
+If the audience for staging later turns out to include people who must not read unreleased
+documentation, this resolution is the thing to revisit — the environment is already declared
+separately, so restricting it is a change to one hostname, not to the pipeline.
+
+### Discovered Insights
+
+- **Insight**: The guard is `github.event_name == 'push' && github.ref == 'refs/heads/main'`,
+  not `github.ref` alone. For a `pull_request` event `github.ref` is the PR's merge ref
+  (`refs/pull/<n>/merge`), so the ref check alone already skips PRs — but the event check is
+  what keeps a fork whose head branch is literally named `main` from ever matching.
+  **Context**: `.github/workflows/ci.yml` triggers on `push: branches: ["**"]` *and*
+  `pull_request`, so every step added to a job in this workflow runs on far more events than a
+  reader assumes. Anything with an outward effect needs both halves of the guard.
+
+- **Insight**: The deployed tree carries `version.json` (commit, ref, environment, build time),
+  written by the shared stamp script rather than by each workflow.
+  **Context**: It makes "which commit is this hostname serving?" a `curl`, answerable by anyone
+  without a Cloudflare login — which is what makes the confirmation check in the deployment
+  record something a person can actually run. Both environments write it through the same
+  script specifically so the staging and production stamps cannot drift apart.
