@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260818-210119
 ---
 
 # The chatwork/room type drops five fields the endpoint delivers
