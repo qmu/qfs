@@ -1,5 +1,6 @@
 ---
 created_at: 2026-07-25T11:05:00+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 type: bugfix
@@ -9,6 +10,7 @@ commit_hash:
 category: Changed
 depends_on:
 mission:
+claim: work-20260816-164408
 ---
 
 # Gate the statement bridge read leg with the same policy
@@ -128,3 +130,70 @@ The stamp is cleared so the ticket returns to the ordinary backlog — the same 
 `20260804173000` received when its own mission closed. The provenance lives here in prose instead.
 
 **Still-open evidence (verified 2026-08-12, read-only):** The read leg is still ungated: `McpEngine::read_rows` parses a caller-supplied statement and runs it through `block_on_read` under a hardcoded `RequestContext::anonymous()`, with no policy resolution (`crates/qfs/src/mcp.rs`, the `mode: "read"` leg).
+
+## Final Report
+
+Development completed as planned. The bridge's read leg (`POST /api/run`, `mode: "read"`) now
+resolves a **dedicated named policy row** and adjudicates the statement's scan leaves through the
+*same* decision procedure the endpoint face uses, under the request's resolved principal — the
+developer's ruling of 2026-07-26 implemented without forking a second read-gating path.
+
+What landed:
+
+- `ServeMcpEngine::read_policy()` resolves the `bridge` row out of the live `/server/policies`
+  table. Fail-closed in **every** degraded direction: no live `/server` seam, an unreadable state
+  lock, or an absent row all resolve to the default-deny policy. The `api` row is untouched — the
+  ruling rejected widening it, and the `one-coarse-api-policy-row-for` concern is why.
+- The gate is `qfs_exec::scan_targets` → `qfs_http::assert_select_allowed`, i.e. the endpoint
+  face's own `evaluate_reads_with_context` seam. It is pure and runs **before** the read worker
+  thread is spawned, so a denial costs no thread and touches no driver (pinned by a counting
+  driver: `scan_count() == 0` on every refusal).
+- `McpEngine::read_rows` gained a `ctx: &RequestContext` parameter; the hardcoded
+  `RequestContext::anonymous()` is gone from both the gate and the executor call. `serve_dashboard`
+  takes the context and `qfs serve` supplies it from the **same** injected `PrincipalResolver` the
+  endpoint face reads (no resolver wired ⇒ anonymous, the same fail-closed default).
+- A denied read is a structured, secret-free `policy_denied` at **403** (`engine_status` gained the
+  arm), never an empty envelope at 200. The message names the governing row so an operator can act
+  on it.
+
+Quality Gate: all four items verified. (1) A denied `mode: "read"` refuses with the structured
+denial and `scan_count() == 0` — `bridge_read_is_gated_and_denial_precedes_the_driver_scan`, plus
+`a_bridge_with_no_declared_policy_row_reads_nothing` for the absent-row case the ruling named.
+(2) The granted direction returns the §14 `{schema, rows, …}` envelope unchanged, and the two
+reconcile end-to-end tests still converge through the bridge with a declared row. (3)
+`bridge_read_gate_evaluates_the_resolved_principal_both_directions` — one `FOR user:alice` rule,
+three directions (alice allowed, anonymous and bob denied). (4) Workspace gates green:
+`cargo test --workspace` 2719 passed / 0 failed, `cargo clippy --workspace --all-targets -D
+warnings` clean, `cargo fmt --all --check` clean, `gen-docs --check` / `gen-skills --check` /
+`check-migrations` all in sync.
+
+The parked super-admin split was **not** touched, as the ruling required.
+
+### Discovered Insights
+
+- **Insight**: The reuse the ticket demanded was available as a public function, not just as a
+  pattern — `qfs_http::assert_select_allowed` already takes `(&[ScanTarget], &Policy,
+  &DecisionContext)` and is exported for exactly this kind of caller. Only `decision_for` (the
+  `RequestContext` → `DecisionContext` map) was missing from the export list.
+  **Context**: The binary is pinned OFF a direct `qfs-server` dependency by the thin-entrypoint
+  guard, so a second gate written "the obvious way" in `crates/qfs` would have had to re-export the
+  enforcer through `qfs-mcp` and re-derive the ReadTarget mapping — a fork by construction. The
+  serve-side door (`qfs-http` re-exporting what the composition root needs) is the pattern to reach
+  for whenever the binary needs a policy decision.
+
+- **Insight**: Gating this leg is a **breaking change for `qfs plan` / `qfs apply`**, and the
+  failing tests said so before any reasoning did. Reconcile is the bridge's third client
+  (`fetch_server_state` reads six `/server/<collection>` paths through `mode: "read"`), so a
+  deployment that declares no `bridge` row can no longer be reconciled at all.
+  **Context**: This is the ruling's intended posture, not a regression — "fail closed" over a face
+  that reads whatever statement the caller sends. But it means the upgrade is not transparent: the
+  cookbook's reconcile recipe now teaches the row, and an existing `config.qfs` must add it. Any
+  future gate over a face an internal CLI drives will have the same shape — the test that breaks is
+  the one telling you a client exists.
+
+- **Insight**: The bridge's `commit_policy()` and `read_policy()` deliberately read **different**
+  rows (`api` vs `bridge`), which looks like an inconsistency and is the opposite.
+  **Context**: `api` is the coarse row the cookbook already teaches and that MCP, the dashboard and
+  reconcile share; the tracked `one-coarse-api-policy-row-for` concern is precisely that coarseness.
+  The ruling rejected reusing it here so the read leg could be split off cleanly, which is also the
+  template for splitting the remaining non-endpoint faces off `api` later.

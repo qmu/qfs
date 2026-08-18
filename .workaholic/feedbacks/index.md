@@ -93,5 +93,12 @@
 * [The branch-safety commit-size findings are recorded, not work](20260812141520-the-branch-safety-commit-size-findings-are-recorded-not-work.md)
 * [The Slack-as-example test concern is moot, verified in the tree](20260812141521-the-slack-as-example-test-concern-is-moot-verified-in-the-tree.md)
 * [The default qfs auth session TTL must be two weeks, not 8 hours](20260813033130-the-default-qfs-auth-session-ttl-must-be-two-weeks-not-8-hours.md)
+* [Resolved: merge-pr.sh returns the branch head, not the merge commit, so a release-on-tag ship tags off the base line](20260815131415-resolved-20260803212935-merge-pr-sh-returns-the-branch-head-not-the-merge-commit-so-a-release-on-tag-ship-tags-off-the-base-line.md)
+* [Resolved: A declared lookup cannot be shared across maps, so the §13.2 conciseness bar moved](20260815131415-resolved-c-d90ea764.md)
 * [Unbound-plugin fallback path only resolves inside the qmu/workaholic checkout](20260816152200-unbound-plugin-fallback-path-only-resolves-inside-the-qmu-workaholic-checkout.md)
+* [Resolved: The preview-time malformed-reference refusal was declined, not implemented](20260816195555-resolved-the-preview-time-malformed-reference-refusal.md)
+* [Add a full documentation of the current situation, starting with a mission ticket](20260817102418-add-a-full-documentation-of-the-current-situation-starting-with-a-mission-ticket.md)
+* [Resolved: The cookbook ratchet only parses, so it cannot catch a fabricated column](20260817131548-resolved-the-cookbook-ratchet-only-parses-so.md)
+* [Auto-deploy docs to staging-qfs.qmu.co.jp on merge to main, and to qfs.qmu.co.jp on release](20260817142308-auto-deploy-docs-to-staging-qfs-qmu-co-jp-on-merge-to-main-and-to-qfs-qmu-co-jp-on-release.md)
+* [Bootstrap installs the plugin but does not guarantee it is bound](20260817184536-bootstrap-installs-the-plugin-but-does.md)
 <!-- okf:generated:end -->

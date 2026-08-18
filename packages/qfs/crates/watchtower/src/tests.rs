@@ -23,6 +23,64 @@ use qfs_server::Binding;
 // helpers
 // ---------------------------------------------------------------------------
 
+/// The in-memory `/log` mount the trigger handlers write to. `build_plan` refuses an effect whose
+/// target routes nowhere (ticket `20260816213014`: an unrouted write used to fall back to a plan
+/// against its literal path, so a write that could never happen previewed as an ordinary one), so
+/// a committer that is meant to exercise the POLICY gate needs the handler's target mounted — the
+/// gate must be what refuses, not the routing. Nothing is applied through it: `RecordingCommitter`
+/// commits over a `RecordingApplier`.
+struct FakeLog;
+
+fn log_schema() -> qfs_types::Schema {
+    qfs_types::Schema::new(vec![qfs_types::Column::new(
+        "line",
+        qfs_types::ColumnType::Text,
+        true,
+    )])
+}
+
+#[derive(Default)]
+struct NoopApplier;
+impl qfs_core::PlanApplier for NoopApplier {
+    fn apply(
+        &mut self,
+        node: &qfs_core::EffectNode,
+    ) -> Result<qfs_core::AppliedEffect, qfs_core::ApplyError> {
+        Ok(qfs_core::AppliedEffect::new(node.id, 0))
+    }
+}
+
+impl qfs_core::Driver for FakeLog {
+    fn mount(&self) -> &str {
+        "/log"
+    }
+    fn describe(&self, _path: &qfs_core::Path) -> Result<qfs_core::NodeDesc, qfs_core::CfsError> {
+        Ok(qfs_core::NodeDesc::new(
+            qfs_core::Archetype::RelationalTable,
+            log_schema(),
+        ))
+    }
+    fn capabilities(&self, _path: &qfs_core::Path) -> qfs_core::Capabilities {
+        qfs_core::Capabilities::none().select().insert()
+    }
+    fn procedures(&self) -> &[qfs_core::ProcSig] {
+        &[]
+    }
+    fn pushdown(&self) -> &qfs_core::PushdownProfile {
+        &qfs_core::PushdownProfile::None
+    }
+    fn applier(&self) -> &dyn qfs_core::PlanApplier {
+        Box::leak(Box::new(NoopApplier))
+    }
+}
+
+/// An engine whose only mount is [`FakeLog`], so a handler's `INSERT INTO /log …` routes.
+fn engine_with_log_mount() -> Engine {
+    let mut engine = Engine::new();
+    engine.mounts.register(Arc::new(FakeLog)).unwrap();
+    engine
+}
+
 /// A counting fake committer: records how many commits succeeded + the cumulative plan summaries,
 /// so the idempotency golden can assert "one net effect across two deliveries".
 #[derive(Default)]
@@ -442,7 +500,8 @@ fn recording_committer_enforces_policy_default_deny_allow_and_atomic_abort() {
     //     and ZERO effects applied (atomic abort — total_applied stays 0).
     let empty: Arc<RwLock<Arc<qfs_server::PolicyTable>>> =
         Arc::new(RwLock::new(Arc::new(qfs_server::PolicyTable::new())));
-    let committer = RecordingCommitter::with_engine(Engine::new()).with_policies(empty.clone());
+    let committer =
+        RecordingCommitter::with_engine(engine_with_log_mount()).with_policies(empty.clone());
     let denied = committer.commit("t", &stmt, None);
     assert!(
         matches!(denied, Err(FireError::PolicyDenied { .. })),
@@ -465,7 +524,7 @@ fn recording_committer_enforces_policy_default_deny_allow_and_atomic_abort() {
         },
     );
     let handle: Arc<RwLock<Arc<qfs_server::PolicyTable>>> = Arc::new(RwLock::new(Arc::new(table)));
-    let committer = RecordingCommitter::with_engine(Engine::new()).with_policies(handle);
+    let committer = RecordingCommitter::with_engine(engine_with_log_mount()).with_policies(handle);
     let outcome = committer
         .commit("t", &stmt, Some("writer"))
         .expect("granted ⇒ commit");

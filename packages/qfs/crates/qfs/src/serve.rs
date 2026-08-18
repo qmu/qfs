@@ -259,6 +259,11 @@ pub fn run_serve(config: &Path) -> i32 {
         let wt = wt_fallback;
         let oauth = oauth_routes.clone();
         let dashboard = dashboard_engine;
+        // The dashboard bridge adjudicates its read leg under the request's principal, so it takes
+        // the SAME injected resolver the endpoint face reads (cloned before the listener takes
+        // ownership below). No resolver wired ⇒ every bridge request stays anonymous — the same
+        // fail-closed default `resolve_request_principal` applies on the endpoint face.
+        let dashboard_resolver = principal_resolver.clone();
         Arc::new(move |req: &qfs_http::HttpRequest| {
             // The three read-only OAuth discovery routes win first (public, cacheable, no creds).
             if let Some(routes) = &oauth {
@@ -276,7 +281,11 @@ pub fn run_serve(config: &Path) -> i32 {
             }
             // The dashboard shell + bridge (`GET /`, `GET /assets/*`, `POST /api/*`). Returns None
             // for any non-dashboard path, so the watchtower webhook ingest still gets its chance.
-            if let Some(resp) = crate::dashboard::serve_dashboard(dashboard.as_ref(), req) {
+            let ctx = match &dashboard_resolver {
+                Some(resolve) => resolve(req),
+                None => qfs_core::RequestContext::anonymous(),
+            };
+            if let Some(resp) = crate::dashboard::serve_dashboard(dashboard.as_ref(), req, &ctx) {
                 return Some(resp);
             }
             wt(req)

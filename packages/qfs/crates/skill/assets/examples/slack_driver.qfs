@@ -118,3 +118,18 @@ CREATE MAP CALL slack.update ( channel text, ts text, text text ) /slack/{ws}/{c
 
 CREATE MAP CALL slack.delete ( channel text, ts text ) /slack/{ws}/{channel}/messages AS
   INSERT INTO /http/slack/chat.delete VALUES ({channel: cid, ts: row.ts}) IRREVERSIBLE;
+
+-- DETACH a file by its id (ticket 20260813024753). The file surface's one write: `files.delete`
+-- takes the id alone, so the map binds `path.file` and needs no lookup. The body is an INSERT
+-- because Slack's method is a POST — the same shape every CALL above uses; the MAP's own verb
+-- (REMOVE) is what a `remove /slack/<ws>/files/<id>` statement matches on, and IRREVERSIBLE puts it
+-- behind the standard gate.
+--
+-- This is the whole file-write surface, deliberately. The article's upload and download were
+-- retired with the compiled driver and are NOT reintroduced here: Slack's upload is a three-call
+-- external flow (`files.getUploadURLExternal` → PUT the bytes → `files.completeUploadExternal`),
+-- which a declared map — one request — cannot express; and a download would need `FOLLOW` to send
+-- the bearer to `url_private`, while `FOLLOW` injects no credential BY DESIGN (the Chatwork
+-- precedent works because its delivered URL is self-authorizing).
+CREATE MAP REMOVE /slack/{ws}/files/{file} AS
+  INSERT INTO /http/slack/files.delete VALUES ({file: path.file}) IRREVERSIBLE;

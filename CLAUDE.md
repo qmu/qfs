@@ -47,9 +47,25 @@ Generated reference docs (`docs/{language,drivers,server}.md`) are rendered from
 The Claude Code **Agent Skills** (`plugins/qfs/skills/qfs-*/SKILL.md`) are generated from the human
 cookbook articles (`docs/cookbook/*.md`, each carrying `skill_name` + `skill_description`
 frontmatter) by `cargo run -p xtask -- gen-skills` — never hand-edit a `SKILL.md`; edit the article
-and regenerate. Every `qfs` recipe in an article is parse-checked by
-`crates/test/tests/cookbook_skills.rs` (the verified-true ratchet), so a skill can never teach an
-agent a statement the binary rejects.
+and regenerate. Every `qfs` recipe in an article goes through the verified-true ratchet
+(`packages/qfs/xtask/tests/cookbook_skills.rs` — it lives in `xtask` because it is the one crate
+allowed to link both `qfs-parser` and the compiled `qfs` describe registry), which holds it to two
+checks — it **parses** on the shipped grammar, and the columns it names **exist** on the node it
+addresses, resolved through the binary's own cred-free describe registry. So a skill can never teach
+an agent a statement the binary rejects, nor a column the driver does not carry. The ratchet runs
+under plain `cargo test --workspace`, so CI's `build-test` job defends it — unlike `gen-docs --check`
+/ `gen-skills --check` / `check-migrations`, which no CI job invokes and which therefore hold only
+where a developer or the ship flow runs them.
+
+**What the ratchet does not cover** (the test's own doc comment carries the full list): the parse
+half sees all 184 recipes; the column half only checks statements whose source resolves in the
+*compiled* describe registry — 62 of 81 query sources today — so paths needing a live registration
+(`/sql`, `/git`, `/slack`, `/server`, and declared `.qfs` mounts like `/chatwork`, `/cloudflare`) are
+skipped, reported by path in the test output rather than silently. It also stops at the first stage
+that reshapes the relation (codec, join, set op, `CALL`, `TRANSFORM`, `SWITCH`, `FOLLOW`, `POST`),
+and typechecks queries only — effects and DDL are parse-checked. Shell `qfs …` examples are not
+recipes and are invisible to it; `packages/qfs/crates/cmd/tests/faq_cli_surface.rs` holds those (in
+`docs/cookbook/faq.md`) against the real clap surface.
 
 **Re-version the plugin when a shipped PR changes any CLI surface the skills mention.** The plugin
 carries its own version line (`plugins/qfs/.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,

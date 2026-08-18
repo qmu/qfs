@@ -1,5 +1,6 @@
 ---
 created_at: 2026-07-25T14:30:00+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 type: bugfix
@@ -9,6 +10,7 @@ commit_hash:
 category:
 depends_on:
 mission:
+claim: work-20260816-184034
 ---
 
 # The cookbook ratchet only parses — it must typecheck against the describe registry
@@ -98,3 +100,96 @@ The stamp is cleared so the ticket returns to the ordinary backlog — the same 
 `20260804173000` received when its own mission closed. The provenance lives here in prose instead.
 
 **Still-open evidence (verified 2026-08-12, read-only):** Still open: `crates/test/tests/cookbook_skills.rs` calls `parse_statement` and asserts nothing beyond parsing — no typecheck against the describe registry.
+
+## Final Report
+
+Development completed as planned, with **two scope calls recorded below** rather than made silently.
+
+The ratchet is now two checks over one extractor and one floor: every recipe **parses**, and every
+column it names **exists** on the node it addresses, resolved through the binary's own cred-free
+`compiled_describe_registry` — the same registry `gen-docs` renders from. 62 recipes are
+typechecked; 19 source paths are skipped and **named** in the test output.
+
+### Where it lives, and why it moved twice
+
+The ticket assumed the new work was "entirely in what happens after extraction", i.e. inside
+`crates/test/tests/cookbook_skills.rs`. It could not stay there: `qfs-test` is the wasm-clean pure
+harness and must not link the binary, and `compiled_describe_registry` is in the binary crate.
+Moving it into `crates/qfs/tests/` then tripped the architecture guard
+`crates/cmd/tests/dep_direction.rs` — the binary may not depend on `qfs-parser`, and a dev-dependency
+counts. The guard is right and was left alone.
+
+It landed in **`xtask/tests/`**: xtask already links `qfs` for `gen-docs`, already owns the
+anti-drift family this check belongs to, and ships in nothing. One file still holds both ratchets,
+so there is still one extractor and one `MIN_STATEMENTS`.
+
+### The check agrees with the fold rather than re-deriving a rule
+
+Running each recipe through `Evaluator::eval` was tried first and does **not** work for the class
+this ticket exists to catch: measured, `/github/acme/web/pulls |> where author == 'x'` evaluates
+**Ok** (the predicate is late-bound at plan time), while `|> select author` refuses. So the check
+walks the pipeline's *checkable prefix* explicitly, as the Scope describes. Two properties keep it
+from ever producing a false red:
+
+- The known-name set starts as the node's columns and only ever **grows** (`EXTEND`/`SET`/`AS`/a
+  projection alias adds a name), so an alias can never read as missing.
+- It stops at the first stage after which the schema is no longer knowable from describe alone —
+  `decode`/`encode`, `join`, the set ops, `call`, `transform`, `switch`, `follow`, `post`.
+
+### Scope call 1 — two articles were changed, which the ticket lists as out of scope
+
+The Out-of-scope line reads "Changing any article. `github.md` was corrected in the same run this
+ticket was minted in" — i.e. *you need not re-fix github.md*. It cannot mean *a recipe the new
+ratchet catches must stay false*, because then the ratchet could never land green. Turning it on
+found **two genuinely false recipes** in `docs/cookbook/cross-service.md`, both against `/mail/inbox`
+(real columns: `id, thread_id, date, from, subject, snippet, label_ids, attachments`):
+
+- `select … received_at as at` — no `received_at`; corrected to `date`.
+- `select subject, body` (×3, plus the `create transform triage` input declaration) — no `body`;
+  corrected to `snippet`.
+
+These are exactly the class the ticket was minted for, found in a second article nobody had checked.
+`qfs-cross-service/SKILL.md` was regenerated and all four plugin `version` fields went
+`0.19.3 → 0.19.4` (a taught surface changed).
+
+### Scope call 2 — the ratchet is blind wherever `describe` is
+
+Three of the first five hits were **false positives** traced to an existing defect, not to false
+articles: the first implementation passed `resolve_path`'s mount-stripped remainder to
+`Driver::describe`, and the mail driver ignores its path argument in that form — reporting the
+*message* schema for `/mail` (really `name`) and for an attachment node (really
+`filename, mime, size, content`). Passing the **full** path, as `catalog.rs` does, fixed all three
+and raised the typechecked count 48 → 62 by making `/github` resolvable at all. This is the live
+concern `what-describe-says-is-not-what` (defect 1); the ratchet is only ever as true as `describe`,
+which is worth stating because a future describe regression turns this green test into a silent one.
+
+### Verification
+
+**Red before green** (Quality Gate item 1), with the ticket's own example added to a scratch article:
+
+```
+$ cargo test -p xtask --test cookbook_skills every_cookbook_skill_recipe_names_columns
+    names ["author"] — not columns of /github/acme/web/pulls
+test result: FAILED. 0 passed; 1 failed; ...
+```
+
+The scratch article was removed and the suite is green. Floors (item 2): `MIN_STATEMENTS = 45`
+unchanged, new `MIN_TYPECHECKED = 20` against an actual 62. Skips (item 3) print by path:
+`/chatwork/*`, `/cloudflare/*`, `/git/myrepo/*`, `/server/*`, `/slack/*`, `/sql/*` — 19 sources, all
+needing a live registration rather than a compiled type, exactly as the ticket scoped.
+
+Gate (item 4): `cargo test --workspace` 2722 passed / 0 failed, `cargo clippy --workspace
+--all-targets -- -D warnings` `CLIPPY=0`, `cargo fmt --all --check` `FMT=0`, `gen-docs --check` /
+`gen-skills --check` / `check-migrations` all exit 0.
+
+### Discovered Insights
+
+- **Insight**: `Driver::describe` takes the **full** path, not the mount-stripped remainder
+  `MountRegistry::resolve_path` returns, and the two forms fail differently per driver: `/github`
+  errors loudly on the stripped form while `/mail` silently answers with the wrong node's schema.
+  **Context**: The loud failure is survivable; the silent one is what makes the stripped form
+  dangerous for any new consumer. `catalog.rs` (gen-docs) is the correct model to copy.
+- **Insight**: The evaluator refuses an unknown `select` column but not an unknown `where` column at
+  plan time, because `where` is late-bound for pushdown.
+  **Context**: This is why "just run it through the evaluator" cannot be the ratchet, and it is the
+  same asymmetry the open ticket `20260725113000` is about from the other direction.
