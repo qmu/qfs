@@ -20,9 +20,22 @@ Nobody runs a deploy command in the normal path; the by-hand commands exist for 
 | production | `https://qfs.qmu.co.jp` | a pushed `v*` tag, after the Release publishes | `.github/workflows/release.yml`, job `docs-deploy-production` |
 
 Both environments are Cloudflare Workers static-assets projects declared in
-`docs/wrangler.toml` (`qfs-docs-staging`, `qfs-docs-production`). Each names its own custom
-domain and is reachable only through an explicit `--env`; the top-level `qfs-docs` worker
-carries no route, so a `wrangler deploy` without `--env` cannot land on either hostname.
+`docs/wrangler.toml` (`qfs-docs-staging`, `qfs-docs-production`), each reachable only through an
+explicit `--env`; no environment carries a route, so a `wrangler deploy` without `--env` cannot
+land on either hostname.
+
+**The hostnames are attached by hand, not by the config.** Each Worker's custom domain
+(`staging-qfs.qmu.co.jp`, `qfs.qmu.co.jp`) was attached once through the Cloudflare dashboard and
+is deliberately **not** declared in `docs/wrangler.toml`. A declared `custom_domain` route is
+re-asserted on every deploy, which would force the CI token to hold `Zone → Workers Routes → Edit`
+on `qmu.co.jp` permanently — a scope that cannot be narrowed below the whole zone, so a leaked CI
+token could attach a Worker to any hostname on it. Without the routes, the token needs account
+scope only, and a leak is bounded to "the docs site's content can be replaced".
+
+**Re-attaching a domain** (needed only if a Worker is deleted and recreated): Cloudflare dashboard
+→ Workers & Pages → the Worker → Settings → Domains & Routes → Add custom domain. Doing it from
+the CLI instead requires a token with the wide `Zone → Workers Routes → Edit` scope that the CI
+secret deliberately no longer has.
 
 **Which record applies to your change.** This one covers `docs/` and the site's build and
 publish path. `github-release.md` covers the `qfs` binary — the versioned, installable
@@ -86,11 +99,15 @@ there are only the names:
 
 | Secret | What it is | Scope needed |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | API token the deploy authenticates with | `Account → Workers Scripts → Edit`, plus `Zone → Workers Routes → Edit` on `qmu.co.jp` for the two custom domains |
+| `CLOUDFLARE_API_TOKEN` | API token the deploy authenticates with | `Account → Workers Scripts → Edit` and `Account → Account Settings → Read`, on the one account. **No zone scope** — with no routes declared, a steady-state deploy never reads or writes the zone |
 | `CLOUDFLARE_ACCOUNT_ID` | the account the two Workers live in | — |
 
 Both are set on the deploying **job** rather than the workflow, so the Rust build jobs and the
 release job keep seeing only the auto-provided `GITHUB_TOKEN`.
+
+Attaching or re-attaching a custom domain is the one operation that still needs
+`Zone → Workers Routes → Edit`. Do it from the dashboard (above) rather than widening the CI
+secret; a token that can bind a Worker to a hostname can bind it to any hostname in the zone.
 
 ## Confirmation
 
