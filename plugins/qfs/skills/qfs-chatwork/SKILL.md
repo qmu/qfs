@@ -215,6 +215,18 @@ than a scan of every room's name:
 |> order by mention_num DESC
 ```
 
+## Find the rooms waiting on a task of yours
+
+`mytask_num` counts the open tasks in a room that are assigned to you, so "which rooms are waiting
+on me" is a `where` on it — no per-room task fetch:
+
+```qfs
+/chatwork/rooms
+|> where mytask_num > 0
+|> select name, mytask_num, task_num, last_update_time
+|> order by mytask_num DESC
+```
+
 ## Read only what arrived since you last looked
 
 `send_time` is a column, so an incremental poll is a `where` on it:
