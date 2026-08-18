@@ -444,3 +444,4 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-08-16 — steering medium corrected — teams inbox disproven, peer socket proven — design-brief-steering-transport.md
 - 2026-08-16 — story written — work-20260816-154228.md
 - 2026-08-18 — ticket archived — 20260816161143-launcher-captures-the-name-not-the-session-id.md
+- 2026-08-18 — ticket archived — 20260816161144-last-message-reads-null-for-a-tool-heavy-session.md
