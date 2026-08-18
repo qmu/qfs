@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260818-204014
 ---
 
 # `offline_run_engine_does_not_mount_server` is the tenth test with no config home of its own, and the sweep missed it
