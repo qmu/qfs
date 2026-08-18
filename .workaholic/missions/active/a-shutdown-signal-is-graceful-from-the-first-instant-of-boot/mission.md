@@ -16,6 +16,7 @@ stories: []
 gate_type:
 gate_target:
 gate_assert:
+claim: work-20260818-134142
 ---
 
 # A shutdown signal is graceful from the first instant of boot
