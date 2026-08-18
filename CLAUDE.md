@@ -28,12 +28,23 @@ The Cargo workspace is under `packages/qfs/`:
 cd packages/qfs
 cargo build --workspace
 cargo test --workspace            # 1240+ tests, all hermetic (no network/credentials)
+env -u XDG_CONFIG_HOME cargo test -p qfs --lib -- --test-threads=1   # config-home isolation detector (see below)
 cargo clippy --workspace --all-targets -- -D warnings   # NOT --all-features (qfs-host features are mutually exclusive)
 cargo fmt --all --check
 cargo run -p xtask -- gen-docs --check     # anti-drift: committed docs must match the binary
 cargo run -p xtask -- gen-skills --check   # anti-drift: Agent Skills must match docs/cookbook/*.md
 cargo run -p xtask -- check-migrations     # anti-drift: no shipped migration body edited in place (needs release tags)
 ```
+
+**Why the qfs lib suite is also run serialised with no ambient config home.** Every env-mutating
+`qfs` unit test isolates its config home through `testenv::HomeGuard`, and `store.rs`'s `cfg(test)`
+guard panics if a test ever resolves the shared `$HOME/.config/qfs` instead. That panic is
+*suppressible by the environment*: `HomeGuard` sets `XDG_CONFIG_HOME` process-wide, so under the
+parallel harness an unguarded test passes whenever a guarded sibling's guard is alive, and an
+ambient `XDG_CONFIG_HOME` suppresses it independently. Under either, `cargo test --workspace`
+reports whichever way the schedule fell. Measured on 2026-08-18 with one guard deliberately removed:
+parallel green 3/3, serialised red every time. CI's `build-test` job therefore runs the serialised,
+`XDG`-unset command above as its own step (~70s, no rebuild) — that is where a missing guard fails.
 
 The qfs-viewer gate (TypeScript; its own canonical runner):
 
