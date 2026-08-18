@@ -42,6 +42,9 @@
 //!     embedded DO body (it stays data).
 //!  8. Boot a fixture mixing CREATE forms + INSERT through `qfs serve` and confirm the
 //!     ServerState snapshot is deterministic and the audit drains correctly (regression vs t30).
+//!  9. CREATE AGENT (blueprint §19): naming + credential-free registry landing.
+//! 10. A SIGINT/SIGTERM delivered while `qfs serve` is still BOOTING takes the graceful path
+//!     (exit 0, whole ledger drained) rather than the default disposition.
 
 // Test code: assertions and setup may panic/expect/unwrap freely.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -56,6 +59,8 @@ use qfs_core::{
     PlanSpec, ServerBindingDdl, ServerNode, ServerWriteOp, StatementSpec,
 };
 use qfs_server::{NullBinding, Runtime, ServerError, ServerState};
+
+mod serve_e2e;
 
 // ---------------------------------------------------------------------------
 // Helpers — drive the public surfaces as a black box
@@ -133,12 +138,88 @@ fn fixture_path() -> PathBuf {
 }
 
 fn send_sigint(pid: u32) {
+    send_signal(pid, "-INT");
+}
+
+/// Send a named signal to a child PID via `kill` (no extra crate dep; the harness delivers the
+/// same signal an operator's ctrl_c or a `systemctl stop` would).
+fn send_signal(pid: u32, signal: &str) {
     let status = Command::new("kill")
-        .args(["-INT", &pid.to_string()])
+        .args([signal, &pid.to_string()])
         .status()
         .expect("spawn kill");
-    assert!(status.success(), "kill -INT failed");
+    assert!(status.success(), "kill {signal} failed");
 }
+
+/// A boot config of `n` independent `/server` mutations, written under a unique temp path.
+///
+/// Scenario 10 needs a boot that is unambiguously still running when the signal lands, and the
+/// honest way to get one is a bigger config rather than a hook in the product: every statement
+/// is a real `CREATE POLICY` replayed through the same COMMIT path as any other boot, so the
+/// drained ledger must carry exactly `n` entries. `n = 200` gives ~100 ms of replay against the
+/// ~5 ms a `kill` spawn costs — a margin that survives a loaded runner.
+fn write_wide_fixture(tag: &str, n: usize) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("qfs-midboot-{}-{tag}.qfs", std::process::id()));
+    let body: String = (0..n)
+        .map(|i| format!("CREATE POLICY p{i} ALLOW SELECT;\n"))
+        .collect();
+    std::fs::write(&path, body).expect("write the wide boot fixture");
+    path
+}
+
+/// The number of `/server` mutations [`write_wide_fixture`] emits.
+const WIDE_FIXTURE_STATEMENTS: usize = 200;
+
+/// Wait for the child to exit, returning its status (a bounded poll, never an unbounded wait).
+fn wait_for_exit(child: &mut std::process::Child, what: &str) -> std::process::ExitStatus {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "server did not exit after {what}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Scenario 10's body: boot a wide fixture, signal the daemon the instant its shutdown listener
+/// reports itself armed — which is BEFORE the config replay finishes — and return the full log
+/// plus the exit status.
+fn signal_during_boot(signal: &str, tag: &str) -> (std::process::ExitStatus, String) {
+    let fixture = write_wide_fixture(tag, WIDE_FIXTURE_STATEMENTS);
+    let state_dir = std::env::temp_dir().join(format!("qfs-midboot-{}-{tag}", std::process::id()));
+    let mut child = Command::new(qfs_bin())
+        .args(["serve", fixture.to_str().unwrap()])
+        .env("RUST_LOG", "qfs::server=info,qfs::server::audit=info")
+        .env("NO_COLOR", "1")
+        .env("QFS_STATE_DIR", &state_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn qfs serve");
+    let log = serve_e2e::ServeLog::pump(child.stderr.take().expect("child stderr"));
+
+    // The observable readiness this test keys on is NOT "the run loop was reached" — the whole
+    // point is to signal before that. It is "the handlers are installed", the first thing the
+    // serve composition root does, so from here the process is inside boot with the graceful
+    // path already live.
+    log.wait_for("shutdown signal armed", READINESS_TIMEOUT);
+    send_signal(child.id(), signal);
+
+    let status = wait_for_exit(&mut child, signal);
+    let text = log.finish();
+    let _ = std::fs::remove_file(&fixture);
+    let _ = std::fs::remove_dir_all(&state_dir);
+    (status, text)
+}
+
+/// The readiness-wait budget. Generous by design: the timeout exists to turn a child that never
+/// reaches the awaited line into a loud failure, not to police how fast a runner is.
+const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // Scenario 1 — all five frozen forms desugar to exactly one /server INSERT
@@ -710,6 +791,67 @@ fn serve_boots_mixed_fixture_and_drains_audit_on_sigint() {
         // reads became policy-gated: the boot endpoint attaches a SELECT grant or it serves nothing.
         log.contains("audit ledger drained") && log.contains("entries=9"),
         "shutdown must drain exactly 9 audit entries (one per /server mutation):\n{log}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 10 — a shutdown signal is graceful from the first instant of boot
+//
+// The `t36` contract ("a `systemctl stop` is a clean drain, not an uncaught SIGTERM") used to
+// hold only once `Runtime::run` started waiting, because that is where the listener was
+// installed. Measured on 2026-08-18: a signal delivered before then died with raw wait status
+// 2 / 15 and an EMPTY ledger — the flake that reddened `main` on PR #74's merge commit, and the
+// same gap a production `systemctl stop` racing a slow boot falls into.
+//
+// These two drive the real binary through that window deliberately: they wait for the daemon to
+// report its handlers ARMED (the composition root's first act, well before the run loop) and
+// signal it there. `shutdown signal arrived during boot` is the process's own statement that the
+// signal was latched mid-boot rather than met at the run loop, and `entries=N` proves the
+// deferred exit drained the WHOLE ledger — a partial drain would be the half-built-runtime
+// answer this deliberately does not take.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn serve_signalled_during_boot_drains_cleanly_on_sigint() {
+    let (status, log) = signal_during_boot("-INT", "int");
+    assert!(
+        status.success(),
+        "a SIGINT delivered DURING boot must take the graceful path (exit 0), got {status:?}:\n{log}"
+    );
+    assert!(
+        log.contains("shutdown signal arrived during boot"),
+        "the signal must land inside boot for this scenario to mean anything:\n{log}"
+    );
+    assert!(
+        log.contains("boot complete"),
+        "the graceful path defers the exit until the runtime is whole, so boot still completes:\n{log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "audit ledger drained entries={WIDE_FIXTURE_STATEMENTS}"
+        )),
+        "a mid-boot shutdown drains the WHOLE ledger ({WIDE_FIXTURE_STATEMENTS} entries), not a partial one:\n{log}"
+    );
+}
+
+#[test]
+fn serve_signalled_during_boot_drains_cleanly_on_sigterm() {
+    // The production claim rides on SIGTERM (`deploy/qfs.service`, `KillSignal=SIGTERM`); only
+    // SIGINT was ever observed failing in CI, so the twin is what pins `systemctl stop`.
+    let (status, log) = signal_during_boot("-TERM", "term");
+    assert!(
+        status.success(),
+        "a SIGTERM delivered DURING boot must take the graceful path (exit 0, not 143), got {status:?}:\n{log}"
+    );
+    assert!(
+        log.contains("shutdown signal arrived during boot"),
+        "the signal must land inside boot for this scenario to mean anything:\n{log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "audit ledger drained entries={WIDE_FIXTURE_STATEMENTS}"
+        )),
+        "a mid-boot SIGTERM drains the WHOLE ledger, exactly as SIGINT does:\n{log}"
     );
 }
 
