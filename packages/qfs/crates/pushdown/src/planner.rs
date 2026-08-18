@@ -272,7 +272,14 @@ fn walk_chain(plan: &LogicalPlan, acc: &mut Acc) -> Result<Schema, PlanError> {
             out
         }
         LogicalPlan::ProjectExpr { input, projections } => {
-            walk_chain(input, acc)?;
+            let schema = walk_chain(input, acc)?;
+            // Ticket 20260816191500: the renaming/computed sibling of the name-only refusal above.
+            // `eval_value` resolves a `ScalarExpr::Col` totally (`unwrap_or(Value::Null)`), which is
+            // right for `EXTEND`/`SET` over a late-bound row and wrong for a caller-written
+            // `SELECT`: `select nosuch as x` answered one null per row at exit 0 while
+            // `select nosuch` refused. Checked at the projection site, not inside `eval_value`,
+            // precisely so `EXTEND`/`SET` keep the total form.
+            check_project_expr_columns(&schema, projections)?;
             // A computed projection is never pushed (a driver cannot build a struct); always
             // a local residual over the scan's rows.
             acc.force_local(CombineOp::ProjectExpr(projections.clone()));
@@ -498,6 +505,40 @@ fn check_project_columns(input: &Schema, columns: &[Name]) -> Result<(), PlanErr
             return Err(PlanError::unknown_column(
                 "select",
                 name.as_str(),
+                input.column_names(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The [`check_project_columns`] twin for a **renaming or computed** `SELECT`: refuse a
+/// `ScalarExpr::Col` naming a column the described relation does not carry (ticket 20260816191500,
+/// extending the developer's 2026-07-26 ruling to the projection's other road).
+///
+/// It keeps the same leniencies, for the same reasons: an **empty** schema is late-bound or
+/// undescribable and is never refused here (the engine's runtime twin refuses over the batch the
+/// driver actually delivered), and only the **head** segment of a dotted path is checked — a
+/// `.`-navigation into a `Struct` resolves per row, exactly as `where` treats one.
+fn check_project_expr_columns(
+    input: &Schema,
+    projections: &[(Name, ScalarExpr)],
+) -> Result<(), PlanError> {
+    if input.columns.is_empty() {
+        return Ok(());
+    }
+    let mut refs: Vec<&qfs_types::ColRef> = Vec::new();
+    for (_, expr) in projections {
+        expr.col_refs(&mut refs);
+    }
+    for col in refs {
+        let Some(head) = col.path.first() else {
+            continue;
+        };
+        if input.column(head).is_none() {
+            return Err(PlanError::unknown_column(
+                "select",
+                head.as_str(),
                 input.column_names(),
             ));
         }

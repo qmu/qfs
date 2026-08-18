@@ -5810,9 +5810,16 @@ mod tests {
 
         let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
         for _ in 0..2 {
+            // Every field the SHIPPED view selects, including the nested `account` object — the
+            // response Chatwork's message endpoint actually returns. The fixture used to carry
+            // three of the six, which only read because a renaming projection resolved the absent
+            // ones to null; since ticket 20260816191500 it refuses like the name-only spelling, so
+            // an impoverished fixture would pin the wire URL through a read that cannot happen.
             mock.push_response(qfs_driver_http::HttpResponse::new(
                 200,
-                br#"[{"message_id":"7","body":"hi","send_time":1}]"#.to_vec(),
+                br#"[{"message_id":"7","body":"hi","send_time":1,"update_time":0,
+                      "account":{"account_id":42,"name":"ann"}}]"#
+                    .to_vec(),
             ));
         }
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
