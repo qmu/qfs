@@ -184,7 +184,7 @@ Read from the source and the binary at `52b0410`, not from any page above.
 | Codecs | `csv` `json` `jsonl` `md` `toml` `yaml` |
 | Faces | the CLI, the interactive shell, the HTTP listener (`qfs serve`), the MCP endpoint composed into it, the embedded SPA dashboard, and the loaded-not-embedded console |
 | State | two SQLite stores at `$XDG_CONFIG_HOME/qfs/` (else `~/.config/qfs/`) — `system.db` and `project.db` — with 32 embedded migration bodies, plus the encrypted credential file `credentials` beside them |
-| Gates | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` (plus the two mutually-exclusive `qfs-host` feature builds), `cargo build --workspace`, `cargo test --workspace`, two cross-compiles, a wasm32 host-core build, and `packages/qfs-viewer/scripts/check-all.sh` |
+| Gates | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` (plus the two mutually-exclusive `qfs-host` feature builds), `cargo build --workspace`, `cargo test --workspace` plus that suite's `qfs` lib half re-run serialised with `XDG_CONFIG_HOME` unset (the config-home isolation detector), two cross-compiles, a wasm32 host-core build, and `packages/qfs-viewer/scripts/check-all.sh` |
 | Release | tag `v*` → `.github/workflows/release.yml` builds four native tarballs (`x86_64`/`aarch64` musl and Darwin) via `xtask dist`, each with a `.sha256`, and publishes a GitHub Release that `install.sh` consumes. The Workers wasm artifact is parked |
 | qfs-viewer | one publishable package (`bin/qfs-viewer.mjs`, `qfs-viewer serve`) plus `plggmatic` as a sibling; entry points `cli` `serve` `api` `root` `document` `columns` `edit` `mcp`; it locates a `qfs` binary rather than bundling one |
 

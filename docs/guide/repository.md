@@ -136,6 +136,7 @@ Two gate families, one per project, each run from its own directory. Nothing run
 cd packages/qfs
 cargo build --workspace
 cargo test --workspace
+env -u XDG_CONFIG_HOME cargo test -p qfs --lib -- --test-threads=1
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 cargo run -p xtask -- gen-docs --check
@@ -146,12 +147,14 @@ cargo run -p xtask -- check-migrations
 | Command | What it proves | What it alone catches |
 | --- | --- | --- |
 | `cargo test --workspace` | The suite, all of it hermetic — no network, no credentials, no sockets (the `qfs-test` harness institutionalizes that) | Two guards live only here: `crates/cmd/tests/dep_direction.rs` (no cycles, no back-edges, tokio confined to `qfs-runtime` and its leaves) and the docs-drift golden inside `qfs::docs`. Also `crates/cmd/tests/faq_cli_surface.rs`, which walks the real clap tree so a renamed flag the FAQ cites fails CI, and `crates/test/tests/roadmap_cookbook.rs`, which ratchets how much of the query cookbook parses today |
+| `env -u XDG_CONFIG_HOME cargo test -p qfs --lib -- --test-threads=1` | That no `qfs` unit test resolves its config home from the ambient environment — every one of them opens an isolated `testenv::HomeGuard` home rather than the shared `$HOME/.config/qfs` | The `store.rs` `cfg(test)` guard that refuses the shared-home fallback, which the line above **cannot** fire reliably: `HomeGuard` sets `XDG_CONFIG_HOME` process-wide, so a test that forgot its guard passes whenever a guarded sibling is running concurrently, and an ambient `XDG_CONFIG_HOME` suppresses the guard independently. Serialised and with the variable unset, a missing guard fails every run instead of some runs (measured 2026-08-18: parallel green 3/3 with a guard deliberately removed, serialised red every time) |
 | `cargo clippy --workspace --all-targets -- -D warnings` | The lint floor: `unsafe_code = forbid` workspace-wide, and `unwrap_used` / `expect_used` / `panic` denied in non-test library code | A panic path introduced into a library. **Never `--all-features`**: `qfs-host`'s `host-daemon` and `host-workers` features are mutually exclusive, so CI lints the two separately with `-p qfs-host --features <one>` |
 | `cargo fmt --all --check` | Formatting, against the committed `rustfmt.toml` | — |
 | `cargo build --workspace` | It compiles for the host | The cross-compile legs (CI adds two targets and a wasm32 build of the `qfs-host` core) catch what a host build cannot |
 | the three `xtask` checks | Anti-drift; see below | — |
 
-CI (`.github/workflows/ci.yml`) runs `fmt`, `clippy` (three invocations), `build + test`, two
+CI (`.github/workflows/ci.yml`) runs `fmt`, `clippy` (three invocations), `build + test` — whose
+job also carries the serialised, `XDG`-unset re-run of the `qfs` lib suite as a second step — two
 cross-compiles, a wasm32 host-core build, the docs site production build, and the viewer gate. It
 does **not** invoke `xtask` at all, so of the three anti-drift checks only `gen-docs` is defended
 automatically — by that docs-drift unit test, not by the command.

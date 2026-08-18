@@ -65,6 +65,16 @@ jobs:
         run: rustup show
       - run: cargo build --workspace
       - run: cargo test --workspace
+      # The config-home isolation detector (ticket 20260818060942). `store.rs`'s cfg(test) panic
+      # already refuses the shared `$HOME/.config/qfs` fallback, but the step above can never fire
+      # it: `HomeGuard` sets `XDG_CONFIG_HOME` process-wide, so under the parallel harness a test
+      # that forgot its guard passes whenever a guarded sibling's guard happens to be alive — and
+      # an ambient `XDG_CONFIG_HOME` on the runner suppresses it independently. Measured on
+      # 2026-08-18 with one guard deliberately removed: the parallel run was green three times out
+      # of three, this serialised one red every time. So this is the run in which a missing guard
+      # fails deterministically; it costs ~70s and needs no rebuild after the step above.
+      - name: qfs lib suite, serialised with no ambient config home
+        run: env -u XDG_CONFIG_HOME cargo test -p qfs --lib -- --test-threads=1
 
   cross:
     name: cross-compile (${{ matrix.target }})
