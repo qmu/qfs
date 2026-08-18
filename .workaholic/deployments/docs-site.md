@@ -105,6 +105,18 @@ there are only the names:
 Both are set on the deploying **job** rather than the workflow, so the Rust build jobs and the
 release job keep seeing only the auto-provided `GITHUB_TOKEN`.
 
+**Outstanding as of 2026-08-18 — the live secret is still the wide token.** The scope in the
+table is what a deploy *needs* now that `docs/wrangler.toml` declares no routes; it is not yet
+what `CLOUDFLARE_API_TOKEN` *holds*. The stored value is the original token, minted with
+`Zone → Workers Routes → Edit` on `qmu.co.jp` back when the config declared the two custom
+domains, and it still carries that scope. Narrowing it is three acts in the Cloudflare and GitHub
+consoles that no change in this repository can perform: mint a replacement holding only the two
+account permissions above, replace the `CLOUDFLARE_API_TOKEN` repository secret with it, and
+revoke the wide one. Until then a leaked secret can still attach a Worker to any hostname in the
+zone, the apex included — the exposure removing the routes was meant to end. The removal is what
+made the narrowing safe to do, not the narrowing itself; tracked in
+`.workaholic/tickets/todo/20260818124500-the-docs-deploy-token-cannot-be-narrowed-while-routes-are-declared.md`.
+
 Attaching or re-attaching a custom domain is the one operation that still needs
 `Zone → Workers Routes → Edit`. Do it from the dashboard (above) rather than widening the CI
 secret; a token that can bind a Worker to a hostname can bind it to any hostname in the zone.
