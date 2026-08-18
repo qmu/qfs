@@ -2,7 +2,10 @@
 
 ## active
 
+* [a-shutdown-signal-is-graceful-from-the-first-instant-of-boot](active/a-shutdown-signal-is-graceful-from-the-first-instant-of-boot/mission.md) - A shutdown signal is graceful from the first instant of boot
 * [claude-code-sessions-are-queryable-and-steerable-as-qfs-paths](active/claude-code-sessions-are-queryable-and-steerable-as-qfs-paths/mission.md) - Claude Code sessions are queryable and steerable as qfs paths
+* [the-current-situation-of-qfs-is-documented-as-it-actually-stands](active/the-current-situation-of-qfs-is-documented-as-it-actually-stands/mission.md) - The current situation of qfs is documented as it actually stands
+* [the-documentation-site-publishes-itself-staging-on-merge-production-on-release](active/the-documentation-site-publishes-itself-staging-on-merge-production-on-release/mission.md) - The documentation site publishes itself: staging on merge, production on release
 
 ## archive
 

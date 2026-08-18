@@ -32,6 +32,11 @@ ExecStart=/usr/local/bin/qfs serve /etc/qfs/config.qfs
 
 # Graceful shutdown: SIGTERM drains in-flight plans (the serve loop's supervised wait + audit
 # drain), giving the on-disk ledger time to flush before exit.
+#
+# This holds from the first instant of the process, boot included: `qfs serve` installs its
+# SIGINT/SIGTERM handlers as its FIRST act, so a `systemctl stop` racing a slow boot is latched
+# and acted on as soon as the runtime is whole, rather than killing the daemon un-drained. A stop
+# issued during boot therefore waits out the remaining boot — TimeoutStopSec below is the bound.
 KillSignal=SIGTERM
 TimeoutStopSec=30
 Restart=on-failure

@@ -244,4 +244,5 @@ ticket blocked.
 - 2026-08-04 — concern deferred (stuck) — 20260804212551-two-tests-used-slack-as-an.md
 - 2026-08-04 — concern deferred (stuck) — 20260804212551-two-commits-exceed-the-branch-safety.md
 - 2026-08-05 — mission achieved — mission.md
+- 2026-08-15 — concern resolved (unstuck) — 20260804212551-c-d90ea764.md
 - 2026-08-16 — concern resolved (unstuck) — 20260804212551-the-preview-time-malformed-reference-refusal.md
