@@ -63,6 +63,14 @@ pub use qfs_parser::Expr;
 // off-the-lower-spine posture as `parse`/`Expr`. The binary never inspects it; it round-trips the
 // body back to `read_registered_collection` / `collection_relation` / `collection_source_path`.
 pub use qfs_parser::Statement;
+// The two AST types the binary needs to read a DESUGARED declaration row back out of a parsed
+// statement (blueprint §13 / ticket 20260812141223): the shipped `.qfs` declaration programs are
+// compared against the operator's installed `/sys/drivers` rows, and the shipped side is obtained
+// by parsing the embedded asset through THIS grammar rather than by a second reader of the same
+// bytes. They ride through here for the same reason `Expr` and `Statement` do — the terminal
+// binary stays off the lower spine and takes no direct `qfs-parser` edge. This is the one place
+// the binary looks INSIDE a statement, and it looks only at the effect's declared VALUES.
+pub use qfs_parser::{EffectBody, Literal};
 // Re-export the transform-execution seam (blueprint §15) so `qfs-cmd` and the binary composition
 // can supply the injected executor without a direct qfs-engine dep.
 pub use qfs_engine::{TransformCall, TransformExecutor};

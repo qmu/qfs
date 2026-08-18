@@ -119,7 +119,11 @@ pub fn claude_node_schema(node: ClaudeNode) -> Schema {
             col("id", ColumnType::Text, false),
             col("cwd", ColumnType::Text, true),
             col("name", ColumnType::Text, true),
-            col("status", ColumnType::Text, false),
+            // NULLABLE: the store writes `status` for background sessions only, so a
+            // non-nullable column could only be filled with a sentinel (ticket
+            // `20260816161145`). Null means "this store recorded no state for this
+            // session", which is a different fact from any status string.
+            col("status", ColumnType::Text, true),
             col("last_message", ColumnType::Text, true),
         ]),
         // The per-session instructions append-log: a steering message + when it was appended.

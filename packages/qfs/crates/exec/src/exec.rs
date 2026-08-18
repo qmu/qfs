@@ -389,13 +389,11 @@ fn map_eval_error(err: qfs_core::EvalError) -> ExecError {
         }
         _ => ErrorKind::Internal,
     };
-    // EvalError has no Display; its owned, secret-free Debug is the machine-facing message. The
-    // host-realm arm's inner error DOES Display — render it so the canonical pointer reads clean.
-    let message = match &err {
-        EvalError::HostScope(h) => h.to_string(),
-        other => format!("{other:?}"),
-    };
-    ExecError::new(kind, err.code(), message)
+    // Every EvalError arm Displays as a sentence (ticket 20260816183441), so the message is the
+    // rendering and there is no `{:?}` fallback left for a future arm to regress into. The Debug
+    // form the seam used to send is still what a report or a panic prints; what an operator reads
+    // is prose, like every other error type in the workspace.
+    ExecError::new(kind, err.code(), err.to_string())
 }
 
 /// Re-map a [`CfsError`] through [`ExecError::from_qfs`] (re-exported for the CLI).

@@ -140,6 +140,75 @@ fn unconfigured_resource_rejects_every_verb_at_parse_time() {
     assert!(check_capability(&d, &unknown, Verb::Select).is_err());
 }
 
+#[test]
+fn a_node_template_addresses_its_own_path_only() {
+    // The declared match: segment count equal, literals equal, `{param}` binds any one segment.
+    let node = NodeMap::new("{ws}/files/{file}", vec![RestVerb::Remove]);
+    assert!(node.matches("W1/files/F1"));
+    assert!(
+        node.matches("/W1/files/F1"),
+        "a leading slash is immaterial"
+    );
+    assert!(
+        !node.matches("W1/users"),
+        "a shorter path is a different node"
+    );
+    assert!(
+        !node.matches("W1/files/F1/meta"),
+        "a longer path is a different node"
+    );
+    assert!(
+        !node.matches("W1/uploads/F1"),
+        "a literal segment must match literally"
+    );
+}
+
+#[test]
+fn a_declared_mount_gates_per_node_not_per_leading_segment() {
+    // Blueprint §13 (ticket 20260817001110): a declaration whose nodes share a `{tenant}` leading
+    // segment gets ONE `ResourceMap`, so the segment answer is the union of every verb the driver
+    // declares anywhere. The node table is what the gate reads instead.
+    let config = RestApiConfig::new(
+        "https://api.example.com",
+        vec![ResourceMap::new(
+            "{ws}",
+            vec![RestVerb::Select, RestVerb::Remove],
+        )],
+    )
+    .with_nodes(vec![
+        NodeMap::new("{ws}/users", vec![RestVerb::Select]),
+        NodeMap::new("{ws}/files/{file}", vec![RestVerb::Remove])
+            .with_irreversible_verbs(vec![RestVerb::Remove]),
+    ]);
+    let d = driver_with(config, MockHttpClient::new(), empty_secrets());
+
+    let users = Path::new("/rest/example/W1/users");
+    assert!(check_capability(&d, &users, Verb::Select).is_ok());
+    let err = check_capability(&d, &users, Verb::Remove).unwrap_err();
+    assert_eq!(err.code(), "unsupported_verb");
+    match err {
+        qfs_driver::CfsError::UnsupportedVerb { supported, .. } => {
+            assert_eq!(
+                supported,
+                vec!["SELECT"],
+                "the refusal names the node's own verbs, not the segment's union"
+            );
+        }
+        other => panic!("expected UnsupportedVerb, got {other:?}"),
+    }
+
+    let file = Path::new("/rest/example/W1/files/F1");
+    assert!(check_capability(&d, &file, Verb::Remove).is_ok());
+    assert!(check_capability(&d, &file, Verb::Select).is_err());
+    // `write_irreversible` reads the same table, so the gate travels with the node.
+    assert!(d.write_irreversible(&file, Verb::Remove));
+    assert!(!d.write_irreversible(&users, Verb::Remove));
+
+    // A path no declared node addresses answers nothing — the segment wildcard does not stand in.
+    let ghost = Path::new("/rest/example/W1/ghost");
+    assert!(check_capability(&d, &ghost, Verb::Select).is_err());
+}
+
 // ---------------------------------------------------------------------------
 // Verb → method mapping + request shape (plan assertions, no live creds)
 // ---------------------------------------------------------------------------

@@ -20,6 +20,31 @@ const SERVE_MAX_ROWS: usize = 10_000;
 /// (`0` clean shutdown, `1` on a boot / bind / runtime error). Never panics.
 #[must_use]
 pub fn run_serve(config: &Path) -> i32 {
+    // ---- Arm the graceful-shutdown listener FIRST, before any boot work ----------------------
+    // The serve composition is async (listener + supervised wait), so the tokio runtime is built
+    // at this leaf boundary — and it is built HERE, at the top, only because installing the
+    // signal handlers needs a runtime context. Everything below this point (engine + driver
+    // registration, the System-DB session store, the daemon host, the OAuth AS, the config
+    // replay) is boot; a SIGINT/SIGTERM landing anywhere in it used to meet the DEFAULT
+    // disposition and kill the process un-drained, because `Runtime::run` installed the handlers
+    // only when it started waiting. Arming them here latches such a signal, and `Runtime::run`
+    // consumes the latch the instant the runtime is whole (see `ShutdownSignal`). A boot that
+    // FAILS still returns 1 below — the latch is only ever consumed by a runtime that booted.
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("qfs serve: cannot start runtime: {e}");
+            return 1;
+        }
+    };
+    let shutdown = {
+        let _guard = rt.enter();
+        qfs_http::ShutdownSignal::install()
+    };
+
     // The serve-side engine: codecs registered (json/csv response encoding) + an empty mount
     // registry the real driver crates register into (E4/E7 wiring). At t32 the read drivers a
     // boot config references are registered by the deployment; an unregistered source surfaces
@@ -152,19 +177,6 @@ pub fn run_serve(config: &Path) -> i32 {
                 None
             }
         };
-
-    // The serve composition is async (listener + supervised ctrl_c wait). Build the runtime at
-    // this leaf boundary so tokio dead-ends in the binary.
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("qfs serve: cannot start runtime: {e}");
-            return 1;
-        }
-    };
 
     // t65 REVERSED (2026-07-11, ticket 20260711121535): the daemon owns the "when" again. The
     // cron sweeper (crate::sweeper) is spawned below beside the watchtower dispatch loop: a
@@ -330,7 +342,11 @@ pub fn run_serve(config: &Path) -> i32 {
             bindings,
             Some(combined_fallback),
             principal_resolver,
-            qfs_http::Runtime::with_shared(Arc::clone(&server_state), reconf_rx),
+            // The listener armed before boot rides in here: `Runtime::run` OWNS the drain, so it
+            // is also the one place a latched mid-boot signal may be consumed (one shutdown
+            // owner, never two racing — crates/http/src/serve.rs).
+            qfs_http::Runtime::with_shared(Arc::clone(&server_state), reconf_rx)
+                .with_shutdown(shutdown),
         )
         .await;
         dispatch.abort();

@@ -10,11 +10,13 @@
 //! and asserts each subcommand path and long flag is real, by walking the clap `Command` tree
 //! `qfs_cmd::clap_command()` exposes. A renamed or removed flag the FAQ cites turns this red.
 //!
-//! Home: this lives in `crates/cmd/tests/` (not beside `cookbook_skills.rs` in `crates/test/`) on
-//! purpose — `qfs-test` is a PURE, wasm-clean, never-linked-into-the-binary harness (proved by its
-//! `dev_only_dep_graph.rs`), so it must not gain a `qfs-cmd`/clap dependency. The CLI surface is
-//! owned by `qfs-cmd`, so the check that reflects over it belongs here; it still runs under the
-//! same `cargo test --workspace` a developer and CI both use.
+//! Home: this lives in `crates/cmd/tests/` on purpose — `qfs-test` is a PURE, wasm-clean,
+//! never-linked-into-the-binary harness (proved by its `dev_only_dep_graph.rs`), so it must not gain
+//! a `qfs-cmd`/clap dependency. The CLI surface is owned by `qfs-cmd`, so the check that reflects
+//! over it belongs here; it still runs under the same `cargo test --workspace` a developer and CI
+//! both use. (`cookbook_skills.rs` is not a neighbour either way: it moved from `crates/test/tests/`
+//! to `xtask/tests/` on 2026-08-16 when its column ratchet started needing the compiled describe
+//! registry.)
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::BTreeSet;
