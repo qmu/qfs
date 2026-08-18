@@ -69,7 +69,7 @@ pub use serve::{
 pub use qfs_server::{
     agent_runs_path_agent, job_runs_path_job, lower_statement, reconfigure_channel, Binding,
     EndpointDef, PolicyDef, ReconfigureHandle, ReconfigureRx, Runtime, ServerConfigApplier,
-    ServerDriver, ServerState, StatementSource,
+    ServerDriver, ServerState, ShutdownSignal, StatementSource,
 };
 
 use std::collections::BTreeMap;
