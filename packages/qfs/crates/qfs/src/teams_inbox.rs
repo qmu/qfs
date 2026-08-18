@@ -12,17 +12,26 @@
 //! The session-id → inbox mapping is `member.agentId = <name>@session-<id>`, so a sessions-relation
 //! `id` resolves to the `session-<id>` half and thence to the member's `inboxes/<member>.json`.
 //!
-//! ## What is proven here, and what stays fail-closed
-//! This module is the **medium mechanic**: append one message object to a per-recipient inbox JSON
-//! array, read it back, and fail closed on an unknown recipient (a standalone / non-team session has
-//! no inbox — never a silent create). It is deliberately **schema-agnostic**: the message element is
-//! an opaque [`serde_json::Value`] the caller supplies, because the exact element field names
-//! (`from`/`to`/`text`/`id`/`ts` or similar) are the ONE remaining unknown — every observed inbox was
-//! `[]`, so the shape must be captured from one real in-flight message (the container live-round,
-//! ticket 20260719231005). Until that capture, `ClaudeStoreSource::append_instruction` stays
-//! **fail-closed** and does not call this primitive with a guessed schema: an honest refusal beats an
-//! append a real session would misparse. The mechanic below is exercised hermetically over a *fake*
-//! inbox dir so it is ready to wire the instant the schema is captured.
+//! ## SUPERSEDED — this medium is NOT the steering path, and must not be wired (2026-08-16)
+//! The spike ticket 20260805113000 put the assumption above to a live session (Claude Code 2.1.233,
+//! design brief `design-brief-steering-transport.md`) and it did not hold:
+//!
+//! - A session that never formed a team has **no `teams/` directory at all**, so there is no inbox
+//!   to append to — the common case for every session qfs would steer.
+//! - An inbox file planted for such a session is **never drained**: ten candidate team/member
+//!   spellings, each carrying a message valid against Claude Code's own mailbox schema, sat
+//!   untouched for 75 s while the session stayed live and provably steerable by other means.
+//!
+//! So the missing piece was never the message schema (it is recorded in the brief); it was that
+//! nothing reads this file for a solo session. `ClaudeStoreSource::append_instruction` therefore
+//! steers over the session's own **peer-messaging socket** instead, and this module is wired by
+//! nothing. It is kept as the recorded mechanic behind a disproven assumption — **do not wire it**;
+//! whether to delete it outright is the developer's call.
+//!
+//! What it still is: the **medium mechanic** — append one message object to a per-recipient inbox
+//! JSON array, read it back, and fail closed on an unknown recipient (never a silent create),
+//! schema-agnostic over an opaque [`serde_json::Value`], exercised hermetically over a fake inbox
+//! dir.
 
 use std::path::{Path, PathBuf};
 

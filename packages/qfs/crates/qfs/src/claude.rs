@@ -31,7 +31,10 @@
 //! machine (pointing it at a real host yielded zero rows). Claude Code actually writes:
 //!
 //! - `<home>/sessions/<pid>.json` — one JSON record per session process: `pid`, `sessionId`,
-//!   `cwd`, `name`, `status` (`busy`/…), `kind`, timestamps. This is the store's own liveness
+//!   `cwd`, `name`, `kind`, timestamps, and — for BACKGROUND sessions only — `status` (`idle`/
+//!   `busy`/…). Claude Code 2.1.233 writes no `status` key for an interactive session (both record
+//!   shapes observed side by side, 2026-08-16), which is why the column is nullable: absent means
+//!   the store recorded no state, not that the state is unknown. This is the store's own liveness
 //!   registry; a record whose process is gone is a leftover, not a session.
 //! - `<home>/projects/<slugified-cwd>/<sessionId>.jsonl` — the transcript: one JSON entry per
 //!   line; `user`/`assistant` entries carry `message.content` (a string, or an array of typed
@@ -41,11 +44,29 @@
 //! as-is, array content as its `text` blocks (tool_use/tool_result traffic never surfaces),
 //! bounded to a fixed length. Only the schema's five metadata columns ever leave this module.
 //!
-//! ## Steering is NOT wired yet (fail-closed, rewire ticket 20260717010500)
+//! ## Steering rides the session's own peer-messaging socket (ticket 20260805113100)
 //! The retired layout's `instructions` append-log was written by qfs and read by **nothing** — an
-//! append that steered no session. Until the rewire ticket lands a medium a live session actually
-//! reads, [`SessionSource::append_instruction`] here fails closed with a structured error and the
-//! instructions log reads back empty. Honest refusal over a write-only no-op.
+//! append that steered no session — so this seam failed closed for a year. The medium a live
+//! session actually reads was captured by the spike ticket 20260805113000 (design brief
+//! `design-brief-steering-transport.md`) against a real Claude Code 2.1.233 session:
+//!
+//! - The **teams inbox is not it.** A session that never formed a team has no
+//!   `<home>/teams/<team>/inboxes/` at all, and an inbox file planted for one is never drained
+//!   (measured: ten candidate spellings, 75 s, zero reads). So this module never creates one.
+//! - The medium is the session's **peer-messaging Unix domain socket**, whose path the session
+//!   publishes in the very liveness record [`scan_sessions`](ClaudeStoreSource::scan_sessions)
+//!   already reads — `sessions/<pid>.json` → `messagingSocketPath` — authenticated by the
+//!   `peerToken` in the sibling `sessions/<pid>.<hash>.key`. Two newline-delimited JSON lines
+//!   (`{"type":"auth",…}` then `{"type":"user",…}`) hand a running session a user message it acts
+//!   on. Both inputs live in the directory this reader already scans: no new store, no new config.
+//!
+//! [`SessionSource::append_instruction`] writes exactly that, and **fails closed with a named
+//! reason** for every way the target can be unreachable (unknown session, dead process, a record
+//! with no socket path, no readable peer token, a refused connection). It invents no path and
+//! creates no directory — refusing beats writing where nothing reads.
+//!
+//! The instructions log still **reads back empty**: the socket is a transport with no queryable
+//! backlog, and an honest empty read beats replaying a file nothing consumed.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -69,13 +90,27 @@ const CLAUDE_ENV: &str = "QFS_CLAUDE_SESSIONS";
 /// `name` are data, passed as discrete arguments (never a shell line).
 const CLAUDE_BINARY_ENV: &str = "QFS_CLAUDE_BINARY";
 
-/// How many bytes of a transcript tail are scanned for the last visible message. Transcripts grow
-/// to many megabytes; the last visible text virtually always lives in the final few entries.
-const TRANSCRIPT_TAIL_BYTES: u64 = 256 * 1024;
+/// The transcript tail windows scanned for the last visible message, widening in order until one
+/// yields visible text. Transcripts grow to many megabytes and an agentic session is almost all
+/// tool traffic, which deliberately never surfaces — so a single fixed window reports "no visible
+/// message" for a session that has plenty, it just stopped looking (measured 2026-08-16, ticket
+/// `20260816161144`: a 1.6 MB transcript had 109 entries in its 256 KiB tail, **0** of them
+/// visible, and 4 visible in the whole file).
+///
+/// Widening in steps rather than reading one large window keeps the common case at one small read:
+/// a session whose last message is recent is answered by the first window and the rest never run.
+/// The last element is the **ceiling**, and it is a stated property, not an oversight — see
+/// [`last_visible_message`].
+const TRANSCRIPT_SCAN_WINDOWS: [u64; 3] = [256 * 1024, 1024 * 1024, 4 * 1024 * 1024];
 
 /// The bound on a surfaced `last_message` (characters). A relation cell is a summary surface, not
 /// a transcript dump; the full transcript never leaves this module.
 const LAST_MESSAGE_MAX_CHARS: usize = 2000;
+
+/// How long a steering write may spend connected to a session's peer socket. A session that is
+/// busy still accepts the two lines immediately (the socket is a queue, not a request/response),
+/// so this bounds a pathological peer rather than ordinary latency.
+const STEER_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The on-disk [`SessionSource`] over Claude Code's REAL store: the `sessions/<pid>.json`
 /// liveness registry joined with the `projects/<slug>/<id>.jsonl` transcripts. Owns only the
@@ -111,6 +146,179 @@ impl ClaudeStoreSource {
             .join(slugify_cwd(cwd))
             .join(format!("{id}.jsonl"))
     }
+
+    /// Resolve a session id to the peer endpoint that steers it, or say precisely why it cannot be
+    /// steered. Reads only the liveness registry this module already scans — the record names its
+    /// own socket, and the sibling key file carries the token that socket demands.
+    ///
+    /// Every failure is a **named, secret-free** refusal (the honest-surfaces floor): a caller that
+    /// gets `Ok` back has a socket that accepted the message, and one that gets an error is told
+    /// which of the five ways the target was unreachable, never a silent success.
+    fn resolve_peer(&self, session: &str) -> Result<SessionPeer, ClaudeError> {
+        let dir = self.home.join("sessions");
+        let entries = std::fs::read_dir(&dir).map_err(|e| {
+            ClaudeError::Source(format!(
+                "the session registry could not be read ({})",
+                e.kind()
+            ))
+        })?;
+        let mut record = None;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            match read_session_record(&path) {
+                Some(r) if r.id == session => {
+                    record = Some(r);
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        let record = record.ok_or_else(|| ClaudeError::UnknownSession {
+            session: session.to_string(),
+        })?;
+        // A record outlives its process; steering a leftover would report success and reach nobody.
+        if !pid_is_live(record.pid) {
+            return Err(ClaudeError::Source(format!(
+                "claude session `{session}` is a leftover record: its process is no longer running, \
+                 so there is nothing to steer"
+            )));
+        }
+        let socket = record.messaging_socket.ok_or_else(|| {
+            ClaudeError::Source(format!(
+                "claude session `{session}` publishes no messaging socket \
+                 (its record carries no `messagingSocketPath`), so it cannot be steered"
+            ))
+        })?;
+        let token = read_peer_token(&dir, record.pid).ok_or_else(|| {
+            ClaudeError::Source(format!(
+                "no readable peer token for claude session `{session}` \
+                 (no `<pid>.<hash>.key` beside its record), so its socket would refuse the message"
+            ))
+        })?;
+        Ok(SessionPeer {
+            socket: PathBuf::from(socket),
+            token,
+        })
+    }
+}
+
+/// The endpoint that steers one live session: the socket it published and the token that socket
+/// demands. Held only for the duration of one write — never surfaced through a relation (the
+/// `/claude` schemas declare no token column, and this type is private to this module).
+struct SessionPeer {
+    /// The session's own `messagingSocketPath`, read from its liveness record — never a path this
+    /// module composed.
+    socket: PathBuf,
+    /// The `peerToken` from the record's sibling key file. Never logged, never echoed in an error.
+    token: String,
+}
+
+/// Read the `peerToken` for `pid` from `<sessions-dir>/<pid>.<hash>.key`. The hash segment is
+/// opaque, so the file is found by its `<pid>.` prefix and `.key` suffix. `None` when no such file
+/// exists or none carries a non-empty token.
+fn read_peer_token(sessions_dir: &Path, pid: u64) -> Option<String> {
+    let prefix = format!("{pid}.");
+    for entry in std::fs::read_dir(sessions_dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("key") {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        if let Some(token) = v.get("peerToken").and_then(|t| t.as_str()) {
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Hand `instruction` to a live session over its peer socket: connect, send the **auth line**, then
+/// the **user message**, both newline-delimited JSON (the protocol Claude Code's own `uds-messaging`
+/// layer documents). The instruction is *data* — it crosses as a JSON string value, so no content
+/// can forge a second protocol line.
+///
+/// Unix only: the peer channel is a Unix domain socket. Elsewhere the write is a named refusal
+/// rather than a pretence.
+#[cfg(unix)]
+fn send_peer_message(peer: &SessionPeer, instruction: &str) -> Result<(), ClaudeError> {
+    use std::io::Write as _;
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(&peer.socket).map_err(|e| {
+        ClaudeError::Source(format!(
+            "the session's messaging socket refused the connection ({}); \
+             the instruction was not delivered",
+            e.kind()
+        ))
+    })?;
+    stream
+        .set_write_timeout(Some(STEER_WRITE_TIMEOUT))
+        .map_err(|e| ClaudeError::Source(format!("the peer socket is unusable ({})", e.kind())))?;
+    let auth = serde_json::json!({ "type": "auth", "token": peer.token });
+    let message = serde_json::json!({
+        "type": "user",
+        "message": { "role": "user", "content": instruction },
+    });
+    // One buffer, one write: the auth line must not be observable without the message behind it.
+    let payload = format!("{auth}\n{message}\n");
+    stream.write_all(payload.as_bytes()).map_err(|e| {
+        ClaudeError::Source(format!(
+            "the instruction could not be written to the session's messaging socket ({})",
+            e.kind()
+        ))
+    })?;
+    stream.flush().map_err(|e| {
+        ClaudeError::Source(format!(
+            "the instruction was not flushed to the session's messaging socket ({})",
+            e.kind()
+        ))
+    })?;
+    Ok(())
+}
+
+/// The non-Unix refusal: there is no peer socket to write to, so steering is unavailable rather
+/// than silently successful.
+#[cfg(not(unix))]
+fn send_peer_message(_peer: &SessionPeer, _instruction: &str) -> Result<(), ClaudeError> {
+    Err(ClaudeError::Source(
+        "steering a claude session needs its peer messaging socket, which exists on unix only"
+            .to_string(),
+    ))
+}
+
+/// The steering text of an `INSERT INTO …/instructions` row batch — the `instruction` column.
+fn instruction_text(batch: &RowBatch) -> Result<String, ClaudeError> {
+    let row = batch
+        .rows
+        .first()
+        .ok_or_else(|| ClaudeError::MalformedEffect {
+            reason: "the steering INSERT carries no VALUES row".to_string(),
+        })?;
+    let idx = batch
+        .schema
+        .columns
+        .iter()
+        .position(|c| c.name.as_str() == "instruction")
+        .ok_or_else(|| ClaudeError::MalformedEffect {
+            reason: "the steering INSERT names no `instruction` column".to_string(),
+        })?;
+    match row.values.get(idx) {
+        Some(Value::Text(s)) if !s.trim().is_empty() => Ok(s.clone()),
+        _ => Err(ClaudeError::MalformedEffect {
+            reason: "the steering INSERT's `instruction` is absent, non-text, or blank".to_string(),
+        }),
+    }
 }
 
 impl SessionSource for ClaudeStoreSource {
@@ -142,7 +350,7 @@ impl SessionSource for ClaudeStoreSource {
                     Value::Text(record.id.clone()),
                     record.cwd.map_or(Value::Null, Value::Text),
                     record.name.map_or(Value::Null, Value::Text),
-                    Value::Text(record.status),
+                    record.status.map_or(Value::Null, Value::Text),
                     last_message,
                 ]);
                 rows.push((record.id, row));
@@ -157,24 +365,21 @@ impl SessionSource for ClaudeStoreSource {
     }
 
     fn scan_instructions(&self, _session: &str) -> Result<RowBatch, ClaudeError> {
-        // Steering is not wired to a medium any session reads (rewire ticket 20260717010500);
-        // until it is, the append-log truthfully reads back empty rather than replaying a file
-        // nothing consumed.
+        // The steering medium is a socket, not a file: it carries no queryable backlog, so the
+        // log truthfully reads back empty rather than replaying something nothing consumed.
         Ok(RowBatch::new(
             claude_node_schema(ClaudeNode::Instructions),
             Vec::new(),
         ))
     }
 
-    fn append_instruction(&self, _session: &str, _row: &RowBatch) -> Result<u64, ClaudeError> {
-        // Fail closed: the retired on-disk append-log was read by NO session — an append that
-        // steers nothing. The rewire ticket (20260717010500) lands a medium a live session
-        // actually reads; until then an honest refusal beats a write-only no-op.
-        Err(ClaudeError::Source(
-            "steering is not wired to a live session yet (rewire ticket 20260717010500); \
-             the append is refused rather than written where no session reads"
-                .to_string(),
-        ))
+    fn append_instruction(&self, session: &str, row: &RowBatch) -> Result<u64, ClaudeError> {
+        // Order matters: a malformed payload is rejected before any session is addressed, so a
+        // blank steer never opens a socket.
+        let instruction = instruction_text(row)?;
+        let peer = self.resolve_peer(session)?;
+        send_peer_message(&peer, &instruction)?;
+        Ok(1)
     }
 }
 
@@ -260,34 +465,69 @@ impl SessionLauncher for ClaudeCliLauncher {
 
 /// Extract the session id from a `claude --bg` banner. Claude Code prints the launched session's
 /// short handle on a line shaped `backgrounded · <shortid>` (after a leading
-/// `Starting background service…` line and before a help block). This finds the first line whose
-/// first whitespace token is `backgrounded` and returns that line's LAST whitespace token — the
-/// id — independent of the exact separator glyph (`·`). `None` when no such line carries an id.
+/// `Starting background service…` line and before a help block), and appends the session name as a
+/// third field when `--name` was passed:
+///
+/// ```text
+/// backgrounded · eb5300ad                 (2.1.217, and 2.1.233 without --name)
+/// backgrounded · 4f89081e · spike-solo    (2.1.233 with --name)
+/// ```
+///
+/// **The id is the token after the first separator, never "the last token."** Reading the last
+/// token was correct for the two-field banner and silently returned the *name* for the three-field
+/// one (ticket `20260816161143`) — a wrong value that looks exactly like a right one. This parse is
+/// positional and states the two shapes it accepts; a `backgrounded` line of any other shape yields
+/// `None` so [`ClaudeCliLauncher::launch`] fails closed with `LaunchFailed` rather than handing a
+/// caller a plausible token from somebody else's output format, which has now changed twice.
 fn parse_backgrounded_id(stdout: &str) -> Option<String> {
-    stdout.lines().find_map(|line| {
-        let mut tokens = line.split_whitespace();
-        if tokens.next() != Some("backgrounded") {
-            return None;
-        }
-        // The id is the last token; the separator token(s) (`·`) sit between and are skipped.
-        line.split_whitespace()
-            .next_back()
-            .filter(|id| *id != "backgrounded" && !id.is_empty())
-            .map(str::to_string)
-    })
+    let line = stdout
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some("backgrounded"))?;
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    // The two recorded shapes, and only those: `backgrounded SEP id` and `backgrounded SEP id SEP
+    // name`. The separator is whatever glyph the banner uses (`·` today) — its identity is not
+    // asserted, only that it sits where a separator sits and is not itself an id.
+    let shape_ok = match tokens.len() {
+        3 => is_banner_separator(tokens[1]),
+        5 => is_banner_separator(tokens[1]) && is_banner_separator(tokens[3]),
+        _ => false,
+    };
+    if !shape_ok {
+        return None;
+    }
+    let id = tokens[2];
+    // A separator glyph in the id slot means the shape is not what it looked like.
+    if id.is_empty() || is_banner_separator(id) {
+        return None;
+    }
+    Some(id.to_string())
 }
 
-/// One parsed `sessions/<pid>.json` record — the selectors-only subset this module surfaces.
+/// Whether a banner token is a field separator rather than a value: a short run of punctuation
+/// (`·`, `-`, `|`, …) carrying no alphanumeric character. Kept separate from the id test so the
+/// shape check reads as the two-shapes statement it is.
+fn is_banner_separator(token: &str) -> bool {
+    !token.is_empty() && !token.chars().any(char::is_alphanumeric)
+}
+
+/// One parsed `sessions/<pid>.json` record — the selectors-only subset this module surfaces, plus
+/// the session's own steering address. `messaging_socket` never reaches a relation cell (the
+/// `sessions` schema declares no such column); it exists so a steer addresses the socket the
+/// session itself published rather than a path qfs composed.
 struct SessionRecord {
     pid: u64,
     id: String,
     cwd: Option<String>,
     name: Option<String>,
-    status: String,
+    status: Option<String>,
+    messaging_socket: Option<String>,
 }
 
-/// Parse one liveness-registry record. Lenient: a missing/malformed field degrades (status
-/// `"unknown"`, absent cwd/name) — only a missing `sessionId`/`pid` drops the record.
+/// Parse one liveness-registry record. Lenient: a missing/malformed field degrades to absent —
+/// only a missing `sessionId`/`pid` drops the record. **`status` absent stays absent**: Claude Code
+/// writes it for background sessions and not for interactive ones, and the `"unknown"` sentinel
+/// this used to substitute was a string that looked like a status, indistinguishable to a caller
+/// from a session whose state really is unknown (ticket `20260816161145`).
 fn read_session_record(path: &Path) -> Option<SessionRecord> {
     let text = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -299,7 +539,8 @@ fn read_session_record(path: &Path) -> Option<SessionRecord> {
         id,
         cwd: str_field("cwd"),
         name: str_field("name"),
-        status: str_field("status").unwrap_or_else(|| "unknown".to_string()),
+        status: str_field("status"),
+        messaging_socket: str_field("messagingSocketPath").filter(|s| !s.is_empty()),
     })
 }
 
@@ -330,10 +571,45 @@ fn slugify_cwd(cwd: &str) -> String {
         .collect()
 }
 
-/// The last transcript entry with visible text, reading only the file's tail. `None` when the
-/// transcript is absent, unreadable, or its tail carries no visible message (tool traffic only).
+/// The last transcript entry with visible text, read through a bounded backward scan over
+/// [`TRANSCRIPT_SCAN_WINDOWS`]. `None` when the transcript is absent, unreadable, or carries no
+/// visible message within the ceiling.
+///
+/// **The ceiling is deliberate and is a property of the column, not a bug.** A session whose last
+/// visible text lies further back than the widest window still reads `Null`: the alternative is
+/// scanning an unbounded file on every listing of every session, and `/claude/sessions` is a
+/// listing surface. What changed in ticket `20260816161144` is that the column no longer reports
+/// absence it never established for the ordinary tool-heavy case — 256 KiB of tool traffic in front
+/// of a real message was the common shape, not the pathological one.
 fn last_visible_message(transcript: &Path) -> Option<String> {
-    let tail = read_tail(transcript, TRANSCRIPT_TAIL_BYTES)?;
+    last_visible_message_within(transcript, &TRANSCRIPT_SCAN_WINDOWS)
+}
+
+/// [`last_visible_message`] with the scan windows named, so a test can state the ceiling property
+/// without writing a file the size of the real ceiling.
+fn last_visible_message_within(transcript: &Path, windows: &[u64]) -> Option<String> {
+    // The absent/unreadable transcript is answered here, once, so a `None` from `read_tail` inside
+    // the loop can mean the narrower thing: this window held no complete line (a window smaller
+    // than one entry, which a transcript of long tool results really does produce). That must
+    // WIDEN, not abort — aborting is what made the ceiling test read null through a window wide
+    // enough to hold the message.
+    let len = std::fs::metadata(transcript).ok()?.len();
+    for window in windows {
+        if let Some(tail) = read_tail(transcript, *window) {
+            if let Some(text) = last_visible_in(&tail) {
+                return Some(text);
+            }
+        }
+        if *window >= len {
+            // This window already covered the whole file; a wider one would re-read the same bytes.
+            break;
+        }
+    }
+    None
+}
+
+/// The last visible message in one already-read tail window, scanning backwards.
+fn last_visible_in(tail: &str) -> Option<String> {
     for line in tail.lines().rev() {
         let line = line.trim();
         if line.is_empty() {
@@ -483,6 +759,20 @@ mod tests {
         std::fs::write(dir.join(format!("{pid}.json")), record.to_string()).unwrap();
     }
 
+    /// Add the steering address to an existing record: the socket the session published plus the
+    /// sibling key file carrying its peer token — exactly the two files a real session writes.
+    fn write_peer_address(home: &Path, pid: u64, socket: &Path, token: &str) {
+        let dir = home.join("sessions");
+        let path = dir.join(format!("{pid}.json"));
+        let mut record: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        record["messagingSocketPath"] = serde_json::json!(socket.to_string_lossy());
+        std::fs::write(&path, record.to_string()).unwrap();
+        // The hash segment is opaque to the reader — any value must be found by the `<pid>.` prefix.
+        let key = serde_json::json!({ "peerToken": token, "procStart": "1" });
+        std::fs::write(dir.join(format!("{pid}.deadbeef.key")), key.to_string()).unwrap();
+    }
+
     /// Write a transcript for `(cwd, id)` from raw JSONL lines.
     fn write_transcript(home: &Path, cwd: &str, id: &str, lines: &[&str]) {
         let dir = home.join("projects").join(slugify_cwd(cwd));
@@ -611,6 +901,146 @@ mod tests {
         );
     }
 
+    /// The two record shapes Claude Code 2.1.233 really writes, side by side (observed 2026-08-16):
+    /// a background session carries `status`, an interactive one carries no `status` key at all.
+    /// The column must tell them apart — the `"unknown"` sentinel it used to render could not,
+    /// which made the documented `WHERE status = 'running'` select nothing on an interactive
+    /// session while reading as though the store had answered.
+    #[test]
+    fn a_record_without_a_status_key_reads_null_not_a_sentinel() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let live_pid = u64::from(std::process::id());
+
+        // The interactive shape: no `status` key.
+        std::fs::write(
+            sessions.join(format!("{live_pid}.json")),
+            serde_json::json!({
+                "pid": live_pid,
+                "sessionId": "s-interactive",
+                "cwd": "/tmp/statusproj",
+                "name": "qfs-5c",
+                "kind": "interactive",
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let batch = source.scan_sessions().unwrap();
+        assert_eq!(batch.rows.len(), 1);
+        assert_eq!(
+            cell(&batch, 0, "status"),
+            Value::Null,
+            "absent means the store recorded no state, and says so"
+        );
+    }
+
+    /// A record that DOES carry `status` still surfaces it verbatim — the nullability widened the
+    /// column's domain, it did not reinterpret a recorded value.
+    #[test]
+    fn a_recorded_status_still_surfaces_verbatim() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let live_pid = u64::from(std::process::id());
+        write_record(home, live_pid, "s-bg", "/tmp/bgproj", "live-fire", "idle");
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let batch = source.scan_sessions().unwrap();
+        assert_eq!(cell(&batch, 0, "status"), Value::Text("idle".into()));
+    }
+
+    /// A transcript whose FIRST tail window holds nothing but tool traffic still surfaces the
+    /// visible text that precedes it. This is the measured shape of a real agentic session
+    /// (2026-08-16, ticket `20260816161144`): 256 KiB of `tool_use`/`tool_result` in front of the
+    /// last real message, which made `last_message` read null for the mission's own gate.
+    #[test]
+    fn visible_text_before_a_tool_only_first_window_still_surfaces() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let live_pid = u64::from(std::process::id());
+        write_record(home, live_pid, "s-deep", "/tmp/deepproj", "deep", "busy");
+
+        // One visible message, then enough tool traffic to bury it past the 256 KiB first window.
+        let filler = "x".repeat(4096);
+        let tool_line = format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":"{filler}"}}]}}}}"#
+        );
+        let mut lines: Vec<&str> = vec![
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"the buried message"}]}}"#,
+        ];
+        // 80 × ~4 KiB ≈ 330 KiB of tool traffic — past the first window, inside the second.
+        for _ in 0..80 {
+            lines.push(&tool_line);
+        }
+        write_transcript(home, "/tmp/deepproj", "s-deep", &lines);
+
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let batch = source.scan_sessions().unwrap();
+        assert_eq!(batch.rows.len(), 1);
+        assert_eq!(
+            cell(&batch, 0, "last_message"),
+            Value::Text("the buried message".into()),
+            "the scan widens past a tool-only first window instead of reporting absence"
+        );
+    }
+
+    /// A transcript with no visible text ANYWHERE still yields null — the widening finds nothing to
+    /// find, and the reader does not invent a cell from tool traffic.
+    #[test]
+    fn a_transcript_of_pure_tool_traffic_stays_null() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let live_pid = u64::from(std::process::id());
+        write_record(home, live_pid, "s-mute", "/tmp/muteproj", "mute", "busy");
+        write_transcript(
+            home,
+            "/tmp/muteproj",
+            "s-mute",
+            &[
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}]}}"#,
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"secret file body"}]}}"#,
+                r#"{"type":"queue-operation","op":"drain"}"#,
+            ],
+        );
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let batch = source.scan_sessions().unwrap();
+        assert_eq!(cell(&batch, 0, "last_message"), Value::Null);
+    }
+
+    /// The scan is BOUNDED: text older than the widest window stays unread, deliberately. Stated
+    /// with small windows so the property is proven without writing a file the size of the real
+    /// 4 MiB ceiling — the mechanism under test is the same one `last_visible_message` uses.
+    #[test]
+    fn the_backward_scan_stops_at_its_ceiling() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("deep.jsonl");
+        let filler = "x".repeat(2048);
+        let tool_line = format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":"{filler}"}}]}}}}"#
+        );
+        let mut lines = vec![
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"far too old"}]}}"#
+                .to_string(),
+        ];
+        for _ in 0..20 {
+            lines.push(tool_line.clone());
+        }
+        std::fs::write(&path, lines.join("\n")).unwrap();
+
+        assert_eq!(
+            last_visible_message_within(&path, &[1024, 4096]),
+            None,
+            "a ceiling below the message's distance reads null rather than scanning the file"
+        );
+        assert_eq!(
+            last_visible_message_within(&path, &[1024, 4096, 1024 * 1024]),
+            Some("far too old".to_string()),
+            "and a ceiling above it finds the same message — the ceiling is what bounds the read"
+        );
+    }
+
     /// The slug matches the REAL store (verified examples from a live `~/.claude/projects`).
     #[test]
     fn slugify_matches_the_observed_store() {
@@ -624,24 +1054,270 @@ mod tests {
         );
     }
 
-    /// Steering fails closed until the rewire ticket lands a medium a session actually reads.
+    /// A steering `INSERT`'s row batch, shaped like the instructions schema.
+    fn steer(instruction: &str) -> RowBatch {
+        RowBatch::new(
+            claude_node_schema(ClaudeNode::Instructions),
+            vec![Row::new(vec![
+                Value::Null,
+                Value::Text(instruction.to_string()),
+            ])],
+        )
+    }
+
+    /// Read every newline-delimited JSON line one connection delivered, until the peer hangs up.
+    #[cfg(unix)]
+    fn read_lines(stream: std::os::unix::net::UnixStream) -> Vec<serde_json::Value> {
+        use std::io::{BufRead, BufReader};
+        BufReader::new(stream)
+            .lines()
+            .map_while(Result::ok)
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(&l).expect("each line is one JSON object"))
+            .collect()
+    }
+
+    /// The steering headline: an `INSERT` delivers **exactly one** authenticated user message to
+    /// the addressed session's own socket — and nothing at all to a second session's. The socket
+    /// is the one the record published; the token is the one its key file carried.
     #[test]
-    fn steering_fails_closed_pending_rewire() {
-        let (_d, source) = fixture();
-        let schema = qfs_types::Schema::new(vec![qfs_types::Column::new(
-            "instruction",
-            qfs_types::ColumnType::Text,
-            false,
-        )]);
-        let row = RowBatch::new(schema, vec![Row::new(vec![Value::Text("hi".into())])]);
-        let err = source.append_instruction("s-live", &row).unwrap_err();
+    #[cfg(unix)]
+    #[cfg_attr(not(target_os = "linux"), ignore = "liveness filtering needs /proc")]
+    fn steering_delivers_one_authenticated_message_to_the_addressed_session() {
+        use std::os::unix::net::UnixListener;
+
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let live_pid = u64::from(std::process::id());
+        // Two live sessions, each with its own socket — only the addressed one may hear anything.
+        write_record(home, live_pid, "s-target", "/tmp/p", "target", "idle");
+        write_record(home, live_pid + 1, "s-other", "/tmp/p", "other", "idle");
+        let target_sock = dir.path().join("target.sock");
+        let other_sock = dir.path().join("other.sock");
+        let target = UnixListener::bind(&target_sock).unwrap();
+        let other = UnixListener::bind(&other_sock).unwrap();
+        write_peer_address(home, live_pid, &target_sock, "tok-target");
+        write_peer_address(home, live_pid + 1, &other_sock, "tok-other");
+
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let accept =
+            std::thread::spawn(move || read_lines(target.incoming().next().unwrap().unwrap()));
+        assert_eq!(
+            source
+                .append_instruction("s-target", &steer("run the tests"))
+                .unwrap(),
+            1,
+            "one steer, one affected row"
+        );
+        let lines = accept.join().unwrap();
+
+        assert_eq!(lines.len(), 2, "the auth line then the user message");
+        assert_eq!(lines[0]["type"], "auth");
+        assert_eq!(lines[0]["token"], "tok-target", "the record's own token");
+        assert_eq!(lines[1]["type"], "user");
+        assert_eq!(lines[1]["message"]["role"], "user");
+        assert_eq!(
+            lines[1]["message"]["content"], "run the tests",
+            "the instruction crosses as one JSON string value"
+        );
+        // The other session was never addressed: its listener has no pending connection.
+        other.set_nonblocking(true).unwrap();
+        assert!(
+            other.accept().is_err(),
+            "a steer must reach only the session it addressed"
+        );
+    }
+
+    /// Instruction text is DATA: a payload full of newlines and JSON cannot forge a second
+    /// protocol line — it arrives as one string value inside the message.
+    #[test]
+    #[cfg(unix)]
+    #[cfg_attr(not(target_os = "linux"), ignore = "liveness filtering needs /proc")]
+    fn a_multiline_instruction_cannot_forge_a_protocol_line() {
+        use std::os::unix::net::UnixListener;
+
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let live_pid = u64::from(std::process::id());
+        write_record(home, live_pid, "s-live", "/tmp/p", "live", "idle");
+        let sock = dir.path().join("s.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        write_peer_address(home, live_pid, &sock, "tok");
+
+        let evil = "line one\n{\"type\":\"auth\",\"token\":\"forged\"}\nline three";
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let accept =
+            std::thread::spawn(move || read_lines(listener.incoming().next().unwrap().unwrap()));
+        source.append_instruction("s-live", &steer(evil)).unwrap();
+        let lines = accept.join().unwrap();
+
+        assert_eq!(lines.len(), 2, "still exactly two protocol lines");
+        assert_eq!(
+            lines[1]["message"]["content"], evil,
+            "verbatim, as one value"
+        );
+    }
+
+    /// Concurrent steers cannot lose each other. The socket is a stream, not a read-modify-write
+    /// file, so two appends are two independent connections — the drain-race class the file
+    /// medium would have had cannot arise here, and this pins that property.
+    #[test]
+    #[cfg(unix)]
+    #[cfg_attr(not(target_os = "linux"), ignore = "liveness filtering needs /proc")]
+    fn concurrent_steers_do_not_lose_each_other() {
+        use std::os::unix::net::UnixListener;
+        use std::sync::Arc as StdArc;
+
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let live_pid = u64::from(std::process::id());
+        write_record(home, live_pid, "s-live", "/tmp/p", "live", "idle");
+        let sock = dir.path().join("s.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        write_peer_address(home, live_pid, &sock, "tok");
+
+        let accept = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for conn in listener.incoming().take(2) {
+                seen.push(read_lines(conn.unwrap()));
+            }
+            seen
+        });
+        let source = StdArc::new(ClaudeStoreSource::new(home.to_path_buf()));
+        let writers: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|text| {
+                let source = StdArc::clone(&source);
+                std::thread::spawn(move || source.append_instruction("s-live", &steer(text)))
+            })
+            .collect();
+        for w in writers {
+            assert_eq!(w.join().unwrap().unwrap(), 1);
+        }
+
+        let mut delivered: Vec<String> = accept
+            .join()
+            .unwrap()
+            .iter()
+            .map(|lines| lines[1]["message"]["content"].as_str().unwrap().to_string())
+            .collect();
+        delivered.sort();
+        assert_eq!(delivered, vec!["first", "second"], "neither steer was lost");
+    }
+
+    /// A record with no `messagingSocketPath` (an older CLI) is refused with a reason that names
+    /// what is missing — and **nothing is created on disk**: no socket, no directory, no inbox.
+    #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "liveness filtering needs /proc")]
+    fn steering_refuses_a_session_that_publishes_no_socket() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let live_pid = u64::from(std::process::id());
+        write_record(home, live_pid, "s-live", "/tmp/p", "live", "idle");
+        let before = entry_names(&home.join("sessions"));
+
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let err = source
+            .append_instruction("s-live", &steer("go"))
+            .unwrap_err();
         assert!(matches!(err, ClaudeError::Source(_)));
         assert!(
-            err.to_string().contains("20260717010500"),
-            "names the rewire ticket"
+            err.to_string().contains("messagingSocketPath"),
+            "the refusal names what is missing: {err}"
         );
-        // The unwired append-log reads back empty (truthful, not an error).
+        assert_eq!(
+            entry_names(&home.join("sessions")),
+            before,
+            "a refused steer creates nothing"
+        );
+        assert!(
+            !home.join("teams").exists(),
+            "and never invents a teams inbox (the spike proved one is never drained)"
+        );
+    }
+
+    /// A published socket with no readable peer token is refused, not attempted — an unauthenticated
+    /// connection would be dropped by the session anyway, and reporting success would be a lie.
+    #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "liveness filtering needs /proc")]
+    fn steering_refuses_when_no_peer_token_is_readable() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let live_pid = u64::from(std::process::id());
+        write_record(home, live_pid, "s-live", "/tmp/p", "live", "idle");
+        // The record names a socket, but no `<pid>.<hash>.key` sits beside it.
+        let path = home.join("sessions").join(format!("{live_pid}.json"));
+        let mut record: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        record["messagingSocketPath"] = serde_json::json!("/tmp/nowhere.sock");
+        std::fs::write(&path, record.to_string()).unwrap();
+
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let err = source
+            .append_instruction("s-live", &steer("go"))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("peer token"),
+            "the refusal names the missing token: {err}"
+        );
+    }
+
+    /// An unknown session id is `UnknownSession` — not a silent success, and not an I/O error.
+    #[test]
+    fn steering_refuses_an_unknown_session() {
+        let (_d, source) = fixture();
+        let err = source
+            .append_instruction("s-nobody", &steer("go"))
+            .unwrap_err();
+        assert!(matches!(err, ClaudeError::UnknownSession { .. }), "{err}");
+    }
+
+    /// A leftover record of a dead process is refused: steering it would report success and reach
+    /// nobody — the exact write-only no-op this seam exists to prevent.
+    #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "dead-pid filtering needs /proc")]
+    fn steering_refuses_a_leftover_record() {
+        let (_d, source) = fixture();
+        let err = source
+            .append_instruction("s-dead", &steer("go"))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("leftover"),
+            "the refusal says the process is gone: {err}"
+        );
+    }
+
+    /// A blank or absent instruction is a malformed effect, rejected **before** any session is
+    /// addressed — a blank steer never opens a socket.
+    #[test]
+    fn steering_refuses_a_blank_instruction() {
+        let (_d, source) = fixture();
+        for batch in [
+            steer("   "),
+            RowBatch::new(claude_node_schema(ClaudeNode::Instructions), vec![]),
+        ] {
+            let err = source.append_instruction("s-live", &batch).unwrap_err();
+            assert!(matches!(err, ClaudeError::MalformedEffect { .. }), "{err}");
+        }
+    }
+
+    /// The instructions log reads back empty: the socket carries no queryable backlog, and an
+    /// honest empty read beats replaying something nothing consumed.
+    #[test]
+    fn instructions_read_back_empty() {
+        let (_d, source) = fixture();
         assert!(source.scan_instructions("s-live").unwrap().rows.is_empty());
+    }
+
+    /// The sorted file names directly under `dir` — the "nothing was created" comparison.
+    fn entry_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
     }
 
     /// `open_default` is fail-closed: with `QFS_CLAUDE_SESSIONS` unset there is no source (the
@@ -733,6 +1409,43 @@ mod tests {
             parse_backgrounded_id(banner),
             Some("eb5300ad".to_string()),
             "the id comes from the `backgrounded` line, not the `Starting…` first line"
+        );
+    }
+
+    /// The RECORDED three-field banner (Claude Code 2.1.233 with `--name`, observed live in the
+    /// container 2026-08-16): the session NAME is appended after the id. The id is the token after
+    /// the first separator — reading the last token returned `spike-solo` here, which is the whole
+    /// of ticket `20260816161143`.
+    #[test]
+    fn parse_backgrounded_id_reads_the_named_launch_banner() {
+        let banner = "Starting background service\u{2026}\n\
+                      backgrounded \u{b7} 4f89081e \u{b7} spike-solo\n\
+                      \x20 claude agents             list sessions\n";
+        assert_eq!(
+            parse_backgrounded_id(banner),
+            Some("4f89081e".to_string()),
+            "the id is the field after the first separator, never the last token"
+        );
+    }
+
+    /// A session name containing spaces does not fool the shape check into reading a longer banner
+    /// as a different one: the line has more fields than either recorded shape, so it refuses.
+    #[test]
+    fn parse_backgrounded_id_unrecognised_shape_is_none() {
+        assert_eq!(
+            parse_backgrounded_id("backgrounded \u{b7} 4f89081e \u{b7} two words\n"),
+            None,
+            "six fields match neither recorded banner shape"
+        );
+        assert_eq!(
+            parse_backgrounded_id("backgrounded eb5300ad\n"),
+            None,
+            "no separator: not a shape this parser claims to read"
+        );
+        assert_eq!(
+            parse_backgrounded_id("backgrounded\n"),
+            None,
+            "the bare keyword carries no id"
         );
     }
 
