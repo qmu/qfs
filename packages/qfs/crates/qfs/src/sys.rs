@@ -283,6 +283,26 @@ impl SysBackend for SystemDbBackend {
                     ]))
                 },
             )?,
+            // blueprint §13 / ticket 20260812141223: the declared-driver CURRENCY view. Derived,
+            // never stored — the rows are recomputed from the installed `/sys/drivers` rows and the
+            // declaration text embedded in THIS binary, so the answer cannot go stale relative to
+            // the registry it describes and no migration or install-time stamp exists to drift.
+            // A pure local read: no network, no credentials.
+            SysNode::Declarations => crate::declaration_currency::declaration_reports()
+                .into_iter()
+                .map(|d| {
+                    Row::new(vec![
+                        Value::Text(d.driver),
+                        Value::Text(d.status.as_str().to_string()),
+                        d.shipped.map_or(Value::Null, Value::Text),
+                        if d.differs.is_empty() {
+                            Value::Null
+                        } else {
+                            Value::Text(d.differs.join(", "))
+                        },
+                    ])
+                })
+                .collect(),
             // `/sys/whoami` is resolved from the request principal in the read facet
             // (`SysReadDriver::scan`), never from the backend — the backend has no request
             // context. Unreachable here by construction; an honest structured rejection if reached.

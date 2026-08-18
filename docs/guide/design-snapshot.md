@@ -3,6 +3,11 @@
 This page is the current operating model for qfs. Generated references still own the exact grammar,
 driver catalog, and server binding tables; this page explains how those surfaces fit together.
 
+Its scope is what an operator meets: paths, mounts, accounts, `/sys`, the safety loop, and the
+backup surfaces. The system *inside* the binary — the crates, the path a statement travels, the
+stores' files on disk, the entry point of each face — is [the architecture as
+built](/guide/architecture). Neither page repeats the other.
+
 ## Mental model
 
 qfs presents services as absolute paths and runs one pipe-SQL language over them. A path can point at
