@@ -53,6 +53,8 @@ use qfs_server::{
     AuditEntry, Binding, BindingKind, NullBinding, Runtime, ServerError, ServerState,
 };
 
+mod serve_e2e;
+
 // ---------------------------------------------------------------------------
 // Subprocess harness (scenario 1)
 // ---------------------------------------------------------------------------
@@ -116,10 +118,10 @@ fn serve_boots_blocks_then_sigint_drains_audit_cleanly() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn qfs serve");
-    let mut stderr = child.stderr.take().expect("child stderr");
+    let log = serve_e2e::ServeLog::pump(child.stderr.take().expect("child stderr"));
 
-    // Give it a moment to boot + enter the run loop, then confirm it has NOT exited.
-    std::thread::sleep(Duration::from_millis(800));
+    // Wait for the daemon to SAY it reached the run loop, then confirm it has NOT exited since.
+    log.wait_for(serve_e2e::SERVE_READY, serve_e2e::READINESS_TIMEOUT);
     assert!(
         child.try_wait().expect("try_wait").is_none(),
         "server must still be running (blocked in the run loop), not self-exited"
@@ -127,24 +129,13 @@ fn serve_boots_blocks_then_sigint_drains_audit_cleanly() {
 
     send_sigint(child.id());
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        if let Some(s) = child.try_wait().expect("try_wait") {
-            break s;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "server did not exit after SIGINT"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let status = serve_e2e::wait_for_exit(&mut child, "SIGINT");
     assert!(
         status.success(),
         "clean shutdown on SIGINT must exit 0, got {status:?}"
     );
 
-    let mut log = String::new();
-    stderr.read_to_string(&mut log).expect("read stderr");
+    let log = log.finish();
 
     assert!(log.contains("boot complete"), "boot must complete:\n{log}");
     assert!(
@@ -184,9 +175,9 @@ fn serve_shuts_down_cleanly_on_sigterm_and_drains_audit() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn qfs serve");
-    let mut stderr = child.stderr.take().expect("child stderr");
+    let log = serve_e2e::ServeLog::pump(child.stderr.take().expect("child stderr"));
 
-    std::thread::sleep(Duration::from_millis(800));
+    log.wait_for(serve_e2e::SERVE_READY, serve_e2e::READINESS_TIMEOUT);
     assert!(
         child.try_wait().expect("try_wait").is_none(),
         "server must still be running (blocked in the run loop) before SIGTERM"
@@ -194,24 +185,16 @@ fn serve_shuts_down_cleanly_on_sigterm_and_drains_audit() {
 
     send_signal(child.id(), "-TERM");
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        if let Some(s) = child.try_wait().expect("try_wait") {
-            break s;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "server did not exit after SIGTERM (the supervisor must catch SIGTERM, not only SIGINT)"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let status = serve_e2e::wait_for_exit(
+        &mut child,
+        "SIGTERM (the supervisor must catch SIGTERM, not only SIGINT)",
+    );
     assert!(
         status.success(),
         "clean shutdown on SIGTERM must exit 0 (not 143/uncaught), got {status:?}"
     );
 
-    let mut log = String::new();
-    stderr.read_to_string(&mut log).expect("read stderr");
+    let log = log.finish();
     assert!(
         log.contains("received SIGTERM"),
         "the supervisor must report it caught SIGTERM:\n{log}"
@@ -236,16 +219,21 @@ fn serve_boots_without_network_or_credentials() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn qfs serve (clean env)");
-    let mut stderr = child.stderr.take().expect("child stderr");
-    std::thread::sleep(Duration::from_millis(700));
+    let log = serve_e2e::ServeLog::pump(child.stderr.take().expect("child stderr"));
+    // The claim IS "it reaches the run loop", so wait for the line that says so rather than
+    // guessing an interval and settling for "it has not exited yet".
+    log.wait_for(serve_e2e::SERVE_READY, serve_e2e::READINESS_TIMEOUT);
     assert!(
         child.try_wait().expect("try_wait").is_none(),
         "boot with no network/creds must still reach the run loop"
     );
     send_sigint(child.id());
-    let _ = child.wait().expect("wait");
-    let mut log = String::new();
-    stderr.read_to_string(&mut log).expect("read stderr");
+    let status = serve_e2e::wait_for_exit(&mut child, "SIGINT");
+    let log = log.finish();
+    assert!(
+        status.success(),
+        "a clean-env boot still shuts down cleanly on SIGINT, got {status:?}:\n{log}"
+    );
     assert!(
         log.contains("boot complete"),
         "boot succeeds with a cleared environment (no network/creds):\n{log}"

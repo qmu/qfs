@@ -53,9 +53,22 @@ allowed to link both `qfs-parser` and the compiled `qfs` describe registry), whi
 checks — it **parses** on the shipped grammar, and the columns it names **exist** on the node it
 addresses, resolved through the binary's own cred-free describe registry. So a skill can never teach
 an agent a statement the binary rejects, nor a column the driver does not carry. The ratchet runs
-under plain `cargo test --workspace`, so CI's `build-test` job defends it — unlike `gen-docs --check`
-/ `gen-skills --check` / `check-migrations`, which no CI job invokes and which therefore hold only
-where a developer or the ship flow runs them.
+under plain `cargo test --workspace`, so CI's `build-test` job defends it.
+
+**Which anti-drift checks CI actually defends.** No CI job invokes the three `xtask` commands by
+name on a branch, but that is not the same as the properties going unguarded — read the property,
+not the command:
+
+| Property | Defended on a branch / PR by | Defended on a `v*` tag by |
+| --- | --- | --- |
+| `docs/{language,drivers,server}.md` match the binary | **Yes** — the `committed_docs_match_generated_output` golden inside `qfs::docs` runs under `cargo test --workspace`, so `build-test` is red on any hand-edited generated page | **Yes** — `release.yml`'s `docs-drift` job runs `gen-docs --check`, and `docs-deploy-production` `needs` it |
+| `plugins/qfs/skills/*/SKILL.md` match `docs/cookbook/*.md` | **No** — `gen-skills --check` catches it only when someone runs it | No |
+| No shipped migration body edited in place | **No** — `check-migrations` catches it only when someone runs it, and it needs release tags to mean anything | No |
+
+The tag column exists because `ci.yml` is `on: push: branches: ["**"]` plus `pull_request`, and a
+tag push matches neither — so on a `v*` tag nothing from `ci.yml` re-checks the tagged tree, and
+that tag publishes `docs/` to qfs.qmu.co.jp. `gen-skills --check` and `check-migrations` therefore
+still hold only where a developer or the ship flow runs them.
 
 **What the ratchet does not cover** (the test's own doc comment carries the full list): the parse
 half sees all 184 recipes; the column half only checks statements whose source resolves in the
@@ -86,8 +99,13 @@ is in the README; this operational rule says bump the patch on every shipped PR 
 
 ## Deploy
 
-There is no separate server deployment — **the deliverable is the published GitHub Release**.
-To deploy a shipped change after the PR merges to `main`:
+There are **two** deployment targets, recorded in `.workaholic/deployments/`. There is still no
+server to run: one target is a published artifact, the other a static site that publishes itself.
+
+### The binary — the published GitHub Release (`deployments/github-release.md`)
+
+**The deliverable is the published GitHub Release.** To deploy a shipped change after the PR
+merges to `main`:
 
 1. Ensure the patch version was bumped (above).
 2. Tag and push: `git tag -a vX.Y.Z -m "qfs vX.Y.Z" && git push origin vX.Y.Z`.
@@ -96,3 +114,19 @@ To deploy a shipped change after the PR merges to `main`:
 
 The Cloudflare Workers wasm artifact is parked (no cdylib entrypoint yet), so releases ship native
 binaries only.
+
+### The documentation site — two hostnames, no deploy command (`deployments/docs-site.md`)
+
+`docs/` publishes itself to a Cloudflare Workers static-assets target (`docs/wrangler.toml`,
+two environments) on the two events the repository already distinguishes:
+
+| Environment | Hostname | Trigger | Where |
+| --- | --- | --- | --- |
+| staging | `staging-qfs.qmu.co.jp` | every merge to `main` | `ci.yml`, job `docs-build` (guarded to `main`) |
+| production | `qfs.qmu.co.jp` | a `v*` tag, after the Release publishes | `release.yml`, job `docs-deploy-production` |
+
+Every deploy stamps the build with `version.json` (commit, ref, environment, build time), so
+`curl https://<host>/version.json` says which commit a hostname carries. Staging is public but
+non-indexable; production is indexable. Both deploys read `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` — repository secrets, scoped to the deploying job. `npm run
+docs:deploy:dry-run` checks both environments without credentials.

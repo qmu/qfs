@@ -162,6 +162,9 @@ pub async fn serve_config_shared(
     // completion on shutdown (a `select!` race could drop it un-drained). So we spawn the
     // listener on a `watch`-channel shutdown, await `runtime.run()` (which drains on ctrl_c),
     // THEN signal the listener to stop and join it. The listener never owns `ctrl_c`.
+    // The same rule covers a signal that arrived DURING boot: the composition root may ARM the
+    // listener before boot (`Runtime::with_shutdown`), but only `run` ever consumes the latch —
+    // arming early adds no second shutdown owner, it only moves when the handlers are installed.
     // Bind the listener up front so a port conflict is observable HERE (before spawning) and
     // can be treated as NON-FATAL to boot: the config boot + audit drain are the core of
     // `qfs serve` (blueprint §10 — boot needs no network), and the HTTP listener is a binding atop it.

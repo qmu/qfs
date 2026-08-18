@@ -68,7 +68,7 @@ pub use qfs_core::{config_row_batch, server_write_plan, ConfigRow, RowBatch};
 // the provisioning loader reaches it through the core hub instead of through this crate.
 pub use runtime::{
     reconfigure_channel, ReconfigureHandle, ReconfigureRx, RefreshReport, Runtime,
-    ServerConfigApplier,
+    ServerConfigApplier, ShutdownSignal,
 };
 pub use state::{
     AgentDef, EndpointDef, JobDef, JobRunRecord, PolicyDef, ServerState, StatementSource,

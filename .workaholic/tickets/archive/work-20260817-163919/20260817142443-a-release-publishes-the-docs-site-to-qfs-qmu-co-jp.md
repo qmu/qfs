@@ -1,5 +1,6 @@
 ---
 created_at: 2026-08-17T14:24:43+00:00
+status: done
 author: noreply@anthropic.com
 assignees: [a@qmu.jp]
 depends_on: the-docs-site-has-a-worker-deploy-target-it-can-be-published-to
@@ -82,3 +83,37 @@ carries the tip of `main`.
 - `release.yml` uses only the auto-provided `GITHUB_TOKEN` today; this job is the first
   secret consumer in that workflow, so secret scope should be set on the job, not the
   workflow.
+
+## Final Report
+
+Development completed as planned. `docs-deploy-production` is a new job in
+`.github/workflows/release.yml`, on the same `v*` tag trigger, `needs: [release]`, building the
+site from the tagged checkout and publishing it with `--env production`.
+
+The two Cloudflare secrets are declared on the job rather than the workflow, as the ticket's
+Considerations asked: the four build jobs and the release job keep seeing only the
+auto-provided `GITHUB_TOKEN`.
+
+The generated-reference-drift observation the ticket carried (`gen-docs --check` runs in no CI
+job, so a tag can publish documentation that has drifted from the binary it documents) is
+outside this ticket's scope and is now its own ticket,
+`20260817164716-a-tag-can-publish-reference-docs-that-drifted-from-the-binary.md`. Publishing
+production docs from the tag is what turns that from a private inconsistency into a public one,
+which is why it is worth a queue entry rather than a note.
+
+### Discovered Insights
+
+- **Insight**: `release.yml` sets `defaults.run.working-directory: packages/qfs` at the
+  workflow level, so a job that works at the repository root must override it with its own
+  `defaults.run.working-directory: .` — `ci.yml`'s `docs-build` job already does exactly this.
+  **Context**: A `run:` step added to this workflow without that override silently executes
+  inside the Cargo workspace. The failure is loud for `npm install` (no package.json there) but
+  would be quiet for anything that happens to work in both places.
+
+- **Insight**: The ordering that matters is `needs: [release]`, not `needs: [build]`. The
+  release job is what actually publishes the GitHub Release, so gating on it is what makes "a
+  failed binary release does not advertise a version nobody can install" true; gating on
+  `build` would publish docs whose install instructions point at assets that never got attached.
+  **Context**: `release` itself runs the credential-shape gate
+  (`scripts/check-no-live-credentials.sh`) before publishing, so the docs publish inherits that
+  gate's verdict for free by depending on it.

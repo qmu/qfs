@@ -1,5 +1,6 @@
 ---
 created_at: 2026-08-17T14:24:43+00:00
+status: done
 author: noreply@anthropic.com
 assignees: [a@qmu.jp]
 depends_on:
@@ -83,3 +84,37 @@ tickets are unaffected — they call whatever command this one establishes.
 - Cloudflare Workers static assets and Cloudflare Pages both serve this; Workers is chosen
   because the ask says "a worker" and because the rest of the project already targets the
   Workers runtime. If Pages is preferred, only this ticket changes.
+
+## Final Report
+
+Development completed as planned. `docs/wrangler.toml` declares a Cloudflare Workers
+static-assets target for the VitePress build with two named environments, and
+`package.json` carries the three commands (`docs:deploy:staging`,
+`docs:deploy:production`, `docs:deploy:dry-run`) that both a human and the two trigger
+tickets invoke. `wrangler` is a devDependency, so the deploy command is the same one
+locally and in CI, pinned by `package-lock.json`.
+
+The config was placed at `docs/wrangler.toml` rather than the repository root, of the two
+options the ticket offered: asset paths resolve relative to the config file, so the site's
+config sits next to the site, and the root stays free for the `qfs-host`-generated
+`wrangler.toml` whose template is `packages/qfs/crates/host/fixtures/wrangler.golden.toml`.
+
+The by-hand first publish and the two custom domains remain with the assignee — the
+ticket's declared `verification_handoff`.
+
+### Discovered Insights
+
+- **Insight**: Wrangler resolves `assets.directory` relative to the *config file's*
+  directory, not the working directory or `--config`'s caller. `docs/wrangler.toml` therefore
+  says `directory = ".vitepress/dist"`, and the command can be run from the repository root.
+  **Context**: Moving this file later without rewriting that path silently changes which tree
+  gets published — the dry-run reports the file count it read, which is the cheapest way to
+  catch it (`142 files` here, `0` if the path is wrong).
+
+- **Insight**: `assets` is declared per environment even though wrangler would inherit the
+  top-level block. The redundancy is the safety property the ticket asked for: an environment
+  that names its own assets directory cannot silently pick up a different one if the top-level
+  block is ever changed for the routeless default worker.
+  **Context**: The top-level `qfs-docs` worker deliberately carries no route, so a bare
+  `wrangler deploy` publishes nothing that any hostname serves — that is what makes "neither
+  environment can be deployed by accident" true by construction rather than by convention.
