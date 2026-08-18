@@ -87,6 +87,44 @@ pub const GITHUB_ACCOUNT_DRIVER: &str = include_str!("../assets/examples/github_
 /// construction (no clause carries a token; the value lives in the account layer).
 pub const SLACK_DRIVER: &str = include_str!("../assets/examples/slack_driver.qfs");
 
+/// One shipped **declared-driver** install program: the asset that declares it, embedded at compile
+/// time. This is the manifest the currency check (`/sys/declarations`, ticket 20260812141223) reads:
+/// an installed declaration is compared against the shipped text this binary carries, so "is my
+/// `/chatwork` current?" is answered from the binary's own bytes and never from the network.
+///
+/// The entry carries the **asset label** only — never the driver name it declares. The name is
+/// derived by parsing the script, exactly as the install path derives it, so the manifest cannot
+/// disagree with the declaration it points at (a hand-written name here would be a second claim
+/// about the same fact, and the two would drift the first time an asset was renamed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeclaredAsset {
+    /// The asset's file name (`chatwork.qfs`) — the pointer an operator re-installs from.
+    pub label: &'static str,
+    /// The embedded declaration program.
+    pub source: &'static str,
+}
+
+/// Every declared-driver program this binary ships, in asset order. Deliberately separate from
+/// [`EXAMPLES`] (single-statement PREVIEW goldens): these are multi-statement install programs.
+pub const DECLARED_DRIVERS: &[DeclaredAsset] = &[
+    DeclaredAsset {
+        label: "chatwork.qfs",
+        source: CHATWORK_DRIVER,
+    },
+    DeclaredAsset {
+        label: "cloudflare.qfs",
+        source: CLOUDFLARE_DRIVER,
+    },
+    DeclaredAsset {
+        label: "github_account.qfs",
+        source: GITHUB_ACCOUNT_DRIVER,
+    },
+    DeclaredAsset {
+        label: "slack_driver.qfs",
+        source: SLACK_DRIVER,
+    },
+];
+
 pub const EXAMPLES: &[Example] = &[
     Example {
         driver: "mail",

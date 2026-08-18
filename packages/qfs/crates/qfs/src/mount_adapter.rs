@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use qfs_core::{
-    AliasFn, Capabilities, CfsError, Driver, DriverId, EffectKind, NodeDesc, Path, Plan,
+    AliasFn, Capabilities, CfsError, ChildNode, Driver, DriverId, EffectKind, NodeDesc, Path, Plan,
     PlanApplier, ProcId, ProcSig, PushdownProfile, RequestContext, RowBatch, Verb, VersionSupport,
 };
 use qfs_exec::ReadDriver;
@@ -285,6 +285,20 @@ impl Driver for MountDriver {
     fn capabilities(&self, path: &Path) -> Capabilities {
         self.inner
             .capabilities(&Path::new(self.remap.path_in(path.as_str())))
+    }
+
+    /// Child locations cross the remap in BOTH directions: the queried path goes in, and every
+    /// child path the inner driver states comes back **out** onto the outer mount. Without the
+    /// outbound leg a caller would be handed inner `/rest/<name>/…` paths it cannot address.
+    fn children(&self, path: &Path) -> Vec<ChildNode> {
+        self.inner
+            .children(&Path::new(self.remap.path_in(path.as_str())))
+            .into_iter()
+            .map(|mut c| {
+                c.path = self.remap.path_out(&c.path);
+                c
+            })
+            .collect()
     }
 
     fn procedures(&self) -> &[ProcSig] {

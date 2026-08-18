@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use qfs_driver_http::{
-    AuthStrategy, Pagination, ResourceMap, RestApiConfig, RestDriver, RestVerb, SecretRef,
+    AuthStrategy, NodeMap, Pagination, ResourceMap, RestApiConfig, RestDriver, RestVerb, SecretRef,
 };
 use qfs_secrets::{ConnectionRecord, CredentialKey, Secret, SecretError, Secrets};
 
@@ -136,28 +136,52 @@ pub(crate) fn load_declared_drivers() -> Vec<DeclaredDriver> {
 }
 
 /// Row shape read back from `sys_drivers` (mirrors the desugar's columns, plus the rowid the
-/// newest-wins resolution keys on).
-struct DriverRow {
-    id: i64,
-    kind: String,
-    name: String,
-    base_url: Option<String>,
-    auth: Option<String>,
-    pagination: Option<String>,
-    of_type: Option<String>,
-    verb: Option<String>,
-    body: Option<String>,
-    irreversible: bool,
-    pushdown: Option<String>,
+/// newest-wins resolution keys on). Visible to the crate because the §13 currency check
+/// ([`crate::declaration_currency`]) compares installed rows against the rows a SHIPPED declaration
+/// desugars to — the same shape on both sides, by construction.
+#[derive(Debug, Clone)]
+pub(crate) struct DriverRow {
+    pub(crate) id: i64,
+    pub(crate) kind: String,
+    pub(crate) name: String,
+    pub(crate) base_url: Option<String>,
+    pub(crate) auth: Option<String>,
+    pub(crate) pagination: Option<String>,
+    pub(crate) of_type: Option<String>,
+    pub(crate) verb: Option<String>,
+    pub(crate) body: Option<String>,
+    pub(crate) irreversible: bool,
+    pub(crate) pushdown: Option<String>,
 }
 
-fn load_from_conn(conn: &rusqlite::Connection) -> Result<Vec<DeclaredDriver>, rusqlite::Error> {
+/// The declaration-row columns a `CREATE DRIVER`/`TYPE`/`VIEW`/`MAP`/`LOOKUP` desugars into, in the
+/// grammar's own order (`qfs_parser`'s `DRIVER_DECL_COLUMNS`). Repeated here rather than exported
+/// because the read below maps by NAME, so the list is a recogniser for "this insert is a
+/// declaration row", never a positional contract.
+const DECL_COLUMNS: [&str; 10] = [
+    "kind",
+    "name",
+    "base_url",
+    "auth",
+    "pagination",
+    "of_type",
+    "verb",
+    "body",
+    "irreversible",
+    "pushdown",
+];
+
+/// Read every `sys_drivers` row, install order. The raw rows before [`assemble`] — what the
+/// currency check compares and what the loader groups.
+pub(crate) fn rows_from_conn(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<DriverRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT kind, name, base_url, auth, pagination, of_type, verb, body, irreversible, \
                 pushdown, id \
          FROM sys_drivers ORDER BY id",
     )?;
-    let rows: Vec<DriverRow> = stmt
+    let rows = stmt
         .query_map([], |r| {
             Ok(DriverRow {
                 kind: r.get(0)?,
@@ -174,7 +198,61 @@ fn load_from_conn(conn: &rusqlite::Connection) -> Result<Vec<DeclaredDriver>, ru
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(assemble(rows))
+    Ok(rows)
+}
+
+/// Read one declaration row back out of a PARSED statement — the shipped side of the currency
+/// comparison. A statement is a declaration row iff it is an effect whose `VALUES` name exactly the
+/// declaration columns; that recogniser is used instead of matching the `/sys/drivers` target path
+/// because the column set is what the row IS, and it keeps this off the path-AST entirely.
+/// Anything else in a script (a `CONNECT`, a comment-only chunk) returns `None`.
+pub(crate) fn driver_row_from_statement(stmt: &qfs_exec::Statement, id: i64) -> Option<DriverRow> {
+    let qfs_exec::Statement::Effect(effect) = stmt else {
+        return None;
+    };
+    let qfs_exec::EffectBody::Values(values) = &effect.body else {
+        return None;
+    };
+    let columns = values.columns.as_ref()?;
+    if columns.len() != DECL_COLUMNS.len()
+        || !DECL_COLUMNS.iter().all(|c| columns.iter().any(|k| k == c))
+    {
+        return None;
+    }
+    let row = values.rows.first()?;
+    let at = |col: &str| -> Option<&qfs_exec::Expr> {
+        let i = columns.iter().position(|k| k == col)?;
+        row.get(i)
+    };
+    let text = |col: &str| -> Option<String> {
+        match at(col) {
+            Some(qfs_exec::Expr::Lit(qfs_exec::Literal::Str(s))) => Some(s.clone()),
+            _ => None,
+        }
+    };
+    let flag = |col: &str| -> bool {
+        matches!(
+            at(col),
+            Some(qfs_exec::Expr::Lit(qfs_exec::Literal::Bool(true)))
+        )
+    };
+    Some(DriverRow {
+        id,
+        kind: text("kind")?,
+        name: text("name")?,
+        base_url: text("base_url"),
+        auth: text("auth"),
+        pagination: text("pagination"),
+        of_type: text("of_type"),
+        verb: text("verb"),
+        body: text("body"),
+        irreversible: flag("irreversible"),
+        pushdown: text("pushdown"),
+    })
+}
+
+fn load_from_conn(conn: &rusqlite::Connection) -> Result<Vec<DeclaredDriver>, rusqlite::Error> {
+    Ok(assemble(rows_from_conn(conn)?))
 }
 
 /// Group flat `sys_drivers` rows into per-driver models. A `driver` row seeds a [`DeclaredDriver`];
@@ -324,6 +402,9 @@ impl DeclaredDriver {
     /// driver's own namespace (the token lives in the account layer, never in the row).
     pub(crate) fn rest_config(&self) -> RestApiConfig {
         let mut config = RestApiConfig::new(self.base_url.clone(), self.resources())
+            // The per-node capability table the plan-time verb gate reads. `resources` stays the
+            // leading-segment aggregate the wire layer resolves a resource with.
+            .with_nodes(self.declared_nodes())
             .with_auth(self.auth_strategy());
         if let Some(p) = self.pagination.as_deref().and_then(parse_pagination) {
             config = config.with_pagination(p);
@@ -397,13 +478,156 @@ impl DeclaredDriver {
             .map(|(seg, verbs, irr)| ResourceMap::new(seg, verbs).with_irreversible_verbs(irr))
             .collect()
     }
+
+    /// The driver's view/map nodes as a per-node capability table, keyed by each node's own path
+    /// **template** (`{ws}/files/{file}`) rather than by its leading segment. This is what the
+    /// plan-time verb gate reads: [`Self::resources`]'s segment aggregate answers the union of
+    /// every verb declared under a leading segment, which for a per-tenant declaration (Slack's
+    /// every node lives under `/slack/{ws}/…`) is every verb the driver declares anywhere — so
+    /// `REMOVE /slack/<ws>/users` passed a gate no `CREATE MAP` declares.
+    ///
+    /// A view contributes `SELECT`; a map contributes its mapped verb, and its `IRREVERSIBLE` flag
+    /// when it carries one. A `CALL` map contributes no universal verb (it is answered by the
+    /// procedure registry), exactly as in the segment aggregate.
+    fn declared_nodes(&self) -> Vec<NodeMap> {
+        // (template, verbs, irreversible subset), in declaration order.
+        let mut by_path: Vec<(String, Vec<RestVerb>, Vec<RestVerb>)> = Vec::new();
+        let mut add = |template: String, verb: RestVerb, irreversible: bool| {
+            if let Some(entry) = by_path.iter_mut().find(|(p, ..)| *p == template) {
+                if !entry.1.contains(&verb) {
+                    entry.1.push(verb);
+                }
+                if irreversible && !entry.2.contains(&verb) {
+                    entry.2.push(verb);
+                }
+            } else {
+                let irr = if irreversible { vec![verb] } else { Vec::new() };
+                by_path.push((template, vec![verb], irr));
+            }
+        };
+        for v in &self.views {
+            if let Some(p) = resource_path(&self.name, &v.path) {
+                add(p.to_string(), RestVerb::Select, false);
+            }
+        }
+        for m in &self.maps {
+            if let (Some(p), Some(verb)) = (resource_path(&self.name, &m.path), map_verb(&m.verb)) {
+                add(p.to_string(), verb, m.irreversible);
+            }
+        }
+        by_path
+            .into_iter()
+            .map(|(p, verbs, irr)| NodeMap::new(p, verbs).with_irreversible_verbs(irr))
+            .collect()
+    }
+}
+
+/// The node path relative to its driver mount (`chatwork`, `/chatwork/rooms/{room}/files` →
+/// `rooms/{room}/files`) — the coordinate space a [`NodeMap`] template is written in, and the one
+/// an inbound `/rest/<name>/<resource…>` path reduces to. `None` if the path does not mount under
+/// the driver, or names the mount root alone.
+fn resource_path<'a>(driver: &str, path: &'a str) -> Option<&'a str> {
+    let rest = path.trim_start_matches('/').strip_prefix(driver)?;
+    let rest = rest.trim_start_matches('/');
+    (!rest.is_empty()).then_some(rest)
+}
+
+/// Lift a declared driver's `CREATE VIEW`/`CREATE MAP` rows onto the describe mount's node list —
+/// the same shape of lift [`DeclaredDriver::procedures`] performs for `CREATE MAP CALL`.
+///
+/// This is what makes a declared driver **discoverable**: without it `DESCRIBE` fell back to the
+/// generic REST answer (one open `value: Json` column, no children), so the documented agent loop's
+/// first step — read the node's columns and build a statement from them — could not be run against
+/// one, even though the declaration carried both answers.
+///
+/// The paths are rewritten into the stock [`RestDriver`]'s own `/rest/<name>/…` namespace, which is
+/// what [`declared_remap`] maps the mount onto.
+pub(crate) fn declared_node_descs(
+    d: &DeclaredDriver,
+    types: &qfs_core::DeclaredTypeDefs,
+) -> Vec<qfs_driver_http::DeclaredNodeDesc> {
+    use qfs_driver_http::{DeclaredNodeDesc, DeclaredNodeType};
+
+    let mut out: Vec<DeclaredNodeDesc> = Vec::new();
+    let mut push =
+        |template: String, of: Option<DeclaredNodeType>, verb: Option<qfs_core::Verb>| {
+            if let Some(existing) = out.iter_mut().find(|n| n.template == template) {
+                if let Some(verb) = verb {
+                    if !existing.verbs.contains(&verb) {
+                        existing.verbs.push(verb);
+                    }
+                }
+                if existing.of.is_none() {
+                    existing.of = of;
+                }
+                return;
+            }
+            out.push(DeclaredNodeDesc {
+                template,
+                of,
+                verbs: verb.into_iter().collect(),
+            });
+        };
+
+    for v in &d.views {
+        let Some(template) = rest_template(&d.name, &v.path) else {
+            continue;
+        };
+        // A view's `OF <type>` resolves against the SAME declared-type registry the read path
+        // shapes rows with (`declared_eval::view_specs`), so DESCRIBE and `run` cannot disagree.
+        // A type that does not resolve yields `None` — reported as "no row type stated" rather
+        // than a fabricated one.
+        let of = v.of_type.as_deref().and_then(|name| {
+            types.get(name).map(|def| DeclaredNodeType {
+                name: name.to_string(),
+                schema: def.schema.clone(),
+                key_columns: def
+                    .columns
+                    .iter()
+                    .filter(|c| c.primary_key)
+                    .map(|c| c.name.clone())
+                    .collect(),
+            })
+        });
+        push(template, of, Some(qfs_core::Verb::Select));
+    }
+    for m in &d.maps {
+        let Some(template) = rest_template(&d.name, &m.path) else {
+            continue;
+        };
+        // A `CALL` mapping contributes a PROCEDURE, not a node verb (it rides `with_procs`).
+        push(template, None, declared_map_universal_verb(&m.verb));
+    }
+    out
+}
+
+/// The universal [`qfs_core::Verb`] a declared MAP's verb label maps onto, or `None` for a `CALL`
+/// mapping (a procedure, not a node verb).
+fn declared_map_universal_verb(verb: &str) -> Option<qfs_core::Verb> {
+    match verb {
+        "INSERT" => Some(qfs_core::Verb::Insert),
+        "UPSERT" => Some(qfs_core::Verb::Upsert),
+        "UPDATE" => Some(qfs_core::Verb::Update),
+        "REMOVE" => Some(qfs_core::Verb::Remove),
+        _ => None,
+    }
+}
+
+/// Rewrite a declared node path onto the stock `RestDriver`'s namespace
+/// (`chatwork`, `/chatwork/rooms/{room}` → `/rest/chatwork/rooms/{room}`). `None` when the path does
+/// not mount under the driver.
+fn rest_template(driver: &str, path: &str) -> Option<String> {
+    let rest = path.trim_start_matches('/').strip_prefix(driver)?;
+    if !rest.is_empty() && !rest.starts_with('/') {
+        return None;
+    }
+    Some(format!("/rest/{driver}{rest}"))
 }
 
 /// The resource segment of a node path relative to its driver mount (`chatwork`, `/chatwork/rooms/…`
 /// → `rooms`). `None` if the path does not mount under the driver.
 fn resource_segment<'a>(driver: &str, path: &'a str) -> Option<&'a str> {
-    let rest = path.trim_start_matches('/').strip_prefix(driver)?;
-    rest.trim_start_matches('/')
+    resource_path(driver, path)?
         .split('/')
         .next()
         .filter(|s| !s.is_empty())
@@ -590,9 +814,13 @@ pub(crate) fn declared_remap(
 /// `RestDriver` (MockHttp + empty secrets — describe is pure) wrapped in the `/rest/<name>` remap so
 /// `DESCRIBE`/capabilities of `<binding>/<resource>` resolve. Compiled drivers are probed first by the
 /// caller, so this is reached only for a declared-only name (compiled wins a collision).
-pub(crate) fn declared_describe_mount(
+/// The declared-type registry is supplied by the CALLER (rather than read here) so a registry build
+/// mounting several declared drivers reads `/sys/drivers` once, and a test can hand in a fixture
+/// registry without a System DB.
+pub(crate) fn declared_describe_mount_with_types(
     binding_path: &str,
     d: &DeclaredDriver,
+    types: &qfs_core::DeclaredTypeDefs,
 ) -> Option<crate::mount_adapter::MountDriver> {
     let json = qfs_core::CodecRegistry::with_builtins()
         .resolve("json")
@@ -606,7 +834,10 @@ pub(crate) fn declared_describe_mount(
         )
         // §13.1 G5: DESCRIBE reports the declared typed CALL signatures cred-free, exactly as a
         // compiled driver's registry does.
-        .with_procs(d.procedures()),
+        .with_procs(d.procedures())
+        // §13: and the declared NODES — each view's `OF` columns, its declared verbs, and the
+        // child paths beneath it — so the mount is walkable from its root down.
+        .with_declared_nodes(declared_node_descs(d, types)),
     );
     let remap = declared_remap(binding_path, &d.name)?;
     Some(crate::mount_adapter::MountDriver::with_remap(remap, driver))
@@ -1750,7 +1981,10 @@ mod tests {
             cfg.pagination,
             Pagination::Cursor { max_pages: 50, .. }
         ));
-        // One resource `rooms` aggregating SELECT (from the view) and INSERT (from the map).
+        // One resource `rooms` aggregating SELECT (from the view) and INSERT (from the map). The
+        // segment aggregate is deliberate and unchanged: it is what the wire layer resolves a
+        // resource with (`resource_for_segment`), and here the whole declaration IS one node, so
+        // the aggregate and the per-node answer agree.
         assert_eq!(cfg.resources.len(), 1);
         assert_eq!(cfg.resources[0].segment, "rooms");
         assert!(
@@ -1759,6 +1993,15 @@ mod tests {
         );
         // A reversible map leaves the resource ungated.
         assert!(!cfg.resources[0].is_irreversible(RestVerb::Insert));
+        // And the per-node table the plan-time gate reads, keyed by the node's own template.
+        assert_eq!(cfg.nodes.len(), 1);
+        assert_eq!(cfg.nodes[0].path, "rooms");
+        assert_eq!(
+            cfg.verbs_for_path("rooms"),
+            vec![RestVerb::Select, RestVerb::Insert]
+        );
+        assert!(cfg.verbs_for_path("rooms/1/messages").is_empty());
+        assert!(!cfg.irreversible_for_path("rooms", RestVerb::Insert));
         // Every declared driver carries the versioned binary User-Agent (GitHub's live API
         // rejects UA-less requests).
         assert!(cfg
@@ -1803,6 +2046,13 @@ mod tests {
         assert!(
             !notes.is_irreversible(RestVerb::Upsert),
             "a reversible map leaves its verb ungated"
+        );
+        // The same marking on the per-node table the gate reads, node by node.
+        assert!(cfg.irreversible_for_path("post", RestVerb::Insert));
+        assert!(!cfg.irreversible_for_path("notes", RestVerb::Upsert));
+        assert!(
+            !cfg.irreversible_for_path("notes", RestVerb::Insert),
+            "the gated INSERT belongs to `post` alone"
         );
     }
 
@@ -1967,7 +2217,12 @@ mod tests {
         // The remap fix: a declared mount at `/chatwork` resolves resource `rooms`'s SELECT (view) +
         // INSERT (map). A single-segment remap would resolve EMPTY here (the bug this closes).
         use qfs_core::{Path, Verb};
-        let mount = declared_describe_mount("/chatwork", &chatwork_fixture()).expect("mounts");
+        let mount = declared_describe_mount_with_types(
+            "/chatwork",
+            &chatwork_fixture(),
+            &qfs_core::DeclaredTypeDefs::new(),
+        )
+        .expect("mounts");
         let p = Path::new("/chatwork/rooms");
         assert!(
             qfs_core::check_capability(&mount, &p, Verb::Select).is_ok(),
@@ -2773,52 +3028,7 @@ mod tests {
     /// and the `IRREVERSIBLE` flag — read from the SHIPPED bytes, so the effect-equivalence proofs
     /// below cannot drift from the declaration an operator actually installs.
     fn shipped_slack_maps() -> Vec<DeclaredMap> {
-        let maps: Vec<DeclaredMap> =
-            shipped_statements_of_kind(qfs_skill::SLACK_DRIVER, "CREATE MAP ")
-                .iter()
-                .map(|stmt| {
-                    // The declaration wraps across lines; collapse it to one line so the `AS` seam and
-                    // the signature parens are found the same way wherever the author broke the line.
-                    let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
-                    let (head, tail) = stmt
-                        .split_once(" AS ")
-                        .expect("a MAP declares `AS <effect>`");
-                    let (body_src, irreversible) = match tail.trim().strip_suffix("IRREVERSIBLE") {
-                        Some(b) => (b.trim(), true),
-                        None => (tail.trim(), false),
-                    };
-                    let head = head.trim_start_matches("CREATE MAP ").trim();
-                    // `CALL <drv>.<action> ( <sig> ) /<node>` or `<VERB> /<node>`. The verb label is
-                    // rendered canonically (no space before the signature, `, `-joined params) — the
-                    // shape `declared_proc_sig`/`call_action` read, asserted against the compiled
-                    // registry in `shipped_slack_call_maps_carry_typed_g5_signatures`.
-                    let (verb, path) = match head.split_once('(') {
-                        Some((call_head, rest)) => {
-                            let (sig, path) = rest.split_once(')').expect("a signature closes");
-                            let sig = sig
-                                .split(',')
-                                .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            (format!("{}({sig})", call_head.trim()), path.trim())
-                        }
-                        None => {
-                            let (verb, path) =
-                                head.split_once(' ').expect("a verb then a node path");
-                            (verb.trim().to_string(), path.trim())
-                        }
-                    };
-                    DeclaredMap {
-                        path: path.to_string(),
-                        verb,
-                        body: serde_json::to_string(
-                            &qfs_exec::parse(body_src).expect("body parses"),
-                        )
-                        .expect("body serializes"),
-                        irreversible,
-                    }
-                })
-                .collect();
+        let maps = shipped_maps(qfs_skill::SLACK_DRIVER);
         assert_eq!(
             maps.len(),
             7,
@@ -2827,12 +3037,64 @@ mod tests {
         maps
     }
 
+    /// The same lift for any SHIPPED declaration — the per-asset helpers above pin their own
+    /// counts on top of it.
+    fn shipped_maps(script: &str) -> Vec<DeclaredMap> {
+        shipped_statements_of_kind(script, "CREATE MAP ")
+            .iter()
+            .map(|stmt| {
+                // The declaration wraps across lines; collapse it to one line so the `AS` seam and
+                // the signature parens are found the same way wherever the author broke the line.
+                let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
+                let (head, tail) = stmt
+                    .split_once(" AS ")
+                    .expect("a MAP declares `AS <effect>`");
+                let (body_src, irreversible) = match tail.trim().strip_suffix("IRREVERSIBLE") {
+                    Some(b) => (b.trim(), true),
+                    None => (tail.trim(), false),
+                };
+                let head = head.trim_start_matches("CREATE MAP ").trim();
+                // `CALL <drv>.<action> ( <sig> ) /<node>` or `<VERB> /<node>`. The verb label is
+                // rendered canonically (no space before the signature, `, `-joined params) — the
+                // shape `declared_proc_sig`/`call_action` read, asserted against the compiled
+                // registry in `shipped_slack_call_maps_carry_typed_g5_signatures`.
+                let (verb, path) = match head.split_once('(') {
+                    Some((call_head, rest)) => {
+                        let (sig, path) = rest.split_once(')').expect("a signature closes");
+                        let sig = sig
+                            .split(',')
+                            .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        (format!("{}({sig})", call_head.trim()), path.trim())
+                    }
+                    None => {
+                        let (verb, path) = head.split_once(' ').expect("a verb then a node path");
+                        (verb.trim().to_string(), path.trim())
+                    }
+                };
+                DeclaredMap {
+                    path: path.to_string(),
+                    verb,
+                    body: serde_json::to_string(&qfs_exec::parse(body_src).expect("body parses"))
+                        .expect("body serializes"),
+                    irreversible,
+                }
+            })
+            .collect()
+    }
+
     /// Every `CREATE VIEW` the SHIPPED `slack_driver.qfs` declares, as the [`DeclaredNode`] rows an
     /// install writes. The §13.1 G9 reverse lookup searches a DECLARED VIEW, so the write facet needs
     /// these for a CALL map's `LET` to resolve at all — read from the shipped bytes for the same
     /// reason the maps are.
     fn shipped_slack_views() -> Vec<DeclaredNode> {
-        shipped_statements_of_kind(qfs_skill::SLACK_DRIVER, "CREATE VIEW ")
+        shipped_views(qfs_skill::SLACK_DRIVER)
+    }
+
+    /// The same lift for any SHIPPED declaration.
+    fn shipped_views(script: &str) -> Vec<DeclaredNode> {
+        shipped_statements_of_kind(script, "CREATE VIEW ")
             .iter()
             .map(|stmt| {
                 let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -3354,7 +3616,9 @@ mod tests {
         // at TYPECHECK, before a plan (let alone a wire request) exists. One negative case per
         // DISTINCT declared shape: `(channel, ts, emoji)`, `(channel, ts)`, `(channel, ts, text)`.
         let d = shipped_slack_declared_driver();
-        let mount = declared_describe_mount("/slack", &d).expect("the declared describe mount");
+        let mount =
+            declared_describe_mount_with_types("/slack", &d, &qfs_core::DeclaredTypeDefs::new())
+                .expect("the declared describe mount");
         let mut reg = qfs_core::MountRegistry::new();
         reg.register(Arc::new(mount)).expect("registers");
         let resolve = |src: &str| {
@@ -3419,7 +3683,9 @@ mod tests {
     #[test]
     fn an_unperformable_declared_write_refuses_at_plan_time() {
         let d = shipped_slack_declared_driver();
-        let mount = declared_describe_mount("/slack", &d).expect("the declared describe mount");
+        let mount =
+            declared_describe_mount_with_types("/slack", &d, &qfs_core::DeclaredTypeDefs::new())
+                .expect("the declared describe mount");
         let mut reg = qfs_core::MountRegistry::new();
         reg.register(Arc::new(mount)).expect("registers");
         let plan = |src: &str| {
@@ -3441,6 +3707,21 @@ mod tests {
             "the refusal lists the verbs the node DOES declare: {rendered}"
         );
 
+        // 1b. Routed, and the verb IS declared — on a DIFFERENT node under the same leading
+        // segment. `CREATE MAP REMOVE` exists for `/slack/{ws}/files/{file}` only, so a REMOVE of
+        // the user list is a write no declaration performs. The verbs answer per NODE, so it
+        // refuses naming what `/slack/{ws}/users` does declare (ticket 20260817001110; while the
+        // gate keyed on the leading segment, every `/slack/<ws>/…` path inherited the union
+        // `SELECT INSERT REMOVE` and this planned).
+        let foreign_verb = plan("remove /slack/W1/users")
+            .expect_err("a REMOVE declared on another node must not plan here");
+        assert_eq!(foreign_verb.code(), "unsupported_verb");
+        let rendered = foreign_verb.to_string();
+        assert!(
+            rendered.contains("/slack/W1/users") && rendered.contains("SELECT"),
+            "the refusal names the path and the node's own verbs: {rendered}"
+        );
+
         // 2. Not routed at all: refused as the read side is, naming the path.
         let unrouted = plan("INSERT INTO /nosuchdriver/x VALUES (a) ('1')")
             .expect_err("an unrouted write target must not plan");
@@ -3450,9 +3731,192 @@ mod tests {
             "the refusal names the path: {unrouted}"
         );
 
-        // The control: a MAPPED declared write still plans, unchanged.
+        // The controls: every MAPPED declared write still plans, on its own node.
         plan("INSERT INTO /slack/W1/C1/messages VALUES (text) ('hi')")
             .expect("a mapped declared write still plans");
+        plan("remove /slack/W1/files/F1").expect("the mapped file detach still plans");
+    }
+
+    /// A concrete path addressing the declared template `t`: every `{param}` segment bound to a
+    /// distinct placeholder, every literal segment kept. The placeholders are deliberately unlike
+    /// any literal segment the shipped declarations use, so the concretization of one node cannot
+    /// accidentally address another.
+    fn concrete_path_of(t: &str) -> String {
+        let bound: Vec<String> = t
+            .trim_start_matches('/')
+            .split('/')
+            .enumerate()
+            .map(|(i, seg)| {
+                if seg.starts_with('{') && seg.ends_with('}') {
+                    format!("Xp{i}")
+                } else {
+                    seg.to_string()
+                }
+            })
+            .collect();
+        format!("/{}", bound.join("/"))
+    }
+
+    /// The universal verb a lifted wire verb gates (the test-side twin of driver-http's private
+    /// `rest_verb_to_verb`).
+    fn rest_verb_as_verb(v: RestVerb) -> qfs_core::Verb {
+        match v {
+            RestVerb::Select => qfs_core::Verb::Select,
+            RestVerb::Insert => qfs_core::Verb::Insert,
+            RestVerb::Upsert => qfs_core::Verb::Upsert,
+            RestVerb::Remove => qfs_core::Verb::Remove,
+            _ => unreachable!("the wire verb set is closed"),
+        }
+    }
+
+    /// Whether the declared template `t` addresses the concrete path `p` — the test's own,
+    /// deliberately obvious re-derivation of the match the config performs.
+    fn template_addresses(t: &str, p: &str) -> bool {
+        let t: Vec<&str> = t.trim_matches('/').split('/').collect();
+        let p: Vec<&str> = p.trim_matches('/').split('/').collect();
+        t.len() == p.len()
+            && t.iter()
+                .zip(p.iter())
+                .all(|(ts, ps)| (ts.starts_with('{') && ts.ends_with('}')) || ts == ps)
+    }
+
+    /// A [`DeclaredDriver`] lifted from a SHIPPED `.qfs` asset's own bytes — the views and maps an
+    /// install writes into `/sys/drivers`. `base_url`/`auth` are immaterial to the capability
+    /// surface these tests read and are left at the declaration-free defaults.
+    fn shipped_declared_driver(name: &str, script: &str) -> DeclaredDriver {
+        DeclaredDriver {
+            name: name.into(),
+            base_url: format!("https://api.{name}.example"),
+            auth: r#"{"kind":"none"}"#.into(),
+            pagination: None,
+            pushdown: None,
+            views: shipped_views(script),
+            lookups: Vec::new(),
+            maps: shipped_maps(script),
+        }
+    }
+
+    #[test]
+    fn every_declared_node_answers_exactly_its_own_verbs() {
+        // Ticket 20260817001110. The plan-time capability answer is per DECLARED NODE, not per
+        // leading path segment: a node answers the verbs its own `CREATE VIEW` / `CREATE MAP`
+        // declares, never the union of every verb declared under the segment it happens to start
+        // with. Walked over all three SHIPPED declarations, from their own bytes.
+        use qfs_core::{Path, Verb};
+        let all_verbs = [Verb::Select, Verb::Insert, Verb::Upsert, Verb::Remove];
+        for (name, script) in [
+            ("slack", qfs_skill::SLACK_DRIVER),
+            ("chatwork", qfs_skill::CHATWORK_DRIVER),
+            ("cloudflare", qfs_skill::CLOUDFLARE_DRIVER),
+        ] {
+            let d = shipped_declared_driver(name, script);
+            assert!(
+                !d.views.is_empty() && !d.maps.is_empty(),
+                "{name} ships views and maps to walk"
+            );
+            let mount = declared_describe_mount_with_types(
+                &format!("/{name}"),
+                &d,
+                &qfs_core::DeclaredTypeDefs::new(),
+            )
+            .expect("the declared describe mount");
+            // The declaration's own answer: which verbs each template declares, from the rows.
+            let mut declared: Vec<(String, Verb)> = Vec::new();
+            for v in &d.views {
+                declared.push((v.path.clone(), Verb::Select));
+            }
+            for m in &d.maps {
+                if let Some(rv) = map_verb(&m.verb) {
+                    declared.push((m.path.clone(), rest_verb_as_verb(rv)));
+                }
+            }
+            for (template, _) in &declared {
+                let concrete = concrete_path_of(template);
+                let path = Path::new(&concrete);
+                for verb in all_verbs {
+                    let node_declares = declared
+                        .iter()
+                        .any(|(t, v)| *v == verb && template_addresses(t, &concrete));
+                    assert_eq!(
+                        qfs_core::check_capability(&mount, &path, verb).is_ok(),
+                        node_declares,
+                        "{concrete} answers {verb:?} iff a declaration addressing it says so \
+                         (declared: {declared:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_declared_node_does_not_inherit_a_sibling_nodes_verb() {
+        // The regression this closes, stated as the one pair that used to pass and must not: the
+        // shipped Slack declaration's every node lives under `/slack/{ws}/…`, so the leading
+        // segment's union answered SELECT + INSERT + REMOVE for every path alike. `CREATE MAP
+        // REMOVE` is declared for `/slack/{ws}/files/{file}` ONLY.
+        use qfs_core::{Path, Verb};
+        let d = shipped_declared_driver("slack", qfs_skill::SLACK_DRIVER);
+        let mount =
+            declared_describe_mount_with_types("/slack", &d, &qfs_core::DeclaredTypeDefs::new())
+                .expect("the declared describe mount");
+        // The coarse answer that used to be given to every path under the mount.
+        let segment_union = d.resources();
+        assert_eq!(
+            segment_union.len(),
+            1,
+            "one leading segment: {segment_union:?}"
+        );
+        assert!(
+            segment_union[0].supports(RestVerb::Remove)
+                && segment_union[0].supports(RestVerb::Insert),
+            "the segment aggregate still unions the whole declaration: {segment_union:?}"
+        );
+        // The per-node answer, on three nodes of that one segment.
+        assert!(
+            qfs_core::check_capability(&mount, &Path::new("/slack/W1/users"), Verb::Remove)
+                .is_err(),
+            "the user list declares no REMOVE — a file detach elsewhere does not lend it one"
+        );
+        assert!(
+            qfs_core::check_capability(&mount, &Path::new("/slack/W1/users"), Verb::Insert)
+                .is_err(),
+            "the user list declares no INSERT either"
+        );
+        assert!(
+            qfs_core::check_capability(&mount, &Path::new("/slack/W1/users"), Verb::Select).is_ok(),
+            "and it keeps the SELECT its view declares"
+        );
+        assert!(
+            qfs_core::check_capability(&mount, &Path::new("/slack/W1/files/F1"), Verb::Remove)
+                .is_ok(),
+            "the node the REMOVE map is declared on keeps it"
+        );
+        // A path no declaration addresses answers nothing, rather than the segment's union.
+        assert!(
+            qfs_core::check_capability(&mount, &Path::new("/slack/W1/nosuchnode"), Verb::Select)
+                .is_err(),
+            "an undeclared node advertises no verb at all"
+        );
+        // The irreversible marking travels with the node too: the detach is gated, the post is not.
+        let driver =
+            declared_describe_mount_with_types("/slack", &d, &qfs_core::DeclaredTypeDefs::new())
+                .expect("mount");
+        assert!(
+            qfs_core::Driver::write_irreversible(
+                &driver,
+                &Path::new("/slack/W1/files/F1"),
+                Verb::Remove
+            ),
+            "the declared IRREVERSIBLE detach stays gated"
+        );
+        assert!(
+            !qfs_core::Driver::write_irreversible(
+                &driver,
+                &Path::new("/slack/W1/C1/messages"),
+                Verb::Insert
+            ),
+            "the reversible message post does not inherit the detach's gate"
+        );
     }
 
     #[test]
@@ -5001,7 +5465,12 @@ mod tests {
 
         // Cred-free describe: capabilities resolve through the declared mount with ZERO network
         // (the mount is MockHttp-backed; describe reads only the static introspective half).
-        let mount = declared_describe_mount("/cloudflare", &d).expect("describe mount");
+        let mount = declared_describe_mount_with_types(
+            "/cloudflare",
+            &d,
+            &qfs_core::DeclaredTypeDefs::new(),
+        )
+        .expect("describe mount");
         assert!(
             qfs_core::check_capability(&mount, &Path::new("/cloudflare/zones"), Verb::Select)
                 .is_ok(),
@@ -5626,5 +6095,380 @@ mod tests {
         let bearer =
             super::declared_auth_bearer(mount).expect("the AUTH ACCOUNT 'cf' bearer resolves");
         assert_eq!(bearer.expose_str(), Some("cf-bearer-token"));
+    }
+
+    // ---------------------------------------------------------------------------
+    // §13 discoverability — DESCRIBE answers a declared node (ticket 20260728085253)
+    // ---------------------------------------------------------------------------
+
+    /// Split a shipped `.qfs` asset into its executable statements: strip `--` trailing and `#`
+    /// whole-line comments, split on `;` (the same splitter the install path uses).
+    fn split_statements(script: &str) -> Vec<String> {
+        let mut stmts: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        for raw in script.lines() {
+            let line = if raw.trim_start().starts_with('#') {
+                ""
+            } else {
+                raw.split("--").next().unwrap_or("")
+            };
+            let mut rest = line;
+            while let Some(pos) = rest.find(';') {
+                cur.push_str(&rest[..pos]);
+                if !cur.trim().is_empty() {
+                    stmts.push(cur.trim().to_string());
+                }
+                cur.clear();
+                rest = &rest[pos + 1..];
+            }
+            if !rest.is_empty() {
+                cur.push_str(rest);
+                cur.push('\n');
+            }
+        }
+        if !cur.trim().is_empty() {
+            stmts.push(cur.trim().to_string());
+        }
+        stmts
+    }
+
+    /// Rebuild the declared model from a SHIPPED `.qfs` asset, through the PRODUCTION path: parse
+    /// each statement to the `INSERT INTO /sys/drivers` it desugars to, read the row back out, and
+    /// hand the rows to the real [`assemble`] / [`qfs_core::ddl::types::resolve_type_def`].
+    ///
+    /// This is what makes the tests below a ratchet rather than a restatement: the fixture IS the
+    /// shipped bytes, so an edit to the asset that breaks discoverability fails here.
+    fn declared_from_script(script: &str) -> (Vec<DeclaredDriver>, qfs_core::DeclaredTypeDefs) {
+        let mut rows: Vec<DriverRow> = Vec::new();
+        let mut type_bodies: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for (i, stmt) in split_statements(script).iter().enumerate() {
+            let parsed = qfs_exec::parse(stmt).expect("a shipped statement parses");
+            let json = serde_json::to_value(&parsed).expect("statement serializes");
+            // The declaration desugar is `INSERT INTO /sys/drivers VALUES (…)`; anything else in a
+            // shipped asset is not a declaration row.
+            let Some(cells) = json
+                .pointer("/Effect/body/Values/rows/0")
+                .and_then(|r| r.as_array())
+            else {
+                continue;
+            };
+            // Literal cells, in DRIVER_DECL_COLUMNS order:
+            // kind, name, base_url, auth, pagination, of_type, verb, body, irreversible, pushdown.
+            let text = |n: usize| -> Option<String> {
+                cells
+                    .get(n)?
+                    .pointer("/Lit/Str")?
+                    .as_str()
+                    .map(str::to_string)
+            };
+            let (Some(kind), Some(name)) = (text(0), text(1)) else {
+                continue;
+            };
+            if kind == "type" {
+                if let Some(body) = text(7) {
+                    type_bodies.entry(name.clone()).or_insert(body);
+                }
+            }
+            rows.push(DriverRow {
+                id: i as i64,
+                kind,
+                name,
+                base_url: text(2),
+                auth: text(3),
+                pagination: text(4),
+                of_type: text(5),
+                verb: text(6),
+                body: text(7),
+                irreversible: cells
+                    .get(8)
+                    .and_then(|c| c.pointer("/Lit/Bool"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                pushdown: text(9),
+            });
+        }
+        let lookup = |path: &str| type_bodies.get(path).cloned();
+        let mut defs = qfs_core::DeclaredTypeDefs::new();
+        for (path, body) in &type_bodies {
+            if let Ok(resolved) = qfs_core::ddl::types::resolve_type_def(body, lookup) {
+                defs.insert(path.clone(), resolved);
+            }
+        }
+        (assemble(rows), defs)
+    }
+
+    /// The describe mount a shipped asset's driver serves, plus the driver model behind it.
+    fn shipped_mount(
+        script: &str,
+        driver_name: &str,
+        binding: &str,
+    ) -> (
+        DeclaredDriver,
+        qfs_core::DeclaredTypeDefs,
+        crate::mount_adapter::MountDriver,
+    ) {
+        let (drivers, types) = declared_from_script(script);
+        let d = drivers
+            .into_iter()
+            .find(|d| d.name == driver_name)
+            .expect("the shipped asset declares its driver");
+        let mount = declared_describe_mount_with_types(binding, &d, &types)
+            .expect("the declared describe mount builds");
+        (d, types, mount)
+    }
+
+    fn report(mount: &crate::mount_adapter::MountDriver, path: &str) -> qfs_core::DescribeReport {
+        qfs_core::DescribeReport::from_driver(mount, &qfs_core::Path::new(path))
+            .unwrap_or_else(|e| panic!("describe {path}: {e:?}"))
+    }
+
+    fn column_names(r: &qfs_core::DescribeReport) -> Vec<String> {
+        r.columns.iter().map(|c| c.name.clone()).collect()
+    }
+
+    /// **The core ratchet (ticket 20260728085253, item 1).** For EVERY view in the shipped
+    /// chatwork and cloudflare declarations, `DESCRIBE`'s columns are exactly the `OF` columns the
+    /// READ path shapes its rows to (`declared_eval::view_specs` → `eval_view_body`). The two used
+    /// to disagree — describe answered one open `value: Json` column while `run` returned the typed
+    /// contract — so an agent could not build a statement from describe output.
+    #[test]
+    fn describe_of_a_declared_node_reports_the_columns_the_read_path_delivers() {
+        for (script, name) in [
+            (qfs_skill::CHATWORK_DRIVER, "chatwork"),
+            (qfs_skill::CLOUDFLARE_DRIVER, "cloudflare"),
+        ] {
+            let (d, types, mount) = shipped_mount(script, name, &format!("/{name}"));
+            let specs = crate::declared_eval::view_specs(&d, &load_types_as_declared(&types));
+            assert!(!specs.is_empty(), "{name} declares views");
+            for spec in &specs {
+                let Some(of_columns) = spec.of_columns.as_ref() else {
+                    continue; // an `OF`-less view is covered by its own test below
+                };
+                let r = report(&mount, &spec.template);
+                assert_eq!(
+                    &column_names(&r),
+                    of_columns,
+                    "{}: DESCRIBE columns must equal the OF columns `run` shapes rows to",
+                    spec.template
+                );
+                assert!(
+                    matches!(r.schema_contract, qfs_core::SchemaContract::Declared { .. }),
+                    "{}: the columns are a DECLARED contract and say so",
+                    spec.template
+                );
+            }
+        }
+    }
+
+    /// `DeclaredType` (name + column names + refinement) rebuilt from the resolved defs, so the
+    /// ratchet above can drive the production `view_specs` without a System DB.
+    fn load_types_as_declared(defs: &qfs_core::DeclaredTypeDefs) -> Vec<DeclaredType> {
+        defs.iter()
+            .map(|(path, def)| DeclaredType {
+                path: path.clone(),
+                columns: def.columns.iter().map(|c| c.name.clone()).collect(),
+                refinement: def.refinement.clone(),
+            })
+            .collect()
+    }
+
+    /// **Item 2.** Walking from the mount ROOT to a leaf using ONLY describe output must reach the
+    /// declared surface — including the `{param}` segments, legible as parameters. Before this, the
+    /// root reported `child_address: none` with every verb false and pointed nowhere.
+    #[test]
+    fn a_declared_mount_is_walkable_from_its_root_down_to_a_leaf() {
+        let (_, _, mount) = shipped_mount(qfs_skill::CHATWORK_DRIVER, "chatwork", "/chatwork");
+
+        let root = report(&mount, "/chatwork");
+        let segments: Vec<&str> = root.children.iter().map(|c| c.segment.as_str()).collect();
+        assert_eq!(
+            segments,
+            vec!["rooms"],
+            "the mount root points at /chatwork/rooms"
+        );
+        assert_eq!(root.children[0].path, "/chatwork/rooms");
+        assert!(root.children[0].parameter.is_none());
+
+        // Walk down, following ONLY the paths describe hands back.
+        let rooms = report(&mount, &root.children[0].path);
+        let room = rooms
+            .children
+            .iter()
+            .find(|c| c.parameter.as_deref() == Some("room"))
+            .expect("a room id goes here, and describe says so");
+        assert_eq!(room.path, "/chatwork/rooms/{room}");
+
+        // A CONCRETE room id resolves the same children a `{room}` template does — the walk works
+        // against a real address, which is the point.
+        for parent in ["/chatwork/rooms/{room}", "/chatwork/rooms/12345"] {
+            let r = report(&mount, parent);
+            let mut segs: Vec<&str> = r.children.iter().map(|c| c.segment.as_str()).collect();
+            segs.sort_unstable();
+            assert_eq!(segs, vec!["files", "messages"], "children of {parent}");
+        }
+
+        // `…/messages` is a typed node carrying its declared columns, and it points one step
+        // further at its unread-only reading (a declared view of its own).
+        let messages = report(&mount, "/chatwork/rooms/12345/messages");
+        assert!(
+            column_names(&messages).contains(&"body".to_string()),
+            "the node carries its declared columns: {:?}",
+            column_names(&messages)
+        );
+        let unread = messages
+            .children
+            .iter()
+            .find(|c| c.segment == "unread")
+            .expect("`…/messages` points at its unread-only reading, and describe says so");
+        assert_eq!(unread.path, "/chatwork/rooms/12345/messages/unread");
+
+        // The leaf is a real typed node reached purely by following child paths.
+        let leaf = report(&mount, &unread.path);
+        assert!(
+            column_names(&leaf).contains(&"body".to_string()),
+            "the leaf carries its declared columns: {:?}",
+            column_names(&leaf)
+        );
+        assert!(leaf.children.is_empty(), "a leaf declares no children");
+    }
+
+    /// **Item 1, negative half.** A declared view with NO `OF` states that, instead of reporting a
+    /// synthetic `value: Json` a caller would read as the node's schema. The shipped chatwork blob
+    /// view is exactly this case.
+    #[test]
+    fn a_declared_view_without_an_of_type_says_so_rather_than_inventing_value_json() {
+        let (_, _, mount) = shipped_mount(qfs_skill::CHATWORK_DRIVER, "chatwork", "/chatwork");
+        let blob = report(&mount, "/chatwork/rooms/12345/files/99/blob");
+        assert!(
+            blob.columns.is_empty(),
+            "no invented columns: {:?}",
+            column_names(&blob)
+        );
+        assert!(
+            matches!(blob.schema_contract, qfs_core::SchemaContract::Undeclared),
+            "the report states that no row type was declared"
+        );
+        assert!(
+            !serde_json::to_string(&blob).unwrap().contains("\"value\""),
+            "the synthetic `value: Json` column is gone"
+        );
+    }
+
+    /// A declared node advertises exactly the verbs ITS OWN declarations gave it. `/chatwork/rooms`
+    /// is a view (SELECT only); the INSERT belongs to `/chatwork/rooms/{room}/messages`, and used to
+    /// leak onto the parent because capabilities were keyed by the `rooms` resource SEGMENT.
+    #[test]
+    fn a_declared_node_advertises_only_its_own_declared_verbs() {
+        let (_, _, mount) = shipped_mount(qfs_skill::CHATWORK_DRIVER, "chatwork", "/chatwork");
+
+        let rooms = report(&mount, "/chatwork/rooms");
+        assert!(rooms.verbs.select, "the rooms view reads");
+        assert!(
+            !rooms.verbs.insert,
+            "no INSERT map is declared on /chatwork/rooms"
+        );
+        assert!(
+            !rooms.native_verbs.contains("INSERT"),
+            "the agent-facing hint cannot over-claim either: {}",
+            rooms.native_verbs
+        );
+
+        let messages = report(&mount, "/chatwork/rooms/12345/messages");
+        assert!(
+            messages.verbs.select && messages.verbs.insert,
+            "messages is both a view and an INSERT map"
+        );
+
+        // The mount ROOT bears no rows of its own and claims no verb — but it is enterable and its
+        // children say where to go, which is the difference from the old dead end.
+        let root = report(&mount, "/chatwork");
+        assert!(!root.verbs.select && !root.verbs.insert);
+        assert!(!root.children.is_empty());
+    }
+
+    /// **Item 3.** The shipped Chatwork types carry the fields a caller actually needs — the unread
+    /// / mention / message counts and last-update time that answer "which conversations have
+    /// something new", and the sender columns without which a message row cannot be attributed.
+    /// Pinned through DESCRIBE, so the declaration and the discoverable surface cannot drift.
+    #[test]
+    fn the_shipped_chatwork_types_carry_the_fields_a_caller_needs() {
+        let (_, _, mount) = shipped_mount(qfs_skill::CHATWORK_DRIVER, "chatwork", "/chatwork");
+
+        let rooms = column_names(&report(&mount, "/chatwork/rooms"));
+        for col in [
+            "unread_num",
+            "mention_num",
+            "message_num",
+            "last_update_time",
+        ] {
+            assert!(
+                rooms.contains(&col.to_string()),
+                "rooms lacks {col}: {rooms:?}"
+            );
+        }
+
+        let messages = column_names(&report(&mount, "/chatwork/rooms/1/messages"));
+        for col in ["account_id", "account_name", "update_time"] {
+            assert!(
+                messages.contains(&col.to_string()),
+                "messages lacks {col}: {messages:?}"
+            );
+        }
+    }
+
+    /// The **live-shaped** half of the ratchet: run the shipped messages view's body over a
+    /// real-shaped Chatwork payload (the sender nested under `account`) and assert the delivered
+    /// columns are exactly what DESCRIBE promised — values included, not nulls.
+    #[test]
+    fn the_shipped_messages_view_delivers_exactly_the_columns_describe_promises() {
+        let (d, types, mount) = shipped_mount(qfs_skill::CHATWORK_DRIVER, "chatwork", "/chatwork");
+        let promised = column_names(&report(&mount, "/chatwork/rooms/1/messages"));
+
+        let spec = crate::declared_eval::view_specs(&d, &load_types_as_declared(&types))
+            .into_iter()
+            .find(|s| s.template == "/chatwork/rooms/{room}/messages")
+            .expect("the messages view is declared");
+        let delivered = qfs_exec::declared::eval_view_body(
+            &spec.body,
+            "chatwork",
+            "/chatwork/rooms/1/messages",
+            spec.of_columns.as_deref(),
+            spec.of_refinement.as_ref(),
+            &[("room".to_string(), "1".to_string())],
+            &[],
+            |_path, _post| {
+                Ok(qfs_core::CodecRegistry::with_builtins()
+                    .resolve("json")
+                    .unwrap()
+                    .decode(
+                        br#"[{"message_id":"1000","account":{"account_id":123,"name":"Ada","avatar_image_url":"x"},
+                              "body":"hello","send_time":1700000000,"update_time":0}]"#,
+                    )
+                    .unwrap())
+            },
+            |_url| unreachable!("the messages view performs no FOLLOW"),
+        )
+        .expect("the shipped messages view evaluates");
+
+        let got: Vec<String> = delivered
+            .schema
+            .columns
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        assert_eq!(got, promised, "run delivers exactly what describe promised");
+        // The sender is really lifted out of the nested `account` object, not left null.
+        let idx = |n: &str| got.iter().position(|c| c == n).expect(n);
+        assert_eq!(
+            delivered.rows[0].values[idx("account_name")],
+            qfs_core::Value::Text("Ada".into()),
+            "the nested sender name reaches its declared column"
+        );
+        assert_ne!(
+            delivered.rows[0].values[idx("account_id")],
+            qfs_core::Value::Null,
+            "the nested sender id reaches its declared column"
+        );
     }
 }

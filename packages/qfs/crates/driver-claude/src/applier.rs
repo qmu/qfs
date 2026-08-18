@@ -81,6 +81,15 @@ impl ClaudeApplier {
                 // The launcher returns the new session id; the runtime effect channel carries only
                 // an affected count, so the id surfaces through the seam (proven hermetically) and
                 // the plan's `RETURNING id` schema types the projection. One session launched.
+                //
+                // The id is DELIBERATELY dropped here for now (decided 2026-08-18, ticket
+                // `20260816161143`): `EffectOutcome` carries a count and no row, so carrying the id
+                // out to a caller is a change to the effect channel's shape, not to this line. Do
+                // not "fix" this by widening the return type in passing — until that channel exists,
+                // the value would have nowhere to go. What the ticket did change is that the id is
+                // now correct when it is finally read: `parse_backgrounded_id` returned the session
+                // NAME for a `--name` launch, and the defect was invisible precisely because this
+                // line discards it.
                 launcher.launch(&spec)?;
                 Ok(1)
             }

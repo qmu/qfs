@@ -229,10 +229,24 @@ fn render_describe_table(
         report.native_verbs
     )?;
 
-    // Columns table (name + type + nullability).
-    writeln!(w, "columns:")?;
+    // Columns table (name + type + nullability), headed by where those columns come from — so a
+    // reader can tell a stated row contract from a node that declares none.
+    match &report.schema_contract {
+        qfs_core::SchemaContract::Declared { of_type } => {
+            writeln!(w, "columns:   (declared OF {of_type})")?;
+        }
+        qfs_core::SchemaContract::Undeclared if report.columns.is_empty() => {
+            writeln!(
+                w,
+                "columns:   (none declared — this node states no row type; run it to see its columns)"
+            )?;
+        }
+        _ => writeln!(w, "columns:")?,
+    }
     if report.columns.is_empty() {
-        writeln!(w, "  (none — schema filled by the engine at query time)")?;
+        if !matches!(report.schema_contract, qfs_core::SchemaContract::Undeclared) {
+            writeln!(w, "  (none — schema filled by the engine at query time)")?;
+        }
     } else {
         let headers = vec!["name".to_string(), "type".to_string(), "null".to_string()];
         let cells: Vec<Vec<String>> = report
@@ -250,6 +264,18 @@ fn render_describe_table(
         render_table(&headers, &cells, &mut indented)?;
         for line in String::from_utf8_lossy(&indented).lines() {
             writeln!(w, "  {line}")?;
+        }
+    }
+
+    // Declared child locations — the next segments to walk. This is the line that makes a mount
+    // root lead somewhere instead of dead-ending.
+    if !report.children.is_empty() {
+        writeln!(w, "children:")?;
+        for c in &report.children {
+            match &c.parameter {
+                Some(param) => writeln!(w, "  {}  ({param} — substitute a value)", c.path)?,
+                None => writeln!(w, "  {}", c.path)?,
+            }
         }
     }
 

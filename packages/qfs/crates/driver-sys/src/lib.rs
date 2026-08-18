@@ -104,7 +104,13 @@ pub fn sys_node_capabilities(node: SysNode) -> Capabilities {
         | SysNode::Connections
         | SysNode::Metrics
         // /sys/whoami: SELECT-only, resolved from the request principal (never written).
-        | SysNode::Whoami => Capabilities::from_verbs(&[Verb::Select]),
+        | SysNode::Whoami
+        // /sys/declarations: SELECT-only, derived per read from the installed rows plus the
+        // binary's embedded assets. It is deliberately NOT writable: the upgrade ruling
+        // (blueprint §13) is operator-initiated, so the way to act on a `stale` row is to
+        // re-install its statements through the ordinary previewed `/sys/drivers` write — never a
+        // write to this view.
+        | SysNode::Declarations => Capabilities::from_verbs(&[Verb::Select]),
     }
 }
 
@@ -227,6 +233,34 @@ mod tests {
             d.describe(&Path::new("/sys/audit")).unwrap().child_address,
             qfs_driver::ChildAddress::None
         );
+    }
+
+    /// blueprint §13.4 (ticket 20260812141223): `/sys/declarations` is a READ — the upgrade ruling
+    /// is operator-initiated, so the node that reports staleness must not be the node that fixes
+    /// it. Its describe stays pure like every other `/sys` node, and its schema carries the closed
+    /// three-value answer plus the asset it was compared against.
+    #[test]
+    fn declarations_is_a_pure_read_only_currency_view() {
+        let d = SysDriver::new();
+        let desc = d.describe(&Path::new("/sys/declarations")).unwrap();
+        assert_eq!(desc.archetype, Archetype::RelationalTable);
+        for col in ["driver", "status", "shipped", "differs"] {
+            assert!(
+                desc.schema.column(col).is_some(),
+                "/sys/declarations declares {col}"
+            );
+        }
+        // `shipped` is NULLABLE on purpose: a locally authored declaration has no shipped
+        // counterpart, and a non-null placeholder there would read as one.
+        assert!(desc.schema.column("shipped").unwrap().nullable);
+
+        assert!(check_capability(&d, &Path::new("/sys/declarations"), Verb::Select).is_ok());
+        for refused in [Verb::Insert, Verb::Update, Verb::Remove] {
+            assert!(
+                check_capability(&d, &Path::new("/sys/declarations"), refused).is_err(),
+                "a currency REPORT is never written through: {refused:?}"
+            );
+        }
     }
 
     /// The redaction contract is structural: `/sys/connections` declares ONLY name/metadata

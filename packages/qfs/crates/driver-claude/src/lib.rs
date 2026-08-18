@@ -65,8 +65,10 @@ pub use schema::{
 /// with [`ClaudeDriver::new`].
 pub struct ClaudeDriver {
     // The session surface is a bounded live view + a small append-log read in-engine; it pushes
-    // nothing down (honest declaration, blueprint §7) — filtering (`WHERE status='running'`) is the
-    // engine's work.
+    // nothing down (honest declaration, blueprint §7) — filtering (`WHERE status == 'busy'`) is the
+    // engine's work. `status` is NULLABLE: Claude Code records it for background sessions only, so
+    // such a predicate deliberately selects no interactive session rather than matching a sentinel
+    // (ticket `20260816161145`).
     pushdown: PushdownProfile,
     procs: Vec<ProcSig>,
 }
@@ -314,7 +316,9 @@ mod tests {
             .describe(&Path::new("/claude/sessions"))
             .unwrap();
         assert_eq!(batch.schema, described.schema);
-        // The status is readable as metadata — what `WHERE status='running'` filters on.
+        // The status is readable as metadata — what `WHERE status == 'busy'` filters on when the
+        // store recorded one. This fixture records one; a real interactive record does not, and
+        // `claude.rs` pins that it reads null rather than a sentinel.
         let status_idx = batch
             .schema
             .columns

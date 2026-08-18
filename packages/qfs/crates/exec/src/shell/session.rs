@@ -210,7 +210,11 @@ impl<'a> Session<'a> {
         let abs = target.render();
         let (driver, _) = self.engine.mounts.resolve_path(&abs)?;
         let desc = driver.describe(&Path::new(abs)).ok()?;
-        Some(NodeFacts::new(desc.archetype, desc.category))
+        Some(NodeFacts::with_schema(
+            desc.archetype,
+            desc.category,
+            &desc.schema,
+        ))
     }
 
     /// Run a batch of qfs source statements (one for most builtins/raw lines; several for `mv`

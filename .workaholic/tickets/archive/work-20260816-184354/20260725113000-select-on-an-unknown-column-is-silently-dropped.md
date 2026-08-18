@@ -1,5 +1,6 @@
 ---
 created_at: 2026-07-25T11:30:00+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 type: bugfix
@@ -9,6 +10,7 @@ commit_hash:
 category:
 depends_on:
 mission:
+claim: work-20260816-184354
 ---
 
 # `select` on an unknown column is silently dropped — the last stage that can mean nothing
@@ -179,3 +181,72 @@ The stamp is cleared so the ticket returns to the ordinary backlog — the same 
 `20260804173000` received when its own mission closed. The provenance lives here in prose instead.
 
 **Still-open evidence (verified 2026-08-12, read-only):** Still open: `qfs-engine`'s `eval::project` resolves projection columns with a `filter_map` and drops the ones it cannot find, so `|> select nosuchcol` still returns an empty schema at exit 0.
+
+## Final Report
+
+Development completed as planned, on the developer's 2026-07-26 ruling (**Refuse**) — this ticket
+carried no open decision left to make, only its implementation.
+
+**The refusal has two seams, because a projection reaches the rows by two roads.** `where` needed
+only the engine, since a predicate is always re-applied over the delivered batch. A projection is
+not: when the source declares `project` pushdown (`/local`, `/fs`, `/sql`, `/cf`, `/ga`,
+`/objstore`) the planner hands the column list to the driver and **no residual `Project` op reaches
+the engine at all** — the driver narrows to what it can find, which is exactly why it has no channel
+to report the miss. So:
+
+- `qfs-pushdown`'s planner refuses at **plan time** (`PlanError::UnknownColumn`, new arm, code
+  `unknown_column`), against the described schema, before the projection is pushed;
+- `qfs-engine`'s `project_checked` refuses at **runtime** over the batch the driver actually
+  delivered — the post-decode and late-bound road, where the described schema is deliberately empty.
+
+Both render the same sentence `EngineError::UnknownColumn` already rendered, so an operator cannot
+tell which seam refused, only what to fix. Both keep the leniencies `where`/`expand` keep: an empty
+schema is late-bound, never "carries no columns".
+
+**Measured before (qfs 0.0.102) and after (0.0.103)**, raw exit codes:
+
+```
+$ qfs run "/local<FIX> |> select nosuchcol"
+before: {"schema":[],"rows":[{},{},{},{}],"meta":{"row_count":4,...}}   EXIT=0
+after:  {"error":{"code":"unknown_column","kind":"usage","message":"`select` names column
+        'nosuchcol', which this relation does not carry; available: [name, path, size, modified,
+        is_dir, mode, content]"}}                                       EXIT=2
+
+$ qfs run "/local<FIX> |> select name, nosuchcol"
+before: {"schema":[{"name":"name",...}],"rows":[{"name":"a.md"},...]}   EXIT=0
+after:  same structured unknown_column refusal                          EXIT=2
+
+$ qfs run "/local<FIX>/t.csv |> decode csv |> select nosuch"
+before: {"schema":[],"rows":[{}],"meta":{"row_count":1,...}}            EXIT=0
+after:  {"error":{"code":"unknown_column",...,"available: [path, k, v]"}} EXIT=2
+```
+
+### Discovered Insights
+
+- **Insight**: `select *` was itself broken, and this ticket's gate item 3 is what caught it. `*`
+  was **pushed** as a projection naming one column literally called `*`; every driver's
+  `apply_project`/`project_batch` then narrowed to the columns it could find — none — so
+  `/local<dir> |> select *` answered rows with an **empty schema** at exit 0. Identity was only
+  ever handled in the two places that do not push (`engine::project`, `planner::project_schema`).
+  Identity is now resolved in `walk_chain` before either branch: it is neither pushed nor kept as a
+  residual op.
+  **Context**: the same shape can hide wherever a stage is *pushed* rather than evaluated — the
+  pushed form and the local form are two implementations of one promise, and only the local one had
+  the identity check. Anything added to `PushedQuery` deserves the question "what does the driver do
+  with the degenerate value of this field?".
+- **Insight**: the shell's `ls` is a **caller of its own query language**, and this refusal made
+  that visible: `ls` desugars a blob namespace to `SELECT name, size, is_dir, modified`, so a
+  namespace describing fewer columns (a driver that lists names only — the E2E fake was exactly
+  that) would have made the shell's own builtin refuse. `ls` now emits that projection only when
+  the node's describe carries all four, and falls back to the bare read otherwise — the same safe
+  default §5.1 already gave every non-blob archetype.
+  **Context**: `desugar.rs`'s comment records the *first* instance of this class ("hardcoding the
+  blob projection here was the §5.1 defect — it made `ls /mail/inbox` fail with `unknown column`").
+  A machine-written statement must be built from what describe says, not from what the archetype
+  usually says; the two defects are the same one, caught twice.
+- **Insight**: a post-decode `select` is refused by the **planner**, not the engine — the codec tail
+  re-plans its trailing ops over the decoded batch's schema, which is non-empty by then. Ticket
+  `20260816175149` had just given the engine's two runtime refusals their own codes at that seam;
+  the plan-time road needed the same treatment (`post_decode_plan_error`), or this ticket would have
+  re-created the two-identities defect on the stage it added.
+  **Context**: the codec seam has *two* error mappers, one per phase, and they must stay in step.

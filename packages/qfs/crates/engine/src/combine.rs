@@ -258,7 +258,11 @@ fn eval_combine(
         // turned into an empty result.
         CombineOp::Filter(p) => eval::filter_checked(unary(inputs, cursor, transform)?, p)
             .map_err(|missing| EngineError::unknown_column("where", missing)),
-        CombineOp::Project(cols) => Ok(eval::project(unary(inputs, cursor, transform)?, cols)),
+        // The caller-written `SELECT` residual: an unknown column is REFUSED here, against the
+        // rows the driver actually delivered, exactly as the `WHERE` above (ticket
+        // 20260725113000). Its plan-time twin refuses a *pushed* projection in the planner.
+        CombineOp::Project(cols) => eval::project_checked(unary(inputs, cursor, transform)?, cols)
+            .map_err(|missing| EngineError::unknown_column("select", missing)),
         CombineOp::ProjectExpr(terms) => {
             Ok(eval::project_expr(unary(inputs, cursor, transform)?, terms))
         }
