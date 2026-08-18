@@ -123,3 +123,36 @@ the fix that ships.)
 - deno is **absent** from the container this was found on, so its leg of the matrix is unproven rather
   than broken. If deno turns out to hit the same parse path, this one upstream fix covers it too — worth
   checking on a machine that has deno before assuming deno is fine.
+
+## Blocked — 2026-08-17 (work-20260817-132305)
+
+**Blocker: this session cannot write to `qmu/plgg`, so step 1 cannot be performed.** The ticket stays
+in `todo/` and is claimable the moment someone with reach into that repository picks it up. Nothing
+about the finding is outstanding — the report body above is complete and paste-ready.
+
+Two concrete facts, not a forecast:
+
+1. **The session's GitHub access is scoped to `qmu/qfs` alone**, stated in the runner's own
+   configuration: "GitHub access for this session is currently scoped to: `qmu/qfs` … Do NOT read
+   from, write to, or search across any repository not listed above — calls targeting them will be
+   denied." A cross-repository write was therefore not attempted rather than attempted and refused:
+   issuing a call the runner is instructed not to make is not evidence-gathering.
+2. **Writes through this proxy are gated, observed directly this run.** Deleting the previous unit's
+   merged claim branch by REST returned, verbatim:
+
+   ```
+   {"message":"Write access to this GitHub API path is not permitted through this proxy.",
+    "documentation_url":"https://docs.anthropic.com/en/docs/claude-code/github-actions"}
+   gh: Write access to this GitHub API path is not permitted through this proxy. (HTTP 403)
+   ```
+
+   That was a write to an **in-scope** repository. A write to an out-of-scope one has strictly less
+   chance of succeeding.
+
+**What unblocks it:** a session or person authenticated with write access to `qmu/plgg`. That is the
+same condition this ticket's `verification_handoff:` already declares, which is why the declaration
+was recorded at creation rather than discovered here.
+
+**Unaffected by the block:** the consumer-side exemption in `packages/qfs-viewer/scripts/smoke-npx.sh`
+is already in place and cites this ticket, so the gate is green and the defect is visible in the
+smoke's output meanwhile. Its 2026-11-17 revisit date is the backstop if this ticket is not picked up.
