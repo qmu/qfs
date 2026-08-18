@@ -53,9 +53,22 @@ allowed to link both `qfs-parser` and the compiled `qfs` describe registry), whi
 checks — it **parses** on the shipped grammar, and the columns it names **exist** on the node it
 addresses, resolved through the binary's own cred-free describe registry. So a skill can never teach
 an agent a statement the binary rejects, nor a column the driver does not carry. The ratchet runs
-under plain `cargo test --workspace`, so CI's `build-test` job defends it — unlike `gen-docs --check`
-/ `gen-skills --check` / `check-migrations`, which no CI job invokes and which therefore hold only
-where a developer or the ship flow runs them.
+under plain `cargo test --workspace`, so CI's `build-test` job defends it.
+
+**Which anti-drift checks CI actually defends.** No CI job invokes the three `xtask` commands by
+name on a branch, but that is not the same as the properties going unguarded — read the property,
+not the command:
+
+| Property | Defended on a branch / PR by | Defended on a `v*` tag by |
+| --- | --- | --- |
+| `docs/{language,drivers,server}.md` match the binary | **Yes** — the `committed_docs_match_generated_output` golden inside `qfs::docs` runs under `cargo test --workspace`, so `build-test` is red on any hand-edited generated page | **Yes** — `release.yml`'s `docs-drift` job runs `gen-docs --check`, and `docs-deploy-production` `needs` it |
+| `plugins/qfs/skills/*/SKILL.md` match `docs/cookbook/*.md` | **No** — `gen-skills --check` catches it only when someone runs it | No |
+| No shipped migration body edited in place | **No** — `check-migrations` catches it only when someone runs it, and it needs release tags to mean anything | No |
+
+The tag column exists because `ci.yml` is `on: push: branches: ["**"]` plus `pull_request`, and a
+tag push matches neither — so on a `v*` tag nothing from `ci.yml` re-checks the tagged tree, and
+that tag publishes `docs/` to qfs.qmu.co.jp. `gen-skills --check` and `check-migrations` therefore
+still hold only where a developer or the ship flow runs them.
 
 **What the ratchet does not cover** (the test's own doc comment carries the full list): the parse
 half sees all 184 recipes; the column half only checks statements whose source resolves in the

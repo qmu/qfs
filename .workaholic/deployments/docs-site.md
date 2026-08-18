@@ -47,11 +47,22 @@ first and the documentation second.
 
 1. Follow `github-release.md` through the tag push. `release.yml` builds the four native
    tarballs and publishes the GitHub Release.
-2. `docs-deploy-production` runs only after that job succeeds (`needs: [release]`), so a failed
-   binary release never leaves qfs.qmu.co.jp advertising a version nobody can install.
-3. It builds the site from the **tagged** checkout, stamps it with
+2. In parallel with those builds, the `docs-drift` job runs `cargo run -p xtask -- gen-docs
+   --check` against the **tagged** tree. It exists because `ci.yml` never runs on a tag push
+   (`on: push: branches: ["**"]` plus `pull_request` matches no tag), so this is the only place
+   a tag's generated reference pages — `docs/language.md`, `docs/drivers.md`, `docs/server.md` —
+   are checked against the binary being released alongside them.
+3. `docs-deploy-production` runs only after **both** succeed (`needs: [release, docs-drift]`): a
+   failed binary release never leaves qfs.qmu.co.jp advertising a version nobody can install, and
+   a drifted reference page never reaches the hostname at all.
+4. It builds the site from the **tagged** checkout, stamps it with
    `bash scripts/stamp-docs-deploy.sh production`, and runs `npm run docs:deploy:production`.
    The tracked `docs/public/robots.txt` ships unchanged, so production is indexable.
+
+**A red `docs-drift`.** The GitHub Release still publishes — the binary is not at fault — and
+`docs-deploy-production` is skipped, so qfs.qmu.co.jp keeps serving the previously published
+version. Recover by running `cargo run -p xtask -- gen-docs` on `main`, committing the result,
+and cutting a new tag; re-running the deploy job alone would republish the same drifted tree.
 
 ### By hand (recovery only)
 

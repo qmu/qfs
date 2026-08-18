@@ -50,3 +50,4 @@ and the repository documents the procedure the way it documents the GitHub Relea
 - 2026-08-17 — ticket archived — 20260817142443-the-docs-deployment-is-recorded-where-the-github-release-already-is.md
 - 2026-08-17 — run recorded (+0.3h) — work-20260817-163919
 - 2026-08-17 — story added — work-20260817-163919.md
+- 2026-08-18 — ticket archived — 20260817164716-a-tag-can-publish-reference-docs-that-drifted-from-the-binary.md
