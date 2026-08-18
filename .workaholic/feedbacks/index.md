@@ -103,4 +103,5 @@
 * [Bootstrap installs the plugin but does not guarantee it is bound](20260817184536-bootstrap-installs-the-plugin-but-does.md)
 * [Two of the inbound sweep's four surfaces are unreadable in a routine container](20260818065528-two-of-the-inbound-sweep-s-four-surfaces-are-unreadable-in-a-routine-container.md)
 * [The stuck-prs dedup digest flaps with GitHub's lazy mergeability](20260818065547-the-stuck-prs-dedup-digest-flaps-with-github-s-lazy-mergeability.md)
+* [The tick log's -filed lines never reach the base, so dedup is dead](20260818065737-the-tick-log-s-filed-lines-never-reach-the-base-so-dedup-is-dead.md)
 <!-- okf:generated:end -->
