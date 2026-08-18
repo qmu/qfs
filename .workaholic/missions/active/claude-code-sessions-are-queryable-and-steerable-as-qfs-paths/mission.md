@@ -27,7 +27,7 @@ concerns: []
 gate_type: live-app
 gate_target: /claude/sessions
 gate_assert: An HTTP endpoint bound over the sessions query, served on the worktree's dev port, returns one row per live Claude Code session read from the real on-disk store — including the session driving the check — each carrying a non-empty last_message.
-actual_hours: 1.3
+actual_hours: 1.9
 claim: work-20260816-154228
 ---
 
@@ -446,3 +446,4 @@ requiring it; restates the Goal's owner-named capabilities, no new scope):
 - 2026-08-18 — ticket archived — 20260816161143-launcher-captures-the-name-not-the-session-id.md
 - 2026-08-18 — ticket archived — 20260816161144-last-message-reads-null-for-a-tool-heavy-session.md
 - 2026-08-18 — ticket archived — 20260816161145-status-reads-unknown-for-an-interactive-session.md
+- 2026-08-18 — run recorded (+0.6h) — session_01XW34NxhnCKHuHMseJjwq2E
