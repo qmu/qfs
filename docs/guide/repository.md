@@ -83,7 +83,7 @@ The Cargo workspace root. Members are `crates/*` (48), `spikes/*` (one throwaway
 | `crates/` | The 48 production crates, including the `qfs` binary crate that is also the composition root |
 | `xtask/` | The cargo-xtask build tool: `gen-docs`, `gen-skills`, `check-migrations`, `dist`. `publish = false`, never shipped in the binary. Run as `cargo run -p xtask -- <cmd>` |
 | `fixtures/`, `crates/*/fixtures/` | `.qfs` documents and data used by tests and by the declared-driver corpus |
-| `deploy/` | `release.sh` and the deployment scripts CI calls |
+| `deploy/` | `qfs.service`, the project-local systemd unit template (never installed system-wide). Its `KillSignal=SIGTERM` is the graceful-drain claim `crates/cmd/tests/e2e_serve.rs` pins. Release artifacts are **not** built here — `xtask dist` builds them, from `release.yml` |
 | `scripts/check-no-live-credentials.sh` | The credential-shape gate the release job runs before publishing |
 | `install.sh` | The end-user installer: detects OS and arch, downloads the matching release tarball, **verifies its sha256**, installs the binary. Note the path — it lives here, not at the repository root |
 | `rust-toolchain.toml`, `rustfmt.toml` | The pinned toolchain and format config; `rustup show` installs from the file |

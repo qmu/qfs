@@ -1,11 +1,13 @@
 ---
 created_at: 2026-08-18T05:48:19+00:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260818-144000
 ---
 
 # `ci.yml`'s `release-artifacts` job can never run
@@ -117,3 +119,63 @@ provoking ticket's scope and so was not fixed opportunistically.
 - The wasm artifact is parked (`release.yml` says so in as many words, and `docs/adr/0005` records
   why), so "we would lose the wasm output" is not an argument for keeping the job — that output
   does not exist to lose.
+
+## Final Report
+
+Development completed as planned. The job was deleted, and `packages/qfs/deploy/release.sh` — the
+script it was the only caller of — was retired with it.
+
+**Step 1, the confirmation the ticket demanded before deleting anything.** The YAML reading was
+checked against the actual run list rather than trusted: `ci.yml` has **zero** workflow runs on
+`v0.0.111` (the newest tag), on `v0.0.97`, or on `v0.0.71` (the oldest tag still present), while
+`release.yml` has exactly one run on `v0.0.111`. The job never executed, as read.
+
+**Step 2, the decision — delete, not `tags: ["v*"]`.** The three outputs only `release-artifacts`
+produced are each unconsumed. The musl `--features host-daemon` binaries are not what ships:
+`release.yml`'s `xtask dist` builds `-p qfs` with default features, and `install.sh` resolves
+*those* tarballs. `qfs.wasm` is parked with no cdylib entrypoint, so `release.sh` wrote a
+`.PARKED` note in its place rather than an artifact. The `wrangler.toml.template` was a copy of a
+golden fixture that stays in the tree at `crates/host/fixtures/wrangler.golden.toml`. Making the
+job reachable would therefore have duplicated `release.yml`'s build on every tag in exchange for
+artifacts nothing downloads.
+
+**Step 3, `deploy/release.sh` — retired, not kept as a by-hand path.** With the job gone it has no
+caller anywhere in the tree, and its own header states that it "is RUN IN THE CI release job" — a
+claim that would have become false in the same commit that removes the job, which is precisely the
+misreading this ticket exists to remove. It is not usable as a by-hand path either: the static
+musl cross-link is CI-only (t01/A2), which is what the script's own header says. `deploy/qfs.service`
+stays — it is a live template, and `crates/cmd/tests/e2e_serve.rs` pins its `KillSignal=SIGTERM`
+graceful-drain claim.
+
+**Step 4, the docs.** `docs/guide/repository.md`'s enumeration of CI's jobs ("fmt, clippy (three
+invocations), build + test, two cross-compiles, a wasm32 host-core build, the docs site production
+build, and the viewer gate") already omitted `release-artifacts`, so deleting the job is what makes
+that sentence true rather than requiring an edit to it. The `deploy/` row did need one — it
+described the directory as "`release.sh` and the deployment scripts CI calls", and both halves of
+that are now wrong.
+
+A comment stands where the job was, so the next reader does not re-add it: this workflow's `on:`
+block selects branch pushes and pull requests only, a tag-gated job here can never execute, and the
+release pipeline is `release.yml`.
+
+### Discovered Insights
+
+- **Insight**: A tag-gated job in a workflow whose `on: push:` carries only a `branches:` filter is
+  not dormant — it is unreachable, and GitHub reports nothing about it. There is no warning, no
+  skipped-job entry, and no run to inspect; the job's absence from the run list is indistinguishable
+  from the workflow simply not having been triggered. The only way to see it is to cross-check each
+  `if:` against the declared trigger set, which is why this ticket's verification method is a
+  parse-and-cross-check rather than a log inspection.
+  **Context**: This repository's two workflows partition the trigger space exactly — `ci.yml` takes
+  branch pushes and pull requests, `release.yml` takes `v*` tags — so any `refs/tags/` condition
+  inside `ci.yml`, and any `refs/heads/` condition inside `release.yml`, is dead by construction.
+  That partition is the thing to check a new conditional job against.
+
+- **Insight**: `packages/qfs/deploy/release.sh` and `xtask dist` were two release-artifact builders
+  that never met. The first built raw musl daemon binaries plus a parked wasm module; the second
+  builds the four stripped, tarballed, checksummed native artifacts `install.sh` actually resolves.
+  They coexisted for as long as they did because the one thing that would have forced a comparison
+  — a CI run executing both — could not happen.
+  **Context**: When retiring a build path here, the question that settles it is which artifact the
+  installer resolves. `packages/qfs/install.sh` names `qfs-<target>.tar.gz` and verifies its
+  `.sha256`; only `xtask dist` produces that shape.
