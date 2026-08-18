@@ -1,5 +1,6 @@
 ---
 created_at: 2026-08-16T16:11:43+00:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -87,3 +88,60 @@ that becomes a wrong answer the moment `RETURNING id` carries the launcher's id 
 - The banner is somebody else's output format and has now changed twice. Whatever the parse becomes,
   it should fail loudly on an unrecognised shape rather than return a plausible-looking wrong token —
   that is precisely how this defect stayed invisible (`packages/qfs/crates/qfs/src/claude.rs`).
+
+## Final Report
+
+Development completed as planned.
+
+### Changes
+
+`parse_backgrounded_id` stopped being "find the `backgrounded` line, take its last token" and became
+a positional read of two stated shapes:
+
+```text
+backgrounded · eb5300ad                 → eb5300ad   (2.1.217, and 2.1.233 without --name)
+backgrounded · 4f89081e · spike-solo    → 4f89081e   (2.1.233 with --name)
+```
+
+The id is the token **after the first separator**. A `backgrounded` line of any other shape yields
+`None`, so `ClaudeCliLauncher::launch` raises `LaunchFailed` rather than returning a plausible
+token. Separator identity is not asserted (`is_banner_separator` asks only that a token carries no
+alphanumeric character), so the parse survives a change of glyph while still refusing a change of
+*shape* — which is the change that actually happened, twice.
+
+One structural change beyond the ticket's letter: the function now takes the **first**
+`backgrounded` line and either parses it or refuses. Before, a malformed line returned `None` from
+the `find_map` closure and the scan silently continued to later lines. That is the same
+"keep looking until something plausible turns up" behaviour in a different place, and it would have
+undone the fail-closed criterion.
+
+Step 4's decision, recorded at `driver-claude/src/applier.rs` where the id is dropped: **the id
+does not surface through `RETURNING id` yet.** `EffectOutcome` carries an affected count and no
+row, so carrying the id to a caller is a change to the effect channel's shape, not to that call
+site. The comment says so explicitly, and says why the defect was invisible — this very line
+discards the value.
+
+### Quality gate
+
+| Criterion | Result |
+| --- | --- |
+| The three-field banner yields `4f89081e`, not `spike-solo` | Pass — `parse_backgrounded_id_reads_the_named_launch_banner`, the observed bytes verbatim. |
+| The two-field banner still yields `eb5300ad` | Pass — `parse_backgrounded_id_reads_the_recorded_banner` is unchanged and green. |
+| A `backgrounded` line matching neither shape yields `None` | Pass — `parse_backgrounded_id_unrecognised_shape_is_none` covers a six-field line, a separator-less line, and the bare keyword. |
+| `cargo test --workspace`, clippy, fmt green | clippy (all three invocations) and fmt green; the suite carries one pre-existing racy failure unrelated to this ticket, ticketed as `20260818060942` and characterised there. |
+
+### Discovered Insights
+
+- **Insight**: the defect was invisible because the value was discarded. `applier.rs` throws the
+  launcher's return away, so a wrong id cost nothing and the live-fire round that exercised this
+  exact path passed its own gate while returning `spike-solo`.
+  **Context**: a value nobody reads is not tested by anything that reads it. When the effect channel
+  grows a `RETURNING` row, every producer feeding it deserves the same second look — being
+  currently-discarded is not evidence of being correct.
+
+- **Insight**: "the last token" is a shape assumption disguised as a position. It was right for a
+  two-field banner and became a *name* reader the moment a third field appeared, with no error
+  anywhere.
+  **Context**: when parsing somebody else's output, anchor on the field you want, not on an end of
+  the line — an appended field is the most common way an external format changes, and it is exactly
+  the change that "last token" cannot survive.

@@ -31,7 +31,10 @@
 //! machine (pointing it at a real host yielded zero rows). Claude Code actually writes:
 //!
 //! - `<home>/sessions/<pid>.json` — one JSON record per session process: `pid`, `sessionId`,
-//!   `cwd`, `name`, `status` (`busy`/…), `kind`, timestamps. This is the store's own liveness
+//!   `cwd`, `name`, `kind`, timestamps, and — for BACKGROUND sessions only — `status` (`idle`/
+//!   `busy`/…). Claude Code 2.1.233 writes no `status` key for an interactive session (both record
+//!   shapes observed side by side, 2026-08-16), which is why the column is nullable: absent means
+//!   the store recorded no state, not that the state is unknown. This is the store's own liveness
 //!   registry; a record whose process is gone is a leftover, not a session.
 //! - `<home>/projects/<slugified-cwd>/<sessionId>.jsonl` — the transcript: one JSON entry per
 //!   line; `user`/`assistant` entries carry `message.content` (a string, or an array of typed
@@ -87,9 +90,18 @@ const CLAUDE_ENV: &str = "QFS_CLAUDE_SESSIONS";
 /// `name` are data, passed as discrete arguments (never a shell line).
 const CLAUDE_BINARY_ENV: &str = "QFS_CLAUDE_BINARY";
 
-/// How many bytes of a transcript tail are scanned for the last visible message. Transcripts grow
-/// to many megabytes; the last visible text virtually always lives in the final few entries.
-const TRANSCRIPT_TAIL_BYTES: u64 = 256 * 1024;
+/// The transcript tail windows scanned for the last visible message, widening in order until one
+/// yields visible text. Transcripts grow to many megabytes and an agentic session is almost all
+/// tool traffic, which deliberately never surfaces — so a single fixed window reports "no visible
+/// message" for a session that has plenty, it just stopped looking (measured 2026-08-16, ticket
+/// `20260816161144`: a 1.6 MB transcript had 109 entries in its 256 KiB tail, **0** of them
+/// visible, and 4 visible in the whole file).
+///
+/// Widening in steps rather than reading one large window keeps the common case at one small read:
+/// a session whose last message is recent is answered by the first window and the rest never run.
+/// The last element is the **ceiling**, and it is a stated property, not an oversight — see
+/// [`last_visible_message`].
+const TRANSCRIPT_SCAN_WINDOWS: [u64; 3] = [256 * 1024, 1024 * 1024, 4 * 1024 * 1024];
 
 /// The bound on a surfaced `last_message` (characters). A relation cell is a summary surface, not
 /// a transcript dump; the full transcript never leaves this module.
@@ -338,7 +350,7 @@ impl SessionSource for ClaudeStoreSource {
                     Value::Text(record.id.clone()),
                     record.cwd.map_or(Value::Null, Value::Text),
                     record.name.map_or(Value::Null, Value::Text),
-                    Value::Text(record.status),
+                    record.status.map_or(Value::Null, Value::Text),
                     last_message,
                 ]);
                 rows.push((record.id, row));
@@ -453,21 +465,49 @@ impl SessionLauncher for ClaudeCliLauncher {
 
 /// Extract the session id from a `claude --bg` banner. Claude Code prints the launched session's
 /// short handle on a line shaped `backgrounded · <shortid>` (after a leading
-/// `Starting background service…` line and before a help block). This finds the first line whose
-/// first whitespace token is `backgrounded` and returns that line's LAST whitespace token — the
-/// id — independent of the exact separator glyph (`·`). `None` when no such line carries an id.
+/// `Starting background service…` line and before a help block), and appends the session name as a
+/// third field when `--name` was passed:
+///
+/// ```text
+/// backgrounded · eb5300ad                 (2.1.217, and 2.1.233 without --name)
+/// backgrounded · 4f89081e · spike-solo    (2.1.233 with --name)
+/// ```
+///
+/// **The id is the token after the first separator, never "the last token."** Reading the last
+/// token was correct for the two-field banner and silently returned the *name* for the three-field
+/// one (ticket `20260816161143`) — a wrong value that looks exactly like a right one. This parse is
+/// positional and states the two shapes it accepts; a `backgrounded` line of any other shape yields
+/// `None` so [`ClaudeCliLauncher::launch`] fails closed with `LaunchFailed` rather than handing a
+/// caller a plausible token from somebody else's output format, which has now changed twice.
 fn parse_backgrounded_id(stdout: &str) -> Option<String> {
-    stdout.lines().find_map(|line| {
-        let mut tokens = line.split_whitespace();
-        if tokens.next() != Some("backgrounded") {
-            return None;
-        }
-        // The id is the last token; the separator token(s) (`·`) sit between and are skipped.
-        line.split_whitespace()
-            .next_back()
-            .filter(|id| *id != "backgrounded" && !id.is_empty())
-            .map(str::to_string)
-    })
+    let line = stdout
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some("backgrounded"))?;
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    // The two recorded shapes, and only those: `backgrounded SEP id` and `backgrounded SEP id SEP
+    // name`. The separator is whatever glyph the banner uses (`·` today) — its identity is not
+    // asserted, only that it sits where a separator sits and is not itself an id.
+    let shape_ok = match tokens.len() {
+        3 => is_banner_separator(tokens[1]),
+        5 => is_banner_separator(tokens[1]) && is_banner_separator(tokens[3]),
+        _ => false,
+    };
+    if !shape_ok {
+        return None;
+    }
+    let id = tokens[2];
+    // A separator glyph in the id slot means the shape is not what it looked like.
+    if id.is_empty() || is_banner_separator(id) {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+/// Whether a banner token is a field separator rather than a value: a short run of punctuation
+/// (`·`, `-`, `|`, …) carrying no alphanumeric character. Kept separate from the id test so the
+/// shape check reads as the two-shapes statement it is.
+fn is_banner_separator(token: &str) -> bool {
+    !token.is_empty() && !token.chars().any(char::is_alphanumeric)
 }
 
 /// One parsed `sessions/<pid>.json` record — the selectors-only subset this module surfaces, plus
@@ -479,12 +519,15 @@ struct SessionRecord {
     id: String,
     cwd: Option<String>,
     name: Option<String>,
-    status: String,
+    status: Option<String>,
     messaging_socket: Option<String>,
 }
 
-/// Parse one liveness-registry record. Lenient: a missing/malformed field degrades (status
-/// `"unknown"`, absent cwd/name) — only a missing `sessionId`/`pid` drops the record.
+/// Parse one liveness-registry record. Lenient: a missing/malformed field degrades to absent —
+/// only a missing `sessionId`/`pid` drops the record. **`status` absent stays absent**: Claude Code
+/// writes it for background sessions and not for interactive ones, and the `"unknown"` sentinel
+/// this used to substitute was a string that looked like a status, indistinguishable to a caller
+/// from a session whose state really is unknown (ticket `20260816161145`).
 fn read_session_record(path: &Path) -> Option<SessionRecord> {
     let text = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -496,7 +539,7 @@ fn read_session_record(path: &Path) -> Option<SessionRecord> {
         id,
         cwd: str_field("cwd"),
         name: str_field("name"),
-        status: str_field("status").unwrap_or_else(|| "unknown".to_string()),
+        status: str_field("status"),
         messaging_socket: str_field("messagingSocketPath").filter(|s| !s.is_empty()),
     })
 }
@@ -528,10 +571,45 @@ fn slugify_cwd(cwd: &str) -> String {
         .collect()
 }
 
-/// The last transcript entry with visible text, reading only the file's tail. `None` when the
-/// transcript is absent, unreadable, or its tail carries no visible message (tool traffic only).
+/// The last transcript entry with visible text, read through a bounded backward scan over
+/// [`TRANSCRIPT_SCAN_WINDOWS`]. `None` when the transcript is absent, unreadable, or carries no
+/// visible message within the ceiling.
+///
+/// **The ceiling is deliberate and is a property of the column, not a bug.** A session whose last
+/// visible text lies further back than the widest window still reads `Null`: the alternative is
+/// scanning an unbounded file on every listing of every session, and `/claude/sessions` is a
+/// listing surface. What changed in ticket `20260816161144` is that the column no longer reports
+/// absence it never established for the ordinary tool-heavy case — 256 KiB of tool traffic in front
+/// of a real message was the common shape, not the pathological one.
 fn last_visible_message(transcript: &Path) -> Option<String> {
-    let tail = read_tail(transcript, TRANSCRIPT_TAIL_BYTES)?;
+    last_visible_message_within(transcript, &TRANSCRIPT_SCAN_WINDOWS)
+}
+
+/// [`last_visible_message`] with the scan windows named, so a test can state the ceiling property
+/// without writing a file the size of the real ceiling.
+fn last_visible_message_within(transcript: &Path, windows: &[u64]) -> Option<String> {
+    // The absent/unreadable transcript is answered here, once, so a `None` from `read_tail` inside
+    // the loop can mean the narrower thing: this window held no complete line (a window smaller
+    // than one entry, which a transcript of long tool results really does produce). That must
+    // WIDEN, not abort — aborting is what made the ceiling test read null through a window wide
+    // enough to hold the message.
+    let len = std::fs::metadata(transcript).ok()?.len();
+    for window in windows {
+        if let Some(tail) = read_tail(transcript, *window) {
+            if let Some(text) = last_visible_in(&tail) {
+                return Some(text);
+            }
+        }
+        if *window >= len {
+            // This window already covered the whole file; a wider one would re-read the same bytes.
+            break;
+        }
+    }
+    None
+}
+
+/// The last visible message in one already-read tail window, scanning backwards.
+fn last_visible_in(tail: &str) -> Option<String> {
     for line in tail.lines().rev() {
         let line = line.trim();
         if line.is_empty() {
@@ -820,6 +898,146 @@ mod tests {
             cell(&batch, 0, "last_message"),
             Value::Text("reading the file".into()),
             "tool_result bodies must never surface"
+        );
+    }
+
+    /// The two record shapes Claude Code 2.1.233 really writes, side by side (observed 2026-08-16):
+    /// a background session carries `status`, an interactive one carries no `status` key at all.
+    /// The column must tell them apart — the `"unknown"` sentinel it used to render could not,
+    /// which made the documented `WHERE status = 'running'` select nothing on an interactive
+    /// session while reading as though the store had answered.
+    #[test]
+    fn a_record_without_a_status_key_reads_null_not_a_sentinel() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let live_pid = u64::from(std::process::id());
+
+        // The interactive shape: no `status` key.
+        std::fs::write(
+            sessions.join(format!("{live_pid}.json")),
+            serde_json::json!({
+                "pid": live_pid,
+                "sessionId": "s-interactive",
+                "cwd": "/tmp/statusproj",
+                "name": "qfs-5c",
+                "kind": "interactive",
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let batch = source.scan_sessions().unwrap();
+        assert_eq!(batch.rows.len(), 1);
+        assert_eq!(
+            cell(&batch, 0, "status"),
+            Value::Null,
+            "absent means the store recorded no state, and says so"
+        );
+    }
+
+    /// A record that DOES carry `status` still surfaces it verbatim — the nullability widened the
+    /// column's domain, it did not reinterpret a recorded value.
+    #[test]
+    fn a_recorded_status_still_surfaces_verbatim() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let live_pid = u64::from(std::process::id());
+        write_record(home, live_pid, "s-bg", "/tmp/bgproj", "live-fire", "idle");
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let batch = source.scan_sessions().unwrap();
+        assert_eq!(cell(&batch, 0, "status"), Value::Text("idle".into()));
+    }
+
+    /// A transcript whose FIRST tail window holds nothing but tool traffic still surfaces the
+    /// visible text that precedes it. This is the measured shape of a real agentic session
+    /// (2026-08-16, ticket `20260816161144`): 256 KiB of `tool_use`/`tool_result` in front of the
+    /// last real message, which made `last_message` read null for the mission's own gate.
+    #[test]
+    fn visible_text_before_a_tool_only_first_window_still_surfaces() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let live_pid = u64::from(std::process::id());
+        write_record(home, live_pid, "s-deep", "/tmp/deepproj", "deep", "busy");
+
+        // One visible message, then enough tool traffic to bury it past the 256 KiB first window.
+        let filler = "x".repeat(4096);
+        let tool_line = format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":"{filler}"}}]}}}}"#
+        );
+        let mut lines: Vec<&str> = vec![
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"the buried message"}]}}"#,
+        ];
+        // 80 × ~4 KiB ≈ 330 KiB of tool traffic — past the first window, inside the second.
+        for _ in 0..80 {
+            lines.push(&tool_line);
+        }
+        write_transcript(home, "/tmp/deepproj", "s-deep", &lines);
+
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let batch = source.scan_sessions().unwrap();
+        assert_eq!(batch.rows.len(), 1);
+        assert_eq!(
+            cell(&batch, 0, "last_message"),
+            Value::Text("the buried message".into()),
+            "the scan widens past a tool-only first window instead of reporting absence"
+        );
+    }
+
+    /// A transcript with no visible text ANYWHERE still yields null — the widening finds nothing to
+    /// find, and the reader does not invent a cell from tool traffic.
+    #[test]
+    fn a_transcript_of_pure_tool_traffic_stays_null() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        let live_pid = u64::from(std::process::id());
+        write_record(home, live_pid, "s-mute", "/tmp/muteproj", "mute", "busy");
+        write_transcript(
+            home,
+            "/tmp/muteproj",
+            "s-mute",
+            &[
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}]}}"#,
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"secret file body"}]}}"#,
+                r#"{"type":"queue-operation","op":"drain"}"#,
+            ],
+        );
+        let source = ClaudeStoreSource::new(home.to_path_buf());
+        let batch = source.scan_sessions().unwrap();
+        assert_eq!(cell(&batch, 0, "last_message"), Value::Null);
+    }
+
+    /// The scan is BOUNDED: text older than the widest window stays unread, deliberately. Stated
+    /// with small windows so the property is proven without writing a file the size of the real
+    /// 4 MiB ceiling — the mechanism under test is the same one `last_visible_message` uses.
+    #[test]
+    fn the_backward_scan_stops_at_its_ceiling() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("deep.jsonl");
+        let filler = "x".repeat(2048);
+        let tool_line = format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":"{filler}"}}]}}}}"#
+        );
+        let mut lines = vec![
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"far too old"}]}}"#
+                .to_string(),
+        ];
+        for _ in 0..20 {
+            lines.push(tool_line.clone());
+        }
+        std::fs::write(&path, lines.join("\n")).unwrap();
+
+        assert_eq!(
+            last_visible_message_within(&path, &[1024, 4096]),
+            None,
+            "a ceiling below the message's distance reads null rather than scanning the file"
+        );
+        assert_eq!(
+            last_visible_message_within(&path, &[1024, 4096, 1024 * 1024]),
+            Some("far too old".to_string()),
+            "and a ceiling above it finds the same message — the ceiling is what bounds the read"
         );
     }
 
@@ -1191,6 +1409,43 @@ mod tests {
             parse_backgrounded_id(banner),
             Some("eb5300ad".to_string()),
             "the id comes from the `backgrounded` line, not the `Starting…` first line"
+        );
+    }
+
+    /// The RECORDED three-field banner (Claude Code 2.1.233 with `--name`, observed live in the
+    /// container 2026-08-16): the session NAME is appended after the id. The id is the token after
+    /// the first separator — reading the last token returned `spike-solo` here, which is the whole
+    /// of ticket `20260816161143`.
+    #[test]
+    fn parse_backgrounded_id_reads_the_named_launch_banner() {
+        let banner = "Starting background service\u{2026}\n\
+                      backgrounded \u{b7} 4f89081e \u{b7} spike-solo\n\
+                      \x20 claude agents             list sessions\n";
+        assert_eq!(
+            parse_backgrounded_id(banner),
+            Some("4f89081e".to_string()),
+            "the id is the field after the first separator, never the last token"
+        );
+    }
+
+    /// A session name containing spaces does not fool the shape check into reading a longer banner
+    /// as a different one: the line has more fields than either recorded shape, so it refuses.
+    #[test]
+    fn parse_backgrounded_id_unrecognised_shape_is_none() {
+        assert_eq!(
+            parse_backgrounded_id("backgrounded \u{b7} 4f89081e \u{b7} two words\n"),
+            None,
+            "six fields match neither recorded banner shape"
+        );
+        assert_eq!(
+            parse_backgrounded_id("backgrounded eb5300ad\n"),
+            None,
+            "no separator: not a shape this parser claims to read"
+        );
+        assert_eq!(
+            parse_backgrounded_id("backgrounded\n"),
+            None,
+            "the bare keyword carries no id"
         );
     }
 
