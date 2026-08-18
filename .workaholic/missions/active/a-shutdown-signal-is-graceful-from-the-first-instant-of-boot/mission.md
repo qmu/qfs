@@ -9,13 +9,14 @@ author: a@qmu.jp
 assignees: [a@qmu.jp]
 assignee:
 predicted_hours:
-actual_hours:
+actual_hours: 1.4
 feedback: [20260818131946-a-sigint-shutdown-e2e-test-flakes-and-reddens-main.md]
 tickets: []
 stories: []
 gate_type:
 gate_target:
 gate_assert:
+claim: work-20260818-134142
 ---
 
 # A shutdown signal is graceful from the first instant of boot
@@ -42,11 +43,15 @@ runner cannot redden a merge commit.
 
 ## Acceptance
 
-- [ ] A shutdown signal delivered during boot takes the graceful path (exit 0, ledger
+- [x] A shutdown signal delivered during boot takes the graceful path (exit 0, ledger
       drained), not the default disposition — covered by a test that signals mid-boot. (#20260818132305-a-shutdown-signal-arriving-during-boot-takes-the-graceful-path.md)
-- [ ] No serve e2e test decides readiness with a fixed sleep; each waits on an observable
+- [x] No serve e2e test decides readiness with a fixed sleep; each waits on an observable
       readiness signal with a bounded timeout that fails loudly. (#20260818132310-the-serve-e2e-tests-wait-for-observable-readiness-never-a-fixed-sleep.md)
 
 ## Changelog
 
 <!-- Append-only, dated timeline. One line per event; never rewrite past lines. -->
+- 2026-08-18 — ticket archived — 20260818132305-a-shutdown-signal-arriving-during-boot-takes-the-graceful-path.md
+- 2026-08-18 — ticket archived — 20260818132310-the-serve-e2e-tests-wait-for-observable-readiness-never-a-fixed-sleep.md
+- 2026-08-18 — run recorded (+1.4h) — session_01TgM27Y8Bz21tWg2j3DoxS7
+- 2026-08-18 — story added — work-20260818-134142.md
