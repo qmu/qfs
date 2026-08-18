@@ -6,6 +6,7 @@ depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260818-195336
 ---
 
 # The server guide's config example does not parse: missing `;` and a `do` the parser rejects
