@@ -117,4 +117,6 @@
 * [Merging before the Cloudflare secrets exist turns `main` red](20260818215719-merging-before-the-cloudflare-secrets-exist.md)
 * [One deployment record carries two environments](20260818215719-one-deployment-record-carries-two-environments.md)
 * [`wrangler` is installed on every branch push](20260818215719-wrangler-is-installed-on-every-branch.md)
+* [CI gained two third-party setup actions](20260819144514-ci-gained-two-third-party-setup.md)
+* [The upstream build wart is real and stays open](20260819144514-the-upstream-build-wart-is-real.md)
 <!-- okf:generated:end -->

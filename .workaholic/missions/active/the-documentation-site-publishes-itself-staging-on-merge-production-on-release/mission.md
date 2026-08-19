@@ -9,14 +9,14 @@ author: noreply@anthropic.com
 assignees: [a@qmu.jp]
 assignee:
 predicted_hours:
-actual_hours: 1.3
+actual_hours: 1.5
 feedback: [20260817142308-auto-deploy-docs-to-staging-qfs-qmu-co-jp-on-merge-to-main-and-to-qfs-qmu-co-jp-on-release.md]
 tickets: []
 stories: []
 gate_type:
 gate_assert:
 gate_target:
-claim: work-20260818-194054
+claim: work-20260818-224556
 ---
 
 # The documentation site publishes itself: staging on merge, production on release
@@ -59,3 +59,4 @@ and the repository documents the procedure the way it documents the GitHub Relea
 - 2026-08-18 — run recorded (+0.4h) — session_01TgM27Y8Bz21tWg2j3DoxS7
 - 2026-08-18 — story added — work-20260818-194054.md
 - 2026-08-18 — run recorded (+0.2h) — session_017KjfyG1SFQamWhS7h6QbLZ
+- 2026-08-18 — run recorded (+0.2h) — session_01FKn9idn6673AsxqXfeywjQ
