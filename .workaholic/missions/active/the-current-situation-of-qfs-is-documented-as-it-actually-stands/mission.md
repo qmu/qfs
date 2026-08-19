@@ -76,3 +76,5 @@ tooling beyond what the survey ticket justifies.
 - 2026-08-17 — The unformed-code-span follow-up was withdrawn as a measurement error and the upstream plgg-md filing recorded blocked on qmu/plgg write access — work-20260817-132305.md
 - 2026-08-18 — run recorded (+0.2h) — session_01FKn9idn6673AsxqXfeywjQ
 - 2026-08-19 — ticket archived — 20260817131540-file-the-bun-plgg-md-parse-defect-upstream.md
+- 2026-08-19 — concern deferred (stuck) — 20260819144514-ci-gained-two-third-party-setup.md
+- 2026-08-19 — concern deferred (stuck) — 20260819144514-the-upstream-build-wart-is-real.md
