@@ -117,4 +117,5 @@
 * [Merging before the Cloudflare secrets exist turns `main` red](20260818215719-merging-before-the-cloudflare-secrets-exist.md)
 * [One deployment record carries two environments](20260818215719-one-deployment-record-carries-two-environments.md)
 * [`wrangler` is installed on every branch push](20260818215719-wrangler-is-installed-on-every-branch.md)
+* [A pull request whose checks are still running is reported as one with a failing check](20260819045532-a-pull-request-whose-checks-are-still-running-is-reported-as-one-with-a-failing-check.md)
 <!-- okf:generated:end -->
