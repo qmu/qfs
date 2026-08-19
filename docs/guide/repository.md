@@ -197,20 +197,24 @@ The smoke's runtime matrix is why this gate is environment-sensitive in one dire
 with bun or deno installed runs the packed bin under them too, and a failure there is a real failure
 of the published artifact under that runtime — not of the change under test.
 
-**What a green run of this gate actually proves, as of 2026-08-17.** CI's `viewer-check-all` job
-installs Node 24 and nothing else, so the runtimes it exercises are narrower than a developer's, and
-until this was written down neither the README nor `CLAUDE.md` said so:
+**What a green run of this gate actually proves, as of 2026-08-19.** `viewer-check-all` installs all
+three runtimes, so a green CI run now attests to the whole matrix the product promises rather than to
+node alone:
 
 | Runtime | In CI | Locally |
 | --- | --- | --- |
-| node | Installed — this is what a green CI run attests to | Proven |
-| bun | Absent, so skipped out loud | **Broken upstream**, and reported as `NOT COVERED` under a dated exemption: bun 1.3.11 cannot parse `plgg-md`'s published dist — one regex class written with raw control characters that node accepts and bun rejects as "range out of order". Present in `plgg-md` 0.0.2 and 0.0.3, so no bump fixes it. Revisit after 2026-11-17; filing it against `qmu/plgg` is ticket `20260817131540` |
-| deno | Absent, so skipped out loud | Unproven — absent from the container this was measured on |
+| node | Installed (Node 24) | Proven |
+| bun | Installed (latest) | Proven **from bun 1.3.13**. Older bun cannot parse `plgg-md`'s published dist — one regex class written with raw control bytes that node accepts and bun rejects as "range out of order" — so the smoke fails such a machine by name and tells it to upgrade |
+| deno | Installed (latest) | Proven — measured against deno 2.9.2 |
 
-The exemption is deliberately narrow: it matches that one error signature in that one dependency, does
-not count bun as covered, and any other bun failure still fails the gate. Dropping bun from the loop
-instead was rejected — `smoke-npx.sh`'s own comments record that a silent skip is how bun stayed broken
-for a whole session.
+Between 2026-08-17 and 2026-08-19 the bun row read *broken upstream*, and the smoke carried a named,
+dated exemption that reported bun as `NOT COVERED` rather than letting a permanently-red gate teach the
+"ignore the red gate" habit. The exemption named its own release condition and that condition fired:
+measured against an **unchanged** `plgg-md@0.0.3`, bun 1.3.11 and 1.3.12 reject the dist and bun 1.3.13
+and 1.3.14 parse it, so the defect was bun's lexer and bun fixed it. The exemption is gone; the version
+floor it collapsed into is what `smoke-npx.sh` now reports. The upstream build-hygiene ask — emit the
+class endpoints as `\0-\x1F` rather than raw bytes — remains open as
+[qmu/plgg#131](https://github.com/qmu/plgg/issues/131), and nothing in this repository waits on it.
 
 ## The three anti-drift generators
 
