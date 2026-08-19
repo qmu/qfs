@@ -136,9 +136,20 @@ curl -sS https://staging-qfs.qmu.co.jp/robots.txt
 ```
 
 **Pass** when `version.json` reports `"environment": "staging"` and a `commit` equal to the
-merge commit on `main`, the page returns `200`, and `robots.txt` is the `Disallow: /` form.
-Also inspect the workflow run for that merge: the two publish steps ran, and
-`Published <sha> to https://staging-qfs.qmu.co.jp` is in the job summary.
+merge commit on `main`, the page returns `200`, and the response carries
+`X-Robots-Tag: noindex, nofollow`. Also inspect the workflow run for that merge: the two publish
+steps ran, and `Published <sha> to https://staging-qfs.qmu.co.jp` is in the job summary.
+
+**The header is the check, not `robots.txt` — corrected 2026-08-19 against the live hostname.**
+This pass condition used to read "`robots.txt` is the `Disallow: /` form", and the deployed file
+does still end with that group. But Cloudflare **prepends** a Managed Content block to it, and that
+block contains its own `User-agent: *` group ending in `Allow: /`. Under RFC 9309 a crawler merges
+every group matching the same user-agent token and, where an allow and a disallow are equally
+specific, takes the least restrictive — so `Allow: /` and `Disallow: /` merge to **allow**, and the
+`robots.txt` half of the staging guard does not bind. `X-Robots-Tag: noindex, nofollow`, which
+`stamp-docs-deploy.sh` sets on the staging environment only, is what actually keeps staging out of
+an index, and it is present on the live hostname. Production correctly carries no such header.
+Checking the `Disallow: /` line alone would therefore have passed while proving nothing.
 
 **Production, after a `vX.Y.Z` tag:**
 
