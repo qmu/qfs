@@ -182,6 +182,22 @@ jobs:
         with:
           node-version: "24.x"
 
+      # bun and deno are here so the npx smoke's runtime matrix is real in CI and
+      # not only on whichever runtimes a developer happens to have. `smoke-npx.sh`
+      # runs the packed bin under every runtime present and skips an absent one out
+      # loud, so before this the green badge attested to node alone. bun needs to be
+      # 1.3.13 or newer: older bun cannot parse `plgg-md`'s published dist and the
+      # smoke fails it by name (see that script's comments).
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Install every package's dependencies
         run: ./scripts/npm-install.sh
 

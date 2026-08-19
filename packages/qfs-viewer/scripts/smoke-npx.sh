@@ -198,49 +198,44 @@ for RUNTIME in node bun deno; do
   # runtime that did not, silent. Per this file's own header: a check that
   # cannot say why it failed is barely a check.
   if ! ACTUAL=$($RUN ./node_modules/.bin/qfs-viewer --version 2>&1); then
-    # A NAMED, DATED, NARROW EXEMPTION — not a silent skip (2026-08-17, ticket
-    # 20260817111530).
+    # THE BUN EXEMPTION THAT STOOD HERE IS GONE (removed 2026-08-19).
     #
-    # bun 1.3.11 cannot PARSE `plgg-md`'s published dist, so it fails before a
-    # line of this repository's code runs. Localized to one regex literal in
-    # `plgg-md/dist/index.es.js`'s `src/Render/usecase/slugify.ts` module:
+    # It existed because bun could not PARSE `plgg-md`'s published dist: one
+    # regex literal in its `src/Render/usecase/slugify.ts` module is emitted with
+    # RAW control bytes,
     #
-    #   /[<U+0000>-<U+001F>]/g   written with RAW control bytes in the source
+    #   /[<U+0000>-<U+001F>]/g
     #
-    # The range is NOT inverted (0x00 < 0x1F) and node compiles it. bun's lexer
-    # mis-consumes the raw control characters and then reports "range out of
-    # order in character class". Written escaped — `/[\0-\x1F]/g` — bun and node
-    # both accept it, so the defect is bun's parser and the practical fix is for
-    # plgg-md's bundler to escape control characters. Verified both ways here on
-    # 2026-08-17: bun 1.3.11, node v22.22.2, plgg-md 0.0.2 AND 0.0.3 (0.0.3 is
-    # the newest published, so no version bump fixes it).
+    # which is valid ECMAScript (the range is NOT inverted, 0x00 < 0x1F) and
+    # which node accepts, but which bun's lexer mis-consumed and rejected as
+    # "range out of order in character class". The exemption named its own
+    # trigger -- "as soon as a bun release parses the published dist". It fired.
     #
-    # Why exempt rather than stay red: the gate is the project's canonical
-    # runner, and a permanently-red gate on every container that has bun teaches
-    # exactly the "ignore the red gate" habit this file's own header argues
-    # against. Why exempt rather than drop bun from the loop: dropping it is the
-    # silent skip that let bun stay broken for a whole session.
+    # Measured 2026-08-19 against the UNCHANGED `plgg-md@0.0.3` tarball: its dist
+    # still ships the raw bytes, so what moved is bun, not the package.
     #
-    # The match is deliberately NARROW — this ONE error signature in THIS
-    # dependency. Any other bun failure, including a different regex fault, still
-    # fails the gate below. The runtime is NOT counted in RAN: it is reported as
-    # not covered, because it is not.
+    #   bun 1.3.11  SyntaxError        bun 1.3.13  parses
+    #   bun 1.3.12  SyntaxError        bun 1.3.14  parses
+    #   node v24.13.1  parses          deno 2.9.2  parses
     #
-    # REVISIT AFTER 2026-11-17, or as soon as a bun release parses the published
-    # dist. Filing it against `qmu/plgg` is tracked by
-    # .workaholic/tickets/todo/20260817131540-file-the-bun-plgg-md-parse-defect-upstream.md
-    # (this run's GitHub access is scoped to qmu/qfs, so it could not open the
-    # upstream issue itself).
+    # So the floor is bun >= 1.3.13, and bun is a covered runtime again, counted
+    # in RAN like any other. The upstream build-hygiene ask -- emit the class
+    # endpoints escaped (`\0-\x1F`) rather than as raw bytes -- is filed as
+    # https://github.com/qmu/plgg/issues/131 and stays open, but nothing in this
+    # repository waits on it any more.
+    #
+    # If that exact signature appears now, this machine's bun is older than
+    # 1.3.13. That is a fixable local condition, and this file's header holds
+    # that a check which cannot say why it failed is barely a check -- so name
+    # the cause and fail, rather than quietly not covering the runtime.
     if [ "$RUNTIME" = bun ] \
       && printf '%s' "$ACTUAL" | grep -q 'range out of order in character class' \
       && printf '%s' "$ACTUAL" | grep -q 'plgg-md'; then
-      echo "  NOT COVERED: bun cannot parse plgg-md's published dist — known upstream defect"
-      echo "    A raw-control-character regex class in plgg-md/dist (slugify.ts) that node accepts"
-      echo "    and bun 1.3.11 rejects as \"range out of order\". Present in plgg-md 0.0.2 and 0.0.3;"
-      echo "    0.0.3 is the newest published, so no bump fixes it. The published artifact IS broken"
-      echo "    under bun — this exemption keeps the gate meaningful, it does not make bun work."
-      echo "    Dated exemption, revisit after 2026-11-17. Tracked by ticket 20260817131540."
-      continue
+      echo "  FAIL: this bun cannot parse plgg-md's published dist" >&2
+      echo "    Fixed in bun 1.3.13 -- 1.3.11 and 1.3.12 reject it, and the package is unchanged." >&2
+      echo "    Upgrade bun to 1.3.13 or newer (\`bun upgrade\`) and re-run." >&2
+      echo "    Upstream build-hygiene issue: https://github.com/qmu/plgg/issues/131" >&2
+      exit 1
     fi
     echo "  FAIL: $RUNTIME could not run the packed bin:" >&2
     echo "$ACTUAL" | sed 's/^/    /' >&2

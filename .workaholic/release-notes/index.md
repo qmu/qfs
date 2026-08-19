@@ -40,5 +40,6 @@
 * [The Chatwork room-messages readings each get their own name](work-20260803-221340.md)
 * [Added .claude/hooks/session-start.sh as a byte-for-byte copy of the workaholic canonical bootstrap, etc](work-20260815-130504.md)
 * [One Workers target, two environments, neither of them reachable without an explicit --env etc](work-20260817-163919.md)
+* [qmu/plgg is public, not private, and the upstream issue was already filed etc](work-20260818-224038.md)
 * [Step 4 verified against the live hostnames, and the staging robots guard is one mechanism etc](work-20260818-224556.md)
 <!-- okf:generated:end -->
