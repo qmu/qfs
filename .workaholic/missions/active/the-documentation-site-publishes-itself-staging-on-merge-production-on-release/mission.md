@@ -60,3 +60,5 @@ and the repository documents the procedure the way it documents the GitHub Relea
 - 2026-08-18 — story added — work-20260818-194054.md
 - 2026-08-18 — run recorded (+0.2h) — session_017KjfyG1SFQamWhS7h6QbLZ
 - 2026-08-18 — run recorded (+0.2h) — session_01FKn9idn6673AsxqXfeywjQ
+- 2026-08-19 — concern deferred (stuck) — 20260819145408-the-docs-ci-token-still-holds.md
+- 2026-08-19 — concern deferred (stuck) — 20260819145408-staging-s-non-indexability-rests-on.md
