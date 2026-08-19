@@ -117,6 +117,9 @@
 * [Merging before the Cloudflare secrets exist turns `main` red](20260818215719-merging-before-the-cloudflare-secrets-exist.md)
 * [One deployment record carries two environments](20260818215719-one-deployment-record-carries-two-environments.md)
 * [`wrangler` is installed on every branch push](20260818215719-wrangler-is-installed-on-every-branch.md)
+* [Every push runs the CI matrix twice, and the pull_request copy can hold a pull request out of mergeability](20260819055804-every-push-runs-the-ci-matrix-twice-and-the-pull-request-copy-can-hold-a-pull-request-out-of-mergeability.md)
 * [CI gained two third-party setup actions](20260819144514-ci-gained-two-third-party-setup.md)
 * [The upstream build wart is real and stays open](20260819144514-the-upstream-build-wart-is-real.md)
+* [Staging's non-indexability rests on one mechanism, not two](20260819145408-staging-s-non-indexability-rests-on.md)
+* [The docs CI token still holds zone-wide Workers Routes](20260819145408-the-docs-ci-token-still-holds.md)
 <!-- okf:generated:end -->
