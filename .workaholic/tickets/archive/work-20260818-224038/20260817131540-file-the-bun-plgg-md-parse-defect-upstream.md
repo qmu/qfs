@@ -174,3 +174,75 @@ So step 1 still needs a person or session with write access to `qmu/plgg`, and s
 follow from it. Nothing in the paste-ready report body above has gone stale: `0.0.3` is still the
 newest published version, so the "no version bump fixes it" claim and the `smoke-npx.sh` exemption
 that cites it both remain true as written.
+
+## Final Report — 2026-08-19, resolved (all four steps)
+
+Picked up by a developer-attended session on a host that has **node v24.13.1, bun 1.3.14 and deno
+2.9.2** — the three runtimes the product promises, none of which the unattended container had
+together. That is what unblocked it, and it turned the ticket over completely rather than by half.
+
+### Step 1 — the upstream issue exists
+
+Filed as **[qmu/plgg#131](https://github.com/qmu/plgg/issues/131)** on 2026-08-18T22:47:43Z,
+carrying the construct, the two-runtime table and the affected versions, exactly as the paste-ready
+body above specifies. `qmu/plgg` is a **public** repository, not private as this ticket's
+`verification_handoff:` and its two blocked entries assumed — that assumption is the only thing in
+the ticket that was wrong, and it is worth remembering because it kept three runs from checking.
+
+### Step 2 — the exemption cites the issue
+
+`packages/qfs-viewer/scripts/smoke-npx.sh` no longer points at this ticket file:
+`grep -n 'qmu/plgg' packages/qfs-viewer/scripts/smoke-npx.sh` resolves to the issue URL.
+
+### Steps 3 and 4 — the defect was bun's, and bun fixed it
+
+The wait was mis-modelled. Both remaining steps were recorded as blocked on *someone publishing a
+fixed `plgg-md`*, but the exemption's other trigger — "as soon as a bun release parses the published
+dist" — is the one that fired. Measured here against the **unchanged** `plgg-md@0.0.3` tarball
+(`npm view plgg-md dist-tags.latest` → `0.0.3`; its dist still carries the literal `0x00` byte and
+still emits `/[<0x00>-<0x1F>]/g` with raw endpoints at offset 61336):
+
+| Runtime | `import()` of `plgg-md/dist/index.es.js` |
+| --- | --- |
+| bun 1.3.11 | `SyntaxError: Invalid regular expression: range out of order in character class` |
+| bun 1.3.12 | same `SyntaxError` |
+| **bun 1.3.13** | **parses** |
+| bun 1.3.14 | parses |
+| node v24.13.1 | parses |
+| deno 2.9.2 | parses |
+
+So the fault was bun's lexer, bun shipped the fix in **1.3.13**, and the package never had to move.
+Each version was probed with its own official release binary, not inferred from a changelog.
+
+What that made possible:
+
+- **The exemption is gone.** In its place `smoke-npx.sh` carries the measured version floor: the
+  same narrow signature match now **fails** with "fixed in bun 1.3.13 — upgrade" instead of
+  reporting `NOT COVERED`, because an old local bun is a fixable local condition, not an upstream
+  wait. bun counts in `RAN` again.
+- **The gate passes with all three runtimes present, no `NOT COVERED` line.**
+  `cd packages/qfs-viewer && ./scripts/check-all.sh` → exit **0**, and its smoke section reads
+  `PASS: node …`, `PASS: bun …`, `PASS: deno …`, with `grep -ci 'NOT COVERED'` → `0`.
+- **CI exercises the real matrix.** `viewer-check-all` installs bun (`oven-sh/setup-bun@v2`) and
+  deno (`denoland/setup-deno@v2`) alongside Node 24, so a green badge stops attesting to node alone.
+- **Both caveats are retired**, in `packages/qfs-viewer/README.md` and `docs/guide/repository.md`:
+  bun is proven from 1.3.13, deno is proven against 2.9.2, and the history is kept as history rather
+  than deleted, so a reader meeting an old bun still finds the explanation.
+
+### What is left, and where it lives
+
+`qmu/plgg#131` stays **open** on purpose. Emitting the class endpoints as `\0-\x1F` instead of raw
+bytes is still the correct build-side fix — the raw NUL also makes `grep` treat the shipped dist as
+binary — but it is now build hygiene in another repository, and **nothing in `qmu/qfs` waits on
+it**. The 2026-11-17 revisit date that backstopped the exemption is retired with the exemption.
+
+### Verification
+
+| Claim | Command | Result |
+| --- | --- | --- |
+| No fixed `plgg-md` was published | `npm view plgg-md versions --json`, `npm view plgg-md dist-tags.latest` | `["0.0.1","0.0.2","0.0.3"]`, `0.0.3` — unchanged, so the runtime is what moved |
+| The raw-byte class is still shipped | byte scan of `node_modules/plgg-md/dist/index.es.js` | NUL present; `[\x00-\x1f]` at offset 61336 |
+| bun's fix landed in 1.3.13 | official `bun-linux-aarch64` release binaries for 1.3.11/1.3.12/1.3.13, each running the `import()` probe | `SyntaxError`, `SyntaxError`, `OK` |
+| The exemption cites the issue | `grep -n 'qmu/plgg' packages/qfs-viewer/scripts/smoke-npx.sh` | the issue URL, twice (comment and operator-facing output) |
+| The gate is green with no exemption | `cd packages/qfs-viewer && ./scripts/check-all.sh; echo $?` | `0`; `PASS` for node, bun and deno; `NOT COVERED` count `0` |
+
