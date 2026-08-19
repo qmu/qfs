@@ -208,3 +208,77 @@ Then one merge to `main` confirms it: `curl -sS https://staging-qfs.qmu.co.jp/ve
 report that merge's commit. That command is now known to work from a developer machine, so the
 confirmation costs nothing and needs no workflow archaeology.
 
+
+## Still blocked, and unobservable from here — 2026-08-19 06:4x UTC (work-20260819-063922)
+
+Re-checked by a later unattended `/implement` run. Step 2 is still the whole of what remains and
+is still three console acts this runner cannot perform. What this pass adds is not another
+restatement of that: it is the reason **no unattended run will ever be able to close this ticket**,
+which the three entries above each assumed away by implying a future tick might find the work done.
+
+### The credential check, with the empty-carry tell ruled out
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Cloudflare credential in the environment? | `env \| grep -ci cloudflare` | `0` |
+| Did this worktree actually carry its env file, or silently get none? | `wc -c .env.worktree` then list its keys | present, 77 bytes, holding exactly `WORKAHOLIC_PORT_BASE`, `WORKAHOLIC_DEV_PORT`, `WORKAHOLIC_DOCS_PORT` — carried, and holding no credential |
+| Any other env source at the root? | `ls -a \| grep -i env` | `.env.example`, `.env.worktree` — nothing else |
+
+So this is the checked form of the claim, not the silent-loader form: the file the worktree
+creator carries is present and simply does not hold a Cloudflare token.
+
+### The new fact: the Actions secrets API is refused for reading, not only writing
+
+The entry of 2026-08-18 recorded that *writes* through this session's GitHub proxy are refused.
+Reads of the same surface are refused too — measured this run, verbatim:
+
+```
+$ gh api repos/qmu/qfs/actions/secrets/public-key
+{"message":"Access to this GitHub Actions path is not permitted through this proxy.", ...}
+gh: Access to this GitHub Actions path is not permitted through this proxy. (HTTP 403)
+
+$ gh api repos/qmu/qfs/actions/secrets
+{"message":"Access to this GitHub Actions path is not permitted through this proxy.", ...}
+gh: Access to this GitHub Actions path is not permitted through this proxy. (HTTP 403)
+```
+
+The second call asks only for secret **names and their `updated_at` timestamps** — GitHub never
+returns a secret's value to anybody — and it is refused all the same. That is the load-bearing
+part: a runner cannot see when `CLOUDFLARE_API_TOKEN` was last written.
+
+### Why nothing else can stand in for that observation either
+
+Narrowing the token produces **no observable change anywhere this runner can look**. With no
+`routes` declared, a steady-state `wrangler deploy --env staging` never touches the zone, so a
+narrow token and the wide one both deploy successfully and both leave an identical green
+`ci.yml` run and an identical `version.json`. Token scope is readable only from the Cloudflare
+dashboard, or from `GET /user/tokens/verify` with a credential that this environment does not
+carry. There is therefore no green signal an unattended tick can wait for.
+
+### What this means for the queue
+
+Left as it stands, this ticket is re-offered on every survey, claimed, re-blocked and re-reported
+by every unattended run, indefinitely — four such runs so far, each producing a pull request whose
+only content is a note saying the same human act is outstanding. That is the cost of a ticket
+whose completion is both unperformable and unverifiable from an unattended session.
+
+Two dispositions close the loop, and **both are the developer's to choose** — a run may not pick
+either for itself, and this run did not:
+
+1. **Do the three acts, then archive the ticket by hand.** Nothing else will archive it, because
+   nothing else can confirm them.
+2. **Declare it unverifiable here** — set `verification_handoff:` on the ticket frontmatter to the
+   reason above. The unit then takes the handoff route on sight instead of re-attempting: the PR
+   opens, quotes the reason and stays open, which is the shape this actually is. A drive run is
+   forbidden from writing that field for itself (`workaholic:drive` §6 — the declaration is read
+   off the artifact and never made mid-drive), which is why it is recorded here as a
+   recommendation rather than applied.
+
+Until one of them happens, the exposure is unchanged: `CLOUDFLARE_API_TOKEN` still holds
+`Zone → Workers Routes → Edit` on `qmu.co.jp`, and `.workaholic/deployments/docs-site.md` still
+states that outstanding gap where an operator reads it.
+
+*(Egress note, for completeness and not as evidence: `curl https://staging-qfs.qmu.co.jp/version.json`
+and the production equivalent both returned `curl: (56) CONNECT tunnel failed, response 403` from
+this container, as the 2026-08-19 correction predicts. Step 4 was verified directly on the
+developer's host and is not reopened by that.)*
