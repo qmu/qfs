@@ -119,4 +119,6 @@
 * [`wrangler` is installed on every branch push](20260818215719-wrangler-is-installed-on-every-branch.md)
 * [CI gained two third-party setup actions](20260819144514-ci-gained-two-third-party-setup.md)
 * [The upstream build wart is real and stays open](20260819144514-the-upstream-build-wart-is-real.md)
+* [Staging's non-indexability rests on one mechanism, not two](20260819145408-staging-s-non-indexability-rests-on.md)
+* [The docs CI token still holds zone-wide Workers Routes](20260819145408-the-docs-ci-token-still-holds.md)
 <!-- okf:generated:end -->
