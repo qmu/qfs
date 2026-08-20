@@ -5,7 +5,7 @@ assignees: [a@qmu.jp]
 depends_on: [the first v0.0.111 tag — the production Worker and its custom domain must exist first]
 mission: [the-documentation-site-publishes-itself-staging-on-merge-production-on-release]
 merge_policy: review
-verification_handoff:
+verification_handoff: Minting and revoking a Cloudflare API token are dashboard acts needing a credential with User -> API Tokens: Edit, which no runner here carries. The repository-secret swap and its verification need a session whose GitHub access is not the unattended proxy - a developer session reads and writes repos/qmu/qfs/actions/secrets fine, an unattended one is refused 403 on both.
 ---
 
 # The docs-deploy CI token cannot be narrowed while `routes` are declared
@@ -282,3 +282,54 @@ states that outstanding gap where an operator reads it.
 and the production equivalent both returned `curl: (56) CONNECT tunnel failed, response 403` from
 this container, as the 2026-08-19 correction predicts. Step 4 was verified directly on the
 developer's host and is not reopened by that.)*
+
+## Handoff declared, and the "unobservable" finding scoped — 2026-08-21 (developer session)
+
+`verification_handoff:` is now set, which is the disposition the entry above recommends and is
+forbidden from applying to itself. An unattended unit takes the declared-handoff route on sight
+from here on, so the ticket stops being re-offered, re-claimed and re-blocked every survey. That
+ends the loop whether or not this pull request stays open — the parking was the temporary form of
+the same intent.
+
+### One correction to the entry above: the refusal is the proxy's, not GitHub's
+
+That entry reads the read-side 403 as "a runner cannot see when `CLOUDFLARE_API_TOKEN` was last
+written", and concludes there is no signal anyone can wait for. The first half is right about an
+unattended run; the second half is too strong. Measured from a developer session on the owner's
+host, the same endpoints answer:
+
+```
+$ gh secret list -R qmu/qfs
+CLOUDFLARE_ACCOUNT_ID   2026-08-18T12:37:03Z
+CLOUDFLARE_API_TOKEN    2026-08-18T12:36:43Z
+
+$ gh api repos/qmu/qfs/actions/secrets/public-key --jq .key_id
+3380204578043523366
+```
+
+So the 403 is a property of the unattended session's GitHub proxy, exactly as the
+`CONNECT tunnel failed` 403 in the 2026-08-19 correction was a property of its egress proxy. Two
+consequences, both practical:
+
+1. **The swap is observable.** `CLOUDFLARE_API_TOKEN`'s `updated_at` is `2026-08-18T12:36:43Z`
+   today. When it changes, the secret was replaced — that is a real acceptance signal for act 2,
+   and it costs one API call. It does **not** prove the new token's *scope*; only the Cloudflare
+   dashboard or an authenticated `GET /user/tokens/verify` shows that.
+2. **The swap is performable here.** `public-key` answering means a developer session can run
+   `gh secret set CLOUDFLARE_API_TOKEN -R qmu/qfs`. Act 2 of the three is therefore not a
+   dashboard act at all; acts 1 and 3 — minting and revoking — still are, because they need a
+   credential holding `User → API Tokens: Edit`, which nothing here carries.
+
+### What remains, stated exactly
+
+| Act | Needs | Can a developer session do it? |
+| --- | --- | --- |
+| 1. Mint a token with only `Account → Workers Scripts: Edit` + `Account → Account Settings: Read` | Cloudflare dashboard | No |
+| 2. Replace the `CLOUDFLARE_API_TOKEN` repository secret | GitHub admin on `qmu/qfs` | **Yes** — `gh secret set` |
+| 3. Revoke the wide token | Cloudflare dashboard | No |
+
+Acceptance, once done: `gh secret list -R qmu/qfs` shows a newer `updated_at` for
+`CLOUDFLARE_API_TOKEN`, and one merge to `main` still publishes —
+`curl -sS https://staging-qfs.qmu.co.jp/version.json` reports that merge's commit. The scope
+itself is confirmed in the dashboard, by the person who minted it.
+
