@@ -1,8 +1,5 @@
 {
   "permissions": {},
-  "enabledPlugins": {
-    "workaholic@workaholic": true
-  },
   "extraKnownMarketplaces": {
     "workaholic": {
       "source": {
