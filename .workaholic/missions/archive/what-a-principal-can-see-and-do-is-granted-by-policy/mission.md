@@ -101,6 +101,7 @@ no-policy and dangling-policy deny), and a denied read is a structured, secret-f
 
 - 2026-07-28 — concern deferred (stuck) — the-statement-bridge-s-read-leg.md
 - 2026-07-28 — mission achieved — mission.md
+- 2026-09-07 — concern resolved (unstuck) — 20260728125129-the-statement-bridge-s-read-leg.md
 ## Reflection
 
 ### 2026-07-25 run 20260725-101714

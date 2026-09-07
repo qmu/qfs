@@ -119,4 +119,12 @@
 * [`wrangler` is installed on every branch push](20260818215719-wrangler-is-installed-on-every-branch.md)
 * [CI gained two third-party setup actions](20260819144514-ci-gained-two-third-party-setup.md)
 * [The upstream build wart is real and stays open](20260819144514-the-upstream-build-wart-is-real.md)
+* [Staging's non-indexability rests on one mechanism, not two](20260819145408-staging-s-non-indexability-rests-on.md)
+* [The docs CI token still holds zone-wide Workers Routes](20260819145408-the-docs-ci-token-still-holds.md)
+* [Resolved: A declared driver has no upgrade path, so a shipped declaration fix does not reach a live mount](20260907132317-resolved-a-declared-driver-has-no-upgrade.md)
+* [Resolved: Merging before the Cloudflare secrets exist turns `main` red](20260907132317-resolved-merging-before-the-cloudflare-secrets-exist.md)
+* [Resolved: qfs-runtime span-buffer test flakes under parallel workspace tests](20260907132317-resolved-qfs-runtime-span-buffer-test-flakes.md)
+* [Resolved: `select` on an unknown column is still silently dropped](20260907132317-resolved-select-on-an-unknown-column-is.md)
+* [Resolved: The shipped-asset install-splitter is still copy-pasted across tests](20260907132317-resolved-the-shipped-asset-install-splitter-is.md)
+* [Resolved: The statement bridge's read leg is ungated](20260907132317-resolved-the-statement-bridge-s-read-leg.md)
 <!-- okf:generated:end -->
