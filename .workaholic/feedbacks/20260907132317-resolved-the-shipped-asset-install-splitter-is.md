@@ -9,7 +9,7 @@ supersedes: 20260804205042-the-shipped-asset-install-splitter-is.md
 severity: low
 concern_id: the-shipped-asset-install-splitter-is
 mission: []
-resolved_by_pr: 
+resolved_by_pr:
 resolved_by_commit: 6076d4b1d2d639ac01de5221f193618b466d5ed0
 ---
 

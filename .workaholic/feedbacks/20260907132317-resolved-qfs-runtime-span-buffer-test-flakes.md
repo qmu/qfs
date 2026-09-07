@@ -8,8 +8,8 @@ author: a@qmu.jp
 supersedes: 20260711043949-qfs-runtime-span-buffer-test-flakes.md
 severity: low
 concern_id: qfs-runtime-span-buffer-test-flakes
-mission: 
-resolved_by_pr: 
+mission:
+resolved_by_pr:
 resolved_by_commit: f93912b56bf6b30c29eda649d054b44d1312f8d4
 ---
 

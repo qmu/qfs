@@ -9,7 +9,7 @@ supersedes: 20260728125539-select-on-an-unknown-column-is.md
 severity: moderate
 concern_id: select-on-an-unknown-column-is
 mission: [a-where-predicate-is-honored-or-refused-never-dropped]
-resolved_by_pr: 
+resolved_by_pr:
 resolved_by_commit: c466e833377bb758dbb743566f9d2fcecb99dff8
 ---
 

@@ -9,7 +9,7 @@ supersedes: 20260804205042-a-declared-driver-has-no-upgrade.md
 severity: moderate
 concern_id: a-declared-driver-has-no-upgrade
 mission: []
-resolved_by_pr: 
+resolved_by_pr:
 resolved_by_commit: b09b2da0f37d94fa8c778eb1028ed10ea6f42e64
 ---
 

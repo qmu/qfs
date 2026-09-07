@@ -9,7 +9,7 @@ supersedes: 20260728125129-the-statement-bridge-s-read-leg.md
 severity: moderate
 concern_id: the-statement-bridge-s-read-leg
 mission: [what-a-principal-can-see-and-do-is-granted-by-policy]
-resolved_by_pr: 
+resolved_by_pr:
 resolved_by_commit: 9aabae1b192814b587f1520b8689a3336ad2f7bb
 ---
 

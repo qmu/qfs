@@ -9,7 +9,7 @@ supersedes: 20260818215719-merging-before-the-cloudflare-secrets-exist.md
 severity: urgent
 concern_id: merging-before-the-cloudflare-secrets-exist
 mission: [the-documentation-site-publishes-itself-staging-on-merge-production-on-release]
-resolved_by_pr: 
+resolved_by_pr:
 resolved_by_commit: 68cebc659a83f38ed163c7e1c24313ec5a1fc562
 ---
 
