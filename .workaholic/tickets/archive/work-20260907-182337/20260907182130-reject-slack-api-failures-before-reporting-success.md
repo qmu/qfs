@@ -1,5 +1,6 @@
 ---
 created_at: 2026-09-07T18:21:30+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -61,3 +62,11 @@ Targeted regressions, cargo test --workspace, serialized qfs lib tests, cargo fm
 ## Considerations
 
 A generic REST response may legitimately contain ok:false as business data; response validation must be opt-in. Existing persisted Slack declarations must gain the fix without credential changes or reinstalling definitions. The scope is truthful error handling and request encoding, not a new Slack feature set.
+
+## Final Report
+
+Implemented opt-in JSON response contracts at the REST boundary and enabled them for the exact Slack Web API base URL. Slack application failures now stop reads and commits, preserve bounded error codes, and never count as affected rows. Generated JSON bodies carry application/json for writes and read-over-POST. Unknown error text is sanitized and failed posts are not retried. Existing persisted Slack definitions inherit the fix.
+
+Verification: all 2,800 workspace tests passed (2 ignored); serialized qfs lib tests passed 529 (1 ignored). Targeted mounted-account and CLI tests prove failed commits exit 5 without committed:true, preview sends nothing, and successful account-isolated writes remain valid. Format, clippy, generated docs and skills checks plus migration integrity passed; GitHub CI passed all jobs. Live read-only checks using the release candidate read internal_with_yosan successfully and returned channel_not_found with exit 5 for a nonexistent channel. No additional Slack messages were posted.
+
+Decision: select the response contract at composition for https://slack.com/api (optional trailing slash), rather than by driver label or for all REST services. Custom Slack proxies are outside this selection; generic REST business data containing ok:false retains its existing semantics. Binary patch version is 0.0.130 and both plugin manifests are 0.22.2.

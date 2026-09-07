@@ -1,6 +1,7 @@
 # stories
 
 <!-- okf:generated:begin -->
+* [Reject Slack API failures instead of reporting successful commits](work-20260907-182337.md) - Slack application failures now produce actionable errors and nonzero exits; JSON request bodies declare their content type.
 * [Select Slack authentication through the connection path](work-20260907-131428.md) - Slack reads and posts use the account bound to each connection path, without a separate secret selector.
 * [work-20260818-224556](work-20260818-224556.md)
 * [work-20260818-224038](work-20260818-224038.md)
