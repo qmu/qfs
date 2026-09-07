@@ -1,5 +1,6 @@
 ---
 created_at: 2026-09-07T13:13:24+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -64,3 +65,24 @@ The Slack implementation moved from a compiled driver to a declared driver, whil
 - Changing only the example AUTH declaration may leave already-stored driver definitions broken; inspect the runtime boundary before choosing the repair (`declared_driver.rs`).
 - The token determines Slack workspace and sender; the path's workspace segment does not independently select credentials (`slack_driver.qfs`).
 - Scope is this requested fix only; existing unrelated queued work is not part of this unit.
+
+## Final Report
+
+Implemented account-bound bearer resolution at the shared read/apply credential boundary. Existing stored Slack declarations now use the selected mount account without reinstallation. Explicit SECRET references retain precedence; missing or revoked selected credentials never fall back to default. Cookbook and generated Slack skill explain profile selection by path. Binary version is 0.0.129 and plugin version is 0.22.1.
+
+### Verification
+
+- Four isolated-vault regression tests pass. The account-isolation and missing-account refusal tests fail before the repair; explicit SECRET and legacy compatibility tests already pass before it.
+- Final Cargo workspace run: 2,792 passed, zero failed, two ignored.
+- Serialized qfs library suite with XDG_CONFIG_HOME unset: 525 passed, zero failed, one ignored.
+- Workspace Clippy with warnings denied, rustfmt, generated docs/skills checks, and migration integrity check pass.
+- Rust 1.98 exposed four preexisting lint findings: two fixed-size hash chunk loops and two identity map_or calls. Equivalent notation repairs are separate commits; hash/Git tests (78) and CLI tests (131) pass.
+- No live Slack message was sent; outbound auth headers and no-network refusal were verified with mock HTTP and real encrypted test vaults.
+
+### Workflow Notes
+
+Workaholic 1.0.329 was used. The ticket publication PR initially failed CI on unchanged code, so its existing work branch was attached through the sanctioned worktree creator and used for the implementation instead of merging a red ticket-only PR merely to create a second claim. Historical concern review resolved six independently verified old concerns in a separate documentation commit.
+
+### Discovered Insights
+
+- Repairing only the shipped AUTH declaration would leave persisted bearer declarations broken. The existing shared credential resolver already receives each mount's account on both execution paths, so this boundary repairs old and new connections together.
