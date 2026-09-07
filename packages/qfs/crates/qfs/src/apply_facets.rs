@@ -124,10 +124,7 @@ impl RestApplyDriver {
                             ),
                             None => qfs_driver_http::rest_read_rows(&self.applier, rest_path),
                         };
-                        result.map_err(|e| qfs_core::CfsError::InvalidPath {
-                            path: rest_path.to_string(),
-                            reason: e.code(),
-                        })
+                        result.map_err(|e| crate::declared_driver::read_http_error(rest_path, e))
                     },
                     |url| {
                         self.applier.follow_bytes(url).map_err(|e| {

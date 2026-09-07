@@ -169,6 +169,16 @@ Until the mount is bound, a read fails with an actionable hint naming the
 `qfs account add slack …` / `qfs connect …` to run. Posting a message previews with no account
 (above); it sends only once connected and committed.
 
+## Failed requests
+
+QFS checks Slack's application result as well as the HTTP status. A response such as
+`{"ok":false,"error":"missing_scope"}` is a failure even when Slack returns HTTP 200:
+`qfs run --commit` exits nonzero without reporting `committed: true`. Recognized service error
+codes are preserved; unrecognized error text is reported as `service_rejected` without echoing
+the response body. A malformed or missing success envelope reports `http_response_contract`.
+A failed read reports the service error instead of an empty result. Failed posts are not
+automatically retried. These checks apply to existing Slack API connections too.
+
 ## The channel as a path
 
 Once connected, a workspace's channels hang off `/slack` in a filesystem shape:

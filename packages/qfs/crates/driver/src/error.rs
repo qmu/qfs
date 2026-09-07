@@ -20,6 +20,15 @@
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CfsError {
+    /// An external service rejected the operation or did not confirm its outcome.
+    #[error("service request failed for {path:?}: {code}")]
+    Service {
+        /// The addressed virtual path, without credentials.
+        path: String,
+        /// A safe machine code selected by the service adapter.
+        code: &'static str,
+    },
+
     /// A feature that is reserved but not yet implemented at this epic.
     #[error("not yet implemented: {feature}")]
     NotImplemented {
@@ -151,6 +160,7 @@ impl CfsError {
             Self::Decode { .. } => "decode_error",
             Self::Encode { .. } => "encode_error",
             Self::InvalidPath { .. } => "invalid_path",
+            Self::Service { code, .. } => code,
             Self::UnsupportedVerb { .. } => "unsupported_verb",
             Self::ReservedRealmMount { .. } => "reserved_realm_mount",
             // The granular server error code lives in `server_code`; the workspace-level

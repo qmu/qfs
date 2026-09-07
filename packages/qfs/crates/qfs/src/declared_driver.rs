@@ -404,6 +404,15 @@ impl DeclaredDriver {
     pub(crate) fn rest_config(&self) -> RestApiConfig {
         let mut config = RestApiConfig::new(self.base_url.clone(), self.resources())
             .with_auth(self.auth_strategy());
+        // Slack acknowledges API failures with HTTP 200. Select its envelope contract at
+        // composition, including existing stored declarations and renamed driver instances.
+        // Exact API bases only: another host/path may legitimately use `ok` as business data.
+        if self.base_url.trim_end_matches('/') == "https://slack.com/api" {
+            config.response_contract = Some(qfs_driver_http::JsonResponseContract {
+                success_field: "ok".into(),
+                error_field: "error".into(),
+            });
+        }
         if let Some(p) = self.pagination.as_deref().and_then(parse_pagination) {
             config = config.with_pagination(p);
         }
@@ -1589,6 +1598,20 @@ fn declared_param_type(token: &str) -> qfs_core::ColumnType {
         "bytes" => qfs_core::ColumnType::Bytes,
         "timestamp" => qfs_core::ColumnType::Timestamp,
         _ => qfs_core::ColumnType::Unknown,
+    }
+}
+
+/// Preserve application rejection codes as service failures, rather than blaming query syntax.
+pub(crate) fn read_http_error(path: &str, error: qfs_driver_http::HttpError) -> qfs_core::CfsError {
+    match error {
+        qfs_driver_http::HttpError::Application { code } => qfs_core::CfsError::Service {
+            path: path.to_string(),
+            code,
+        },
+        other => qfs_core::CfsError::InvalidPath {
+            path: path.to_string(),
+            reason: other.code(),
+        },
     }
 }
 
@@ -5148,7 +5171,8 @@ mod tests {
         )
         .unwrap();
         let view_body = serde_json::to_string(
-            &qfs_exec::parse("/http/slack/conversations.list |> DECODE json").unwrap(),
+            &qfs_exec::parse("/http/slack/conversations.list |> DECODE json |> EXPAND channels")
+                .unwrap(),
         )
         .unwrap();
         let d = DeclaredDriver {
@@ -5175,7 +5199,7 @@ mod tests {
         // 1st: the collection the LET searches. 2nd: the effect leg's response.
         mock.push_response(qfs_driver_http::HttpResponse::new(
             200,
-            br#"[{"name":"general","id":"C_GEN"},{"name":"random","id":"C_RND"}]"#.to_vec(),
+            br#"{"ok":true,"channels":[{"name":"general","id":"C_GEN"},{"name":"random","id":"C_RND"}]}"#.to_vec(),
         ));
         mock.push_response(qfs_driver_http::HttpResponse::new(
             200,
@@ -5282,7 +5306,8 @@ mod tests {
         )
         .unwrap();
         let view_body = serde_json::to_string(
-            &qfs_exec::parse("/http/slack/conversations.list |> DECODE json").unwrap(),
+            &qfs_exec::parse("/http/slack/conversations.list |> DECODE json |> EXPAND channels")
+                .unwrap(),
         )
         .unwrap();
         let d = DeclaredDriver {
@@ -5311,7 +5336,7 @@ mod tests {
         let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
         mock.push_response(qfs_driver_http::HttpResponse::new(
             200,
-            br#"[{"name":"general","id":"C_GEN"},{"name":"random","id":"C_RND"}]"#.to_vec(),
+            br#"{"ok":true,"channels":[{"name":"general","id":"C_GEN"},{"name":"random","id":"C_RND"}]}"#.to_vec(),
         ));
         mock.push_response(qfs_driver_http::HttpResponse::new(
             200,
@@ -5402,7 +5427,8 @@ mod tests {
         )
         .unwrap();
         let view_body = serde_json::to_string(
-            &qfs_exec::parse("/http/slack/conversations.list |> DECODE json").unwrap(),
+            &qfs_exec::parse("/http/slack/conversations.list |> DECODE json |> EXPAND channels")
+                .unwrap(),
         )
         .unwrap();
         let d = DeclaredDriver {
@@ -5428,7 +5454,7 @@ mod tests {
         let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
         mock.push_response(qfs_driver_http::HttpResponse::new(
             200,
-            br#"[{"name":"general","id":"C_GEN"}]"#.to_vec(),
+            br#"{"ok":true,"channels":[{"name":"general","id":"C_GEN"}]}"#.to_vec(),
         ));
         let client: Arc<dyn qfs_driver_http::HttpClient> = mock.clone();
         let secrets: Arc<dyn qfs_secrets::Secrets> = Arc::new(qfs_secrets::InMemoryStore::new());

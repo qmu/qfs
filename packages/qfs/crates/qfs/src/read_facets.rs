@@ -244,10 +244,7 @@ impl ReadDriver for RestReadDriver {
                         }
                         None => qfs_driver_http::rest_read_rows(&self.applier, rest_path),
                     };
-                    result.map_err(|e| CfsError::InvalidPath {
-                        path: rest_path.to_string(),
-                        reason: e.code(),
-                    })
+                    result.map_err(|e| crate::declared_driver::read_http_error(rest_path, e))
                 },
                 // The §13 FOLLOW second fetch: raw bytes off the delivered URL, no auth, the
                 // URL's host data-admitted for exactly this request (applier::follow_bytes).
