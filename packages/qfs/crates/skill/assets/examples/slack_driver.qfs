@@ -10,7 +10,7 @@
 --   audited local write; zero network). CONNECT binds the stored Slack token from the account layer,
 --   never from this script:
 --     qfs account add slack <label>            # stores the workspace token in the vault
---     qfs connect /slackd TO slack SECRET 'vault:slack/<label>'
+--     qfs connect /slackd --driver slack --account <label>
 --
 -- HOST CONFINEMENT (enforced at load): every wire body addresses ONLY /http/slack/… , so this script
 --   is structurally unable to read Slack and exfiltrate elsewhere. It is credential-free by

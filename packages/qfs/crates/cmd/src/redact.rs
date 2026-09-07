@@ -65,7 +65,7 @@ fn scrub_after_markers(s: &str, markers: &[&str], is_delim: impl Fn(char) -> boo
         out.push_str(&s[cursor..val_start]);
         // The value runs to the next delimiter (or end).
         let rest = &s[val_start..];
-        let end = rest.find(&is_delim).map_or(rest.len(), |e| e);
+        let end = rest.find(&is_delim).unwrap_or(rest.len());
         if end > 0 {
             out.push_str(REDACTED);
         }
@@ -115,7 +115,7 @@ fn scrub_basic_auth(s: &str) -> String {
     // The authority ends at the first path/query/space.
     let auth_end = authority
         .find(|c: char| c == '/' || c == '?' || c == '#' || c.is_whitespace() || c == '"')
-        .map_or(authority.len(), |e| e);
+        .unwrap_or(authority.len());
     let authority = &authority[..auth_end];
     if let Some(at) = authority.find('@') {
         let userinfo = &authority[..at];

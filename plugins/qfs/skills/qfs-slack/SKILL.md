@@ -108,6 +108,37 @@ qfs connect /slack-acme --driver slack --account acme   # its own mount, bound t
 The label and the mount path are yours to choose; the `default` label and the `/slack` path in
 [Setup](#setup) are one instance of these same two commands, not fixed names.
 
+### Choose a profile by its connection path
+
+For your own user accounts in two workspaces, store each user token under a separate label and
+bind each label to a separate path:
+
+```sh
+printf '%s' "$SLACK_USER_TOKEN_A" | qfs account add slack work-a
+printf '%s' "$SLACK_USER_TOKEN_B" | qfs account add slack work-b
+qfs connect /slack-a --driver slack --account work-a
+qfs connect /slack-b --driver slack --account work-b
+```
+
+An agent then chooses only the connection path. Both reads and posts through `/slack-a/…` use
+`work-a`; `/slack-b/…` uses `work-b`. No active-profile switch or extra `--secret` is needed.
+The token determines the actual workspace and sender; changing the `{ws}` segment beneath a
+connection does not change authentication. Use each workspace's actual channel ID:
+
+```sh
+qfs run -e "insert into /slack-a/acme/C0123456789/messages values ('Hello from work-a')"
+qfs run -e "insert into /slack-b/beta/C9876543210/messages values ('Hello from work-b')"
+```
+
+These commands preview. Add `--commit` to send. If the selected account is missing or locally
+revoked, qfs refuses the request without falling back to `default` or another account. For legacy
+bearer connections with an explicit `--secret`, that reference retains precedence over `--account`;
+reconnect using the commands above to select authentication solely by account.
+
+User-token setup and required user scopes are covered in [Post as yourself](#post-as-yourself-a-user-token).
+
+### Disconnect a workspace
+
 **Undoing it** is those two layers in reverse. On the Slack side, uninstall the app — or revoke its
 token — from the workspace's app-management page. On the qfs side, `qfs disconnect /slack-acme`
 removes the mount and `qfs account remove slack acme` deletes the token together with its consent
