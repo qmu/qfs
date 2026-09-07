@@ -177,6 +177,7 @@ impl ExecError {
                 ErrorKind::Capability
             }
             CfsError::InvalidPath { .. } => ErrorKind::Usage,
+            CfsError::Service { .. } => ErrorKind::CommitFailed,
             CfsError::Decode { .. } | CfsError::Encode { .. } => ErrorKind::Internal,
             CfsError::DuplicateRegistration(_) | CfsError::NotImplemented { .. } => {
                 ErrorKind::Internal
@@ -192,7 +193,7 @@ impl ExecError {
             out.path = Some(path.clone());
             out.detail = Some(format!("supported: [{}]", supported.join(", ")));
         }
-        if let CfsError::InvalidPath { path, .. } = err {
+        if let CfsError::InvalidPath { path, .. } | CfsError::Service { path, .. } = err {
             out.path = Some(path.clone());
         }
         out

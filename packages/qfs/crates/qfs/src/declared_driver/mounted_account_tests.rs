@@ -75,7 +75,10 @@ async fn mounted_read(
     .await
 }
 
-async fn mounted_write(path: &str, mock: Arc<qfs_driver_http::MockHttpClient>) -> bool {
+fn mounted_registry(
+    path: &str,
+    mock: Arc<qfs_driver_http::MockHttpClient>,
+) -> (qfs_core::DriverId, DriverRegistry) {
     let d = shipped_slack_declared_driver();
     let binding =
         crate::path_binding::db_get_binding(&crate::connection::open_system_conn().unwrap(), path)
@@ -105,6 +108,11 @@ async fn mounted_write(path: &str, mock: Arc<qfs_driver_http::MockHttpClient>) -
             Arc::new(facet),
         )),
     );
+    (id, registry)
+}
+
+async fn mounted_write(path: &str, mock: Arc<qfs_driver_http::MockHttpClient>) -> bool {
+    let (id, registry) = mounted_registry(path, mock);
     let mut plan = PlanBuilder::new();
     plan.push(
         EffectNode::new(
@@ -232,4 +240,141 @@ async fn mounted_slack_explicit_secret_retains_precedence_over_account() {
             .iter()
             .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
                 && value == "Bearer token-b")));
+}
+
+#[tokio::test]
+async fn mounted_slack_rejections_fail_reads_and_commits_without_retry() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-response-contract");
+    seed_accounts();
+    bind("/slack-a", "work-a", None);
+    for code in ["missing_post_type", "missing_scope", "channel_not_found"] {
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        let body = format!(r#"{{"ok":false,"error":"{code}"}}"#);
+        mock.push_response(qfs_driver_http::HttpResponse::new(
+            200,
+            body.as_bytes().to_vec(),
+        ));
+        assert!(!mounted_write("/slack-a", mock.clone()).await);
+        assert_eq!(mock.recorded().len(), 1, "a failed POST must not retry");
+        assert_eq!(
+            mock.recorded()[0].header_value("Content-Type"),
+            Some("application/json")
+        );
+        mock.push_response(qfs_driver_http::HttpResponse::new(200, body.into_bytes()));
+        let error = mounted_read("/slack-a", mock.clone()).await.unwrap_err();
+        assert!(error.to_string().contains(code), "{error}");
+    }
+}
+
+#[test]
+fn slack_response_contract_is_selected_by_exact_api_base_not_driver_label() {
+    let mut d = shipped_slack_declared_driver();
+    d.name = "another-label".into();
+    assert!(d.rest_config().response_contract.is_some());
+    d.base_url = "https://slack.com/api/".into();
+    assert!(d.rest_config().response_contract.is_some());
+    for url in [
+        "https://slack.com.evil.test/api",
+        "https://example.test/api",
+        "https://slack.com/other",
+        "http://slack.com/api",
+    ] {
+        d.base_url = url.into();
+        assert!(d.rest_config().response_contract.is_none(), "{url}");
+    }
+}
+
+#[test]
+fn slack_failure_reaches_cli_exit_and_output_without_success_receipt() {
+    use qfs_exec::{
+        run_oneshot, ErrorKind, ExecCtx, ExecError, OutputFormat, ReadRegistry, StmtSource, Streams,
+    };
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-cli-outcome");
+    seed_accounts();
+    bind("/slack-a", "work-a", None);
+    let d = shipped_slack_declared_driver();
+    let mut engine = qfs_core::Engine::new();
+    engine
+        .mounts
+        .register(Arc::new(
+            declared_describe_mount_with_types("/slack-a", &d, &qfs_core::DeclaredTypeDefs::new())
+                .unwrap(),
+        ))
+        .unwrap();
+    let reads = ReadRegistry::new();
+    let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+    mock.push_response(qfs_driver_http::HttpResponse::new(
+        200,
+        br#"{"ok":false,"error":"missing_scope"}"#.to_vec(),
+    ));
+    let world = |plan: &qfs_core::Plan| -> Result<(), ExecError> {
+        let (id, registry) = mounted_registry("/slack-a", mock.clone());
+        let caps = CapabilitySet::none().grant(id, &EffectKind::Insert);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(Interpreter::with_defaults(registry).commit(plan.clone(), &caps));
+        match result {
+            Ok(outcome) if outcome.is_complete() => Ok(()),
+            other => Err(ExecError::new(
+                ErrorKind::CommitFailed,
+                "commit_failed",
+                format!("{other:?}"),
+            )),
+        }
+    };
+    let ctx = ExecCtx {
+        engine: &engine,
+        reads: &reads,
+        world_apply: Some(&world),
+        safety_mode: qfs_core::SafetyMode::default(),
+        transform: None,
+    };
+    let source = StmtSource::Expr(
+        "insert into /slack-a/workspace/C1/messages values (text) ('hello')".into(),
+    );
+    for commit in [false, true] {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_oneshot(
+            &source,
+            &ctx,
+            OutputFormat::Json,
+            commit,
+            false,
+            &mut Streams {
+                out: &mut out,
+                err: &mut err,
+            },
+        )
+        .code();
+        let out = String::from_utf8(out).unwrap();
+        let err = String::from_utf8(err).unwrap();
+        if commit {
+            assert_eq!(code, 5, "{out} {err}");
+            assert!(
+                err.contains("commit_failed") && err.contains("missing_scope"),
+                "{err}"
+            );
+            assert!(!out.contains(r#""committed":true"#));
+            assert_eq!(mock.recorded().len(), 1);
+        } else {
+            assert_eq!(code, 0, "{err}");
+            assert!(mock.recorded().is_empty(), "preview must not send");
+        }
+    }
+}
+
+#[test]
+fn service_read_failure_has_a_non_usage_exit_code_and_preserves_reason() {
+    let err = crate::declared_driver::read_http_error(
+        "/rest/slack/conversations.history",
+        qfs_driver_http::HttpError::Application {
+            code: "channel_not_found",
+        },
+    );
+    let err = qfs_exec::ExecError::from_qfs(&err);
+    assert_eq!(err.exit_code().code(), 5);
+    assert_eq!(err.code, "channel_not_found");
+    assert!(err.message.contains("channel_not_found"));
 }

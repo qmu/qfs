@@ -200,6 +200,50 @@ impl RestApplier {
         Ok(req.header(header_name.to_string(), value))
     }
 
+    /// Validate before decoding, counting an effect or advancing pagination. A malformed
+    /// success envelope is an unconfirmed result, never a successful empty response.
+    fn validate_response(&self, response: &HttpResponse) -> Result<(), HttpError> {
+        let Some(contract) = &self.config.response_contract else {
+            return Ok(());
+        };
+        let invalid = || HttpError::Application {
+            code: "http_response_contract",
+        };
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.body).map_err(|_| invalid())?;
+        match body
+            .get(&contract.success_field)
+            .and_then(serde_json::Value::as_bool)
+        {
+            Some(true) => Ok(()),
+            Some(false) => {
+                // Only known protocol codes cross the boundary. Do not echo an arbitrary
+                // response value: even an apparent identifier could contain credentials.
+                let code = match body
+                    .get(&contract.error_field)
+                    .and_then(serde_json::Value::as_str)
+                {
+                    Some("missing_post_type") => "missing_post_type",
+                    Some("invalid_post_type") => "invalid_post_type",
+                    Some("missing_scope") => "missing_scope",
+                    Some("channel_not_found") => "channel_not_found",
+                    Some("not_in_channel") => "not_in_channel",
+                    Some("invalid_auth") => "invalid_auth",
+                    Some("not_authed") => "not_authed",
+                    Some("token_revoked") => "token_revoked",
+                    Some("account_inactive") => "account_inactive",
+                    Some("no_permission") => "no_permission",
+                    Some("invalid_arguments") => "invalid_arguments",
+                    Some("thread_not_found") => "thread_not_found",
+                    Some("ratelimited") => "ratelimited",
+                    _ => "service_rejected",
+                };
+                Err(HttpError::Application { code })
+            }
+            None => Err(invalid()),
+        }
+    }
+
     /// Send a single request and classify the status: a 2xx is the response; a >= 400 is a
     /// structured [`HttpError`] (server/transient vs client/terminal). Emits a structured,
     /// **redacted** request log (method + URL + status; never an auth header).
@@ -219,6 +263,7 @@ impl RestApplier {
             "rest request"
         );
         if resp.is_success() {
+            self.validate_response(&resp)?;
             Ok(resp)
         } else {
             Err(HttpError::from_status(

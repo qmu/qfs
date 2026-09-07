@@ -14,6 +14,14 @@ use qfs_runtime::EffectError;
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum HttpError {
+    /// The service rejected a successful HTTP exchange, or failed its response contract.
+    /// Codes are selected from a closed vocabulary, never copied from response text.
+    #[error("service response failed: {code}")]
+    Application {
+        /// Safe machine code describing the application failure.
+        code: &'static str,
+    },
+
     /// The transport failed before a status was received (DNS, connect, TLS, read timeout).
     /// Retry-safe **only** on a retry-safe method (`GET`/`PUT`/`DELETE`, never `POST`).
     #[error("transport error for {method} {url}: {reason}")]
@@ -91,6 +99,7 @@ impl HttpError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
+            HttpError::Application { code } => code,
             HttpError::Transport { .. } => "http_transport",
             HttpError::Server { .. } => "http_server",
             HttpError::Client { .. } => "http_client",
