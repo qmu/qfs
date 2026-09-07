@@ -1,6 +1,7 @@
 # stories
 
 <!-- okf:generated:begin -->
+* [Select Slack authentication through the connection path](work-20260907-131428.md) - Slack reads and posts use the account bound to each connection path, without a separate secret selector.
 * [work-20260818-224556](work-20260818-224556.md)
 * [work-20260818-224038](work-20260818-224038.md)
 * [work-20260818-214011](work-20260818-214011.md) - The `qfs` store's shared-home guard could only fire in a run nobody made, so CI's `build-test` job now re-runs the lib suite serialised with `XDG_CONFIG_HOME` unset — proven first by breaking one guard: parallel green 3/3, serialised red every time.
