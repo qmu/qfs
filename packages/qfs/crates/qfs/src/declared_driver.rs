@@ -100,8 +100,9 @@ pub(crate) struct DeclaredMount {
     /// the Cloudflare account id the D1 twin's [`HttpApiBackend`] routes to). `None` when the
     /// connect carried no `AT` clause.
     pub at_locator: Option<String>,
-    /// The connection's bound account label (`CONNECT … ACCOUNT '<label>'`) — the account an
-    /// `AUTH ACCOUNT '<provider>'` driver resolves its live bearer from (`None` → `default`).
+    /// The connection's bound account label (`CONNECT … ACCOUNT '<label>'`) — the account a
+    /// bearer driver resolves its token from. `AUTH ACCOUNT` uses its named provider; plain
+    /// `AUTH BEARER` uses the driver's own namespace unless an explicit secret reference overrides it.
     pub account: Option<String>,
     /// The OAuth app label bound to this mount (`CONNECT … `, `path_binding.app`) — which provider
     /// app an OAuth `AUTH ACCOUNT` driver exchanges its stored refresh token through. `None` falls
@@ -1246,7 +1247,8 @@ fn declared_auth_key(d: &DeclaredDriver) -> Option<CredentialKey> {
 /// The shared secrets store a live declared driver resolves its auth `SecretRef` through. A
 /// `CONNECT ... SECRET '<ref>'` path binding is lifted into the driver's default auth key, so the
 /// generated `SecretRef(driver, "default")` can resolve `env:<VAR>` / `vault:<driver>/<conn>` at use
-/// time. Without a path-level secret reference, the binary's credential store is used directly.
+/// time. A bearer mount without an explicit secret reference resolves its bound account in the
+/// driver's namespace; an unbound legacy bearer mount still uses the default coordinate.
 pub(crate) fn declared_secrets(
     d: &DeclaredDriver,
     secret_ref: Option<&str>,
@@ -1285,6 +1287,19 @@ pub(crate) fn declared_secrets(
         });
     }
     let Some(reference) = secret_ref.filter(|s| !s.is_empty()) else {
+        // Existing Slack declarations use AUTH BEARER. The mount already carries its account
+        // on both the read and apply paths; translate the stable wire key to that account here
+        // so stored declarations work without reinstallation or a second SECRET selector.
+        if let (AuthStrategy::Bearer { .. }, Some(account)) = (
+            parse_auth(&d.auth, SecretRef::new(d.name.clone(), "default")),
+            account.filter(|s| !s.is_empty()),
+        ) {
+            return Arc::new(AccountBearerSecrets {
+                provider: d.name.clone(),
+                account: account.to_string(),
+                vault,
+            });
+        }
         return vault;
     };
     let Ok(connection) = qfs_secrets::ConnectionId::new("default") else {
@@ -1310,8 +1325,8 @@ fn account_auth_provider(auth: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The [`Secrets`] adapter an `AUTH ACCOUNT '<provider>'` declared driver resolves its bearer
-/// through. The declared [`AuthStrategy::Account`] resolves the STABLE coordinate
+/// The [`Secrets`] adapter an account-bound declared driver resolves its bearer through.
+/// Both [`AuthStrategy::Account`] and account-bound [`AuthStrategy::Bearer`] use a STABLE coordinate
 /// `(provider, "default")`; this adapter matches it and returns the shared provider account's stored
 /// bearer at `(provider, <connected account>)`. The token stays in the vault — the declaration and
 /// its `/sys/drivers` row carry only the provider name. A missing account fails closed with a
@@ -1337,13 +1352,15 @@ impl Secrets for AccountBearerSecrets {
             qfs_secrets::ConnectionId::new(&self.account)
                 .map_err(|e| SecretError::Backend(e.to_string()))?,
         );
-        self.vault.get(&account_key).map_err(|_| {
-            SecretError::Backend(format!(
-                "AUTH ACCOUNT '{p}' has no stored account '{a}' — run `qfs account add {p} {a}` \
-                 (the token stays in the vault; the declaration carries only the provider)",
+        self.vault.get(&account_key).map_err(|error| match error {
+            SecretError::NotFound(_) => SecretError::Backend(format!(
+                "no stored account '{a}' for '{p}' — run `qfs account add {p} {a}` \
+                 (the token stays in the vault; the mount carries only the account label)",
                 p = self.provider,
                 a = self.account,
-            ))
+            )),
+            // Keep revocation/lock failures distinct; none may fall back to another account.
+            other => other,
         })
     }
 
@@ -1579,6 +1596,9 @@ fn declared_param_type(token: &str) -> qfs_core::ColumnType {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
+    mod mounted_account_tests {
+        include!("declared_driver/mounted_account_tests.rs");
+    }
 
     fn base_row(kind: &str, name: &str) -> DriverRow {
         DriverRow {
