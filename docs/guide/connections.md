@@ -6,8 +6,10 @@ with `qfs connect`, and a local path like `/sql/orders/customers` comes from a `
 declaration whose name (`orders`) is the path segment. That's why you can have `/sql/orders` and
 `/sql/analytics`, or a work `/mail` and a home `/mail2`, side by side.
 
-You don't need any connection to **describe** a path or **preview** a query — both are completely
-offline. You need one to **read rows** from a source or **commit** a change to it.
+You don't need a connection to **describe** a compiled path. A write preview performs no network
+request and resolves no credential, but it still needs a routed path: built-in `/sys` and `/local`
+paths are ready immediately, while a cloud path must first be mounted with `qfs connect`. A
+connection with a usable account is required to read live rows or commit a cloud change.
 
 ::: tip Just want the steps for one service?
 [Connect a service](/guide/connect) is the per-source how-to (Gmail/Drive, GitHub/Slack, S3/R2,

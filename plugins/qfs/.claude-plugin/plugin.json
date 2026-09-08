@@ -1,7 +1,7 @@
 {
   "name": "qfs",
   "description": "Use when a task needs to read or modify any service the user has connected — mail, files, databases, GitHub, Slack, git, cloud storage — through the qfs pipe-SQL query language and the qfs CLI. Replaces the gmail-ftp and gdrive-ftp plugins.",
-  "version": "0.22.2",
+  "version": "0.22.3",
   "dependencies": [],
   "author": {
     "name": "tamurayoshiya",
@@ -9,5 +9,16 @@
   },
   "repository": "https://github.com/qmu/qfs",
   "license": "MIT",
-  "keywords": ["qfs", "cli", "pipe-sql", "query-language", "mail", "drive", "sql", "github", "slack", "git"]
+  "keywords": [
+    "qfs",
+    "cli",
+    "pipe-sql",
+    "query-language",
+    "mail",
+    "drive",
+    "sql",
+    "github",
+    "slack",
+    "git"
+  ]
 }

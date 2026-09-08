@@ -1,7 +1,7 @@
 # Installation
 
-qfs is a single binary. There's nothing to configure to get started — you can describe and preview
-queries with no credentials at all.
+qfs is a single binary. There's nothing to configure to get started — you can describe compiled
+paths and preview writes against built-in routed paths with no credentials at all.
 
 ## Install script (recommended)
 
@@ -51,18 +51,57 @@ Released binaries are built for:
 
 ## First check (no credentials needed)
 
-You can immediately explore the language without connecting anything. `describe` and `preview` are
-completely offline:
+You can immediately explore the language without connecting anything. `describe` is offline, and a
+write preview against the built-in `/sys` mount performs no I/O:
 
 ```sh
 # What can I do with a mail draft?
 qfs describe /mail/drafts
 
-# Preview a query — shows the plan, changes nothing
-qfs run "insert into /mail/drafts values ('alice@example.com', 'Hi', 'Body text')"
+# Preview a routed write — shows the plan, changes nothing
+qfs run "insert into /sys/policies values (name, allow) ('first-preview', 'ALLOW INSERT')"
 ```
 
-When you're ready to act on real services, [connect a service](/guide/connect).
+An unconnected cloud write such as `/mail/drafts` refuses with `unrouted_path`; preview is safe, but
+it does not bypass routing setup. When you're ready to use a real service, [connect it](/guide/connect).
+
+## Use qfs from Codex (the plugin)
+
+The QFS plugin packages the same skills for Codex and Claude Code. Install the `qfs` binary first;
+the plugin teaches the CLI and does not bundle service credentials or an MCP server.
+
+For a checkout of this repository, run these commands from the repository root:
+
+```sh
+codex plugin marketplace add .
+codex plugin add qfs@qfs
+codex plugin list --json --marketplace qfs
+```
+
+These commands were verified with Codex CLI `0.153.4`: the listing reported `qfs@qfs` installed
+and enabled from this checkout, with both `qfs:qfs` and `qfs:qfs-slack` available to a new thread.
+
+The local marketplace is `.agents/plugins/marketplace.json`, pointing to `plugins/qfs` and its
+`.codex-plugin/plugin.json`. Check that the listing reports QFS installed and enabled, and that
+the marketplace root is the checkout you intend to use. To install from GitHub instead, use
+`codex plugin marketplace add qmu/qfs` before `codex plugin add qfs@qfs`; a remote snapshot does not
+pick up edits made to a local checkout.
+
+After updating a local plugin's version, run `codex plugin add qfs@qfs` again. Start a new Codex
+thread to verify automatic discovery: ask it to use QFS to find a channel by name **without giving
+an ID**, and confirm it reads the connection and workspace `describe` output before choosing a
+channel collection. The plugin's registered skill names are `qfs:qfs` and `qfs:qfs-slack`;
+select them from Codex's skill picker (or explicitly invoke `$qfs:qfs` / `$qfs:qfs-slack`). Installation and
+cache freshness do not prove that an already-running thread has refreshed its skill catalog;
+reading updated skill files into that thread explicitly is a separate operation.
+
+The repository's packaging check is `python3 scripts/check-plugin.py`, with negative fixtures in
+`python3 scripts/test-check-plugin.py`. It checks both host manifests, exact registrations and
+Cookbook-generated content; `cargo run -p xtask -- gen-skills --check` from `packages/qfs` remains
+the generator-owned backstop. These checks verify distribution, not live agent behavior.
+
+See the [official plugin guide](https://developers.openai.com/plugins/build/plugins) for Codex's
+marketplace and plugin packaging model.
 
 ## Use qfs from Claude Code (the plugin)
 

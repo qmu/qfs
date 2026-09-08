@@ -13,14 +13,15 @@ github, slack, sql, git, object storage, and the qfs server itself — is reache
 > 4. **COMMIT** — apply at the edge, only after PREVIEW looks right.
 
 ```text
-qfs describe /mail/drafts -json     # step 1 — the contract
-qfs run 'insert into /mail/drafts …'  # step 2+3 — PREVIEW by default
-qfs run 'insert into /mail/drafts …' --commit   # step 4 — apply
+qfs describe /sys/policies --json     # step 1 — the contract
+qfs run "insert into /sys/policies values (name, allow) ('example', 'ALLOW INSERT')"  # PREVIEW
+qfs run "insert into /sys/policies values (name, allow) ('example', 'ALLOW INSERT')" --commit
 ```
 
-`DESCRIBE` is **pure**: no credentials, no I/O, no network. You can always describe a node to
-learn how to address it before touching anything. `qfs run` **PREVIEWs by default**; nothing is
-applied until you add `--commit` (or a trailing `COMMIT` keyword).
+`DESCRIBE` is **pure**: no credentials, no I/O, no network. You can describe a compiled node to
+learn how to address it before touching anything. `qfs run` executes reads and **PREVIEWs writes by
+default**; nothing is applied until you add `--commit` (or a trailing `COMMIT` keyword). Preview
+still resolves its target, so an unmounted cloud path refuses with `unrouted_path`.
 
 ## What DESCRIBE tells you
 
@@ -77,8 +78,9 @@ The four archetypes (RFD §5):
    two accounts of one driver are simply two mounts (`/mail` + `/mail2`) in one process. An
    unauthenticated operator fails closed — a cloud driver will not bind a credential at COMMIT
    without a consented account. Local drivers (`local`, `git`, `sql`, `sys`) are ungated.
-   **DESCRIBE and a write-plan PREVIEW stay pure** — they build the contract / effect-plan with no
-   credential bind, so `qfs run 'insert into /mail/drafts …'` previews fine from a bare binary.
+   **DESCRIBE and write-plan PREVIEW do not bind a credential or contact the service**, but preview
+   still requires the target to route. Built-in paths preview from a bare binary; a cloud write
+   refuses with `unrouted_path` until `qfs connect` defines its mount.
    **Reading live rows from a cloud service is different**: `/mail/inbox`, `/github/…`, `/slack/…`,
    `/drive/…` reach the backend, so with no mount they **fail closed at resolve time** (exit 3,
    `kind: capability`). That is the agent's cue to have the account connected and mounted, not a
@@ -93,14 +95,13 @@ no account connected**:
 
 - **Local-family READS** — `/local`, `/sys`, `/sql` (via `qfs connect /sql/<conn> TO sqlite AT
   '<path.sqlite>'`), and `/git` (via `qfs connect /git/<repo> TO git AT '<path>'`) — return real rows.
-- **Write-plan PREVIEWs** for **any** driver — `insert/update/upsert into /path …` builds the typed
-  effect-plan with no credential bind, so the PREVIEW prints (`"committed": false`) cred-free.
+- **Write-plan PREVIEWs on built-in routed paths** — for example, an `INSERT` into `/sys/policies`
+  builds the typed effect-plan with no credential bind, so the PREVIEW prints.
 
-What needs a mounted account is **reading live rows from a cloud service** (gmail / github / slack
-/ drive) and **committing** anything. Those fail closed (exit 3, `kind: capability`) until the
-mount exists (see each example). The golden corpus (`crates/skill/tests/`) re-proves the PREVIEW
-plans against **in-test fixture drivers**, so it is hermetic; a bare binary reproduces the same
-write-plan PREVIEWs but fails cloud *reads* closed until you connect a mount.
+Cloud reads, cloud write previews, and cloud commits all need the service path mounted. Preview does
+not resolve the credential or contact the backend, while reads and commits do. An absent route fails
+closed (exit 3, `kind: capability`). The golden corpus (`crates/skill/tests/`) proves plans against
+**in-test fixture drivers**, so its hermetic previews do not imply a bare host has those mounts.
 
 ### local + sys — reads that run today (no creds)
 
@@ -126,8 +127,8 @@ relational op after a codec errors `codec_then_query`.
                        "params": [ {"name":"to"}, {"name":"subject"}, {"name":"body"} ] } ],
      "aliases": [ { "name": "SEND", "desugars_to": "mail.send" } ] }
    ```
-2. **Statement + PREVIEW (runs now)** — drafting a message is a write-plan; its PREVIEW prints
-   cred-free:
+2. **Mount, then preview** — authorize the account and mount `/mail` as described in step 3. Once
+   routed, drafting a message is a write-plan whose PREVIEW performs no credential or backend call:
    ```text
    insert into /mail/drafts values ('alice@example.com', 'Hi', 'Body text')
    ```
@@ -146,7 +147,7 @@ relational op after a codec errors `codec_then_query`.
 
 1. **DESCRIBE** `qfs describe /drive/my/Reports --json` → `"archetype": "blob_namespace"`, universal
    `upsert` (+ `ls/cp/mv` listed as native verbs).
-2. **Statement + PREVIEW (runs now)** — a retry-safe blob write. `cp`/`mv`/`rm` are
+2. **Statement + PREVIEW (after mounting `/drive`)** — a retry-safe blob write. `cp`/`mv`/`rm` are
    **interactive-shell-only** builtins, *not* one-shot grammar — so a one-shot uses the closed-core
    `UPSERT` form the shell lowers to (and the golden corpus pins):
    ```text
@@ -162,7 +163,7 @@ relational op after a codec errors `codec_then_query`.
 
 1. **DESCRIBE** `qfs describe /github/acme/web/pulls --json` → `"archetype":
    "object_graph_workflow"`, a `merge` procedure with `irreversible: true`.
-2. **Statement + PREVIEW (runs now)** — open an issue (reversible object-graph `INSERT`):
+2. **Statement + PREVIEW (after mounting `/github`)** — open an issue (reversible object-graph `INSERT`):
    ```text
    insert into /github/acme/web/issues values (title) ('Tracking bug')
    ```
@@ -181,7 +182,7 @@ relational op after a codec errors `codec_then_query`.
 1. **DESCRIBE** `qfs describe /slack/acme/general/messages --json` → `"archetype": "append_log"`,
    `native_verbs: "SELECT(tail) INSERT(append) REMOVE"`. (A bare `general` or symbolic `#general`
    both address the channel — ordinary path segments. Use the bare form in a write target.)
-2. **Statement + PREVIEW (runs now)** — append a message (reversible `INSERT`):
+2. **Statement + PREVIEW (after mounting `/slack`)** — append a message (reversible `INSERT`):
    ```text
    insert into /slack/acme/general/messages values ('Deploy finished')
    ```
