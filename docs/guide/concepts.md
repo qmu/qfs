@@ -24,9 +24,9 @@ a credentialed service is a **mount** you define, bound to an authorized account
 (`qfs connect /s3 --driver s3 --account prod` → `/s3/…`). See
 [Connections & credentials](/guide/connections) for both.
 
-**Write-plan previews run with no account** — `insert`/`update`/`upsert`/`remove into /any/path …`
-returns a plan (`"committed": false`) without ever touching the service, because previewing never
-reads or writes. (See **Preview vs. commit**, §4 below.)
+**Write-plan previews perform no service I/O or credential resolution**, but the target must route
+to a built-in or connected mount. An unconnected cloud path refuses with `unrouted_path` instead of
+presenting a plan that could not be applied. (See **Preview vs. commit**, §4 below.)
 
 **Cloud reads need a connected account.** A cloud path exists only after a `qfs connect` mounts it
 (before that, a read reports `unknown source`), and a mounted path whose account isn't usable fails
@@ -183,13 +183,13 @@ And codecs convert formats: `DECODE json`, `ENCODE yaml` (more below).
 
 This is the safety model:
 
-- **`qfs run` previews by default.** It plans the whole thing and shows you the effects — what
-  paths, how many rows, and whether anything is **irreversible** — but touches nothing. A write-plan
-  preview runs even before you connect the service:
+- **`qfs run` previews writes by default.** It plans the whole thing and shows you the effects — what
+  paths, how many rows, and whether anything is **irreversible** — but touches nothing. Use a routed
+  built-in path for a credential-free preview:
 
   ```console
-  $ qfs run "insert into /mail/drafts values ('a@b.com','Hi','Body')"
-  {"preview":{"rows":[{"verb":"INSERT","target":{"driver":"mail","path":"/mail/drafts"},
+  $ qfs run "insert into /sys/policies values (name, allow) ('example','ALLOW INSERT')"
+  {"preview":{"rows":[{"verb":"INSERT","target":{"driver":"sys","path":"/sys/policies"},
     "affected":{"exact":1},"irreversible":false}], … },"committed":false}
   ```
 
@@ -275,8 +275,9 @@ The path model, the four archetypes, and preview-then-commit are identical on al
 
 ## Credentials, briefly
 
-`describe` and `preview` never need a credential. To **commit** against a live service you authorize
-the account once — `qfs account add <provider> <label>` seals its token into the encrypted vault
+`describe` never needs a credential. Preview resolves no credential, but the path must already be
+routed; a cloud mount therefore needs to be configured first. To **commit** against a live service
+you authorize the account once — `qfs account add <provider> <label>` seals its token into the encrypted vault
 (created by `qfs init`, unlocked by a passphrase or the OS-keychain slot) and qfs never prints it
 back — then mount the path with `qfs connect <path> --driver <driver> --account <label>`. See
 [Connections & credentials](/guide/connections) for the full flow.

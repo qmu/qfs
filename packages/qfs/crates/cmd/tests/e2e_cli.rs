@@ -617,6 +617,25 @@ fn kind_to_exit_code_is_one_to_one() {
 // ===================================================================================
 
 #[test]
+fn unconnected_cloud_write_refuses_before_preview() {
+    let o = qfs(&[
+        "run",
+        "-e",
+        "INSERT INTO /mail/drafts VALUES ('alice@example.com', 'Hi', 'Body')",
+        "--json",
+    ]);
+    assert_eq!(o.code, 3, "an unrouted cloud write is a capability error");
+    assert!(
+        o.stdout.is_empty(),
+        "an unrouted write must not render a misleading preview: {:?}",
+        o.stdout
+    );
+    let error = json(&o.stderr);
+    assert_eq!(error["error"]["code"], "unrouted_path");
+    assert_eq!(error["error"]["kind"], "capability");
+}
+
+#[test]
 fn non_destructive_effect_previews_at_exit_zero_with_counts() {
     let o = qfs(&["run", "-e", ROUTED_WRITE, "--json"]);
     assert_eq!(o.code, 0, "a non-destructive preview is exit 0");

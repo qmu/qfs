@@ -1,13 +1,38 @@
 {
   "name": "qfs",
-  "version": "0.22.2",
-  "description": "Use when a task needs to read or modify any service the user has connected — mail, files, databases, GitHub, Slack, git, cloud storage — through the qfs pipe-SQL query language and the qfs CLI.",
+  "version": "0.22.3",
+  "description": "Use when a task needs to read or modify any service the user has connected \u2014 mail, files, databases, GitHub, Slack, git, cloud storage \u2014 through the qfs pipe-SQL query language and the qfs CLI.",
   "author": {
     "name": "tamurayoshiya",
     "email": "a@qmu.jp"
   },
   "repository": "https://github.com/qmu/qfs",
   "license": "MIT",
-  "keywords": ["qfs", "cli", "pipe-sql", "query-language", "mail", "drive", "sql", "github", "slack", "git"],
-  "skills": "./skills/"
+  "keywords": [
+    "qfs",
+    "cli",
+    "pipe-sql",
+    "query-language",
+    "mail",
+    "drive",
+    "sql",
+    "github",
+    "slack",
+    "git"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "QFS",
+    "shortDescription": "Discover and operate connected services through QFS",
+    "longDescription": "Use the QFS CLI to discover live connections and available paths, read connected services, and preview authorized writes. Includes Slack public/private channel discovery and thread guidance.",
+    "developerName": "qmu",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use QFS to discover my connected services and their available paths."
+    ]
+  }
 }

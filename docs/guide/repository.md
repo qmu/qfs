@@ -224,7 +224,7 @@ three are `xtask` subcommands, run from `packages/qfs`.
 | Generator | Owns | Source of truth | Why never hand-edited |
 | --- | --- | --- | --- |
 | `cargo run -p xtask -- gen-docs` | `docs/language.md`, `docs/drivers.md`, `docs/server.md` | The binary's own registries: the frozen reserved-keyword set, the cred-free compiled describe registry, the server binding forms | A hand-edited reference can claim a keyword, a column or a verb the binary does not have. Fix the prose in `crates/qfs/src/docs.rs` and regenerate. Enforced automatically twice: the docs-drift golden test inside `qfs::docs` makes `cargo test --workspace` (and so CI's `build-test`) fail on drift for a branch or PR, and `release.yml`'s `docs-drift` job runs `gen-docs --check` on a `v*` tag before the production docs publish is allowed to run |
-| `cargo run -p xtask -- gen-skills` | The 14 `plugins/qfs/skills/*/SKILL.md`, plus the `.claude/skills/<name>` symlinks | `docs/cookbook/*.md` — each article carries `skill_name` + `skill_description` front matter, and the skill is that front matter plus the article body verbatim | A skill is what an agent loads; a hand-edited one drifts from the article a human maintains. **Not enforced by any test or CI step** — `--check` catches it only when someone runs it |
+| `cargo run -p xtask -- gen-skills` | The 13 Cookbook-derived `plugins/qfs/skills/*/SKILL.md`, plus their `.claude/skills/<name>` symlinks; the base `qfs` skill is separately authored | `docs/cookbook/*.md` — each article carries `skill_name` + `skill_description` front matter, and the skill is that front matter plus the article body verbatim | `build-test` runs `--check` on branches and PRs. `python3 scripts/check-plugin.py` independently checks generated content, both hosts' distribution paths, all four version fields, and all 14 skill registrations and symlinks, including the base skill. Neither check proves live task behavior |
 | `cargo run -p xtask -- check-migrations` | Nothing — it is a guard, not a writer | `crates/store/src/schema/*.sql` versus their content at the last release tag | An already-shipped migration body edited in place would leave existing installations with a recorded checksum that no longer matches, and the runtime heal path cannot fire on a fresh CI database. Changing a shipped body needs an audited `SUPERSEDED_BODIES` entry. **It needs release tags**: with none reachable it returns clean rather than failing, so a shallow clone or a fork without tags cannot verify this gate |
 
 **Re-version the plugin when a shipped change touches a CLI surface the skills mention.** The plugin
@@ -234,7 +234,8 @@ fields in the repository-root `.claude-plugin/marketplace.json` — the marketpl
 root, beside `.agents/plugins/marketplace.json`, which carries no version and needs no bump.
 Regenerated skills only reach installed caches when that version moves — a stale cache keeps
 teaching retired commands — so a taught-surface break bumps the minor and anything else
-skill-affecting bumps the patch, in the same change. All four read `0.20.0` at this commit.
+skill-affecting bumps the patch, in the same change. Local Codex iteration may add a cachebuster
+suffix; keep the complete version string synchronized in all four fields and reinstall the plugin.
 
 ## Version and release
 

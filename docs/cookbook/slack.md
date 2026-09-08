@@ -1,6 +1,6 @@
 ---
 skill_name: qfs-slack
-skill_description: Use when a task needs Slack through qfs — read the latest messages in a channel, list the files shared in a channel or DM (newest first), detach (delete) one by its id, and post a message over /slack, as an append log. Covers creating the Slack app, the bot-token scopes it needs, and connecting a Slack workspace.
+skill_description: Use for Slack through QFS — discover connected accounts and public/private channels from live describe output, read messages and threads, and post to the requested channel or thread. Check installed views and write maps before concluding a channel or capability is unavailable.
 ---
 
 # Slack
@@ -8,6 +8,67 @@ skill_description: Use when a task needs Slack through qfs — read the latest m
 A Slack channel is an **append log** with a filesystem shape: its messages become a queryable path
 you read the tail of, and post to — the same pipe-SQL language you already use on a mailbox, a
 database, or a git repo.
+
+## Discover channels before using an example path
+
+For an existing connection, start here rather than repeating account setup. Replace `/slack-work`
+with the mount returned by `connect --list`; `acme` is an example workspace segment. The bound
+account chooses authentication, not the spelling of the workspace segment.
+
+```sh
+qfs connect --list
+qfs describe /slack-work --json
+qfs describe /slack-work/acme --json
+```
+
+Inspect the workspace's `children` before choosing a collection. The installed registry can expose
+additional views such as `private-channels` that are absent from the shipped driver asset. Describe
+the discovered collection to check its schema, then query its real name:
+
+```sh
+qfs describe /slack-work/acme/private-channels --json
+qfs run '/slack-work/acme/private-channels |> select id, name, is_private'
+```
+
+This example applies **when that view is installed**. If it is not shown, inspect the Slack views
+in `/sys/drivers` before changing configuration or asking the user for a channel ID:
+
+```sh
+qfs describe /sys/drivers --json
+qfs run "/sys/drivers |> where kind == 'view' AND name LIKE '/slack/%' |> select name, body"
+```
+
+Slack's [`conversations.list`](https://docs.slack.dev/reference/methods/conversations.list/)
+defaults to `types=public_channel`. Private discovery needs `types=private_channel` (or both types)
+and `groups:read`, and returns only channels accessible to the token. The shipped `/channels` view
+omits `types`: a miss there is **not** evidence that a private channel is absent or inaccessible.
+Check the installed view body, relevant sibling collections, pagination, and API errors before
+reporting a miss. Do not interpret a generic `invalid_path` evaluation error as `missing_scope`.
+
+Search the accessible collections for the supplied name, allowing for spaces versus underscores
+or hyphens, and use the returned channel ID for reads and posts. Keep the account that found the
+channel attached to that ID. Multiple account labels may reach the same workspace with different
+sender identities or permissions; do not switch them silently on an error. A URL already supplies
+the channel ID and may be used directly without requiring it to appear in the public list.
+
+## Reply in the requested thread
+
+For a permalink `/archives/C0123456789/p1780000000123456`, the channel is `C0123456789` and the
+message timestamp is the string `1780000000.123456`. Preserve its six fractional digits. Read the
+message/thread through the discovered `messages/<ts>/replies` path; when a linked reply supplies a
+`thread_ts`, use that root timestamp for the thread.
+
+Before posting, inspect the installed `map` rows for the Slack namespace in `/sys/drivers`.
+The shipped channel-post map forwards only `channel` and `text`; adding a `thread_ts` input column
+to that map does **not** make it a thread reply. A thread-capable map must forward the parent
+timestamp to Slack's `chat.postMessage` as `thread_ts`. A readable replies view or `describe` showing
+INSERT alone does not prove the corresponding write map is installed.
+
+When a thread-reply map exists, preview and commit against its exact path using the chosen account.
+Read the thread back and verify the new message's `thread_ts` equals the requested parent. If the
+map is absent, report the specific missing mapping and address it within the task's authorization;
+do not silently substitute a top-level channel post. Sending a message requires user authorization;
+reading a greeting alone is not authorization to answer it.
 
 ## Example
 
@@ -166,8 +227,8 @@ qfs connect /slack --driver slack --account default    # 3. mount it at /slack
 
 The token comes in on **stdin**, never argv, and is sealed in qfs's encrypted credential store.
 Until the mount is bound, a read fails with an actionable hint naming the
-`qfs account add slack …` / `qfs connect …` to run. Posting a message previews with no account
-(above); it sends only once connected and committed.
+`qfs account add slack …` / `qfs connect …` to run. The mount is required even for a write
+preview; preview resolves no token and sends nothing, while `--commit` applies the post.
 
 ## Failed requests
 

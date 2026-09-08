@@ -137,13 +137,13 @@ qfs run "/local/tmp/d.json |> decode json |> encode yaml"
 qfs run "/sql/orders/orders |> where total > 100 |> select customer, total |> order by total desc"
 qfs run "/git/myrepo/commits |> select sha, message |> limit 10"
 
-# 3. PREVIEW a write — the default; it builds the effect-plan and touches nothing:
-qfs run "insert into /mail/drafts values ('a@b.com','Hi','Body')"
-# -> {"preview":{"rows":[{"verb":"INSERT","target":{"driver":"mail","path":"/mail/drafts"},
+# 3. PREVIEW a routed write — the default; it builds the effect-plan and touches nothing:
+qfs run "insert into /sys/policies values (name, allow) ('quickstart','ALLOW INSERT')"
+# -> {"preview":{"rows":[{"verb":"INSERT","target":{"driver":"sys","path":"/sys/policies"},
 #     "affected":{"exact":1},"irreversible":false}],...},"committed":false}
 
-# 4. COMMIT applies the plan — `--commit` (writes need a CONNECTED account; below).
-qfs run "insert into /mail/drafts values ('a@b.com','Hi','Body')" --commit
+# 4. COMMIT applies the same plan — `--commit`.
+qfs run "insert into /sys/policies values (name, allow) ('quickstart','ALLOW INSERT')" --commit
 
 # A mail READ, or an irreversible CALL, needs a mounted Google account. Nothing
 #    cloud is pre-mounted — until `qfs connect` creates the /mail mount, the read
@@ -152,6 +152,7 @@ qfs run "insert into /mail/drafts values ('a@b.com','Hi','Body')" --commit
 #      cat credentials.json | qfs app add google   # your Google OAuth app
 #      qfs account add google                      # paste-back browser consent on a TTY
 #      qfs connect /mail --driver gmail --account you@gmail.com
+qfs run "insert into /mail/drafts values ('a@b.com','Hi','Body')"  # safe preview; /mail is routed
 qfs run "/mail/inbox |> where subject LIKE '%invoice%' |> select subject, from"
 qfs run "/mail/drafts |> where id == 'draft-1' |> call mail.send" --commit --commit-irreversible
 # (same fail-closed error until /mail is mounted; `mail.send` is irreversible,

@@ -153,8 +153,9 @@ qfs connect --list             # the paths you've defined (metadata only, never 
 qfs run "/mail/inbox |> where subject LIKE '%invoice%' |> select date, subject"
 ```
 
-`describe` and `preview` never need any of this — they're always offline. A connect is only
-required to **read rows** from a source or **commit** a change to it.
+`describe` never needs any of this. Preview performs no service I/O or credential resolution, but
+the target must still route to a built-in or connected mount. A cloud connect is also required to
+read live rows or commit a change.
 
 See [Connections & credentials](/guide/connections) for the full model: the account lifecycle,
 rotating and revoking secrets, re-keying the vault, and how the vault is encrypted.
