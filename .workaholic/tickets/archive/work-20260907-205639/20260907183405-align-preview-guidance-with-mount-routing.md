@@ -89,3 +89,30 @@ The earlier fix explicitly removed successful plans for unrouted writes; the ins
 - The hypothesis is stale documentation following an intentional evaluator change; reproduction decides the exact correction. Changing registration requirements solely to make an old example pass is not the proposed fix.
 - The companion `20260907183404-verify-codex-plugin-distribution-and-drift.md` addresses distribution checks and Codex onboarding. There is no implementation prerequisite between the tickets; rebase shared version edits when shipping independently.
 - Keep this ticket standalone. `review` is the default merge policy and does not authorize merging the ticket publication PR.
+
+## Final Report
+
+Development completed as planned. Isolated execution reproduced the intended boundary: compiled
+`describe` succeeds without a connection, while an unmounted cloud write exits 3 with
+`code=unrouted_path` and produces no preview. A routed system path remains previewable without
+credentials or side effects. The evaluator was not weakened and no permissive fallback was
+reintroduced.
+
+The FAQ, Slack Cookbook, base plugin skill, embedded binary skill, and directly related guide pages
+now distinguish offline schema discovery from write evaluation against an installed mount. Zero-
+setup examples use `/sys/policies`; cloud examples state that the relevant driver must first be
+installed and routed. The generated FAQ and Slack skills were regenerated through the shared
+distribution check rather than edited as independent sources.
+
+`packages/qfs/crates/cmd/tests/e2e_cli.rs` now pins the unrouted behavior: exit status 3, empty
+standard output, and the structured capability error. The checker tests and docs build passed
+locally, and GitHub CI passed the full Rust workspace, clippy, rustfmt, generation, serialized
+library, viewer, wasm, and cross-compilation gates.
+
+### Discovered Insights
+
+- **Insight**: compiled schema availability says that QFS knows a service's shape; it does not mean
+  an executable mount exists. Preview is side-effect-free and credential-resolution-free, but it
+  still requires a route whose driver can describe the proposed operation.
+- **Insight**: `/sys/policies` is the useful zero-setup teaching surface because it demonstrates a
+  real preview without implying that arbitrary cloud paths can be evaluated before connection.

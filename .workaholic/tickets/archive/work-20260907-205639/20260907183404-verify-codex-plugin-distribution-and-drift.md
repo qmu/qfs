@@ -78,3 +78,31 @@ The FAQ skill already established directory discovery for Codex. Earlier investi
 - A separately authored base skill is not inherently wrong. Do not duplicate it per agent or force it into a new generation scheme merely to make counts uniform.
 - Existing active missions were inspected; these maintenance tickets are kept standalone rather than expanding an existing mission's completed acceptance scope. `review` records the default merge policy and does not authorize merging this ticket publication PR.
 - Official packaging reference checked during the audit: https://developers.openai.com/plugins/build/plugins . Re-check installation syntax at implementation time.
+
+## Final Report
+
+Development completed as planned. The shared QFS plugin now has one structural distribution check,
+`scripts/check-plugin.py`, covering both host manifests, both marketplaces, synchronized versions,
+exact skill registration, the base-skill symlink, and byte-for-byte Cookbook-derived skill content.
+`scripts/test-check-plugin.py` supplies 11 hermetic positive and negative cases, including malformed
+metadata, missing and extra registrations, incorrect Codex paths, version mismatch, and generated
+body drift. CI invokes this checker alongside the existing Rust generator check.
+
+Codex installation was verified with Codex CLI 0.153.4 from the repository marketplace: `qfs@qfs`
+installed, listed as enabled, and resolved plugin version 0.22.3 from the shared skill tree. The
+installation guide now documents the supported Codex marketplace flow and keeps the QFS binary and
+service connection prerequisites distinct from plugin discovery. The binary patch version is
+0.0.131 and all plugin version-bearing metadata is synchronized at 0.22.3.
+
+The local Python checker and its 11 tests passed, as did `npm run docs:build`. GitHub CI supplied
+the unavailable local Rust toolchain and passed the workspace build/test, clippy, rustfmt,
+generator, serialized library, viewer, wasm, and cross-compilation gates.
+
+### Discovered Insights
+
+- **Insight**: generated-body equality and host installation are separate guarantees. The former
+  prevents source drift; the latter proves that Codex accepts the marketplace and exposes the
+  package. Both are now checked without creating a second Codex-specific skill tree.
+- **Insight**: a small standard-library Python checker is the common executable boundary for the
+  two JSON distributions, while the Rust xtask remains the authoritative generator backstop. This
+  keeps local and CI checks reproducible even before a Rust toolchain is available.
