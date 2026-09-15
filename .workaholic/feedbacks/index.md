@@ -127,4 +127,5 @@
 * [Resolved: `select` on an unknown column is still silently dropped](20260907132317-resolved-select-on-an-unknown-column-is.md)
 * [Resolved: The shipped-asset install-splitter is still copy-pasted across tests](20260907132317-resolved-the-shipped-asset-install-splitter-is.md)
 * [Resolved: The statement bridge's read leg is ungated](20260907132317-resolved-the-statement-bridge-s-read-leg.md)
+* [[FB] Make Slack write failures actionable instead of collapsing upstream errors to service_rejected](20260916065407-fb-make-slack-write-failures-actionable-instead-of-collapsing-upstream-errors-to-service-rejected.md)
 <!-- okf:generated:end -->
