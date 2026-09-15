@@ -1,5 +1,6 @@
 ---
 created_at: 2026-09-16T06:54:17+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -44,3 +45,38 @@ Make failed Slack writes identify a safe cause and operation, and reject locally
 ## Considerations
 
 The report did not observe the upstream no_text response: it is a hypothesis, not a proven cause. Existing commit 51bcbbb already handles API refusals; extend its safe contract. No active mission covers this atomic repair (mid_term_plan:no).
+
+## Final Report
+
+Implemented the diagnostic repair. Recording HTTP fixtures drove the real CLI spelling through
+the mounted declared driver for both channel messages and a locally installed reply map. Before
+enabling validation, `VALUES ('hello')` produced `{"channel":"C1","text":null}`; explicit
+`VALUES (text) ('hello')` produced `{"channel":"C1","text":"hello"}`. Reply bodies additionally
+contained `"thread_ts":"123.456789"` in both cases. Explicit null also produced null text.
+These are synthetic fixtures; the original live upstream error remains unobserved.
+
+The exact Slack API composition now configures a JSON content requirement for `chat.postMessage`.
+Missing/null/empty text-only payloads fail before credential lookup or HTTP, naming the operation
+and explicit-column correction. Nonempty blocks, attachments and markdown_text are alternatives;
+other endpoints and non-JSON encodings keep their existing behavior. This follows
+[Slack's documented contract](https://docs.slack.dev/reference/methods/chat.postMessage/).
+
+The existing response allowlist now includes no_text, msg_too_long and invalid_blocks. Application
+errors include a closed operation label and corrective guidance. Unknown string codes remain
+service_rejected with an explicit withheld-code explanation; malformed error fields are distinct.
+Response bodies, unknown error values, request content and URL parameters never enter these errors.
+No retry behavior changed. The cookbook and generated Slack skill describe the diagnostic;
+plugin 0.22.4 and qfs 0.0.132 carry the change.
+
+Validation: 54 driver-http tests and 87 declared-driver tests passed, including the CLI
+message/reply positional-versus-explicit regression with zero HTTP requests for invalid text.
+The pre-validation recording test also passed independently. cargo fmt --all --check,
+xtask gen-docs --check, xtask gen-skills --check, and scripts/check-plugin.py passed.
+No live Slack message was sent and no deployment was performed.
+
+### Discovered Insights
+
+- A read view for replies does not supply a reply write map. The fixture installs its own map
+  and verifies its parent timestamp; this repair does not introduce a shipped reply surface.
+- A required-text check alone would reject valid rich messages. Validation uses alternative
+  content fields and is limited to the JSON POST contract selected at the Slack composition seam.

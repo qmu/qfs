@@ -235,10 +235,22 @@ preview; preview resolves no token and sends nothing, while `--commit` applies t
 QFS checks Slack's application result as well as the HTTP status. A response such as
 `{"ok":false,"error":"missing_scope"}` is a failure even when Slack returns HTTP 200:
 `qfs run --commit` exits nonzero without reporting `committed: true`. Recognized service error
-codes are preserved; unrecognized error text is reported as `service_rejected` without echoing
-the response body. A malformed or missing success envelope reports `http_response_contract`.
+codes (including `no_text`) are preserved. Failed writes include a bounded operation label and
+corrective guidance: check explicit input bindings, channel access, or the selected account's
+permissions as appropriate. An unknown string code reports `service_rejected` and says the
+unrecognized code was withheld; a missing/non-string error code reports `service_error_malformed`.
+Neither diagnostic copies arbitrary response values, message content, tokens, or URL parameters.
+A malformed or missing success envelope reports `http_response_contract`.
 A failed read reports the service error instead of an empty result. Failed posts are not
 automatically retried. These checks apply to existing Slack API connections too.
+
+Before sending a JSON `chat.postMessage`, QFS rejects a body with missing, null, or empty content locally.
+For text-only message and installed reply maps that use `row.text`, bind the column explicitly:
+`VALUES (text) ('hello')`. Positional values can bind another column and leave `row.text` null.
+The local error identifies the operation and the explicit-binding correction; it sends no request
+and does not resolve credentials. Nonempty `blocks`, `attachments`, or `markdown_text` remain valid
+alternatives, following [Slack's message contract](https://docs.slack.dev/reference/methods/chat.postMessage/).
+Preview still performs no I/O; this content check runs when the map is applied at commit time.
 
 ## The channel as a path
 
