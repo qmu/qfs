@@ -4,6 +4,7 @@ author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
 merge_policy: review
+claim: work-20260916-073743
 ---
 
 # Verify Codex plugin distribution and prevent shared-skill drift
