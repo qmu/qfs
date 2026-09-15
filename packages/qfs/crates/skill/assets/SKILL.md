@@ -257,7 +257,8 @@ The loop is identical no matter how you reach qfs, and these surfaces are live t
 
 ## Quick reference
 
-- **PREVIEW is the default.** `qfs run '<stmt>'` previews; add `--commit` to apply.
+- **Writes preview by default; reads execute immediately.** A write target must route to an
+  installed mount before it can preview. Add `--commit` to apply the previewed write.
 - **Irreversible = gate.** `REMOVE`, `CALL mail.send`, `CALL github.merge`. One-shot needs
   `--commit-irreversible`.
 - **Unsupported verb = structured error.** The error lists the `supported:` set — pick from it.

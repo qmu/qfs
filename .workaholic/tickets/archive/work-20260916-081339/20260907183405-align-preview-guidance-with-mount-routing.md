@@ -1,5 +1,6 @@
 ---
 created_at: 2026-09-07T18:34:05+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -90,3 +91,119 @@ The earlier fix explicitly removed successful plans for unrouted writes; the ins
 - The hypothesis is stale documentation following an intentional evaluator change; reproduction decides the exact correction. Changing registration requirements solely to make an old example pass is not the proposed fix.
 - The companion `20260907183404-verify-codex-plugin-distribution-and-drift.md` addresses distribution checks and Codex onboarding. There is no implementation prerequisite between the tickets; rebase shared version edits when shipping independently.
 - Keep this ticket standalone. `review` is the default merge policy and does not authorize merging the ticket publication PR.
+
+## Final Report
+
+Reconciled the duplicate queued ticket against the completed archive in
+`archive/work-20260907-205639/` and merged PR #106. The FAQ, base skill, generated
+FAQ skill, and unrouted CLI regression were already implemented on the base.
+This follow-up corrects the remaining embedded Quick reference sentence: reads
+execute immediately, while write previews require an installed route. No evaluator
+change or duplicate regression test was needed. The original archive is preserved.
+
+The binary patch is 0.0.132; the four synchronized plugin version fields are 0.22.4.
+No service write, release tag, or deployment was performed.
+
+### Isolated CLI behavior matrix
+
+A freshly built binary ran in a fresh directory with a fresh XDG_CONFIG_HOME and
+no service credentials, using neither --commit nor --commit-irreversible. System
+and project databases were isolated under that config directory. Raw results follow.
+The reads before and after the policy preview are byte-identical with no rows.
+
+Command arguments: ["--version"]
+
+Exit: 0
+
+stdout:
+```text
+qfs 0.0.132
+commit:  c7fa350
+target:  aarch64-unknown-linux-gnu
+wasm32:  false
+```
+
+stderr:
+```text
+(empty)
+```
+
+Command arguments: ["describe", "/mail/drafts", "--json"]
+
+Exit: 0
+
+stdout:
+```text
+{"path":"/mail/drafts","archetype":"append_log","native_verbs":"SELECT(tail) INSERT(append) UPSERT","columns":[{"name":"id","ty":"Text","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"thread_id","ty":"Text","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"date","ty":"Timestamp","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"from","ty":"Text","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"subject","ty":"Text","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"snippet","ty":"Text","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"label_ids","ty":{"Array":"Text"},"nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"attachments","ty":{"Array":{"Struct":{"columns":[{"name":"filename","ty":"Text","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"mime","ty":"Text","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"size","ty":"Int","nullable":false,"provenance":{"driver":null,"source_col":null}}]}}},"nullable":false,"provenance":{"driver":null,"source_col":null}}],"verbs":{"select":true,"insert":true,"upsert":true,"update":false,"remove":false,"ls":false,"cp":false,"mv":false,"rm":false},"procedures":[{"name":"send","params":[{"name":"to","ty":"Text"},{"name":"subject","ty":"Text"},{"name":"body","ty":"Text"},{"name":"attachments","ty":{"Array":{"Struct":{"columns":[{"name":"filename","ty":"Text","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"mime","ty":"Text","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"bytes","ty":"Bytes","nullable":false,"provenance":{"driver":null,"source_col":null}}]}}}}],"irreversible":true,"returns":null,"requires_scopes":["https://www.googleapis.com/auth/gmail.compose"]},{"name":"reply","params":[{"name":"body","ty":"Text"},{"name":"to","ty":"Text"},{"name":"cc","ty":"Text"},{"name":"subject","ty":"Text"},{"name":"attachments","ty":{"Array":{"Struct":{"columns":[{"name":"filename","ty":"Text","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"mime","ty":"Text","nullable":false,"provenance":{"driver":null,"source_col":null}},{"name":"bytes","ty":"Bytes","nullable":false,"provenance":{"driver":null,"source_col":null}}]}}}}],"irreversible":false,"returns":null,"requires_scopes":["https://www.googleapis.com/auth/gmail.compose"]}],"aliases":[{"name":"SEND","desugars_to":"mail.send"}],"pushdown":{"where_":true,"project":false,"limit":true,"order":false,"join":false,"aggregate":false,"distinct":false,"group_by":false},"child_address":{"kind":"none"},"schema_contract":{"kind":"compiled"},"children":[]}
+```
+
+stderr:
+```text
+(empty)
+```
+
+Command arguments: ["run", "insert into /mail/drafts values ('alice@example.com','Hi','Body')", "--json"]
+
+Exit: 3
+
+stdout:
+```text
+(empty)
+```
+
+stderr:
+```text
+{"error":{"code":"unrouted_path","kind":"capability","message":"path `/mail/drafts` routes to no mounted driver, so no schema can be described for it"}}
+```
+
+Command arguments: ["run", "/sys/policies |> select name", "--json"]
+
+Exit: 0
+
+stdout:
+```text
+{"schema":[{"name":"name","type":"text"}],"rows":[],"meta":{"row_count":0,"truncated":false,"limit":null,"offset":null,"affected":null}}
+```
+
+stderr:
+```text
+(empty)
+```
+
+Command arguments: ["run", "insert into /sys/policies values (name, allow) ('preview-example', 'ALLOW INSERT')", "--json"]
+
+Exit: 0
+
+stdout:
+```text
+{"preview":{"rows":[{"id":0,"verb":"INSERT","target":{"driver":"sys","path":"/sys/policies"},"affected":{"exact":1},"irreversible":false}],"irreversible":[],"total_affected":{"exact":1},"is_pure":false},"committed":false}
+```
+
+stderr:
+```text
+(empty)
+```
+
+Command arguments: ["run", "/sys/policies |> select name", "--json"]
+
+Exit: 0
+
+stdout:
+```text
+{"schema":[{"name":"name","type":"text"}],"rows":[],"meta":{"row_count":0,"truncated":false,"limit":null,"offset":null,"affected":null}}
+```
+
+stderr:
+```text
+(empty)
+```
+
+### Verification
+
+- Rust workspace: 2801 passed, zero failed.
+- Serialized qfs library with XDG_CONFIG_HOME unset: 529 passed, one existing ignored test, zero failed.
+- Clippy with warnings denied, rustfmt, gen-docs --check, and gen-skills --check passed.
+- Plugin distribution check and all 11 negative fixtures passed.
+- VitePress docs build passed, with its existing large-chunk warning.
+- The full suites used a private user/mount namespace binding a repository-local temporary directory to /tmp; no host mount or system setting changed.
+- A read-only story reviewer found no blocking issue in the final wording, historical reconciliation, or version alignment.
