@@ -149,22 +149,33 @@ need a few shared items.
 
 ## The query & safety loop in detail
 
-**`describe` and `preview` are always offline.** `qfs describe <path>` and a bare `qfs run "<write>"`
-(no `--commit`) build the plan with no credentials and no network — you can inspect any path,
-including a cloud one you have not connected yet:
+**`describe` is offline; preview is side-effect-free but still requires a routed path.** A compiled
+path such as `/mail/drafts` can be described without a connection, because that reports the shipped
+schema. Evaluating a write must resolve its target through an installed mount. On a fresh host the
+mail write therefore refuses with `unrouted_path` (exit 3), even without `--commit`:
 
 ```sh
 qfs describe /mail/drafts --json | jq .verbs
 qfs run "insert into /mail/drafts values ('alice@example.com', 'Hi', 'Body text')"
 ```
 
-The second command prints a PREVIEW and creates nothing:
+To exercise the preview gate with no service credentials, use the built-in routed `/sys` surface:
+
+```sh
+qfs run "insert into /sys/policies values (name, allow) ('preview-example', 'ALLOW INSERT')"
+```
+
+That command prints a PREVIEW and creates nothing:
 
 ```text
 PREVIEW: 1 effect(s)
-  #0 INSERT -> mail:/mail/drafts [affected 1]
+  #0 INSERT -> sys:/sys/policies [affected 1]
   total affected: 1
 ```
+
+A cloud write preview also performs no network request or credential resolution, but its mount must
+already exist. Authorize the account and run `qfs connect /mail --driver gmail --account <label>`
+before previewing the mail example.
 
 **Apply it with `--commit`.** Actions that can't be undone (sending mail, merging a PR, trashing a
 file) need a second acknowledgement in a one-shot — `--commit` alone is refused, fail-closed:
