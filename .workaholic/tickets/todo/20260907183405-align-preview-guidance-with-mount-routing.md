@@ -4,6 +4,7 @@ author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
 merge_policy: review
+claim: work-20260916-081339
 ---
 
 # Align preview guidance with the requirement for a routed mount
