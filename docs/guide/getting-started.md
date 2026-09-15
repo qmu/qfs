@@ -176,22 +176,24 @@ and `/mail` once those are connected.
 
 ## 3. Preview a write
 
-`qfs run` **previews by default** — it shows the exact plan and applies nothing. This works offline
-for any path, including cloud ones you haven't connected yet, because building the plan needs no
-credentials:
+`qfs run` **previews writes by default** — it shows the exact plan and applies nothing. Preview
+performs no backend I/O, but the target still has to route. The built-in `/sys` mount gives us a
+credential-free example:
 
 ```sh
-qfs run "insert into /mail/drafts values ('alice@example.com', 'Hi', 'Body text')"
+qfs run "insert into /sys/policies values (name, allow) ('first-preview', 'ALLOW INSERT')"
 ```
 
 ```text
 PREVIEW: 1 effect(s)
-  #0 INSERT -> mail:/mail/drafts [affected 1]
+  #0 INSERT -> sys:/sys/policies [affected 1]
   total affected: 1
 ```
 
-The preview shows what *would* happen: one INSERT, one row affected. **No draft was created.** This
-is the heart of qfs's safety model — you always see the plan before anything happens.
+The preview shows what *would* happen: one INSERT, one row affected. **No policy was created.** This
+is the heart of qfs's safety model — you always see the plan before anything happens. By contrast,
+an unconnected cloud target such as `/mail/drafts` refuses with `unrouted_path`; safety does not
+pretend an unavailable route is executable.
 
 ## Output formats
 
@@ -200,7 +202,7 @@ output is piped or redirected — so it composes with other tools automatically.
 piped, looks like this:
 
 ```json
-{"preview":{"rows":[{"id":0,"verb":"INSERT","target":{"driver":"mail","path":"/mail/drafts"},"affected":{"exact":1},"irreversible":false}],"irreversible":[],"total_affected":{"exact":1},"is_pure":false},"committed":false}
+{"preview":{"rows":[{"id":0,"verb":"INSERT","target":{"driver":"sys","path":"/sys/policies"},"affected":{"exact":1},"irreversible":false}],"irreversible":[],"total_affected":{"exact":1},"is_pure":false},"committed":false}
 ```
 
 Force either format explicitly:
@@ -208,16 +210,15 @@ Force either format explicitly:
 ```sh
 qfs run "..." --format table   # always the human table
 qfs run "..." --json           # always JSON
-qfs describe /mail/drafts --json | jq .verbs
+qfs describe /sys/policies --json | jq .verbs
 ```
 
 ## 4. Commit
 
-When the preview looks right, add `--commit` to apply it (this is where a live service needs a
-connection — see below):
+When the preview looks right, add `--commit` to apply it:
 
 ```sh
-qfs run "insert into /mail/drafts values ('alice@example.com', 'Hi', 'Body text')" --commit
+qfs run "insert into /sys/policies values (name, allow) ('first-preview', 'ALLOW INSERT')" --commit
 ```
 
 ### Irreversible actions need an extra OK
@@ -236,7 +237,7 @@ If you forget the extra flag on an irreversible plan, qfs **fails safely** and t
 ## Connecting a real service
 
 Reads and commits against a live cloud service need a **connect** — a cloud path exists only after
-you mount it. Until then, a fresh read fails closed (exit code 2) — never silent or empty rows:
+you mount it. Until then, a fresh read fails closed (exit code 3) — never silent or empty rows:
 
 ```sh
 qfs run "/mail/inbox |> select date, subject"

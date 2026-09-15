@@ -17,12 +17,12 @@ own `/sys` administration surface.
 The safety loop is always:
 
 1. `qfs describe <path>` inspects a path offline.
-2. `qfs run "<query-or-effect>"` previews a read or write plan.
+2. `qfs run "<query-or-effect>"` executes a read or previews a routed write plan.
 3. `qfs run "<effect>" --commit` applies the plan.
 
 Irreversible effects, such as sending mail, merging a pull request, or destructive deletes, require
-the extra irreversible acknowledgement. Preview is a plan projection, not an apply dry-run: an effect
-can preview cleanly and still fail at commit if its live credential, policy, or backend is unavailable.
+the extra irreversible acknowledgement. Preview is a plan projection, not an apply dry-run: a routed
+effect can preview cleanly and still fail at commit if its live credential, policy, or backend is unavailable.
 
 ## State stores
 
@@ -165,7 +165,8 @@ scheduler invokes it with `qfs job run ...`, and the same preview/commit/policy 
 
 The docs should treat these boundaries as product behavior:
 
-- `describe` and preview are credential-free, offline plan surfaces.
+- `describe` is a credential-free offline schema surface. Preview performs no backend I/O or
+  credential resolution, but its target must be routed.
 - Reads and committed writes to cloud services need a connected mount and a usable account.
 - A mount whose credential is missing, revoked, locked, or unauthorized fails closed before a secret
   is decrypted.
