@@ -2,7 +2,7 @@
 type: Mission
 title: A shutdown signal is graceful from the first instant of boot
 slug: a-shutdown-signal-is-graceful-from-the-first-instant-of-boot
-status: active
+status: achieved
 merge_policy:
 created_at: 2026-08-18T13:21:25+00:00
 author: a@qmu.jp
@@ -55,3 +55,4 @@ runner cannot redden a merge commit.
 - 2026-08-18 — ticket archived — 20260818132310-the-serve-e2e-tests-wait-for-observable-readiness-never-a-fixed-sleep.md
 - 2026-08-18 — run recorded (+1.4h) — session_01TgM27Y8Bz21tWg2j3DoxS7
 - 2026-08-18 — story added — work-20260818-134142.md
+- 2026-09-16 — mission achieved — mission.md
