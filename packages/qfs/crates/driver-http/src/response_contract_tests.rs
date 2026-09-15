@@ -75,9 +75,11 @@ fn application_rejections_and_invalid_envelopes_cannot_count_as_success() {
 
 #[test]
 fn unknown_errors_keep_safe_operation_and_guidance_without_echoing_data() {
+    // Construct synthetic credential-shaped data without checking in a token literal.
+    let secret_like = ["xoxb", "SECRET-DO-NOT-ECHO"].join("-");
     for error in [
         "SECRET_IDENTIFIER",
-        "xoxb-SECRET-DO-NOT-ECHO",
+        secret_like.as_str(),
         "novel_api_error",
     ] {
         let mock = Arc::new(MockHttpClient::new().with_response(HttpResponse::new(200,
