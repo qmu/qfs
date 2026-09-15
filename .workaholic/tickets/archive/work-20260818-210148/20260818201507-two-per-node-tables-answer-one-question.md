@@ -1,11 +1,13 @@
 ---
 created_at: 2026-08-18T20:15:07+00:00
+status: done
 author: a@qmu.jp
 assignees: []
 depends_on:
 mission:
 merge_policy: review
 verification_handoff:
+claim: work-20260818-210148
 ---
 
 # A declared mount now carries two independent per-node tables, and which one answers depends on which mount you ask
@@ -179,3 +181,95 @@ it through `let gated = verb.filter(|_| irreversible);`, and pushes `gated` onto
 - The `verbs` half is genuinely settled: `capabilities()` is per node on both PRs' accounts, and
   `a_declared_node_advertises_only_its_own_declared_verbs` pins it over the shipped chatwork
   declaration. Only the plumbing is duplicated.
+
+## Final Report
+
+Development completed as planned. The two per-node tables are one: `DeclaredNodeDesc` carries the
+irreversible marking, `write_irreversible` reads the same list `capabilities()` does, and the live
+mount is given that list — so the answer no longer depends on which mount was asked.
+
+### What changed
+
+- **`DeclaredNodeDesc` gained `irreversible_verbs: Vec<Verb>`** (`driver-http/src/lib.rs`), and
+  `declared_node_descs()`'s `push` closure takes a fourth `irreversible: bool`, gates it through
+  `verb.filter(|_| irreversible)`, and merges it per template. Views pass `false`; maps pass
+  `m.irreversible`. This is the ticket's `## Patches` shape, re-checked against `main`.
+- **`write_irreversible` reads the declared table first**: when `self.nodes` is non-empty it answers
+  from the matching nodes' `irreversible_verbs`; a mount that declares none keeps the per-segment
+  answer, which is the compiled `/rest` case.
+- **The live mount gets the table.** `live_rest_driver` now takes a `&DeclaredTypeDefs` and calls
+  `.with_declared_nodes(declared_node_descs(d, types))`. Both call sites pass the real registry:
+  `shell.rs` reuses the `DeclaredTypeDefs` it already loads for `set_declared_types` (bound once and
+  cloned rather than opening the System DB twice), and `commit.rs`'s apply-lane twin loads it the
+  same way. This resolves the ticket's step-4 open question — the live mount is given the **real**
+  registry, not an empty one — because both call sites already had one in hand, so passing empty
+  would have cost `of` on the live mount for no reason.
+- **Deleted**: `NodeMap`, `RestApiConfig::nodes`, `with_nodes`, `declares_nodes`, `verbs_for_path`,
+  `irreversible_for_path`, `DeclaredDriver::declared_nodes()`, and `caps_for`'s declared branch —
+  which leaves `caps_for` with exactly one caller shape, the compiled mount. `grep -r NodeMap
+  packages/qfs/crates` returns nothing.
+
+### The decision the collapse forced: first-match or union
+
+The two tables did not resolve a path the same way. `capabilities()` took the **first** matching
+`DeclaredNodeDesc`; `verbs_for_path`/`irreversible_for_path` **unioned every** matching `NodeMap`.
+Collapsing onto one table therefore had to pick, and the choice is not cosmetic: the two rules
+differ exactly when two distinct templates address one concrete path (`{tenant}/things` and
+`acme/things`).
+
+**The union wins**, so `capabilities()` moved to it rather than `write_irreversible` moving to
+first-match. The reason is the one `config.rs` already recorded for `verbs_for_path`: the apply seam
+picks the first declared map matching the path *for the verb being written*, so a verb is
+performable exactly when some matching node declares it, and a narrower gate would refuse writes the
+applier would then have performed. A first-match gate would also have **narrowed
+`write_irreversible`** — an irreversible marking on a later-matching template would have gone
+unanswered, dropping a safety gate. `declared_nodes_for()` is the shared matcher; `declared_node()`
+(first match) survives for `describe`, which needs one node's `OF` contract and child key, not a
+union.
+
+Note this also closes a disagreement the ticket did not name: on that two-template shape the live
+mount (union, via the config) and the describe mount (first-match) could already have answered
+differently. Both union now.
+
+### Verification
+
+New hermetic tests, built from the shipped `.qfs` bytes:
+
+- `the_live_and_describe_mounts_answer_from_one_declared_node_table` walks **every** declared node
+  of the shipped slack, chatwork and cloudflare declarations through **both** mounts and requires
+  the same answer for all five universal verbs, on capabilities and on irreversibility.
+- `the_live_mount_keeps_the_declared_irreversible_gate` pins PR #64's property on the live mount:
+  `remove /slack/{ws}/files/{file}` is gated, `INSERT INTO /slack/{ws}/{channel}/messages` is not.
+
+The first was **negative-controlled**: reverting only step 4 (dropping `.with_declared_nodes` from
+`live_rest_driver`) turns it red — `slack /slack/{ws}/channels: the two mounts disagree on Insert` —
+and restoring it turns it green. So the test measures the split rather than merely passing.
+
+The two `NodeMap`-based tests in `driver-http/src/tests.rs` were rewritten against
+`DeclaredNodeDesc` rather than deleted: `a_node_template_addresses_its_own_path_only` now reads the
+match rule through `capabilities()`, its only consumer, and
+`a_declared_mount_gates_per_node_not_per_leading_segment` builds its nodes with
+`.with_declared_nodes(...)`. Two `declared_driver.rs` tests that asserted against `cfg.nodes` were
+likewise re-pointed at `declared_node_descs()`.
+
+Gate: `cargo test --workspace` exit 0 (48 `qfs-driver-http` tests green, 78 `declared_driver` tests
+green), `cargo clippy --workspace --all-targets -- -D warnings` exit 0, `cargo fmt --all --check`
+exit 0, `gen-docs --check` and `gen-skills --check` both in sync. Patch version `0.0.123`.
+
+### Discovered Insights
+
+- **Insight**: a duplicated table is rarely a duplicate of the same *rule*. These two derivations
+  agreed on their data and disagreed on their **resolution** — first match versus union — so
+  deleting either one silently changed behaviour in a way no test named. The collapse had to be a
+  decision about which rule is right, not a mechanical deletion.
+  **Context**: whenever two derivations of one fact are merged here, read the *lookup* as carefully
+  as the contents. The rule that survives should be the one the layer below already assumes; here
+  the applier's own first-matching-map-per-verb behaviour is what makes the union correct, and that
+  argument was already written down in `config.rs`'s doc comment.
+- **Insight**: `RestDriver::capabilities` short-circuits on `self.nodes.is_empty()`, so on the
+  describe mount `caps_for`'s declared branch was unreachable while `write_irreversible` still ran
+  it. Dead code on one mount and live code on the other, from one `if`.
+  **Context**: when a builder is optional (`with_declared_nodes`), every reader that branches on the
+  same field has to be checked at each construction site, not once. The construction site is the
+  real switch, and there were two of them (`declared_describe_mount_with_types` and
+  `live_rest_driver`) with only one carrying the call.

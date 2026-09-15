@@ -305,10 +305,46 @@ pub fn eval_value(expr: &ScalarExpr, schema: &Schema, row: &Row) -> Value {
     }
 }
 
+/// [`project_expr`] for a **caller-written renaming or computed `SELECT`**: refuse a column the
+/// (non-empty) batch schema does not carry, instead of the one null per row `eval_value`'s total
+/// resolution would otherwise produce (ticket 20260816191500).
+///
+/// The runtime twin of the planner's `check_project_expr_columns`, and the exact counterpart of
+/// [`project_checked`] on the other road. The check lives HERE rather than inside `eval_value`
+/// because that resolver is shared with `EXTEND`/`SET`, whose total form over a late-bound row is
+/// deliberate and unchanged.
+///
+/// # Errors
+/// [`MissingColumn`] when a projection term names a column the (non-empty) batch schema lacks.
+pub(crate) fn project_expr_checked(
+    batch: RowBatch,
+    projections: &[(Name, ScalarExpr)],
+) -> Result<RowBatch, MissingColumn> {
+    if !batch.schema.columns.is_empty() {
+        let mut refs: Vec<&qfs_types::ColRef> = Vec::new();
+        for (_, expr) in projections {
+            expr.col_refs(&mut refs);
+        }
+        for col in refs {
+            let Some(head) = col.path.first() else {
+                continue;
+            };
+            if batch.schema.column(head).is_none() {
+                return Err(MissingColumn {
+                    name: head.clone(),
+                    available: batch.schema.column_names(),
+                });
+            }
+        }
+    }
+    Ok(project_expr(batch, projections))
+}
+
 /// A **computed** projection (t92): each output column is a per-row [`ScalarExpr`] (a struct/
 /// array constructor over the input columns). Unlike name-only [`project`], this evaluates an
 /// expression per row, so `SELECT {filename: name, bytes: content} AS att` produces a real
 /// `Struct` value. Output column types are late-bound (`Unknown`) — the value carries its shape.
+/// The caller-written `SELECT` goes through [`project_expr_checked`].
 #[must_use]
 pub(crate) fn project_expr(batch: RowBatch, projections: &[(Name, ScalarExpr)]) -> RowBatch {
     let schema = Schema::new(

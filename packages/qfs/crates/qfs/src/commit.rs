@@ -408,7 +408,12 @@ fn live_registry(local_root: &Path) -> DriverRegistry {
                         account.as_deref(),
                         app.as_deref(),
                     );
-                    let driver = crate::declared_driver::live_rest_driver(&d, client, secrets)?;
+                    // The apply lane's own live twin gets the same per-node declared table the
+                    // read and describe mounts carry, so `write_irreversible` answers from one
+                    // list wherever the driver is built (ticket 20260818201507).
+                    let type_defs = crate::declared_driver::load_declared_type_defs();
+                    let driver =
+                        crate::declared_driver::live_rest_driver(&d, &type_defs, client, secrets)?;
                     let bridge = qfs_driver_http::rest_apply_driver(&driver);
                     // The declared views ride along so a §13.1 G9 `LET` lookup can search the
                     // driver's own read surface at commit time; the applier is the confined one the
@@ -1008,6 +1013,7 @@ mod tests {
 
     #[test]
     fn a_gdrive_named_mount_registers_a_lazy_apply_driver_under_the_outer_id() {
+        let _home = crate::testenv::HomeGuard::new();
         let mount = crate::cloud_mounts::CloudMount {
             path: "/gdrive".into(),
             kind: "gdrive".into(),
@@ -1032,6 +1038,7 @@ mod tests {
 
     #[test]
     fn a_drive_kind_mount_is_accepted_as_an_alias_for_gdrive() {
+        let _home = crate::testenv::HomeGuard::new();
         let mount = crate::cloud_mounts::CloudMount {
             path: "/gdrive".into(),
             kind: "drive".into(),

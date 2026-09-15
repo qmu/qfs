@@ -33,6 +33,31 @@ pub enum ScalarExpr {
     Struct(Vec<(Name, ScalarExpr)>),
 }
 
+impl ScalarExpr {
+    /// Every column reference this expression resolves, in evaluation order — through the whole
+    /// constructor structure, since a `{n: nosuch}` hides a typo exactly as well as a bare `nosuch`.
+    ///
+    /// The [`Predicate`](qfs_types::Predicate) twin of this lives in the engine's
+    /// `check_predicate_columns`; both exist so a caller-written stage can refuse a column the
+    /// relation does not carry instead of evaluating it to `null` (ticket 20260816191500).
+    pub fn col_refs<'e>(&'e self, out: &mut Vec<&'e ColRef>) {
+        match self {
+            ScalarExpr::Col(c) => out.push(c),
+            ScalarExpr::Lit(_) => {}
+            ScalarExpr::Array(items) => {
+                for item in items {
+                    item.col_refs(out);
+                }
+            }
+            ScalarExpr::Struct(fields) => {
+                for (_, value) in fields {
+                    value.col_refs(out);
+                }
+            }
+        }
+    }
+}
+
 /// The mount/driver a subtree resolves to (blueprint §7). An owned `Arc<str>` so a `SourceId`
 /// is cheap to clone while tagging every node of a subtree. Two subtrees share a source
 /// iff their `SourceId`s are equal.

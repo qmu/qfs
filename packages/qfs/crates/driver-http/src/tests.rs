@@ -140,25 +140,43 @@ fn unconfigured_resource_rejects_every_verb_at_parse_time() {
     assert!(check_capability(&d, &unknown, Verb::Select).is_err());
 }
 
+/// A declared node whose template is `template` and which declares `verbs`, none irreversible.
+fn node(template: &str, verbs: Vec<Verb>) -> DeclaredNodeDesc {
+    DeclaredNodeDesc {
+        template: template.to_string(),
+        of: None,
+        verbs,
+        irreversible_verbs: Vec::new(),
+    }
+}
+
 #[test]
 fn a_node_template_addresses_its_own_path_only() {
     // The declared match: segment count equal, literals equal, `{param}` binds any one segment.
-    let node = NodeMap::new("{ws}/files/{file}", vec![RestVerb::Remove]);
-    assert!(node.matches("W1/files/F1"));
+    // Read through `capabilities`, which is the only consumer — the match rule is not a surface of
+    // its own since the per-node table collapsed onto `DeclaredNodeDesc` (ticket 20260818201507).
+    let d = driver_with(
+        RestApiConfig::new("https://api.example.com", vec![]),
+        MockHttpClient::new(),
+        empty_secrets(),
+    )
+    .with_declared_nodes(vec![node(
+        "/rest/example/{ws}/files/{file}",
+        vec![Verb::Remove],
+    )]);
+    let addresses = |path: &str| d.capabilities(&Path::new(path)).remove;
+
+    assert!(addresses("/rest/example/W1/files/F1"));
     assert!(
-        node.matches("/W1/files/F1"),
-        "a leading slash is immaterial"
-    );
-    assert!(
-        !node.matches("W1/users"),
+        !addresses("/rest/example/W1/users"),
         "a shorter path is a different node"
     );
     assert!(
-        !node.matches("W1/files/F1/meta"),
+        !addresses("/rest/example/W1/files/F1/meta"),
         "a longer path is a different node"
     );
     assert!(
-        !node.matches("W1/uploads/F1"),
+        !addresses("/rest/example/W1/uploads/F1"),
         "a literal segment must match literally"
     );
 }
@@ -174,13 +192,14 @@ fn a_declared_mount_gates_per_node_not_per_leading_segment() {
             "{ws}",
             vec![RestVerb::Select, RestVerb::Remove],
         )],
-    )
-    .with_nodes(vec![
-        NodeMap::new("{ws}/users", vec![RestVerb::Select]),
-        NodeMap::new("{ws}/files/{file}", vec![RestVerb::Remove])
-            .with_irreversible_verbs(vec![RestVerb::Remove]),
+    );
+    let d = driver_with(config, MockHttpClient::new(), empty_secrets()).with_declared_nodes(vec![
+        node("/rest/example/{ws}/users", vec![Verb::Select]),
+        DeclaredNodeDesc {
+            irreversible_verbs: vec![Verb::Remove],
+            ..node("/rest/example/{ws}/files/{file}", vec![Verb::Remove])
+        },
     ]);
-    let d = driver_with(config, MockHttpClient::new(), empty_secrets());
 
     let users = Path::new("/rest/example/W1/users");
     assert!(check_capability(&d, &users, Verb::Select).is_ok());

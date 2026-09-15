@@ -401,6 +401,7 @@ mod tests {
     /// no I/O (the mock client is never called).
     #[test]
     fn mail_drafts_describes_cred_free() {
+        let _home = crate::testenv::HomeGuard::new();
         let reg = describe_registry();
         let (driver, _rest) = reg
             .resolve_path("/mail/drafts")
@@ -427,6 +428,7 @@ mod tests {
     /// the registry is genuinely cred-free across every compiled describe driver.
     #[test]
     fn all_registered_mounts_describe_cred_free() {
+        let _home = crate::testenv::HomeGuard::new();
         let reg = describe_registry();
         let cases = [
             ("/local/x.txt", qfs_core::Archetype::BlobNamespace),

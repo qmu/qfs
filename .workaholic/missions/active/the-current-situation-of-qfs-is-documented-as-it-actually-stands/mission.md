@@ -9,14 +9,14 @@ author: a@qmu.jp
 assignees: [a@qmu.jp]
 assignee:
 predicted_hours:
-actual_hours: 0.6
+actual_hours: 0.8
 feedback: [20260817102418-add-a-full-documentation-of-the-current-situation-starting-with-a-mission-ticket.md]
 tickets: []
 stories: []
 gate_type: documentation
 gate_target: /guide/architecture
 gate_assert: The docs site serves a current-architecture page that renders and reads correctly, naming the crates, the engine layering, the state stores and the faces the binary actually serves, with the date and source it was verified against.
-claim: work-20260818-195016
+claim: work-20260818-224038
 ---
 
 # The current situation of qfs is documented as it actually stands
@@ -74,3 +74,7 @@ tooling beyond what the survey ticket justifies.
 - 2026-08-17 — Three follow-ups closed: the recipe ratchet claim re-pointed at its real file, the docs site production build fixed and gated in CI, and the viewer gate's runtime coverage stated with a narrow dated bun exemption — work-20260817-124626.md
 - 2026-08-17 — ticket archived — 20260817130410-seventy-seven-code-spans-across-the-docs-site-never-form.md
 - 2026-08-17 — The unformed-code-span follow-up was withdrawn as a measurement error and the upstream plgg-md filing recorded blocked on qmu/plgg write access — work-20260817-132305.md
+- 2026-08-18 — run recorded (+0.2h) — session_01FKn9idn6673AsxqXfeywjQ
+- 2026-08-19 — ticket archived — 20260817131540-file-the-bun-plgg-md-parse-defect-upstream.md
+- 2026-08-19 — concern deferred (stuck) — 20260819144514-ci-gained-two-third-party-setup.md
+- 2026-08-19 — concern deferred (stuck) — 20260819144514-the-upstream-build-wart-is-real.md

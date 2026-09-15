@@ -1362,6 +1362,9 @@ mod tests {
 
     #[test]
     fn offline_run_engine_does_not_mount_server() {
+        // `run_engine_and_reads` resolves the active safety mode, which opens the System DB — so
+        // this test needs an isolated config home exactly like its `seed_sys` siblings do.
+        let _home = HomeGuard::new();
         // The read leg is serve-side ONLY: the CLI's offline run engine never mounts /server,
         // so an offline `/server/endpoints` read is a structured unknown-source failure — which
         // is exactly what keeps the reconcile CLI's host-not-serving refusal honest.

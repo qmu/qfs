@@ -175,6 +175,7 @@ mod tests {
     /// permissive agent policy — invocation without `--commit` produces zero effects.
     #[test]
     fn agent_run_previews_without_commit() {
+        let _home = crate::testenv::HomeGuard::new();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let out = dir.path().join("preview.txt");
         let cfg = write_config(
@@ -194,6 +195,7 @@ mod tests {
     /// applier — the file is written.
     #[test]
     fn agent_run_commits_an_in_grant_function() {
+        let _home = crate::testenv::HomeGuard::new();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let out = dir.path().join("done.txt");
         let cfg = write_config(
@@ -217,6 +219,7 @@ mod tests {
     /// driver.)
     #[test]
     fn agent_run_denies_an_ungranted_function() {
+        let _home = crate::testenv::HomeGuard::new();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let out = dir.path().join("blocked.txt");
         std::fs::write(&out, b"safe").unwrap();
@@ -242,6 +245,7 @@ mod tests {
     /// reversible function.
     #[test]
     fn agent_run_no_policy_is_default_denied() {
+        let _home = crate::testenv::HomeGuard::new();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let out = dir.path().join("nopolicy.txt");
         let cfg = write_config(

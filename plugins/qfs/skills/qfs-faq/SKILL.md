@@ -149,22 +149,33 @@ need a few shared items.
 
 ## The query & safety loop in detail
 
-**`describe` and `preview` are always offline.** `qfs describe <path>` and a bare `qfs run "<write>"`
-(no `--commit`) build the plan with no credentials and no network — you can inspect any path,
-including a cloud one you have not connected yet:
+**`describe` is offline; preview is side-effect-free but still requires a routed path.** A compiled
+path such as `/mail/drafts` can be described without a connection, because that reports the shipped
+schema. Evaluating a write must resolve its target through an installed mount. On a fresh host the
+mail write therefore refuses with `unrouted_path` (exit 3), even without `--commit`:
 
 ```sh
 qfs describe /mail/drafts --json | jq .verbs
 qfs run "insert into /mail/drafts values ('alice@example.com', 'Hi', 'Body text')"
 ```
 
-The second command prints a PREVIEW and creates nothing:
+To exercise the preview gate with no service credentials, use the built-in routed `/sys` surface:
+
+```sh
+qfs run "insert into /sys/policies values (name, allow) ('preview-example', 'ALLOW INSERT')"
+```
+
+That command prints a PREVIEW and creates nothing:
 
 ```text
 PREVIEW: 1 effect(s)
-  #0 INSERT -> mail:/mail/drafts [affected 1]
+  #0 INSERT -> sys:/sys/policies [affected 1]
   total affected: 1
 ```
+
+A cloud write preview also performs no network request or credential resolution, but its mount must
+already exist. Authorize the account and run `qfs connect /mail --driver gmail --account <label>`
+before previewing the mail example.
 
 **Apply it with `--commit`.** Actions that can't be undone (sending mail, merging a PR, trashing a
 file) need a second acknowledgement in a one-shot — `--commit` alone is refused, fail-closed:
@@ -232,7 +243,7 @@ declaration you edited on purpose must not be silently overwritten (blueprint §
 | `--commit` of a send/remove is refused | The plan is **irreversible** and a one-shot needs the explicit extra ack | Add `--commit-irreversible` |
 | An `auth` error resolving a secret | The vault is locked, or the account's credential was revoked | `qfs auth` to unlock; `qfs account rotate <provider> <label>` to re-mint |
 | `` `where` names column 'nope', which this relation does not carry `` (`code: unknown_column`, `kind: usage`, exit 2) | A stage named a column the relation has no such thing as. This is **not** "nothing matched" — a typo now refuses instead of quietly answering zero rows, so the two are distinguishable. `where`, `expand` and `select` all refuse it, on every source: the same statement refuses identically whether the driver runs the projection natively (`/sql`) or qfs runs it locally | `qfs describe <path>` and use a real column; the message lists the available ones |
-| `` `select` names column 'nope', which this relation does not carry `` (`code: unknown_column`, `kind: usage`, exit 2) | A **projection** named a column the relation does not carry. It used to be dropped, so `\|> select nope` answered the row count with an empty schema — rows of `{}` at exit 0. `select *` (and no `select` at all) still means every column | `qfs describe <path>` for the column list, or drop the stage |
+| `` `select` names column 'nope', which this relation does not carry `` (`code: unknown_column`, `kind: usage`, exit 2) | A **projection** named a column the relation does not carry. It used to be dropped, so `\|> select nope` answered the row count with an empty schema — rows of `{}` at exit 0. Every spelling of the projection refuses alike: naming the column (`select nope`), renaming it (`select nope AS x`), or building a value from it (`select {n: nope} AS s`) — the renaming forms used to answer one `null` per row instead. `select *` (and no `select` at all) still means every column, and `extend`/`set` keep resolving an absent column to `null` | `qfs describe <path>` for the column list, or drop the stage |
 | `` `expand` cannot explode column 'path': it is a scalar (text), not an array or a struct `` (`code: not_expandable`, `kind: usage`, exit 2) | `expand` was pointed at a column that carries no nested rows to explode | `qfs describe <path>` and expand an array or struct column instead |
 
 **Exit codes** are stable so an agent can branch on them:

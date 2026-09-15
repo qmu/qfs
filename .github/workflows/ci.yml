@@ -65,6 +65,21 @@ jobs:
         run: rustup show
       - run: cargo build --workspace
       - run: cargo test --workspace
+      - name: Shared Claude Code and Codex plugin distribution
+        run: |
+          python3 ../../scripts/check-plugin.py
+          python3 ../../scripts/test-check-plugin.py
+          cargo run -p xtask -- gen-skills --check
+      # The config-home isolation detector (ticket 20260818060942). `store.rs`'s cfg(test) panic
+      # already refuses the shared `$HOME/.config/qfs` fallback, but the step above can never fire
+      # it: `HomeGuard` sets `XDG_CONFIG_HOME` process-wide, so under the parallel harness a test
+      # that forgot its guard passes whenever a guarded sibling's guard happens to be alive — and
+      # an ambient `XDG_CONFIG_HOME` on the runner suppresses it independently. Measured on
+      # 2026-08-18 with one guard deliberately removed: the parallel run was green three times out
+      # of three, this serialised one red every time. So this is the run in which a missing guard
+      # fails deterministically; it costs ~70s and needs no rebuild after the step above.
+      - name: qfs lib suite, serialised with no ambient config home
+        run: env -u XDG_CONFIG_HOME cargo test -p qfs --lib -- --test-threads=1
 
   cross:
     name: cross-compile (${{ matrix.target }})
@@ -171,6 +186,22 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24.x"
+
+      # bun and deno are here so the npx smoke's runtime matrix is real in CI and
+      # not only on whichever runtimes a developer happens to have. `smoke-npx.sh`
+      # runs the packed bin under every runtime present and skips an absent one out
+      # loud, so before this the green badge attested to node alone. bun needs to be
+      # 1.3.13 or newer: older bun cannot parse `plgg-md`'s published dist and the
+      # smoke fails it by name (see that script's comments).
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
 
       - name: Install every package's dependencies
         run: ./scripts/npm-install.sh

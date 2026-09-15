@@ -136,6 +136,7 @@ Two gate families, one per project, each run from its own directory. Nothing run
 cd packages/qfs
 cargo build --workspace
 cargo test --workspace
+env -u XDG_CONFIG_HOME cargo test -p qfs --lib -- --test-threads=1
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 cargo run -p xtask -- gen-docs --check
@@ -146,12 +147,14 @@ cargo run -p xtask -- check-migrations
 | Command | What it proves | What it alone catches |
 | --- | --- | --- |
 | `cargo test --workspace` | The suite, all of it hermetic — no network, no credentials, no sockets (the `qfs-test` harness institutionalizes that) | Two guards live only here: `crates/cmd/tests/dep_direction.rs` (no cycles, no back-edges, tokio confined to `qfs-runtime` and its leaves) and the docs-drift golden inside `qfs::docs`. Also `crates/cmd/tests/faq_cli_surface.rs`, which walks the real clap tree so a renamed flag the FAQ cites fails CI, and `crates/test/tests/roadmap_cookbook.rs`, which ratchets how much of the query cookbook parses today |
+| `env -u XDG_CONFIG_HOME cargo test -p qfs --lib -- --test-threads=1` | That no `qfs` unit test resolves its config home from the ambient environment — every one of them opens an isolated `testenv::HomeGuard` home rather than the shared `$HOME/.config/qfs` | The `store.rs` `cfg(test)` guard that refuses the shared-home fallback, which the line above **cannot** fire reliably: `HomeGuard` sets `XDG_CONFIG_HOME` process-wide, so a test that forgot its guard passes whenever a guarded sibling is running concurrently, and an ambient `XDG_CONFIG_HOME` suppresses the guard independently. Serialised and with the variable unset, a missing guard fails every run instead of some runs (measured 2026-08-18: parallel green 3/3 with a guard deliberately removed, serialised red every time) |
 | `cargo clippy --workspace --all-targets -- -D warnings` | The lint floor: `unsafe_code = forbid` workspace-wide, and `unwrap_used` / `expect_used` / `panic` denied in non-test library code | A panic path introduced into a library. **Never `--all-features`**: `qfs-host`'s `host-daemon` and `host-workers` features are mutually exclusive, so CI lints the two separately with `-p qfs-host --features <one>` |
 | `cargo fmt --all --check` | Formatting, against the committed `rustfmt.toml` | — |
 | `cargo build --workspace` | It compiles for the host | The cross-compile legs (CI adds two targets and a wasm32 build of the `qfs-host` core) catch what a host build cannot |
 | the three `xtask` checks | Anti-drift; see below | — |
 
-CI (`.github/workflows/ci.yml`) runs `fmt`, `clippy` (three invocations), `build + test`, two
+CI (`.github/workflows/ci.yml`) runs `fmt`, `clippy` (three invocations), `build + test` — whose
+job also carries the serialised, `XDG`-unset re-run of the `qfs` lib suite as a second step — two
 cross-compiles, a wasm32 host-core build, the docs site production build, and the viewer gate. It
 does **not** invoke `xtask` at all, so of the three anti-drift checks only `gen-docs` is defended
 automatically — by that docs-drift unit test, not by the command.
@@ -194,20 +197,24 @@ The smoke's runtime matrix is why this gate is environment-sensitive in one dire
 with bun or deno installed runs the packed bin under them too, and a failure there is a real failure
 of the published artifact under that runtime — not of the change under test.
 
-**What a green run of this gate actually proves, as of 2026-08-17.** CI's `viewer-check-all` job
-installs Node 24 and nothing else, so the runtimes it exercises are narrower than a developer's, and
-until this was written down neither the README nor `CLAUDE.md` said so:
+**What a green run of this gate actually proves, as of 2026-08-19.** `viewer-check-all` installs all
+three runtimes, so a green CI run now attests to the whole matrix the product promises rather than to
+node alone:
 
 | Runtime | In CI | Locally |
 | --- | --- | --- |
-| node | Installed — this is what a green CI run attests to | Proven |
-| bun | Absent, so skipped out loud | **Broken upstream**, and reported as `NOT COVERED` under a dated exemption: bun 1.3.11 cannot parse `plgg-md`'s published dist — one regex class written with raw control characters that node accepts and bun rejects as "range out of order". Present in `plgg-md` 0.0.2 and 0.0.3, so no bump fixes it. Revisit after 2026-11-17; filing it against `qmu/plgg` is ticket `20260817131540` |
-| deno | Absent, so skipped out loud | Unproven — absent from the container this was measured on |
+| node | Installed (Node 24) | Proven |
+| bun | Installed (latest) | Proven **from bun 1.3.13**. Older bun cannot parse `plgg-md`'s published dist — one regex class written with raw control bytes that node accepts and bun rejects as "range out of order" — so the smoke fails such a machine by name and tells it to upgrade |
+| deno | Installed (latest) | Proven — measured against deno 2.9.2 |
 
-The exemption is deliberately narrow: it matches that one error signature in that one dependency, does
-not count bun as covered, and any other bun failure still fails the gate. Dropping bun from the loop
-instead was rejected — `smoke-npx.sh`'s own comments record that a silent skip is how bun stayed broken
-for a whole session.
+Between 2026-08-17 and 2026-08-19 the bun row read *broken upstream*, and the smoke carried a named,
+dated exemption that reported bun as `NOT COVERED` rather than letting a permanently-red gate teach the
+"ignore the red gate" habit. The exemption named its own release condition and that condition fired:
+measured against an **unchanged** `plgg-md@0.0.3`, bun 1.3.11 and 1.3.12 reject the dist and bun 1.3.13
+and 1.3.14 parse it, so the defect was bun's lexer and bun fixed it. The exemption is gone; the version
+floor it collapsed into is what `smoke-npx.sh` now reports. The upstream build-hygiene ask — emit the
+class endpoints as `\0-\x1F` rather than raw bytes — remains open as
+[qmu/plgg#131](https://github.com/qmu/plgg/issues/131), and nothing in this repository waits on it.
 
 ## The three anti-drift generators
 
@@ -217,7 +224,7 @@ three are `xtask` subcommands, run from `packages/qfs`.
 | Generator | Owns | Source of truth | Why never hand-edited |
 | --- | --- | --- | --- |
 | `cargo run -p xtask -- gen-docs` | `docs/language.md`, `docs/drivers.md`, `docs/server.md` | The binary's own registries: the frozen reserved-keyword set, the cred-free compiled describe registry, the server binding forms | A hand-edited reference can claim a keyword, a column or a verb the binary does not have. Fix the prose in `crates/qfs/src/docs.rs` and regenerate. Enforced automatically twice: the docs-drift golden test inside `qfs::docs` makes `cargo test --workspace` (and so CI's `build-test`) fail on drift for a branch or PR, and `release.yml`'s `docs-drift` job runs `gen-docs --check` on a `v*` tag before the production docs publish is allowed to run |
-| `cargo run -p xtask -- gen-skills` | The 14 `plugins/qfs/skills/*/SKILL.md`, plus the `.claude/skills/<name>` symlinks | `docs/cookbook/*.md` — each article carries `skill_name` + `skill_description` front matter, and the skill is that front matter plus the article body verbatim | A skill is what an agent loads; a hand-edited one drifts from the article a human maintains. **Not enforced by any test or CI step** — `--check` catches it only when someone runs it |
+| `cargo run -p xtask -- gen-skills` | The 13 Cookbook-derived `plugins/qfs/skills/*/SKILL.md`, plus their `.claude/skills/<name>` symlinks; the base `qfs` skill is separately authored | `docs/cookbook/*.md` — each article carries `skill_name` + `skill_description` front matter, and the skill is that front matter plus the article body verbatim | `build-test` runs `--check` on branches and PRs. `python3 scripts/check-plugin.py` independently checks generated content, both hosts' distribution paths, all four version fields, and all 14 skill registrations and symlinks, including the base skill. Neither check proves live task behavior |
 | `cargo run -p xtask -- check-migrations` | Nothing — it is a guard, not a writer | `crates/store/src/schema/*.sql` versus their content at the last release tag | An already-shipped migration body edited in place would leave existing installations with a recorded checksum that no longer matches, and the runtime heal path cannot fire on a fresh CI database. Changing a shipped body needs an audited `SUPERSEDED_BODIES` entry. **It needs release tags**: with none reachable it returns clean rather than failing, so a shallow clone or a fork without tags cannot verify this gate |
 
 **Re-version the plugin when a shipped change touches a CLI surface the skills mention.** The plugin
@@ -227,7 +234,8 @@ fields in the repository-root `.claude-plugin/marketplace.json` — the marketpl
 root, beside `.agents/plugins/marketplace.json`, which carries no version and needs no bump.
 Regenerated skills only reach installed caches when that version moves — a stale cache keeps
 teaching retired commands — so a taught-surface break bumps the minor and anything else
-skill-affecting bumps the patch, in the same change. All four read `0.20.0` at this commit.
+skill-affecting bumps the patch, in the same change. Local Codex iteration may add a cachebuster
+suffix; keep the complete version string synchronized in all four fields and reinstall the plugin.
 
 ## Version and release
 

@@ -49,6 +49,19 @@ pub fn default_system_db_path() -> Option<PathBuf> {
 /// `XDG_CONFIG_HOME`, so reaching the HOME branch means a test forgot to — fail it loudly rather
 /// than let it silently touch the shared home. `cfg(test)` is this crate only, so the shipped binary
 /// and the integration-test crate keep the real HOME fallback.
+///
+/// **The run in which this panic is deterministic** (ticket 20260818060942):
+///
+/// ```sh
+/// env -u XDG_CONFIG_HOME cargo test -p qfs --lib -- --test-threads=1
+/// ```
+///
+/// Two ambient conditions suppress it independently, and under either a plain `cargo test` reports
+/// whichever way the schedule fell: an `XDG_CONFIG_HOME` inherited from the shell, and — because
+/// [`crate::testenv::HomeGuard`] sets that variable process-wide — a *guarded sibling running
+/// concurrently*. `env -u` removes the first, `--test-threads=1` the second. CI runs exactly this
+/// command in `build-test` after the workspace suite, so a test that forgets its guard is red there
+/// every time rather than sometimes.
 #[cfg(test)]
 fn forbid_shared_home_fallback_in_tests() {
     panic!(

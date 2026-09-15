@@ -139,3 +139,72 @@ only **Account → Workers Scripts: Edit** and **Account → Account Settings: R
 `CLOUDFLARE_API_TOKEN` with it, revoke the wide token, then let one merge to `main` publish to
 confirm. The deployment record now states this as outstanding where an operator reads it, so the
 narrow scope in its Credentials table is not mistaken for the scope the live secret has.
+
+## Still blocked — 2026-08-18 22:4x UTC (work-20260818-224556)
+
+Re-checked by a later unattended `/implement` run. Step 2 is still the only thing left and is still
+a set of console acts this runner cannot perform; what did move is the evidence under step 4, which
+now rests on a merge two hours newer than the one the entry above cites.
+
+What was actually run this time:
+
+| Check | Command / source | Result |
+| --- | --- | --- |
+| Is a Cloudflare credential present now? | `env \| grep -ci cloudflare` | `0`; the repository root still carries only `.env.example` — nothing to mint or revoke a token with |
+| Can the published hostnames be read directly? | `curl -sS https://staging-qfs.qmu.co.jp/version.json`, same for `qfs.qmu.co.jp` | `curl: (56) CONNECT tunnel failed, response 403` on both — outbound HTTPS to them is still refused by this container's proxy, so the workflow-run check stays the substitute |
+| Does a routeless merge still publish? | `ci.yml` run [32191206355](https://github.com/qmu/qfs/actions/runs/32191206355), the push of `94bb6e7` (merge of #97) | job **docs site production build** `success`; its steps **Stamp the staging build with its commit** and **Publish to staging-qfs.qmu.co.jp** both `success`, finishing 2026-08-18T22:07:48Z |
+
+So the routes removal is not merely "was fine once": every merge since has published, the newest
+being two hours old at the time of this check. The exposure the ticket exists to close is unchanged
+— `CLOUDFLARE_API_TOKEN` still holds `Zone → Workers Routes → Edit` on `qmu.co.jp` until a person
+mints the narrow replacement, swaps the repository secret and revokes the wide one.
+
+## Step 4 verified directly — 2026-08-19 (developer host, work-20260818-224556)
+
+Picked up on the developer's own machine, which — unlike the unattended containers the three
+entries above were written from — can reach the public internet. So the check the Implementation
+section actually asks for was run as written, instead of the workflow-run substitute:
+
+```
+$ curl -sS https://staging-qfs.qmu.co.jp/version.json
+{ "commit": "bb164bbb7b1d9743540f229a3dd80dc117ecb04f", "ref": "main",
+  "environment": "staging", "built_at": "2026-08-19T03:53:19Z" }
+
+$ curl -sS https://qfs.qmu.co.jp/version.json
+{ "commit": "14068b5cc5e1cdfa7961080375e7ffc46edb4346", "ref": "v0.0.121",
+  "environment": "production", "built_at": "2026-08-18T20:47:54Z" }
+```
+
+Both agree with the repository: `bb164bb` is `origin/main`'s head at the time of the check, and
+`v0.0.121` is the newest `v*` tag, whose `release.yml` run concluded `success`. **Step 4 is met.**
+
+This closes the question the routes removal actually raised, which the workflow-run substitute could
+only approach sideways. A deploy that quietly stops attaching a custom domain still reports success,
+so a green job was never proof the hostnames survived — only the hostnames answering is. They answer,
+each with its own `environment`, on a tree that has declared no `routes` since `db0a1ee`. Nothing
+detached.
+
+One correction to carry forward: the `curl: (56) CONNECT tunnel failed, response 403` recorded on
+2026-08-18 is a property of **that container's egress proxy**, not of the deployment. It should not
+be read back as evidence that the hostnames are unreachable, and step 4 does not need the
+workflow-run substitute on any machine with ordinary outbound HTTPS.
+
+### Step 2 is still the whole of what remains
+
+Unchanged and still not a repository change. `CLOUDFLARE_API_TOKEN` still holds
+`Zone → Workers Routes → Edit` on `qmu.co.jp`, which is the exposure this ticket exists to close,
+and minting or revoking a Cloudflare token needs a credential that grants `User → API Tokens: Edit`
+— nothing in this environment carries one. It is three acts for the account holder:
+
+1. In the Cloudflare dashboard, mint a token scoped to the one account with **exactly**
+   `Account → Workers Scripts: Edit` and `Account → Account Settings: Read`, and **no** zone
+   permission.
+2. Replace the `CLOUDFLARE_API_TOKEN` repository secret on `qmu/qfs` with it —
+   `gh secret set CLOUDFLARE_API_TOKEN -R qmu/qfs`, or the repository's Settings → Secrets page.
+   (`CLOUDFLARE_ACCOUNT_ID` does not change.)
+3. Revoke the old wide token.
+
+Then one merge to `main` confirms it: `curl -sS https://staging-qfs.qmu.co.jp/version.json` should
+report that merge's commit. That command is now known to work from a developer machine, so the
+confirmation costs nothing and needs no workflow archaeology.
+

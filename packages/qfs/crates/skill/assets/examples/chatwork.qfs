@@ -26,14 +26,24 @@ CREATE DRIVER chatwork
 -- The counts and times below are NOT decoration: without `unread_num`/`mention_num` the question
 -- "which conversations have something new" degrades into listing every room and reading names, and
 -- without the sender columns you cannot tell who wrote a row in any room with more than two people.
+-- The type names EVERY field `GET /rooms` delivers, not a convenient subset: a column the type
+-- omits is a column no caller can reach, because the `OF` projection drops it before the rows leave
+-- the view. `sticky`/`icon_path` are room metadata; `mytask_num`/`file_num`/`task_num` are counts
+-- the endpoint returns alongside the unread/mention/message ones — `mytask_num` is what makes
+-- "which rooms are waiting on me" answerable (docs/cookbook/chatwork.md).
 CREATE TYPE chatwork/room (
   room_id text PRIMARY KEY,
   name text NOT NULL,
   type text,
   role text,
+  sticky bool,
+  icon_path text,
   unread_num int,
   mention_num int,
   message_num int,
+  mytask_num int,
+  file_num int,
+  task_num int,
   last_update_time timestamp
 );
 
