@@ -63,7 +63,8 @@ use qfs_types::{Column, ColumnType, DriverId, Schema};
 pub use applier::RestApplier;
 pub use client::{redirect_allowed, HttpClient, MockHttpClient, ReqwestClient};
 pub use config::{
-    AuthStrategy, CodecId, Pagination, ResourceMap, RestApiConfig, RestVerb, SecretRef,
+    AuthStrategy, CodecId, JsonResponseContract, Pagination, ResourceMap, RestApiConfig, RestVerb,
+    SecretRef,
 };
 pub use effect::{HttpEffect, BODY_COL, HEADER_COL_PREFIX, URL_COL};
 pub use error::HttpError;
@@ -454,11 +455,7 @@ pub fn rest_read_rows_post(
     // Encode the view's evaluated `POST { … }` struct into the JSON object the applier POSTs
     // verbatim — the same clean, untagged `value_to_json` the declared-map write path uses
     // (`http_body_args`), so a read-over-POST body and a write body share one encoding.
-    let bytes = serde_json::to_vec(&value_to_json(body)).unwrap_or_default();
-    let args = RowBatch::new(
-        Schema::new(vec![Column::new(BODY_COL, ColumnType::Bytes, false)]),
-        vec![Row::new(vec![Value::Bytes(bytes)])],
-    );
+    let args = http_body_args(body);
     let node = qfs_plan::EffectNode::new(
         qfs_plan::NodeId(0),
         qfs_plan::EffectKind::Read,
@@ -499,8 +496,18 @@ pub fn http_get_args(url: impl Into<String>, headers: &[(String, String)]) -> Ro
 pub fn http_body_args(body: &Value) -> RowBatch {
     let bytes = serde_json::to_vec(&value_to_json(body)).unwrap_or_default();
     RowBatch::new(
-        Schema::new(vec![Column::new(BODY_COL, ColumnType::Bytes, false)]),
-        vec![Row::new(vec![Value::Bytes(bytes)])],
+        Schema::new(vec![
+            Column::new(BODY_COL, ColumnType::Bytes, false),
+            Column::new(
+                format!("{HEADER_COL_PREFIX}Content-Type"),
+                ColumnType::Text,
+                false,
+            ),
+        ]),
+        vec![Row::new(vec![
+            Value::Bytes(bytes),
+            Value::Text("application/json".into()),
+        ])],
     )
 }
 
@@ -519,3 +526,6 @@ pub fn http_get_node(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod response_contract_tests;

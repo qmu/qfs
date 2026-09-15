@@ -1,6 +1,6 @@
 ---
 name: qfs
-description: Use when a task needs to read or modify any external service the user has connected — mail, files, databases, GitHub, Slack, git, cloud storage — via the `qfs` CLI and its pipe-SQL query language. Covers the query syntax and semantics, the describe→preview→commit loop, one-shot execution, and the safety model.
+description: Use when the user asks to use QFS or its connected services. Discover the live connections and available paths before reading or writing through the qfs CLI; covers pipe-SQL, preview, and commit. For Slack channel discovery and threads, also read qfs-slack.
 ---
 
 # Driving services with qfs
@@ -14,15 +14,38 @@ Prefer **one-shot** commands (`qfs run '<statement>'`, `qfs describe <path>`) �
 exits, which is what you want as an agent. The interactive shell (`qfs` with no args) exists but you
 generally won't use it.
 
-The repo's `docs/` (and `qfs skill` / `qfs skill --examples`, printed from the binary) are
-authoritative; this skill is the quick operating guide.
+## Start with the installed environment
+
+This plugin supplies instructions, not a fixed inventory of connected services. Its examples and
+the binary's `qfs skill` describe shipped capabilities; the user's installed declarations can add
+paths that are absent from those examples or this repository.
+
+1. Run `qfs --version` and `qfs connect --list`. Use the actual connection path and its account;
+   example names such as `/slack` or `/mail` are not guaranteed mounts. If accounts and mounts
+   appear inconsistent, `qfs account list` lists account labels without revealing tokens.
+2. Run `qfs describe <connection> --json`. Follow its `children`, substituting concrete values for
+   parameter segments, and describe the parent namespace before selecting a leaf. For Slack,
+   read [qfs-slack](../qfs-slack/SKILL.md) and describe `<connection>/<workspace>`: that is where
+   public and private channel collections can be discovered.
+3. If a capability seems absent, inspect the **installed** declarations through
+   `qfs describe /sys/drivers --json` and a targeted `SELECT name, kind, body` over `/sys/drivers`.
+   Repository assets are not the installed registry. Do not create or replace a declaration merely
+   because it was missing from an example.
+
+An empty result means no matches in the collection actually queried. Before reporting that a
+resource is unavailable or requesting its ID from the user, check the relevant sibling collections,
+the listing's filters/pagination, and the exact error. A public-only listing cannot establish that
+a private resource is absent; a generic evaluation error does not establish a permission failure.
 
 ## Prerequisites (check these first)
 
 - **The binary.** Use an installed `qfs`, or build it: `cd packages/qfs && cargo build --release`
   → `packages/qfs/target/release/qfs`. `qfs --version` confirms it runs.
-- **Credentials are only needed to COMMIT against a live service.** `describe` and `preview` work
-  offline with no credentials at all. To apply real changes, the user authorizes an account once
+- **Existing setup.** Live reads and writes need the service's authorized account. A compiled
+  `describe` can work offline even when a write preview fails because its path is not mounted.
+  Previewing a write is not a substitute for connection setup. Reuse the existing account and
+  unlock session; do not initialize or reconnect an already working environment. For new setup,
+  the user authorizes an account once
   and mounts it at a path (ADR 0008: the mount carries the account). This needs
   **`QFS_PASSPHRASE`** exported first — the master passphrase that unlocks the local encrypted
   vault (an argon2id KDF over the at-rest store, NOT a service credential) — and reads the
@@ -35,7 +58,7 @@ authoritative; this skill is the quick operating guide.
   qfs connect /github --driver github --account work       # the mount carries the account
   ```
 
-  `QFS_PASSPHRASE` must stay set for the shell running `qfs account add/list/remove`. Labels are
+  A valid unlock mechanism (session, keychain, or `QFS_PASSPHRASE`) must be available. Labels are
   safe to print; the secret is never echoed. `qfs account list` shows authorized accounts and
   `qfs connect --list` the mounted paths. Two accounts of one service coexist as two mounts
   (`/mail` and `/mail2`).
@@ -45,9 +68,11 @@ authoritative; this skill is the quick operating guide.
 1. **`qfs describe <path>`** — learn the node's archetype, columns, supported verbs, `CALL`
    procedures, and which filters push down. Pure: no creds, no network. **Always read this first.**
 2. **Write a statement** against what describe told you.
-3. **`qfs run '<statement>'`** — **previews by default**: prints the effect-plan (paths, affected
-   counts, and an `irreversible` flag) without touching anything.
+3. **`qfs run '<statement>'`** — reads execute immediately; writes **preview by default**, printing
+   the effect-plan (paths, affected counts, and an `irreversible` flag) before committing effects.
 4. **Add `--commit`** to apply, once the preview looks right.
+
+With a configured `/mail` mount:
 
 ```sh
 qfs describe /mail/drafts --json                 # 1: the contract
@@ -132,7 +157,8 @@ A preview's JSON includes `preview.rows` (each with `verb`, `target`, `affected`
 
 ## Safety model — preview vs. commit (non-negotiable)
 
-- `qfs run` **previews by default**; nothing changes until you pass `--commit`.
+- Writes through `qfs run` **preview by default**; reads execute immediately. Apply a write only
+  when the user's request authorizes it, using `--commit` after checking its preview.
 - **Irreversible effects** — sending mail (`CALL mail.send`), merging a PR (`CALL github.merge`),
   deleting/trashing (`REMOVE`) — are flagged `irreversible: true` in the preview. In a one-shot,
   applying them needs **both** `--commit` and `--commit-irreversible`; without the extra flag qfs

@@ -64,3 +64,4 @@ and the repository documents the procedure the way it documents the GitHub Relea
 - 2026-08-19 — concern deferred (stuck) — 20260819145408-staging-s-non-indexability-rests-on.md
 - 2026-08-19 — run recorded (+0.2h) — session_01KU5Y1QDmzCJNhDrdNoVA4T-implement
 - 2026-08-19 — story added — work-20260819-063922.md
+- 2026-09-07 — concern resolved (unstuck) — 20260818215719-merging-before-the-cloudflare-secrets-exist.md

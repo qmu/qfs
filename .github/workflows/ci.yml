@@ -65,6 +65,11 @@ jobs:
         run: rustup show
       - run: cargo build --workspace
       - run: cargo test --workspace
+      - name: Shared Claude Code and Codex plugin distribution
+        run: |
+          python3 ../../scripts/check-plugin.py
+          python3 ../../scripts/test-check-plugin.py
+          cargo run -p xtask -- gen-skills --check
       # The config-home isolation detector (ticket 20260818060942). `store.rs`'s cfg(test) panic
       # already refuses the shared `$HOME/.config/qfs` fallback, but the step above can never fire
       # it: `HomeGuard` sets `XDG_CONFIG_HOME` process-wide, so under the parallel harness a test

@@ -55,7 +55,7 @@ cd packages/qfs-viewer && ./scripts/check-all.sh   # gates + build + npx smoke +
 Generated reference docs (`docs/{language,drivers,server}.md`) are rendered from the binary by
 `cargo run -p xtask -- gen-docs` — never hand-edit them; change the source and regenerate.
 
-The Claude Code **Agent Skills** (`plugins/qfs/skills/qfs-*/SKILL.md`) are generated from the human
+The shared Claude Code / Codex **Agent Skills** (`plugins/qfs/skills/qfs-*/SKILL.md`) are generated from the human
 cookbook articles (`docs/cookbook/*.md`, each carrying `skill_name` + `skill_description`
 frontmatter) by `cargo run -p xtask -- gen-skills` — never hand-edit a `SKILL.md`; edit the article
 and regenerate. Every `qfs` recipe in an article goes through the verified-true ratchet
@@ -66,20 +66,20 @@ addresses, resolved through the binary's own cred-free describe registry. So a s
 an agent a statement the binary rejects, nor a column the driver does not carry. The ratchet runs
 under plain `cargo test --workspace`, so CI's `build-test` job defends it.
 
-**Which anti-drift checks CI actually defends.** No CI job invokes the three `xtask` commands by
-name on a branch, but that is not the same as the properties going unguarded — read the property,
-not the command:
+**Which anti-drift checks CI actually defends.** Generated skills and shared plugin distribution
+are checked explicitly in `build-test`; reference-doc equality also has a workspace golden test:
 
 | Property | Defended on a branch / PR by | Defended on a `v*` tag by |
 | --- | --- | --- |
 | `docs/{language,drivers,server}.md` match the binary | **Yes** — the `committed_docs_match_generated_output` golden inside `qfs::docs` runs under `cargo test --workspace`, so `build-test` is red on any hand-edited generated page | **Yes** — `release.yml`'s `docs-drift` job runs `gen-docs --check`, and `docs-deploy-production` `needs` it |
-| `plugins/qfs/skills/*/SKILL.md` match `docs/cookbook/*.md` | **No** — `gen-skills --check` catches it only when someone runs it | No |
+| The 13 generated skills match `docs/cookbook/*.md` | **Yes** — `build-test` runs `gen-skills --check` | No |
+| Both host manifests, marketplace paths, four versions, all 14 registrations, and Cookbook-generated skill content agree | **Yes** — `python3 scripts/check-plugin.py` and its negative fixtures run in `build-test`; includes the separately authored base `qfs` skill | No |
 | No shipped migration body edited in place | **No** — `check-migrations` catches it only when someone runs it, and it needs release tags to mean anything | No |
 
 The tag column exists because `ci.yml` is `on: push: branches: ["**"]` plus `pull_request`, and a
 tag push matches neither — so on a `v*` tag nothing from `ci.yml` re-checks the tagged tree, and
-that tag publishes `docs/` to qfs.qmu.co.jp. `gen-skills --check` and `check-migrations` therefore
-still hold only where a developer or the ship flow runs them.
+that tag publishes `docs/` to qfs.qmu.co.jp. Plugin checks do not run again on a tag;
+`check-migrations` still holds only where a developer or the ship flow runs it.
 
 **What the ratchet does not cover** (the test's own doc comment carries the full list): the parse
 half sees all 184 recipes; the column half only checks statements whose source resolves in the
