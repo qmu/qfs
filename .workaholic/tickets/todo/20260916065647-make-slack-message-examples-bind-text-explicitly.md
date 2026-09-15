@@ -6,6 +6,7 @@ depends_on:
 feedback: [20260916065638-fb-slack-worked-example-in-qfs-skill-posts-an-empty-message-and-the-correct-spelling-is-ungrammatical.md]
 merge_policy:
 verification_handoff: 
+claim: work-20260916-083806
 ---
 
 # Make Slack message examples bind text explicitly
