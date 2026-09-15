@@ -117,6 +117,8 @@
 * [Merging before the Cloudflare secrets exist turns `main` red](20260818215719-merging-before-the-cloudflare-secrets-exist.md)
 * [One deployment record carries two environments](20260818215719-one-deployment-record-carries-two-environments.md)
 * [`wrangler` is installed on every branch push](20260818215719-wrangler-is-installed-on-every-branch.md)
+* [The Cloudflare token-narrowing blocker has been re-presented four times running](20260818225414-the-cloudflare-token-narrowing-blocker-has-been-re-presented-four-times-running.md)
+* [The upstream plgg-md parse defect has been filed as qmu/plgg#131](20260818225415-the-upstream-plgg-md-parse-defect-has-been-filed-as-qmu-plgg-131.md)
 * [A pull request whose checks are still running is reported as one with a failing check](20260819045532-a-pull-request-whose-checks-are-still-running-is-reported-as-one-with-a-failing-check.md)
 * [CI gained two third-party setup actions](20260819144514-ci-gained-two-third-party-setup.md)
 * [The upstream build wart is real and stays open](20260819144514-the-upstream-build-wart-is-real.md)
