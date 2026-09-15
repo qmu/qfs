@@ -269,6 +269,9 @@ pub enum RestVerb {
 /// `auth` is a [`SecretRef`] indirection, and `resources` declare the path→verb mapping.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RestApiConfig {
+    /// Optional application-level JSON success contract; absent keeps HTTP-only semantics.
+    #[serde(default)]
+    pub response_contract: Option<JsonResponseContract>,
     /// The base URL every resource path is joined onto (e.g. `https://api.example.com/v1`).
     pub base_url: String,
     /// How requests authenticate (token resolved from a [`SecretRef`] at commit time).
@@ -313,6 +316,7 @@ impl RestApiConfig {
     #[must_use]
     pub fn new(base_url: impl Into<String>, resources: Vec<ResourceMap>) -> Self {
         Self {
+            response_contract: None,
             declared_where_pushdown: false,
             base_url: base_url.into(),
             auth: AuthStrategy::None,
@@ -398,4 +402,13 @@ impl RestApiConfig {
             .find(|r| r.segment == segment)
             .or_else(|| self.resources.iter().find(|r| is_param_token(&r.segment)))
     }
+}
+
+/// A service envelope that must explicitly confirm application success.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct JsonResponseContract {
+    /// Top-level boolean field which must be true.
+    pub success_field: String,
+    /// Top-level error identifier, reported only when recognized as a safe machine code.
+    pub error_field: String,
 }

@@ -55,18 +55,22 @@ qfs-viewer consumes the plgg family from the npm registry as published
 `plgg-cms`, `plggmatic` — and takes **no other dependency**. It runs on node,
 bun, and deno.
 
-**Which runtimes are actually proven, as of 2026-08-17.** `scripts/smoke-npx.sh`
+**Which runtimes are actually proven, as of 2026-08-19.** `scripts/smoke-npx.sh`
 runs the packed bin under every runtime the machine has and says out loud which
 it skipped, so the gate's coverage depends on the machine:
 
 | Runtime | Status |
 | --- | --- |
-| node | Proven — CI's `viewer-check-all` job installs Node 24 and nothing else, so this is the runtime a green CI run attests to |
-| bun | **Broken, upstream.** bun 1.3.11 cannot parse `plgg-md`'s published dist (a raw-control-character regex class node accepts), so `npx qfs-viewer` fails under bun before any of this code runs. Present in `plgg-md` 0.0.2 and 0.0.3. The smoke reports it as NOT COVERED under a dated exemption — see `scripts/smoke-npx.sh` and ticket `20260817131540` |
-| deno | Unproven either way — absent from CI and from the container this was last measured on |
+| node | Proven — CI's `viewer-check-all` job installs Node 24, and the packed bin runs under it |
+| bun | Proven, **from bun 1.3.13**. Older bun cannot parse `plgg-md`'s published dist — a regex class written with raw control bytes that node accepts and bun 1.3.11/1.3.12 reject as "range out of order" — so `npx qfs-viewer` failed under bun before any of this code ran. That was a bun lexer defect, fixed in bun 1.3.13 against an unchanged `plgg-md` 0.0.3; the smoke now fails an older bun by name rather than exempting it |
+| deno | Proven — the packed bin runs under deno 2.9.2 |
 
-So "runs on node, bun, and deno" is the product's intent and the source's
-portability contract; today only node is demonstrated end to end.
+So "runs on node, bun, and deno" is no longer only the product's intent: CI
+exercises all three, and a developer machine exercises whichever it has. The one
+loose end is upstream cosmetics — `plgg-md`'s bundler still emits those endpoints
+as raw bytes instead of `\0-\x1F`, filed as
+[qmu/plgg#131](https://github.com/qmu/plgg/issues/131) — but nothing here waits
+on it.
 
 ## Development
 

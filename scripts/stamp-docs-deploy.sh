@@ -12,8 +12,19 @@
 #   version.json    every environment — the commit, ref, environment and build time, so
 #                   `curl https://<host>/version.json` answers "which commit is this?"
 #                   without an authenticated look at Cloudflare.
-#   robots.txt      staging only — disallow every crawler.
-#   _headers        staging only — `X-Robots-Tag: noindex, nofollow` on every path.
+#   robots.txt      staging only — disallow every crawler. See the caveat below: at the edge
+#                   this file is no longer the binding half of the staging guard.
+#   _headers        staging only — `X-Robots-Tag: noindex, nofollow` on every path. This is
+#                   what actually keeps staging out of an index.
+#
+# Why `_headers` and not `robots.txt` is the load-bearing one (measured 2026-08-19 against the
+# live hostname): Cloudflare PREPENDS a "Managed content" block to whatever robots.txt the origin
+# serves, and that block carries its own `User-agent: *` group ending in `Allow: /`. RFC 9309 has
+# a crawler merge all groups matching the same user-agent token and, between an allow and a
+# disallow of equal specificity, take the least restrictive — so the `Disallow: /` written below
+# merges with the injected `Allow: /` and does not bind. It is kept anyway (it is correct at the
+# origin, and it binds again the moment the zone's managed robots.txt is turned off), but do not
+# read it as the guarantee. Verify staging with the header.
 #
 # Why staging is public but non-indexable: the repository, `main`, and the released
 # documentation are all public already, so restricting the hostname would protect nothing that
