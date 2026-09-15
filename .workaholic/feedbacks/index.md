@@ -129,4 +129,5 @@
 * [Resolved: The statement bridge's read leg is ungated](20260907132317-resolved-the-statement-bridge-s-read-leg.md)
 * [[FB] Make Slack write failures actionable instead of collapsing upstream errors to service_rejected](20260916065407-fb-make-slack-write-failures-actionable-instead-of-collapsing-upstream-errors-to-service-rejected.md)
 * [[FB] Slack worked example in `qfs skill` posts an empty message, and the correct spelling is ungrammatical](20260916065638-fb-slack-worked-example-in-qfs-skill-posts-an-empty-message-and-the-correct-spelling-is-ungrammatical.md)
+* [[FB] Support authenticated Slack attachment downloads through the selected QFS mount](20260916065746-fb-support-authenticated-slack-attachment-downloads-through-the-selected-qfs-mount.md)
 <!-- okf:generated:end -->
