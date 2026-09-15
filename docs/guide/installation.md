@@ -78,8 +78,10 @@ codex plugin add qfs@qfs
 codex plugin list --json --marketplace qfs
 ```
 
-These commands were verified with Codex CLI `0.153.4`: the listing reported `qfs@qfs` installed
-and enabled from this checkout, with both `qfs:qfs` and `qfs:qfs-slack` available to a new thread.
+These commands were verified with Codex CLI `0.154.0` in an isolated configuration: the listing
+reported `qfs@qfs` version `0.22.3` installed and enabled. A fresh app-server's `skills/list`
+request from an empty project loaded all 14 QFS skills from the installed plugin cache, with
+no skill-loading errors. This verifies discovery independently of repository-local skill links.
 
 The local marketplace is `.agents/plugins/marketplace.json`, pointing to `plugins/qfs` and its
 `.codex-plugin/plugin.json`. Check that the listing reports QFS installed and enabled, and that
@@ -90,8 +92,25 @@ pick up edits made to a local checkout.
 After updating a local plugin's version, run `codex plugin add qfs@qfs` again. Start a new Codex
 thread to verify automatic discovery: ask it to use QFS to find a channel by name **without giving
 an ID**, and confirm it reads the connection and workspace `describe` output before choosing a
-channel collection. The plugin's registered skill names are `qfs:qfs` and `qfs:qfs-slack`;
-select them from Codex's skill picker (or explicitly invoke `$qfs:qfs` / `$qfs:qfs-slack`). Installation and
+channel collection. The plugin registers these skills:
+
+- `qfs:qfs`
+- `qfs:qfs-automation`
+- `qfs:qfs-chatwork`
+- `qfs:qfs-cloudflare`
+- `qfs:qfs-cookbook`
+- `qfs:qfs-cross-service`
+- `qfs:qfs-databases`
+- `qfs:qfs-faq`
+- `qfs:qfs-files`
+- `qfs:qfs-gdrive`
+- `qfs:qfs-git`
+- `qfs:qfs-github`
+- `qfs:qfs-gmail`
+- `qfs:qfs-slack`
+
+Select a skill from Codex's skill picker (for example, explicitly invoke `$qfs:qfs` or
+`$qfs:qfs-slack`). Installation and
 cache freshness do not prove that an already-running thread has refreshed its skill catalog;
 reading updated skill files into that thread explicitly is a separate operation.
 
