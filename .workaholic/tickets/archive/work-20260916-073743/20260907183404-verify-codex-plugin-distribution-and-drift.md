@@ -87,19 +87,19 @@ Completed verification of the existing distribution implementation. PR #106 alre
 checker, CI integration, installation guide and an archived copy of this ticket; the survey still
 offered this queued copy. This follow-up corrects the guide's incomplete two-skill catalog and adds
 the omitted missing-registration negative fixture. The existing shared skill tree and generator
-remain authoritative. Binary patch version is 0.0.132; unchanged plugin content remains 0.22.3.
+remain authoritative. Binary patch version is 0.0.132; the shared plugin advances to 0.22.4 at the story release boundary.
 
 ### Host loading evidence
 
 On 2026-09-16, Codex CLI 0.154.0 successfully executed `codex plugin marketplace add <worktree>
 --json`, `codex plugin add qfs@qfs --json`, and `codex plugin list --json --marketplace qfs` in an
-isolated Codex configuration. Installation returned version 0.22.3; listing returned installed and
+isolated Codex configuration. Installation returned version 0.22.4; listing returned installed and
 enabled. The official packaging guide above and the installed CLI help were checked again.
 
 A fresh `codex app-server --stdio` received `initialize`, `initialized`, then `skills/list` with
 `cwds` pointing at an empty project and `forceReload: true`. The result had `errors: []`. Assertions
 verified exact equality with the repository's 14 skill directories, every skill enabled, and every
-QFS path under the isolated installed `plugins/cache/qfs/qfs/0.22.3` directory. Loaded names were:
+QFS path under the isolated installed `plugins/cache/qfs/qfs/0.22.4` directory. Loaded names were:
 
 ```text
 qfs:qfs, qfs:qfs-automation, qfs:qfs-chatwork, qfs:qfs-cloudflare,

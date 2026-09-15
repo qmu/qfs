@@ -79,7 +79,7 @@ codex plugin list --json --marketplace qfs
 ```
 
 These commands were verified with Codex CLI `0.154.0` in an isolated configuration: the listing
-reported `qfs@qfs` version `0.22.3` installed and enabled. A fresh app-server's `skills/list`
+reported `qfs@qfs` version `0.22.4` installed and enabled. A fresh app-server's `skills/list`
 request from an empty project loaded all 14 QFS skills from the installed plugin cache, with
 no skill-loading errors. This verifies discovery independently of repository-local skill links.
 

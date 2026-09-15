@@ -1,6 +1,7 @@
 # stories
 
 <!-- okf:generated:begin -->
+* [Verify the complete Codex skill catalog](work-20260916-073743.md) - Verify all 14 shared QFS skills load from an isolated Codex installation and document the complete catalog.
 * [Verify Codex distribution and routed preview guidance](work-20260907-205639.md) - QFS now verifies its shared Codex plugin distribution and teaches the routed-mount prerequisite for write previews.
 * [Reject Slack API failures instead of reporting successful commits](work-20260907-182337.md) - Slack application failures now produce actionable errors and nonzero exits; JSON request bodies declare their content type.
 * [Select Slack authentication through the connection path](work-20260907-131428.md) - Slack reads and posts use the account bound to each connection path, without a separate secret selector.
