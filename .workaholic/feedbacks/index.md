@@ -128,4 +128,5 @@
 * [Resolved: The shipped-asset install-splitter is still copy-pasted across tests](20260907132317-resolved-the-shipped-asset-install-splitter-is.md)
 * [Resolved: The statement bridge's read leg is ungated](20260907132317-resolved-the-statement-bridge-s-read-leg.md)
 * [[FB] Make Slack write failures actionable instead of collapsing upstream errors to service_rejected](20260916065407-fb-make-slack-write-failures-actionable-instead-of-collapsing-upstream-errors-to-service-rejected.md)
+* [[FB] Slack worked example in `qfs skill` posts an empty message, and the correct spelling is ungrammatical](20260916065638-fb-slack-worked-example-in-qfs-skill-posts-an-empty-message-and-the-correct-spelling-is-ungrammatical.md)
 <!-- okf:generated:end -->
