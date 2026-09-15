@@ -6,6 +6,7 @@ depends_on:
 feedback: [20260916065407-fb-make-slack-write-failures-actionable-instead-of-collapsing-upstream-errors-to-service-rejected.md]
 merge_policy:
 verification_handoff: 
+claim: work-20260916-071056
 ---
 
 # Make Slack write failures actionable and validate required text bindings
