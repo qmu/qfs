@@ -2,7 +2,7 @@
 type: Mission
 title: The current situation of qfs is documented as it actually stands
 slug: the-current-situation-of-qfs-is-documented-as-it-actually-stands
-status: active
+status: achieved
 merge_policy:
 created_at: 2026-08-17T10:26:06+00:00
 author: a@qmu.jp
@@ -78,3 +78,4 @@ tooling beyond what the survey ticket justifies.
 - 2026-08-19 — ticket archived — 20260817131540-file-the-bun-plgg-md-parse-defect-upstream.md
 - 2026-08-19 — concern deferred (stuck) — 20260819144514-ci-gained-two-third-party-setup.md
 - 2026-08-19 — concern deferred (stuck) — 20260819144514-the-upstream-build-wart-is-real.md
+- 2026-09-16 — mission achieved — mission.md
