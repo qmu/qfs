@@ -16,10 +16,14 @@ use qfs_runtime::EffectError;
 pub enum HttpError {
     /// The service rejected a successful HTTP exchange, or failed its response contract.
     /// Codes are selected from a closed vocabulary, never copied from response text.
-    #[error("service response failed: {code}")]
+    #[error("service response failed for {operation}: {code}; {hint}")]
     Application {
         /// Safe machine code describing the application failure.
         code: &'static str,
+        /// Closed operation label, never a URL or request value.
+        operation: &'static str,
+        /// Corrective guidance from the closed error vocabulary.
+        hint: &'static str,
     },
 
     /// The transport failed before a status was received (DNS, connect, TLS, read timeout).
@@ -99,7 +103,7 @@ impl HttpError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            HttpError::Application { code } => code,
+            HttpError::Application { code, .. } => code,
             HttpError::Transport { .. } => "http_transport",
             HttpError::Server { .. } => "http_server",
             HttpError::Client { .. } => "http_client",

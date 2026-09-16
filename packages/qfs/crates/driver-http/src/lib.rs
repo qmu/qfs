@@ -63,8 +63,8 @@ use qfs_types::{Column, ColumnType, DriverId, Schema};
 pub use applier::RestApplier;
 pub use client::{redirect_allowed, HttpClient, MockHttpClient, ReqwestClient};
 pub use config::{
-    AuthStrategy, CodecId, JsonResponseContract, Pagination, ResourceMap, RestApiConfig, RestVerb,
-    SecretRef,
+    AuthStrategy, CodecId, JsonRequestContract, JsonResponseContract, Pagination, ResourceMap,
+    RestApiConfig, RestVerb, SecretRef,
 };
 pub use effect::{HttpEffect, BODY_COL, HEADER_COL_PREFIX, URL_COL};
 pub use error::HttpError;
