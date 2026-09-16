@@ -26,11 +26,23 @@ pub trait HttpClient: Send + Sync {
     /// received. A non-2xx status is **not** an error here — the driver classifies the
     /// returned [`HttpResponse::status`] (so a 404 body is still available to decode).
     fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError>;
+
+    /// Send exactly one exchange, refusing to follow any redirect. Transports must explicitly
+    /// implement this capability; falling back to `send` could disclose an authenticated request.
+    fn send_without_redirects(&self, _req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        Err(HttpError::Application {
+            code: "http_no_redirect_transport_required",
+        })
+    }
 }
 
 impl HttpClient for Arc<dyn HttpClient> {
     fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
         (**self).send(req)
+    }
+
+    fn send_without_redirects(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        (**self).send_without_redirects(req)
     }
 }
 
@@ -122,6 +134,22 @@ impl Default for ReqwestClient {
 }
 
 impl HttpClient for ReqwestClient {
+    fn send_without_redirects(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        // Build failure is closed: never substitute the default redirect-following client.
+        let inner = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| HttpError::Application {
+                code: "http_no_redirect_transport_required",
+            })?;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok();
+        Self { inner, rt }.send(req)
+    }
+
     fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
         // Derive the reqwest method from the DTO's canonical uppercase wire token. Going through
         // `as_str()` keeps this total over `qfs_http_core::HttpMethod` even though it is a foreign
@@ -272,6 +300,11 @@ impl MockHttpClient {
 }
 
 impl HttpClient for MockHttpClient {
+    fn send_without_redirects(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        // The recording transport already performs exactly one scripted exchange.
+        self.send(req)
+    }
+
     fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
         if let Ok(mut r) = self.recorded.lock() {
             r.push(req.clone());
