@@ -1,7 +1,12 @@
 # stories
 
 <!-- okf:generated:begin -->
+* [work-20260916-102958](work-20260916-102958.md) - Restore combined-main compilation by completing the Slack file and no-redirect HTTP error constructors.
+* [work-20260916-091802](work-20260916-091802.md) - Read Slack attachment bytes through the selected account with confined destinations and no redirects.
+* [work-20260916-083806](work-20260916-083806.md) - Repair Slack posting examples and calls on named mounts
 * [work-20260916-081339](work-20260916-081339.md) - Reconcile the completed preview ticket and correct the embedded read/write quick reference.
+* [Verify the complete Codex skill catalog](work-20260916-073743.md) - Verify all 14 shared QFS skills load from an isolated Codex installation and document the complete catalog.
+* [work-20260916-071056](work-20260916-071056.md)
 * [Verify Codex distribution and routed preview guidance](work-20260907-205639.md) - QFS now verifies its shared Codex plugin distribution and teaches the routed-mount prerequisite for write previews.
 * [Reject Slack API failures instead of reporting successful commits](work-20260907-182337.md) - Slack application failures now produce actionable errors and nonzero exits; JSON request bodies declare their content type.
 * [Select Slack authentication through the connection path](work-20260907-131428.md) - Slack reads and posts use the account bound to each connection path, without a separate secret selector.
@@ -12,6 +17,7 @@
 * [work-20260818-210148](work-20260818-210148.md) - `main` had ended up carrying two per-node capability tables built from the same declarations, one per mount; they collapse to `DeclaredNodeDesc`, which both the describe and the live mount now read for capabilities and irreversibility alike.
 * [work-20260818-210119](work-20260818-210119.md) - The chatwork/room type now names all five fields GET /rooms delivers (sticky, icon_path, mytask_num, file_num, task_num), so they are queryable, with a "rooms waiting on me" recipe over mytask_num.
 * [work-20260818-204014](work-20260818-204014.md) - Fourteen `qfs` unit tests reached a System-DB opener without an isolated config home, passing only while a concurrent sibling held one; each now opens its own, and the suite is green with `XDG_CONFIG_HOME` unset and the harness serialised.
+* [work-20260818-200743](work-20260818-200743.md)
 * [work-20260818-195336](work-20260818-195336.md) - The server guide's worked config did not boot when pasted: missing statement terminators, a wrong endpoint shape, and a parse error pinned to line 1 are fixed at the generator and locked in by a new parse ratchet over every config example.
 * [work-20260818-194054](work-20260818-194054.md)
 * [work-20260818-144000](work-20260818-144000.md) - `ci.yml` carried a release job gated on `refs/tags/` inside a workflow that only triggers on branches, so it had never run in the repository's history; the job and the release script behind it are retired, leaving `xtask dist` from `release.yml` as the one release-artifact builder.

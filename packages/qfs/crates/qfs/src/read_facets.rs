@@ -242,7 +242,14 @@ impl ReadDriver for RestReadDriver {
                         Some(body) => {
                             qfs_driver_http::rest_read_rows_post(&self.applier, rest_path, &body)
                         }
-                        None => qfs_driver_http::rest_read_rows(&self.applier, rest_path),
+                        None => match rest_path.strip_prefix("/rest/slack/qfs.file-content/") {
+                            // Explicit provider-scoped wire primitive; the applier independently
+                            // verifies the API base, account auth, file identity and destination.
+                            Some(file) => self.applier.slack_file_content(
+                                file.split_once('?').map_or(file, |(id, _)| id),
+                            ),
+                            None => qfs_driver_http::rest_read_rows(&self.applier, rest_path),
+                        },
                     };
                     result.map_err(|e| crate::declared_driver::read_http_error(rest_path, e))
                 },

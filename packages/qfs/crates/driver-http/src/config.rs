@@ -269,6 +269,9 @@ pub enum RestVerb {
 /// `auth` is a [`SecretRef`] indirection, and `resources` declare the path→verb mapping.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RestApiConfig {
+    /// Optional content requirements for JSON writes, selected by the composing driver.
+    #[serde(default)]
+    pub request_contracts: Vec<JsonRequestContract>,
     /// Optional application-level JSON success contract; absent keeps HTTP-only semantics.
     #[serde(default)]
     pub response_contract: Option<JsonResponseContract>,
@@ -316,6 +319,7 @@ impl RestApiConfig {
     #[must_use]
     pub fn new(base_url: impl Into<String>, resources: Vec<ResourceMap>) -> Self {
         Self {
+            request_contracts: Vec::new(),
             response_contract: None,
             declared_where_pushdown: false,
             base_url: base_url.into(),
@@ -411,4 +415,13 @@ pub struct JsonResponseContract {
     pub success_field: String,
     /// Top-level error identifier, reported only when recognized as a safe machine code.
     pub error_field: String,
+}
+
+/// At least one named content field must be a nonempty string or array before a POST.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonRequestContract {
+    /// Exact resource path relative to the configured base URL.
+    pub resource: String,
+    /// Alternative content fields (for example text, blocks, or attachments).
+    pub nonempty_any: Vec<String>,
 }

@@ -1,8 +1,8 @@
 -- slack_driver.qfs — the DECLARED (query-based) Slack driver: the twin of the compiled driver-slack.
 --
--- Blueprint §13.3 playbook entry #1. Slack's read surface plus the message post, expressed as
--- declarative config over the generic /http wire primitive — no compiled Rust. Every read below is
--- proven ROW-EQUIVALENT to the compiled driver on shared hermetic fixtures
+-- Blueprint §13.3 playbook entry #1. Slack's API reads and message post, expressed as declarative
+-- config over /http. The file-content view uses a scoped authenticated transport primitive.
+-- The original API reads are proven ROW-EQUIVALENT to the compiled driver on hermetic fixtures
 -- (`crates/qfs/src/declared_driver.rs`, the `slack_twin_*` tests); that equivalence gate is what
 -- authorizes retiring the compiled crate, and it stays in the tree as the twin's regression suite.
 --
@@ -38,6 +38,7 @@ CREATE TYPE slack/reaction ( name text PRIMARY KEY, count int );
 CREATE TYPE slack/file ( id text PRIMARY KEY, name text, mimetype text, size int, created int, user text );
 CREATE TYPE slack/user ( id text PRIMARY KEY, name text, real_name text, is_bot bool, deleted bool );
 CREATE TYPE slack/channel ( id text PRIMARY KEY, name text, is_private bool );
+CREATE TYPE slack/file_content ( content bytes );
 
 -- Reads. Each `|> EXPAND <field>` unwraps Slack's `{ok, <collection>}` envelope into one row per
 -- element; the `OF` type then shapes the row to the delivered contract.
@@ -68,6 +69,13 @@ CREATE VIEW /slack/{ws}/files OF slack/file AS
 
 CREATE VIEW /slack/{ws}/{channel}/files OF slack/file AS
   /http/slack/files.list?channel={channel} |> DECODE json |> EXPAND files;
+
+-- qfs.file-content is a QFS transport primitive, not a Slack Web API method. It resolves the
+-- file ID through files.info with the selected mount account, then reads the returned private
+-- file bytes. Only HTTPS files.slack.com/files-pri/ URLs are accepted; all redirects are refused.
+-- No caller-supplied URL or credential is accepted, and generic FOLLOW remains credential-free.
+CREATE VIEW /slack/{ws}/files/{file}/content OF slack/file_content AS
+  /http/slack/qfs.file-content/{file};
 
 CREATE VIEW /slack/{ws}/users OF slack/user AS
   /http/slack/users.list |> DECODE json |> EXPAND members;
@@ -125,11 +133,9 @@ CREATE MAP CALL slack.delete ( channel text, ts text ) /slack/{ws}/{channel}/mes
 -- (REMOVE) is what a `remove /slack/<ws>/files/<id>` statement matches on, and IRREVERSIBLE puts it
 -- behind the standard gate.
 --
--- This is the whole file-write surface, deliberately. The article's upload and download were
--- retired with the compiled driver and are NOT reintroduced here: Slack's upload is a three-call
+-- This is the whole file-write surface, deliberately. Slack's upload is a three-call
 -- external flow (`files.getUploadURLExternal` → PUT the bytes → `files.completeUploadExternal`),
--- which a declared map — one request — cannot express; and a download would need `FOLLOW` to send
--- the bearer to `url_private`, while `FOLLOW` injects no credential BY DESIGN (the Chatwork
--- precedent works because its delivered URL is self-authorizing).
+-- which a declared map — one request — cannot express. Downloads use the scoped content view
+-- above; FOLLOW still injects no credential (Chatwork's URL is self-authorizing).
 CREATE MAP REMOVE /slack/{ws}/files/{file} AS
   INSERT INTO /http/slack/files.delete VALUES ({file: path.file}) IRREVERSIBLE;

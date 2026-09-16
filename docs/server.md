@@ -27,7 +27,7 @@
 ```qfs
 create policy readmail ALLOW select ON mail;
 create endpoint recent on 'GET /recent' policy readmail as /mail/inbox |> limit 5;
-create trigger notify on /mail/inbox do insert into /slack/acme/general/messages values (NEW.subject);
+create trigger notify on /mail/inbox do insert into /slack/acme/general/messages values (text) (NEW.subject);
 create job nightly every '1h' do remove /tmp/scratch where age > 7;
 create policy api ALLOW select DENY insert, update, remove, call;
 ```

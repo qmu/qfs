@@ -82,7 +82,11 @@ pub fn apply_plan_rooted(plan: &qfs_core::Plan, local_root: &Path) -> Result<(),
             .ledger
             .iter()
             .filter_map(|e| match &e.status {
-                LegStatus::Failed { error, .. } => Some(format!("{error:?}")),
+                // Display, never Debug: an operator-facing message carries prose, never Rust struct
+                // syntax (the same rule `exec::codec` pins). `EffectError`'s `Display` renders the
+                // secret-free reason, so a refusal reads `terminal effect failure: refused: …`
+                // rather than `Terminal { reason: "…" }`.
+                LegStatus::Failed { error, .. } => Some(error.to_string()),
                 LegStatus::Skipped { cause } => {
                     Some(format!("skipped (dependency {cause:?} failed)"))
                 }

@@ -29,6 +29,41 @@ use tokio::net::TcpListener;
 
 const TOKEN: &str = "WIRE-TEST-TOKEN-abc123";
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_redirect_transport_never_forwards_a_bearer_even_to_the_same_host() {
+    use qfs_driver_http::{HttpMethod, HttpRequest};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let destination = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = format!("http://{}/steal", destination.local_addr().unwrap());
+    let origin = format!("http://{}/file", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = [0; 4096];
+        let n = socket.read(&mut buf).await.unwrap();
+        assert!(String::from_utf8_lossy(&buf[..n]).contains(TOKEN));
+        socket.write_all(format!(
+            "HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ).as_bytes()).await.unwrap();
+    });
+    let response = tokio::task::spawn_blocking(move || {
+        ReqwestClient::new(5)
+            .send_without_redirects(
+                &HttpRequest::new(HttpMethod::Get, origin)
+                    .header("Authorization", format!("Bearer {TOKEN}")),
+            )
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    server.await.unwrap();
+    assert_eq!(response.status, 302);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), destination.accept())
+            .await
+            .is_err()
+    );
+}
+
 /// Stand up a one-shot loopback HTTP server: accept a single connection, read the request
 /// headers, assert the `Authorization` header carried our token, and reply with a JSON array
 /// of two objects. Returns the bound `http://127.0.0.1:<port>` base URL and the server task's

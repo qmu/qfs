@@ -94,7 +94,7 @@ appends a message, and previews before it sends anything:
 
 ```qfs
 insert into /slack/acme/general/messages
-  values ('Deploy finished ✅')
+  values (text) ('Deploy finished ✅')
 ```
 
 ```text
@@ -187,8 +187,8 @@ The token determines the actual workspace and sender; changing the `{ws}` segmen
 connection does not change authentication. Use each workspace's actual channel ID:
 
 ```sh
-qfs run -e "insert into /slack-a/acme/C0123456789/messages values ('Hello from work-a')"
-qfs run -e "insert into /slack-b/beta/C9876543210/messages values ('Hello from work-b')"
+qfs run -e "insert into /slack-a/acme/C0123456789/messages values (text) ('Hello from work-a')"
+qfs run -e "insert into /slack-b/beta/C9876543210/messages values (text) ('Hello from work-b')"
 ```
 
 These commands preview. Add `--commit` to send. If the selected account is missing or locally
@@ -235,10 +235,22 @@ preview; preview resolves no token and sends nothing, while `--commit` applies t
 QFS checks Slack's application result as well as the HTTP status. A response such as
 `{"ok":false,"error":"missing_scope"}` is a failure even when Slack returns HTTP 200:
 `qfs run --commit` exits nonzero without reporting `committed: true`. Recognized service error
-codes are preserved; unrecognized error text is reported as `service_rejected` without echoing
-the response body. A malformed or missing success envelope reports `http_response_contract`.
+codes (including `no_text`) are preserved. Failed writes include a bounded operation label and
+corrective guidance: check explicit input bindings, channel access, or the selected account's
+permissions as appropriate. An unknown string code reports `service_rejected` and says the
+unrecognized code was withheld; a missing/non-string error code reports `service_error_malformed`.
+Neither diagnostic copies arbitrary response values, message content, tokens, or URL parameters.
+A malformed or missing success envelope reports `http_response_contract`.
 A failed read reports the service error instead of an empty result. Failed posts are not
 automatically retried. These checks apply to existing Slack API connections too.
+
+Before sending a JSON `chat.postMessage`, QFS rejects a body with missing, null, or empty content locally.
+For text-only message and installed reply maps that use `row.text`, bind the column explicitly:
+`VALUES (text) ('hello')`. Positional values can bind another column and leave `row.text` null.
+The local error identifies the operation and the explicit-binding correction; it sends no request
+and does not resolve credentials. Nonempty `blocks`, `attachments`, or `markdown_text` remain valid
+alternatives, following [Slack's message contract](https://docs.slack.dev/reference/methods/chat.postMessage/).
+Preview still performs no I/O; this content check runs when the map is applied at commit time.
 
 ## The channel as a path
 
@@ -303,9 +315,43 @@ up in the workspace directory: `/slack/acme/users |> where name == 'alice' |> se
 |> order by created DESC
 ```
 
-The listing carries a file's metadata, not its bytes: qfs reads *what was shared*, and fetching the
-content itself is not part of the Slack surface today (see *What the file surface does not do*
-below).
+### Download an attached PDF through the selected account
+
+Use the mount you discovered and the channel ID returned by its channel listing. List PDFs first,
+then use the returned file ID on that same mount:
+
+```qfs
+/slack-work/acme/C0123/files
+|> where mimetype == 'application/pdf'
+|> select id, name, size
+```
+
+```qfs
+/slack-work/acme/files/F0123/content
+```
+
+The content view returns one `content: bytes` column. Copy it intact to a local file with the
+ordinary blob write (preview, then commit):
+
+```qfs
+/slack-work/acme/files/F0123/content
+|> upsert into /local/tmp/report.pdf
+```
+
+The file ID above stands for one returned by the listing. Inspect its schema with
+`qfs describe /slack-work/acme/files/F0123/content` before reading. Reinstall the current
+`slack_driver.qfs` declarations if an older installation does not advertise the content node.
+
+QFS asks Slack `files.info` with the selected mount account and uses that same account for the
+private download. The account needs `files:read` and access to the file; another account or a
+stored default credential is never a fallback. Missing files, missing scope, unavailable download
+URLs and denied access are reported as errors. The scoped transport accepts only HTTPS URLs under
+`files.slack.com/files-pri/` returned by Slack and refuses all redirects, including same-host
+redirects. External/remote files and other download hosts are unsupported. Generic `FOLLOW`
+continues to send no credential.
+
+Slack documents the authorization header and `files:read` requirement in its
+[file object reference](https://docs.slack.dev/reference/objects/file-object/).
 
 ## Detach a file from Slack
 
@@ -324,16 +370,8 @@ the machine; the id is the one from the listings above.
 
 ### What the file surface does not do
 
-Two operations you might expect are deliberately absent rather than pending, and knowing why saves
-you looking for a spelling that does not exist:
+Uploading remains unsupported:
 
-- **Downloading a file's bytes.** Slack serves file content from `url_private`, which requires the
-  app's bearer token on the download request. qfs's declared `FOLLOW` stage — the primitive that
-  fetches a delivered URL, and the one Chatwork's download rides — sends **no** credential by
-  design, because a delivered URL usually points at a foreign host and the driver's token must not
-  follow it there. So an authorized download is not expressible in the declaration today. Route the
-  bytes through a service whose blob read qfs does carry ([files & object
-  storage](/cookbook/files), [Google Drive](/cookbook/gdrive)).
 - **Uploading a file.** Slack's current upload is a three-call external flow (reserve an upload URL,
   PUT the bytes out-of-band, then complete the share); `files.upload` is retired for new apps. A
   declared map is **one** request, so the flow cannot be written as one — unlike Chatwork's
@@ -346,7 +384,7 @@ until `--commit`:
 
 ```qfs
 insert into /slack/acme/general/messages
-  values ('Deploy finished ✅')
+  values (text) ('Deploy finished ✅')
 ```
 
 ```text
@@ -360,11 +398,27 @@ Want a deploy to post to Slack by itself? Wire it up once with a trigger — see
 [Automation](/cookbook/automation).
 :::
 
-::: tip One positional value binds to `text`
-`values ('…')` with a single value posts that text — the bare form above and the explicit
-`values (text) ('…')` form are equivalent, and both apply the same at `--commit` as they preview.
-Reach for the named-column form (`values (text) ('…')`) when a row also carries other columns.
+::: tip Bind the message column explicitly
+Use `values (text) ('…')`: the column list comes **after** `values`.
+Positional input follows the described schema order and can populate `ts` instead of `text`.
+Explicit columns keep the intended message binding when that schema changes.
 :::
+
+## Call a procedure on the selected account
+
+Use the procedure qualifier advertised by `qfs describe /slack-a --json`.
+The qualifier is the mount name without its leading slash; hyphens stay in the name:
+
+```qfs
+/slack-a/acme/general/messages
+|> call slack-a.react(channel => 'general', ts => '1780000000.123456', emoji => 'eyes')
+```
+
+The source and qualifier select the same mount. The channel lookup and write both use that
+mount's bound account. `slack.react` still addresses the default `/slack` mount; it does not
+mean the account selected by a `/slack-a` source. The advertised `pin`, `unpin`, `update`,
+and `delete` procedures use the same qualifier. Typed arguments and irreversible confirmation
+requirements remain those reported by DESCRIBE.
 
 ## Post as yourself (a user token)
 
@@ -388,7 +442,7 @@ qfs connect /slack-me --driver slack --account me     # its own mount, bound to 
 
 ```qfs
 insert into /slack-me/acme/general/messages
-  values ('Sent from my own account 👋')
+  values (text) ('Sent from my own account 👋')
 ```
 
 ::: warning The app page shows only the installer's token
@@ -435,7 +489,7 @@ working.
 | read the user directory — including looking up a DM peer's `U…` id | either | `users:read` |
 | open a DM (`/slack/<ws>/dms/<user>`) | either | `im:write` |
 | read a DM's messages | either | `im:history` |
-| list the files shared in a channel, a DM, or the workspace | either | `files:read` |
+| list shared files or read their content | either | `files:read` |
 | detach a file (`remove /slack/<ws>/files/<id>`) | either | `files:write` |
 | add a reaction (`slack.react`) | either | `reactions:write` |
 | pin or unpin a message (`slack.pin` / `slack.unpin`) | either | `pins:write` |

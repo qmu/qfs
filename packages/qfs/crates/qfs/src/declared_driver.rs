@@ -408,6 +408,17 @@ impl DeclaredDriver {
         // composition, including existing stored declarations and renamed driver instances.
         // Exact API bases only: another host/path may legitimately use `ok` as business data.
         if self.base_url.trim_end_matches('/') == "https://slack.com/api" {
+            config
+                .request_contracts
+                .push(qfs_driver_http::JsonRequestContract {
+                    resource: "chat.postMessage".into(),
+                    nonempty_any: vec![
+                        "text".into(),
+                        "blocks".into(),
+                        "attachments".into(),
+                        "markdown_text".into(),
+                    ],
+                });
             config.response_contract = Some(qfs_driver_http::JsonResponseContract {
                 success_field: "ok".into(),
                 error_field: "error".into(),
@@ -1604,7 +1615,7 @@ fn declared_param_type(token: &str) -> qfs_core::ColumnType {
 /// Preserve application rejection codes as service failures, rather than blaming query syntax.
 pub(crate) fn read_http_error(path: &str, error: qfs_driver_http::HttpError) -> qfs_core::CfsError {
     match error {
-        qfs_driver_http::HttpError::Application { code } => qfs_core::CfsError::Service {
+        qfs_driver_http::HttpError::Application { code, .. } => qfs_core::CfsError::Service {
             path: path.to_string(),
             code,
         },
@@ -2929,8 +2940,8 @@ mod tests {
         let stmts = shipped_statements(script);
         assert_eq!(
             stmts.len(),
-            23,
-            "1 driver + 5 types + 9 views + 1 post map + 1 shared LOOKUP + 5 typed CALL maps + \
+            25,
+            "1 driver + 6 types + 10 views + 1 post map + 1 shared LOOKUP + 5 typed CALL maps + \
              1 file-detach REMOVE map: {stmts:?}"
         );
         for s in &stmts {
@@ -2964,9 +2975,11 @@ mod tests {
         // and download rather than reproducing them — so this measurement is what a twin costs
         // when it stops over-promising, and it moves the calibration concern further from ~40
         // rather than closer.
+        // The scoped file-content type and read add three lines (46 total); no generic FOLLOW
+        // credentials or new grammar are introduced by the authenticated transport primitive.
         assert!(
-            statement_lines <= 43,
-            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~43 statement-lines); \
+            statement_lines <= 46,
+            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~46 statement-lines); \
              measured {statement_lines}"
         );
         // Host-confinement floor over the shipped bytes: every /http/ reference is /http/slack/.
@@ -4551,8 +4564,8 @@ mod tests {
     fn shipped_slack_detach_map_fires_files_delete_behind_the_gate() {
         // Ticket 20260813024753. `docs/cookbook/slack.md` taught three file operations the driver
         // did not carry after the compiled crate was retired. Two of them cannot be expressed by a
-        // declaration at all (the upload is a three-call external flow; a download would need
-        // `FOLLOW` to carry the bearer, which it never does) and were removed from the article; the
+        // upload declaration (the upload is a three-call external flow). Downloads now use the
+        // scoped file-content read while `FOLLOW` still carries no bearer. The
         // detach IS one request, so it is declared — and pinned here, over the SHIPPED bytes, so
         // the article's surviving `remove /slack/<ws>/files/<id>` recipe cannot drift from it.
         let detach = shipped_slack_maps()
