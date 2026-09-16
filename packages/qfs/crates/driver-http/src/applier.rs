@@ -6,9 +6,9 @@
 //! This is also the **reusable REST request/response machinery** t24 (GitHub) and t25 (Slack)
 //! layer on: build a request from `(verb, config, secret, rows)`, send it through the injected
 //! [`crate::client::HttpClient`], classify the status into a structured error, decode the body
-//! through the codec registry to rows, and follow pagination at the edge. None of it is
-//! API-specific — a specific API supplies a [`crate::config::RestApiConfig`] and reuses all of
-//! it.
+//! through the codec registry to rows, and follow pagination at the edge. The ordinary REST
+//! path is API-neutral. The scoped Slack file adapter in `slack_file` reuses its authentication
+//! seam and explicitly restricts its additional private-file destination.
 //!
 //! Stateless across the request: it holds the config, the codec, the client, and a shared
 //! [`qfs_secrets::Secrets`] handle behind `Arc`s, performing fresh World I/O on every call —
@@ -26,6 +26,8 @@ use crate::config::{AuthStrategy, Pagination, RestApiConfig};
 use crate::effect::HttpEffect;
 use crate::error::HttpError;
 use crate::request::{HttpMethod, HttpRequest, HttpResponse};
+
+mod slack_file;
 
 /// The synchronous REST apply leg. Holds the per-instance config, the resolved response codec,
 /// the HTTP transport client, and the shared secrets surface — all behind `Arc` so the leg is

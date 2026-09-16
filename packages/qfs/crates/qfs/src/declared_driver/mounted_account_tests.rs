@@ -13,6 +13,15 @@ fn account_key(label: &str) -> CredentialKey {
     )
 }
 
+#[test]
+fn shipped_slack_file_content_is_discoverable_as_bytes_on_named_mounts() {
+    let (_, _, mount) = shipped_mount(qfs_skill::SLACK_DRIVER, "slack", "/slack-work");
+    let description = report(&mount, "/slack-work/acme/files/F0123/content");
+    assert_eq!(column_names(&description), ["content"]);
+    assert_eq!(description.columns[0].ty, ColumnType::Bytes);
+    qfs_core::check_capability(&mount, &qfs_core::Path::new("/slack-work/acme/files/F0123/content"), qfs_core::Verb::Select).unwrap();
+}
+
 fn bind(path: &str, account: &str, secret_ref: Option<&str>) {
     crate::path_binding::db_upsert_binding(
         &crate::connection::open_system_conn().unwrap(),
@@ -42,6 +51,14 @@ async fn mounted_read(
     path: &str,
     mock: Arc<qfs_driver_http::MockHttpClient>,
 ) -> Result<RowBatch, qfs_core::CfsError> {
+    mounted_read_node(path, "same-workspace/C1/messages", mock).await
+}
+
+async fn mounted_read_node(
+    path: &str,
+    node: &str,
+    mock: Arc<qfs_driver_http::MockHttpClient>,
+) -> Result<RowBatch, qfs_core::CfsError> {
     let d = shipped_slack_declared_driver();
     let binding =
         crate::path_binding::db_get_binding(&crate::connection::open_system_conn().unwrap(), path)
@@ -65,7 +82,7 @@ async fn mounted_read(
     read.scan(
         &qfs_pushdown::ScanNode {
             source: qfs_pushdown::SourceId::new(path.trim_start_matches('/')),
-            path: format!("{path}/same-workspace/C1/messages"),
+            path: format!("{path}/{node}"),
             pushed: qfs_pushdown::PushedQuery::default(),
             schema: Schema::new(vec![]),
             materialize_content: false,
@@ -73,6 +90,51 @@ async fn mounted_read(
         &RequestContext::anonymous(),
     )
     .await
+}
+
+#[tokio::test]
+async fn mounted_slack_file_listing_and_content_use_the_same_selected_account() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-attachment-accounts");
+    seed_accounts();
+    for (path, account, token, payload) in [
+        ("/slack-a", "work-a", "token-a", b"%PDF-1.7\n\0\xffaccount-a\n%%EOF".as_slice()),
+        ("/slack-b", "work-b", "token-b", b"%PDF-1.7\n\0\xfeaccount-b\n%%EOF".as_slice()),
+    ] {
+        bind(path, account, None);
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(200,
+            br#"{"ok":true,"files":[{"id":"F1","name":"report.pdf","mimetype":"application/pdf","size":27,"created":1,"user":"U1"}]}"#.to_vec()));
+        let listing = mounted_read_node(path, "workspace/C1/files", mock.clone()).await.unwrap();
+        assert_eq!(listing.rows[0].values[0], Value::Text("F1".into()));
+        mock.push_response(qfs_driver_http::HttpResponse::new(200,
+            br#"{"ok":true,"file":{"id":"F1","url_private":"https://files.slack.com/files-pri/T1-F1/report.pdf"}}"#.to_vec()));
+        mock.push_response(qfs_driver_http::HttpResponse::new(200, payload.to_vec()));
+        let content = mounted_read_node(path, "workspace/files/F1/content", mock.clone()).await.unwrap();
+        assert_eq!(content.schema.columns[0].name, "content");
+        assert_eq!(content.rows[0].values, vec![Value::Bytes(payload.to_vec())]);
+        let requests = mock.recorded();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].url, "https://slack.com/api/files.list?channel=C1");
+        assert_eq!(requests[1].url, "https://slack.com/api/files.info?file=F1");
+        assert!(requests.iter().all(|req| req.header_value("Authorization") == Some(format!("Bearer {token}").as_str())));
+    }
+}
+
+#[tokio::test]
+async fn mounted_slack_file_read_fails_closed_for_an_inaccessible_selected_account() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-attachment-denied");
+    seed_accounts();
+    bind("/slack-a", "work-a", None);
+    let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+    mock.push_response(qfs_driver_http::HttpResponse::new(200,
+        br#"{"ok":false,"error":"file_not_found"}"#.to_vec()));
+    let error = mounted_read_node("/slack-a", "workspace/files/F1/content", mock.clone()).await.unwrap_err();
+    assert!(error.to_string().contains("slack_file_not_found"));
+    assert_eq!(mock.recorded().len(), 1);
+    bind("/slack-a", "absent", None);
+    let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+    assert!(mounted_read_node("/slack-a", "workspace/files/F1/content", mock.clone()).await.is_err());
+    assert!(mock.recorded().is_empty());
 }
 
 fn mounted_registry(
