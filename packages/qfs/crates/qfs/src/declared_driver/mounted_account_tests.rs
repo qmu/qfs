@@ -378,12 +378,68 @@ fn service_read_failure_has_a_non_usage_exit_code_and_preserves_reason() {
         "/rest/slack/conversations.history",
         qfs_driver_http::HttpError::Application {
             code: "channel_not_found",
+            operation: "conversations.history",
+            hint: "check channel membership",
         },
     );
     let err = qfs_exec::ExecError::from_qfs(&err);
     assert_eq!(err.exit_code().code(), 5);
     assert_eq!(err.code, "channel_not_found");
     assert!(err.message.contains("channel_not_found"));
+}
+
+#[test]
+fn slack_text_binding_records_message_and_reply_payloads() {
+    use qfs_exec::{run_oneshot, ErrorKind, ExecCtx, ExecError, OutputFormat, ReadRegistry, StmtSource, Streams};
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-text-binding");
+    seed_accounts();
+    bind("/slack-a", "work-a", None);
+    let mut d = shipped_slack_declared_driver();
+    // A locally installed reply map, using the same pattern as the reported operation.
+    d.maps.push(DeclaredMap {
+        path: "/slack/{ws}/{channel}/messages/{ts}/replies".into(),
+        verb: "INSERT".into(),
+        body: serde_json::to_string(&qfs_exec::parse("INSERT INTO /http/slack/chat.postMessage VALUES ({channel: path.channel, thread_ts: path.ts, text: row.text})").unwrap()).unwrap(),
+        irreversible: false,
+    });
+    let mut engine = qfs_core::Engine::new();
+    engine.mounts.register(Arc::new(declared_describe_mount_with_types("/slack-a", &d, &qfs_core::DeclaredTypeDefs::new()).unwrap())).unwrap();
+    let reads = ReadRegistry::new();
+    for suffix in ["messages", "messages/123.456789/replies"] {
+        for values in ["('hello')", "(text) ('hello')", "(text) (null)"] {
+            let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+            response(&mock);
+            let world = |plan: &qfs_core::Plan| -> Result<(), ExecError> {
+                let (id, registry) = mounted_registry_for("/slack-a", mock.clone(), &d);
+                let caps = CapabilitySet::none().grant(id, &EffectKind::Insert);
+                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                match rt.block_on(Interpreter::with_defaults(registry).commit(plan.clone(), &caps)) {
+                    Ok(out) if out.is_complete() => Ok(()),
+                    other => Err(ExecError::new(ErrorKind::CommitFailed, "commit_failed", format!("{other:?}"))),
+                }
+            };
+            let ctx = ExecCtx { engine: &engine, reads: &reads, world_apply: Some(&world), safety_mode: qfs_core::SafetyMode::default(), transform: None };
+            let source = StmtSource::Expr(format!("insert into /slack-a/workspace/C1/{suffix} values {values}"));
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let code = run_oneshot(&source, &ctx, OutputFormat::Json, true, false, &mut Streams { out: &mut out, err: &mut err }).code();
+            if values != "(text) ('hello')" {
+                assert_eq!(code, 5, "{}", String::from_utf8_lossy(&err));
+                let diagnostic = String::from_utf8_lossy(&err);
+                assert!(diagnostic.contains("chat.postMessage") && diagnostic.contains("explicit input column bindings"), "{diagnostic}");
+                assert!(!diagnostic.contains("hello") && !diagnostic.contains("token-a"));
+                assert!(mock.recorded().is_empty(), "invalid text must send nothing");
+                continue;
+            }
+            assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+            let recorded = mock.recorded();
+            assert_eq!(recorded.len(), 1);
+            let body: serde_json::Value = serde_json::from_slice(recorded[0].body.as_ref().unwrap()).unwrap();
+            eprintln!("{suffix} VALUES {values}: {body}");
+            assert_eq!(body["channel"], "C1");
+            assert_eq!(body["text"], if values == "(text) ('hello')" { serde_json::json!("hello") } else { serde_json::Value::Null });
+            if suffix.ends_with("replies") { assert_eq!(body["thread_ts"], "123.456789"); }
+        }
+    }
 }
 
 fn parsed_mount_plan(path: &str, d: &DeclaredDriver, source: &str) -> qfs_core::Plan {

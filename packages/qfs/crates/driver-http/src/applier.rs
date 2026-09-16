@@ -134,11 +134,51 @@ impl RestApplier {
         for (name, value) in &effect.override_headers {
             req = req.header(name.clone(), value.clone());
         }
-        req = self.inject_auth(req)?;
         if let Some(body) = &effect.body {
             req = req.with_body(body.clone());
         }
-        Ok(req)
+        self.validate_request(&req)?;
+        self.inject_auth(req)
+    }
+
+    /// Validate content before credential lookup or network I/O. Rich-content alternatives
+    /// remain valid: a configured text field is not required when another content field exists.
+    fn validate_request(&self, req: &HttpRequest) -> Result<(), HttpError> {
+        if req.method != HttpMethod::Post
+            || !req.header_value("content-type").is_some_and(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("application/json"))
+            })
+        {
+            return Ok(());
+        }
+        for contract in &self.config.request_contracts {
+            let url = format!(
+                "{}/{}",
+                self.config.base_url.trim_end_matches('/'),
+                contract.resource
+            );
+            if req.url.split('?').next() != Some(url.as_str()) {
+                continue;
+            }
+            let body = req
+                .body
+                .as_deref()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok());
+            let present = contract.nonempty_any.iter().any(|field| {
+                match body.as_ref().and_then(|b| b.get(field)) {
+                    Some(serde_json::Value::String(text)) => !text.trim().is_empty(),
+                    Some(serde_json::Value::Array(items)) => !items.is_empty(),
+                    _ => false,
+                }
+            });
+            if !present {
+                return Err(HttpError::Invalid { reason: format!("{} requires nonempty content; check explicit input column bindings (for text use VALUES (text) ('...')); no request sent", safe_operation(req)) });
+            }
+        }
+        Ok(())
     }
 
     /// Resolve the request URL: the `http.get` override verbatim, or the config base URL joined
@@ -202,12 +242,19 @@ impl RestApplier {
 
     /// Validate before decoding, counting an effect or advancing pagination. A malformed
     /// success envelope is an unconfirmed result, never a successful empty response.
-    fn validate_response(&self, response: &HttpResponse) -> Result<(), HttpError> {
+    fn validate_response(
+        &self,
+        req: &HttpRequest,
+        response: &HttpResponse,
+    ) -> Result<(), HttpError> {
         let Some(contract) = &self.config.response_contract else {
             return Ok(());
         };
         let invalid = || HttpError::Application {
             code: "http_response_contract",
+            operation: safe_operation(req),
+            hint:
+                "success was not confirmed; inspect the installed response contract before retrying",
         };
         let body: serde_json::Value =
             serde_json::from_slice(&response.body).map_err(|_| invalid())?;
@@ -234,11 +281,30 @@ impl RestApplier {
                     Some("account_inactive") => "account_inactive",
                     Some("no_permission") => "no_permission",
                     Some("invalid_arguments") => "invalid_arguments",
+                    Some("no_text") => "no_text",
+                    Some("msg_too_long") => "msg_too_long",
+                    Some("invalid_blocks") => "invalid_blocks",
                     Some("thread_not_found") => "thread_not_found",
                     Some("ratelimited") => "ratelimited",
-                    _ => "service_rejected",
+                    Some(_) => "service_rejected",
+                    None => "service_error_malformed",
                 };
-                Err(HttpError::Application { code })
+                let hint = match code {
+                    "no_text" => "bind message text explicitly with VALUES (text) ('...')",
+                    "missing_scope" | "no_permission" => "check the selected account's scopes and permissions",
+                    "not_in_channel" | "channel_not_found" | "thread_not_found" => "check channel membership and the requested channel or thread",
+                    "invalid_auth" | "not_authed" | "token_revoked" | "account_inactive" => "check the selected account credential without switching accounts",
+                    "msg_too_long" => "shorten the message text",
+                    "invalid_blocks" | "invalid_arguments" | "missing_post_type" | "invalid_post_type" => "check the installed write map and required argument bindings",
+                    "ratelimited" => "wait for the service rate limit before a deliberate retry",
+                    "service_error_malformed" => "the failure envelope has no string error code; inspect the installed response contract",
+                    _ => "unrecognized upstream error code withheld; check the installed write map, required bindings and selected account permissions before retrying",
+                };
+                Err(HttpError::Application {
+                    code,
+                    operation: safe_operation(req),
+                    hint,
+                })
             }
             None => Err(invalid()),
         }
@@ -263,7 +329,7 @@ impl RestApplier {
             "rest request"
         );
         if resp.is_success() {
-            self.validate_response(&resp)?;
+            self.validate_response(req, &resp)?;
             Ok(resp)
         } else {
             Err(HttpError::from_status(
@@ -349,6 +415,27 @@ impl RestApplier {
                 detail: other.to_string(),
             },
         })
+    }
+}
+
+/// Never echo URL components: even an identifier-shaped value may be secret-bearing.
+fn safe_operation(req: &HttpRequest) -> &'static str {
+    match req.url.split('?').next().unwrap_or("").rsplit('/').next() {
+        Some("chat.postMessage") => "chat.postMessage",
+        Some("chat.update") => "chat.update",
+        Some("chat.delete") => "chat.delete",
+        Some("conversations.history") => "conversations.history",
+        Some("conversations.replies") => "conversations.replies",
+        Some("conversations.list") => "conversations.list",
+        Some("search.messages") => "search.messages",
+        _ => match req.method {
+            HttpMethod::Get => "HTTP GET",
+            HttpMethod::Post => "HTTP POST",
+            HttpMethod::Put => "HTTP PUT",
+            HttpMethod::Delete => "HTTP DELETE",
+            HttpMethod::Patch => "HTTP PATCH",
+            _ => "HTTP request",
+        },
     }
 }
 

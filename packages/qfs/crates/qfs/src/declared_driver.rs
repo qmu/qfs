@@ -408,6 +408,17 @@ impl DeclaredDriver {
         // composition, including existing stored declarations and renamed driver instances.
         // Exact API bases only: another host/path may legitimately use `ok` as business data.
         if self.base_url.trim_end_matches('/') == "https://slack.com/api" {
+            config
+                .request_contracts
+                .push(qfs_driver_http::JsonRequestContract {
+                    resource: "chat.postMessage".into(),
+                    nonempty_any: vec![
+                        "text".into(),
+                        "blocks".into(),
+                        "attachments".into(),
+                        "markdown_text".into(),
+                    ],
+                });
             config.response_contract = Some(qfs_driver_http::JsonResponseContract {
                 success_field: "ok".into(),
                 error_field: "error".into(),
@@ -1604,7 +1615,7 @@ fn declared_param_type(token: &str) -> qfs_core::ColumnType {
 /// Preserve application rejection codes as service failures, rather than blaming query syntax.
 pub(crate) fn read_http_error(path: &str, error: qfs_driver_http::HttpError) -> qfs_core::CfsError {
     match error {
-        qfs_driver_http::HttpError::Application { code } => qfs_core::CfsError::Service {
+        qfs_driver_http::HttpError::Application { code, .. } => qfs_core::CfsError::Service {
             path: path.to_string(),
             code,
         },
