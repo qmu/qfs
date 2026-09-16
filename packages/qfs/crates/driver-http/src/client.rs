@@ -32,6 +32,8 @@ pub trait HttpClient: Send + Sync {
     fn send_without_redirects(&self, _req: &HttpRequest) -> Result<HttpResponse, HttpError> {
         Err(HttpError::Application {
             code: "http_no_redirect_transport_required",
+            operation: "http.send_without_redirects",
+            hint: "Use an HTTP transport that supports refusing redirects.",
         })
     }
 }
@@ -142,6 +144,8 @@ impl HttpClient for ReqwestClient {
             .build()
             .map_err(|_| HttpError::Application {
                 code: "http_no_redirect_transport_required",
+                operation: "http.send_without_redirects",
+                hint: "Check the HTTP client configuration and retry creating the no-redirect transport.",
             })?;
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
