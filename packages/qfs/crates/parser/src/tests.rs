@@ -2968,3 +2968,16 @@ fn create_view_still_parses_as_server_ddl_not_a_table() {
     let stmt = parse_ok("CREATE VIEW top_orders AS /sql/shop/orders |> limit 5");
     assert!(matches!(stmt, Statement::Ddl(_)), "got {stmt:?}");
 }
+
+#[test]
+fn call_hyphenated_mount_qualifiers_are_contiguous_names() {
+    for driver in ["slack", "slack-a", "slack-cdx01-qmu", "slack-select"] {
+        assert!(parse_statement(&format!("/slack-a/W/C/messages |> CALL {driver}.update(channel => 'C', ts => '1', text => 'hi')")).is_ok());
+    }
+    for driver in ["slack -a", "slack- a", "slack-", "-slack", "slack--a"] {
+        assert!(parse_statement(&format!(
+            "/slack-a/W/C/messages |> CALL {driver}.pin('C', '1')"
+        ))
+        .is_err());
+    }
+}

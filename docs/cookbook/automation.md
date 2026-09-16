@@ -18,7 +18,7 @@ inbox message posts its subject to Slack, forever, unattended:
 ```qfs
 create trigger notify
   on /mail/inbox
-  do insert into /slack/acme/general/messages values (NEW.subject)
+  do insert into /slack/acme/general/messages values (text) (NEW.subject)
 ```
 
 ```text
@@ -87,7 +87,7 @@ Once served, each binding shape wraps a query and fires on a different signal:
 ```qfs
 create trigger notify
   on /mail/inbox
-  do insert into /slack/acme/general/messages values (NEW.subject)
+  do insert into /slack/acme/general/messages values (text) (NEW.subject)
 ```
 
 **Only escalate high-priority mail** — triggers can filter on the new row with `NEW`:
@@ -96,7 +96,7 @@ create trigger notify
 create trigger escalate
   on /mail/inbox
   where NEW.priority > 3
-  do insert into /slack/acme/ops/messages values ('urgent mail')
+  do insert into /slack/acme/ops/messages values (text) ('urgent mail')
 ```
 
 ::: warning Object-store write targets aren't wired yet
