@@ -42,3 +42,24 @@ Each advertised procedure is reachable on a named/hyphenated mount and uses only
 ## Considerations
 
 Source history 277504f binds authentication by connection path; preserve that boundary. Do not silently omit useful procedures if the existing language can express them. Error handling overlaps #108 and remains in its ticket.
+
+## Final Report
+
+The existing CALL parser accepted a single identifier as the driver qualifier, so the mount names
+advertised for `/slack-a` and `/slack-b` failed before procedure resolution. The existing mount
+adapter already rewrites qualified procedure IDs and binds authentication by connection path.
+
+Added a CALL-only parser for contiguous hyphen-separated qualifier words. Spaced, incomplete and
+double hyphens remain rejected; ordinary expression parsing is unchanged. The cookbook now shows
+`/slack-a/... |> CALL slack-a.react(...)` and explains that the source and qualifier select the
+same mounted account. The default `slack.action` forms remain supported.
+
+Verification: all five advertised procedures (react, pin, unpin, update, delete) run through the
+actual parser, evaluator, mount adapter, interpreter COMMIT and recording HTTP transport on each
+of two separately authenticated mounts. Assertions cover lookup-before-write ordering, complete
+payloads, endpoint, credential, and the advertised irreversible flag. Missing source/qualifier
+mounts and invalid arguments are rejected. Existing default-mount and lookup/refusal tests remain
+green. Workspace tests passed (2806); the XDG-unset serial qfs library passed (533, one existing
+ignored); clippy, formatting, generated checks, plugin distribution/11 fixtures and docs build passed.
+
+The unit preserves the credential boundary and performs no real Slack calls or deployment.

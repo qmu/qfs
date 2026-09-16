@@ -1290,7 +1290,7 @@ fn switch_arm_write(input: &mut Stream<'_>) -> ModalResult<ArmWrite> {
 /// names are strings resolved later (capability gating deferred to E2).
 fn call_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
     let call_span = kw(Keyword::Call).parse_next(input)?;
-    let driver = ident(input)?;
+    let driver = call_driver(input)?;
     let _ = punct(Token::Dot).parse_next(input)?;
     // The action sits in a NAME position, so a keyword-shaped procedure name reads as its canonical
     // text — the same ruling `CREATE MAP CALL <drv>.<action>` already makes. Without it a registry
@@ -1304,6 +1304,26 @@ fn call_op(input: &mut Stream<'_>) -> ModalResult<PipeOp> {
         args,
         span: Span::new(call_span.start, end),
     }))
+}
+
+/// A mount qualifier may contain adjacent hyphen-separated words. Keep this in the
+/// CALL name position so ordinary subtraction and column identifiers stay unchanged.
+fn call_driver(input: &mut Stream<'_>) -> ModalResult<Spanned<Ident>> {
+    let mut driver = ident(input)?;
+    while let Some(token) = input.first() {
+        if token.node != Token::Minus || token.span.start != driver.span.end {
+            break;
+        }
+        let dash = punct(Token::Minus).parse_next(input)?;
+        let part = action_word(input)?;
+        if part.span.start != dash.end {
+            return fail.parse_next(input);
+        }
+        driver.node.push('-');
+        driver.node.push_str(&part.node);
+        driver.span.end = part.span.end;
+    }
+    Ok(driver)
 }
 
 /// `( arg, … )` for a `CALL`, each arg positional or `name => value`.
