@@ -5,7 +5,35 @@ use super::*;
 use qfs_types::{Column, ColumnType, Row, Schema, Value};
 
 fn failure(code: &'static str) -> HttpError {
-    HttpError::Application { code }
+    let hint = match code {
+        "slack_file_requires_authenticated_slack_mount" => {
+            "Use an authenticated Slack mount for the selected account."
+        }
+        "slack_file_invalid_id" => "Use the Slack file ID from the room file listing.",
+        "slack_file_not_found" => {
+            "Check that the file exists and is visible to the selected account."
+        }
+        "slack_file_missing_scope" => {
+            "Grant files:read to the selected Slack account and reconnect."
+        }
+        "slack_file_auth_failed" => "Reconnect the selected Slack account.",
+        "slack_file_access_denied" => {
+            "Check the selected account's access to the file and its room."
+        }
+        "slack_file_download_unavailable" => {
+            "Check that Slack provides a private download for this file."
+        }
+        "slack_file_redirect_refused" | "slack_file_untrusted_url" => {
+            "Use a file with a direct private download on files.slack.com; redirects are refused."
+        }
+        "slack_file_invalid_metadata" => "Retry the file lookup and check Slack's file metadata.",
+        _ => "Check Slack service availability and retry the file read.",
+    };
+    HttpError::Application {
+        code,
+        operation: "slack.files.content",
+        hint,
+    }
 }
 
 impl RestApplier {
