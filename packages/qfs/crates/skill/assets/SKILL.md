@@ -184,7 +184,7 @@ relational op after a codec errors `codec_then_query`.
    both address the channel — ordinary path segments. Use the bare form in a write target.)
 2. **Statement + PREVIEW (after mounting `/slack`)** — append a message (reversible `INSERT`):
    ```text
-   insert into /slack/acme/general/messages values ('Deploy finished')
+   insert into /slack/acme/general/messages values (text) ('Deploy finished')
    ```
 3. **Needs a mounted account** — `/slack/acme/general/messages |> limit 5` fails closed (exit 3,
    `kind: capability`) until the mount exists: `printf %s "$SLACK_TOKEN" | qfs account add slack acme`,
