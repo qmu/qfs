@@ -1,6 +1,7 @@
 # stories
 
 <!-- okf:generated:begin -->
+* [work-20260916-083806](work-20260916-083806.md) - Repair Slack posting examples and calls on named mounts
 * [work-20260916-071056](work-20260916-071056.md)
 * [Verify Codex distribution and routed preview guidance](work-20260907-205639.md) - QFS now verifies its shared Codex plugin distribution and teaches the routed-mount prerequisite for write previews.
 * [Reject Slack API failures instead of reporting successful commits](work-20260907-182337.md) - Slack application failures now produce actionable errors and nonzero exits; JSON request bodies declare their content type.

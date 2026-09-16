@@ -308,7 +308,7 @@ pub fn render_server() -> String {
         "```qfs\n\
          create policy readmail ALLOW select ON mail;\n\
          create endpoint recent on 'GET /recent' policy readmail as /mail/inbox |> limit 5;\n\
-         create trigger notify on /mail/inbox do insert into /slack/acme/general/messages values (NEW.subject);\n\
+         create trigger notify on /mail/inbox do insert into /slack/acme/general/messages values (text) (NEW.subject);\n\
          create job nightly every '1h' do remove /tmp/scratch where age > 7;\n\
          create policy api ALLOW select DENY insert, update, remove, call;\n\
          ```\n"

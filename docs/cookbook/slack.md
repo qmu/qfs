@@ -94,7 +94,7 @@ appends a message, and previews before it sends anything:
 
 ```qfs
 insert into /slack/acme/general/messages
-  values ('Deploy finished ✅')
+  values (text) ('Deploy finished ✅')
 ```
 
 ```text
@@ -187,8 +187,8 @@ The token determines the actual workspace and sender; changing the `{ws}` segmen
 connection does not change authentication. Use each workspace's actual channel ID:
 
 ```sh
-qfs run -e "insert into /slack-a/acme/C0123456789/messages values ('Hello from work-a')"
-qfs run -e "insert into /slack-b/beta/C9876543210/messages values ('Hello from work-b')"
+qfs run -e "insert into /slack-a/acme/C0123456789/messages values (text) ('Hello from work-a')"
+qfs run -e "insert into /slack-b/beta/C9876543210/messages values (text) ('Hello from work-b')"
 ```
 
 These commands preview. Add `--commit` to send. If the selected account is missing or locally
@@ -358,7 +358,7 @@ until `--commit`:
 
 ```qfs
 insert into /slack/acme/general/messages
-  values ('Deploy finished ✅')
+  values (text) ('Deploy finished ✅')
 ```
 
 ```text
@@ -372,11 +372,27 @@ Want a deploy to post to Slack by itself? Wire it up once with a trigger — see
 [Automation](/cookbook/automation).
 :::
 
-::: tip One positional value binds to `text`
-`values ('…')` with a single value posts that text — the bare form above and the explicit
-`values (text) ('…')` form are equivalent, and both apply the same at `--commit` as they preview.
-Reach for the named-column form (`values (text) ('…')`) when a row also carries other columns.
+::: tip Bind the message column explicitly
+Use `values (text) ('…')`: the column list comes **after** `values`.
+Positional input follows the described schema order and can populate `ts` instead of `text`.
+Explicit columns keep the intended message binding when that schema changes.
 :::
+
+## Call a procedure on the selected account
+
+Use the procedure qualifier advertised by `qfs describe /slack-a --json`.
+The qualifier is the mount name without its leading slash; hyphens stay in the name:
+
+```qfs
+/slack-a/acme/general/messages
+|> call slack-a.react(channel => 'general', ts => '1780000000.123456', emoji => 'eyes')
+```
+
+The source and qualifier select the same mount. The channel lookup and write both use that
+mount's bound account. `slack.react` still addresses the default `/slack` mount; it does not
+mean the account selected by a `/slack-a` source. The advertised `pin`, `unpin`, `update`,
+and `delete` procedures use the same qualifier. Typed arguments and irreversible confirmation
+requirements remain those reported by DESCRIBE.
 
 ## Post as yourself (a user token)
 
@@ -400,7 +416,7 @@ qfs connect /slack-me --driver slack --account me     # its own mount, bound to 
 
 ```qfs
 insert into /slack-me/acme/general/messages
-  values ('Sent from my own account 👋')
+  values (text) ('Sent from my own account 👋')
 ```
 
 ::: warning The app page shows only the installer's token
