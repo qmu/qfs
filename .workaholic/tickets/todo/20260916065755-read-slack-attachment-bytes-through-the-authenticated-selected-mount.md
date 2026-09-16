@@ -6,6 +6,7 @@ depends_on:
 feedback: [20260916065746-fb-support-authenticated-slack-attachment-downloads-through-the-selected-qfs-mount.md]
 merge_policy:
 verification_handoff: 
+claim: work-20260916-091802
 ---
 
 # Read Slack attachment bytes through the authenticated selected mount
