@@ -1368,13 +1368,6 @@ mod tests {
         // The read leg is serve-side ONLY: the CLI's offline run engine never mounts /server,
         // so an offline `/server/endpoints` read is a structured unknown-source failure — which
         // is exactly what keeps the reconcile CLI's host-not-serving refusal honest.
-        //
-        // `run_engine_and_reads` mounts /sys, which resolves the System DB — so this test must
-        // isolate its config home like every other DB-touching test, or it reads the shared
-        // `$HOME/.config/qfs` and races its siblings' migration. Without the guard it passed only
-        // when some sibling happened to leave `XDG_CONFIG_HOME` set, so its suite result was
-        // order-dependent (ticket 20260818060942).
-        let _home = crate::testenv::HomeGuard::new();
         let (engine, _reads, _mode) = crate::shell::run_engine_and_reads();
         let stmt = qfs_exec::parse("/server/endpoints").unwrap();
         assert!(
