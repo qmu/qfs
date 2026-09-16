@@ -139,3 +139,12 @@ the working namespace route replaced it. No failed or interrupted attempt is cou
   independently of local skill links.
 - The archived and queued copies of this ticket coexisted after the earlier implementation;
   checking existing artifacts avoided reimplementing the distribution checker and CI wiring.
+
+### Recovery on current main
+
+Integrated main at d0e49cc, preserving its mounted-write and Slack fixes. The original 0.0.132
+allocation above is historical; this PR now allocates binary 0.0.134. Shared plugin content is
+unchanged by this follow-up and remains 0.22.4. The plugin checker, 12 negative fixtures, exact
+14-skill installation catalog comparison, both generation checks and docs build passed again.
+The earlier isolated Codex host and full Rust suite evidence above was retained; those suites
+were not rerun for this documentation and fixture recovery. Delivery requires current-head CI.
