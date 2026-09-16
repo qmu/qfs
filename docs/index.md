@@ -86,7 +86,7 @@ The `/sql` leg reads today; the GitHub leg needs a connected account —
 ```qfs
 create trigger notify
   on /mail/inbox
-  do insert into /slack/acme/general/messages values (NEW.subject)
+  do insert into /slack/acme/general/messages values (text) (NEW.subject)
 ```
 
 You **preview** each one to see precisely what would happen — the trigger above previews as a
