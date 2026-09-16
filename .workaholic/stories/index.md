@@ -1,6 +1,8 @@
 # stories
 
 <!-- okf:generated:begin -->
+* [work-20260916-102958](work-20260916-102958.md) - Restore combined-main compilation by completing the Slack file and no-redirect HTTP error constructors.
+* [work-20260916-091802](work-20260916-091802.md) - Read Slack attachment bytes through the selected account with confined destinations and no redirects.
 * [work-20260916-083806](work-20260916-083806.md) - Repair Slack posting examples and calls on named mounts
 * [work-20260916-071056](work-20260916-071056.md)
 * [Verify Codex distribution and routed preview guidance](work-20260907-205639.md) - QFS now verifies its shared Codex plugin distribution and teaches the routed-mount prerequisite for write previews.

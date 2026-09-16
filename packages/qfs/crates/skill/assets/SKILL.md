@@ -266,3 +266,14 @@ The loop is identical no matter how you reach qfs, and these surfaces are live t
   (`cp`→`upsert into /path …`, `rm`→`remove …`). `cp` is copy → verify → delete (never lossy); the
   audit ledger is the recovery source of truth.
 - **Secrets never appear.** Not in DESCRIBE, not in logs. Request a `POLICY` for least privilege.
+
+### Slack attachment bytes
+
+After describing the selected Slack mount, list PDFs with
+`/slack-work/acme/C0123/files |> where mimetype == 'application/pdf' |> select id, name`.
+Read the returned file ID through the same mount at `/slack-work/acme/files/F0123/content`;
+the single `content` column is bytes. Copy with
+`/slack-work/acme/files/F0123/content |> upsert into /local/tmp/report.pdf`
+(preview, then commit). The account must have `files:read` and access to the file. Private downloads
+accept only HTTPS `files.slack.com/files-pri/` destinations and refuse redirects; generic FOLLOW
+remains credential-free. Reinstall current Slack declarations when the content node is absent.

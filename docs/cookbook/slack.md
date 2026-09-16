@@ -315,9 +315,43 @@ up in the workspace directory: `/slack/acme/users |> where name == 'alice' |> se
 |> order by created DESC
 ```
 
-The listing carries a file's metadata, not its bytes: qfs reads *what was shared*, and fetching the
-content itself is not part of the Slack surface today (see *What the file surface does not do*
-below).
+### Download an attached PDF through the selected account
+
+Use the mount you discovered and the channel ID returned by its channel listing. List PDFs first,
+then use the returned file ID on that same mount:
+
+```qfs
+/slack-work/acme/C0123/files
+|> where mimetype == 'application/pdf'
+|> select id, name, size
+```
+
+```qfs
+/slack-work/acme/files/F0123/content
+```
+
+The content view returns one `content: bytes` column. Copy it intact to a local file with the
+ordinary blob write (preview, then commit):
+
+```qfs
+/slack-work/acme/files/F0123/content
+|> upsert into /local/tmp/report.pdf
+```
+
+The file ID above stands for one returned by the listing. Inspect its schema with
+`qfs describe /slack-work/acme/files/F0123/content` before reading. Reinstall the current
+`slack_driver.qfs` declarations if an older installation does not advertise the content node.
+
+QFS asks Slack `files.info` with the selected mount account and uses that same account for the
+private download. The account needs `files:read` and access to the file; another account or a
+stored default credential is never a fallback. Missing files, missing scope, unavailable download
+URLs and denied access are reported as errors. The scoped transport accepts only HTTPS URLs under
+`files.slack.com/files-pri/` returned by Slack and refuses all redirects, including same-host
+redirects. External/remote files and other download hosts are unsupported. Generic `FOLLOW`
+continues to send no credential.
+
+Slack documents the authorization header and `files:read` requirement in its
+[file object reference](https://docs.slack.dev/reference/objects/file-object/).
 
 ## Detach a file from Slack
 
@@ -336,16 +370,8 @@ the machine; the id is the one from the listings above.
 
 ### What the file surface does not do
 
-Two operations you might expect are deliberately absent rather than pending, and knowing why saves
-you looking for a spelling that does not exist:
+Uploading remains unsupported:
 
-- **Downloading a file's bytes.** Slack serves file content from `url_private`, which requires the
-  app's bearer token on the download request. qfs's declared `FOLLOW` stage — the primitive that
-  fetches a delivered URL, and the one Chatwork's download rides — sends **no** credential by
-  design, because a delivered URL usually points at a foreign host and the driver's token must not
-  follow it there. So an authorized download is not expressible in the declaration today. Route the
-  bytes through a service whose blob read qfs does carry ([files & object
-  storage](/cookbook/files), [Google Drive](/cookbook/gdrive)).
 - **Uploading a file.** Slack's current upload is a three-call external flow (reserve an upload URL,
   PUT the bytes out-of-band, then complete the share); `files.upload` is retired for new apps. A
   declared map is **one** request, so the flow cannot be written as one — unlike Chatwork's
@@ -463,7 +489,7 @@ working.
 | read the user directory — including looking up a DM peer's `U…` id | either | `users:read` |
 | open a DM (`/slack/<ws>/dms/<user>`) | either | `im:write` |
 | read a DM's messages | either | `im:history` |
-| list the files shared in a channel, a DM, or the workspace | either | `files:read` |
+| list shared files or read their content | either | `files:read` |
 | detach a file (`remove /slack/<ws>/files/<id>`) | either | `files:write` |
 | add a reaction (`slack.react`) | either | `reactions:write` |
 | pin or unpin a message (`slack.pin` / `slack.unpin`) | either | `pins:write` |
