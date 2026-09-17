@@ -333,7 +333,7 @@ mod tests {
         serde_json::to_vec(&serde_json::json!({
             "filename": filename,
             "channel": channel,
-            "content": content.iter().copied().collect::<Vec<u8>>(),
+            "content": content.to_vec(),
         }))
         .unwrap()
     }
