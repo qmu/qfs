@@ -1,9 +1,11 @@
 ---
 created_at: 2026-09-07T18:34:04+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
 merge_policy: review
+claim: work-20260916-073743
 ---
 
 # Verify Codex plugin distribution and prevent shared-skill drift
@@ -78,3 +80,71 @@ The FAQ skill already established directory discovery for Codex. Earlier investi
 - A separately authored base skill is not inherently wrong. Do not duplicate it per agent or force it into a new generation scheme merely to make counts uniform.
 - Existing active missions were inspected; these maintenance tickets are kept standalone rather than expanding an existing mission's completed acceptance scope. `review` records the default merge policy and does not authorize merging this ticket publication PR.
 - Official packaging reference checked during the audit: https://developers.openai.com/plugins/build/plugins . Re-check installation syntax at implementation time.
+
+## Final Report
+
+Completed verification of the existing distribution implementation. PR #106 already landed the
+checker, CI integration, installation guide and an archived copy of this ticket; the survey still
+offered this queued copy. This follow-up corrects the guide's incomplete two-skill catalog and adds
+the omitted missing-registration negative fixture. The existing shared skill tree and generator
+remain authoritative. Binary patch version is 0.0.132; the shared plugin advances to 0.22.4 at the story release boundary.
+
+### Host loading evidence
+
+On 2026-09-16, Codex CLI 0.154.0 successfully executed `codex plugin marketplace add <worktree>
+--json`, `codex plugin add qfs@qfs --json`, and `codex plugin list --json --marketplace qfs` in an
+isolated Codex configuration. Installation returned version 0.22.4; listing returned installed and
+enabled. The official packaging guide above and the installed CLI help were checked again.
+
+A fresh `codex app-server --stdio` received `initialize`, `initialized`, then `skills/list` with
+`cwds` pointing at an empty project and `forceReload: true`. The result had `errors: []`. Assertions
+verified exact equality with the repository's 14 skill directories, every skill enabled, and every
+QFS path under the isolated installed `plugins/cache/qfs/qfs/0.22.4` directory. Loaded names were:
+
+```text
+qfs:qfs, qfs:qfs-automation, qfs:qfs-chatwork, qfs:qfs-cloudflare,
+qfs:qfs-cookbook, qfs:qfs-cross-service, qfs:qfs-databases, qfs:qfs-faq,
+qfs:qfs-files, qfs:qfs-gdrive, qfs:qfs-git, qfs:qfs-github,
+qfs:qfs-gmail, qfs:qfs-slack
+```
+
+This establishes host discovery from the installed cache independently of repository-local links;
+it does not claim to verify a model's later skill selection or live service behavior.
+
+### Quality gate
+
+- `python3 scripts/check-plugin.py`: passed. `python3 scripts/test-check-plugin.py`: 12 passed,
+  including a missing base-skill registration with a marketplace-path-specific diagnostic.
+- `cargo test --workspace`: passed, 2801 tests across 149 reported suites, 2 ignored, 0 failed.
+  Includes xtask recipe/generation tests and CLI integrations.
+- `env -u XDG_CONFIG_HOME cargo test -p qfs --lib -- --test-threads=1`: passed,
+  529 passed, 1 ignored, 0 failed.
+- `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all --check`: passed.
+- `cargo run -p xtask -- gen-docs --check` and `cargo run -p xtask -- gen-skills --check`: in sync.
+- `npm run docs:build`: passed, with the existing large-chunk advisory.
+
+The host `/tmp` filesystem was full. The first workspace attempt stopped at two provisioning
+tests (`StorageFull` on boot-config emission and the resulting missing config file), because their
+intentional `clean_tempdir()` fixture uses `/tmp` independently of `TMPDIR`. The successful workspace
+and serialized runs used the unchanged source and commands inside a private user/mount namespace:
+`unshare --user --map-root-user --mount sh -c 'mount --bind "$TMPDIR/implement-2-isolated-tmp"
+/tmp && exec cargo test --workspace'` and the corresponding serialized command. The host mount and
+other users' files were untouched. A bubblewrap attempt could not execute the Cargo build script;
+the working namespace route replaced it. No failed or interrupted attempt is counted as passed.
+
+### Discovered Insights
+
+- A fresh app-server catalog from an empty project proves installed-plugin discovery, whereas
+  an enabled installation record or a thread opened inside the repository cannot establish this
+  independently of local skill links.
+- The archived and queued copies of this ticket coexisted after the earlier implementation;
+  checking existing artifacts avoided reimplementing the distribution checker and CI wiring.
+
+### Recovery on current main
+
+Integrated main at d0e49cc, preserving its mounted-write and Slack fixes. The original 0.0.132
+allocation above is historical; this PR now allocates binary 0.0.134. Shared plugin content is
+unchanged by this follow-up and remains 0.22.4. The plugin checker, 12 distribution fixtures (11 negative), exact
+14-skill installation catalog comparison, both generation checks and docs build passed again.
+The earlier isolated Codex host and full Rust suite evidence above was retained; those suites
+were not rerun for this documentation and fixture recovery. Delivery requires current-head CI.

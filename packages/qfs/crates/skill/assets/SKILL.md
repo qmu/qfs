@@ -184,7 +184,7 @@ relational op after a codec errors `codec_then_query`.
    both address the channel — ordinary path segments. Use the bare form in a write target.)
 2. **Statement + PREVIEW (after mounting `/slack`)** — append a message (reversible `INSERT`):
    ```text
-   insert into /slack/acme/general/messages values ('Deploy finished')
+   insert into /slack/acme/general/messages values (text) ('Deploy finished')
    ```
 3. **Needs a mounted account** — `/slack/acme/general/messages |> limit 5` fails closed (exit 3,
    `kind: capability`) until the mount exists: `printf %s "$SLACK_TOKEN" | qfs account add slack acme`,
@@ -257,7 +257,8 @@ The loop is identical no matter how you reach qfs, and these surfaces are live t
 
 ## Quick reference
 
-- **PREVIEW is the default.** `qfs run '<stmt>'` previews; add `--commit` to apply.
+- **Writes preview by default; reads execute immediately.** A write target must route to an
+  installed mount before it can preview. Add `--commit` to apply the previewed write.
 - **Irreversible = gate.** `REMOVE`, `CALL mail.send`, `CALL github.merge`. One-shot needs
   `--commit-irreversible`.
 - **Unsupported verb = structured error.** The error lists the `supported:` set — pick from it.
@@ -266,3 +267,14 @@ The loop is identical no matter how you reach qfs, and these surfaces are live t
   (`cp`→`upsert into /path …`, `rm`→`remove …`). `cp` is copy → verify → delete (never lossy); the
   audit ledger is the recovery source of truth.
 - **Secrets never appear.** Not in DESCRIBE, not in logs. Request a `POLICY` for least privilege.
+
+### Slack attachment bytes
+
+After describing the selected Slack mount, list PDFs with
+`/slack-work/acme/C0123/files |> where mimetype == 'application/pdf' |> select id, name`.
+Read the returned file ID through the same mount at `/slack-work/acme/files/F0123/content`;
+the single `content` column is bytes. Copy with
+`/slack-work/acme/files/F0123/content |> upsert into /local/tmp/report.pdf`
+(preview, then commit). The account must have `files:read` and access to the file. Private downloads
+accept only HTTPS `files.slack.com/files-pri/` destinations and refuse redirects; generic FOLLOW
+remains credential-free. Reinstall current Slack declarations when the content node is absent.

@@ -57,6 +57,11 @@ class PluginDistribution(unittest.TestCase):
         self.mutate(".claude-plugin/marketplace.json", lambda m: m["plugins"][0]["skills"].append("./skills/nope"))
         self.assertTrue(any("exactly once" in e for e in CHECKER.check(self.root)))
 
+    def test_missing_registration(self):
+        self.mutate(".claude-plugin/marketplace.json", lambda m: m["plugins"][0]["skills"].remove("./skills/qfs"))
+        self.assertTrue(any(".claude-plugin/marketplace.json: skills must list each actual skill exactly once" in e
+                            for e in CHECKER.check(self.root)))
+
     def test_generated_body_drift(self):
         path = self.root / "plugins/qfs/skills/qfs-slack/SKILL.md"
         path.write_text(path.read_text().replace("A Slack channel is", "A Slack stream is", 1))

@@ -80,12 +80,15 @@ pub fn sys_node_capabilities(node: SysNode) -> Capabilities {
         // The gated write surfaces: SELECT to review, INSERT to grant a policy / set a setting
         // (`/sys/settings` upserts on `key`, e.g. the safety mode — t59) / record a billing tier
         // (`/sys/billing` upserts on `team_id` — t67).
-        // §13 declared drivers: SELECT to review the registry, INSERT to install a declaration (the
-        // desugar target of a `CREATE DRIVER`/`TYPE`/`VIEW`/`MAP` script). Update/remove is the next
-        // ticket's install/uninstall surface.
-        SysNode::Policies | SysNode::Settings | SysNode::Billing | SysNode::Drivers => {
+        SysNode::Policies | SysNode::Settings | SysNode::Billing => {
             Capabilities::from_verbs(&[Verb::Select, Verb::Insert])
         }
+        // §13 declared drivers: SELECT to review the registry, INSERT to install a declaration (the
+        // desugar target of a `CREATE DRIVER`/`TYPE`/`VIEW`/`MAP` script), REMOVE to uninstall one
+        // (the `REMOVE VIEW|MAP|SQL|TYPE|DRIVER` surface — ticket 20260729163000). A mistaken or
+        // experimental declaration is no longer permanent; the applier refuses a driver removal that
+        // would orphan dependent views/maps or a live CONNECT, so REMOVE never silently orphans.
+        SysNode::Drivers => Capabilities::from_verbs(&[Verb::Select, Verb::Insert, Verb::Remove]),
         // The defined-path binding registry (t100020, the CONNECT model): SELECT to review, INSERT
         // to bind/re-bind (`CONNECT` — upsert on `path`), REMOVE to disconnect (`DISCONNECT`). The
         // ONE `/sys` node that accepts REMOVE — a defined path is a user-owned mount the user may

@@ -1,5 +1,6 @@
 ---
 created_at: 2026-07-29T16:30:00+09:00
+status: done
 author: a@qmu.jp
 type: enhancement
 layer: [Domain]
@@ -8,6 +9,7 @@ commit_hash:
 category: Added
 depends_on:
 mission:
+claim: work-20260818-200743
 ---
 
 # A declared view cannot be removed, so a mistaken declaration is permanent in local config
@@ -122,3 +124,71 @@ Provoked by ticket
 `20260728085253-declared-driver-undiscoverable-through-describe.md`, whose own "Related: a
 declared view cannot be removed" section first recorded the gap. Filed as its own ticket rather
 than left as prose, because the corpus only carries tickets.
+
+## Final Report
+
+Development completed as planned. A declared registration (view/map/sql/type/driver) is now
+removable, so a mistaken or experimental declaration is no longer permanent.
+
+### The two design decisions the ticket left open, and how they were resolved
+
+- **Surface verb (scope item 1): `REMOVE <noun>`, not `DROP`.** The codebase has no `DROP` keyword
+  and states in its own comments that "`REMOVE` is the one frozen destructive verb"; every sibling
+  definition-drop is `REMOVE TABLE` / `REMOVE TRANSFORM`. Introducing `DROP` as a frozen keyword
+  would violate the stated no-new-keyword principle (the t31 `AT` lesson). So the inverse verbs are
+  `REMOVE VIEW|MAP|SQL /<path>` and `REMOVE TYPE|DRIVER <name>`, contextual nouns mirroring the
+  existing forms. The SQL-muscle-memory `DROP …` spelling is caught with a pointed error naming the
+  `REMOVE` forms (item 5), replacing the misleading `RESERVED_AS_IDENTIFIER`-on-the-noun complaint.
+- **Storage (scope item 2): a real `DELETE`, not a tombstone.** The eval-layer already chose this:
+  `SysBackend::remove_driver` (the provisioning reconcile's authoritative destroy) does
+  `DELETE FROM sys_drivers … ` and appends a `ddl_event`. A new kind-scoped sibling,
+  `remove_declaration(kind, name)`, does `DELETE … WHERE kind = ? AND name = ?` + the same audit,
+  so a view and a map sharing a node path are dropped independently. A tombstone would have added a
+  second resolution rule to `assemble` for no gain over the append-only ledger the DELETE already
+  audits.
+
+### What changed, by layer
+
+- **Grammar** (`parser/src/grammar.rs`): five `REMOVE <noun>` forms desugar to `REMOVE /sys/drivers
+  WHERE name == '<name>' AND kind == '<kind>'` (both leaves on the WHERE selector); a `drop_stmt`
+  arm rejects `DROP …` with the capability-naming error.
+- **Capability gate** (`driver-sys/src/lib.rs`): `/sys/drivers` gains `Remove` (was `Select`,
+  `Insert` — the "next ticket's install/uninstall surface" the old comment named).
+- **Applier** (`driver-sys/src/applier.rs`): the `(Remove, Drivers)` route reads `name`+`kind` off
+  the selector (falling back to args for the reconcile path), enforces the dependency refusal for a
+  driver removal, and calls the kind-scoped delete. Refusal scans the registry for dependent
+  view/map/sql/lookup rows under the driver's leading segment (item 3) and the `path_binding`
+  registry for a CONNECT still targeting it (item 4), naming both.
+- **One-shot addressing** (`exec/src/addressing.rs`): the noun-skip that already existed for `REMOVE
+  TABLE` generalized — path nouns (`TABLE`/`VIEW`/`MAP`/`SQL`) validate the path after the noun;
+  name nouns (`TYPE`/`DRIVER`/`TRANSFORM`) carry a bare, possibly slash-qualified definition name
+  and are not validated as paths.
+- **Error legibility** (`qfs/src/commit.rs`): a commit-time leg failure was Debug-formatted
+  (`Terminal { reason: "…" }`), which breaches the codebase's own "no Debug struct syntax in
+  operator messages" rule (`exec::codec`). Switched to `Display`, so a refusal reads
+  `terminal effect failure: refused: driver 'x' still has dependent declaration(s): …`.
+
+### Discovered Insights
+
+- **Insight**: the ticket (filed 2026-07-29) was partly overtaken by later work — the eval-layer
+  `remove_driver` + applier `(Remove, Drivers)` route already existed for the provisioning reconcile;
+  only the parse-time capability gate still advertised `[SELECT, INSERT]`, which is why
+  `remove /sys/drivers WHERE …` failed with `unsupported_verb` while the machinery underneath was
+  ready. Re-verifying an aged ticket against the current tree before implementing saved building a
+  backend path that was already there.
+  **Context**: a capability advertised in `sys_node_capabilities` gates at parse time BEFORE the
+  applier is reached, so a route can exist in the applier and still be unreachable from the language.
+- **Insight**: the one-shot addressing check (`exec::addressing`) runs over RAW statement text, not
+  the AST, because the lexer drops a path's leading `/`. So any new `REMOVE <noun>` surface has to
+  teach that lexical guard about its noun too, or the noun itself is mistaken for a relative path —
+  a second, easily-missed place a drop verb lives besides the grammar.
+
+### Also resolved here (out of this ticket's scope, but fixed to keep the gate green)
+
+`packages/qfs/crates/qfs/src/provision.rs`'s `offline_run_engine_does_not_mount_server` test lacked
+`HomeGuard` isolation and passed only when a sibling test happened to leave `XDG_CONFIG_HOME` set —
+so its suite result was order-dependent. It is red on the base branch in isolation; adding this
+unit's tests perturbed the ordering enough to surface it in the full suite. It is wrapped in
+`HomeGuard::new()` here (the remedy the store's own panic prescribes). **This is exactly the defect
+ticket `20260818060942-one-qfs-unit-test-still-reads-the-shared-config-home.md` describes; that
+backlog ticket can be closed as fixed by this PR.**

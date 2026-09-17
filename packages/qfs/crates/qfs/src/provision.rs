@@ -1574,6 +1574,10 @@ mod tests {
             self.removed.lock().unwrap().push(format!("driver:{name}"));
             Ok(1)
         }
+        fn remove_declaration(&self, kind: &str, name: &str) -> Result<u64, SysError> {
+            self.removed.lock().unwrap().push(format!("{kind}:{name}"));
+            Ok(1)
+        }
     }
 
     #[test]

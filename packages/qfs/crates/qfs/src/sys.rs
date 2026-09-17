@@ -741,6 +741,25 @@ impl SysBackend for SystemDbBackend {
             remove_payload_json("driver", "name", name),
         )
     }
+
+    fn remove_declaration(&self, kind: &str, name: &str) -> Result<u64, SysError> {
+        let conn = self.system.lock().map_err(poisoned)?;
+        let tx = conn.unchecked_transaction().map_err(backend)?;
+        let affected = tx
+            .execute(
+                "DELETE FROM sys_drivers WHERE kind = ?1 AND name = ?2",
+                rusqlite::params![kind, name],
+            )
+            .map_err(backend)? as u64;
+        self.audit_and_event_tx(
+            &tx,
+            SysNode::Drivers,
+            "REMOVE",
+            remove_payload_json(kind, "name", name),
+        )?;
+        tx.commit().map_err(backend)?;
+        Ok(affected)
+    }
 }
 
 impl SystemDbBackend {
@@ -1512,6 +1531,9 @@ impl SysBackend for AnonymousSysBackend {
     fn remove_driver(&self, _name: &str) -> Result<u64, SysError> {
         Err(no_system_db())
     }
+    fn remove_declaration(&self, _kind: &str, _name: &str) -> Result<u64, SysError> {
+        Err(no_system_db())
+    }
     fn insert_driver(&self, _row: &RowBatch) -> Result<u64, SysError> {
         Err(no_system_db())
     }
@@ -1529,6 +1551,7 @@ fn sys_error_reason(e: &SysError) -> &'static str {
         SysError::UnknownNode { .. } => "unknown_sys_node",
         SysError::AppendOnly { .. } => "append_only",
         SysError::MalformedEffect { .. } => "malformed_effect",
+        SysError::DependencyRefused { .. } => "dependency_refused",
         SysError::Backend(_) => "read_failed",
     }
 }
@@ -1883,6 +1906,82 @@ mod tests {
         assert!(events[0].payload_json.contains(r#""kind":"driver""#));
         assert!(events[0].payload_json.contains(r#""name":"chatwork""#));
         assert!(!events[0].payload_json.contains("SUPER-SECRET-TOKEN"));
+    }
+
+    /// Ticket 20260729163000: a declared registration is removable by its `(kind, name)` key, it
+    /// disappears from the registry the loader reads, and the drop lands in the audit + DDL event
+    /// log — a mistaken declaration is no longer permanent. A view and a driver sharing no name are
+    /// dropped independently; the kind key means `remove_declaration('view', …)` never touches the
+    /// driver row.
+    #[test]
+    fn remove_declaration_drops_the_kind_scoped_row_and_audits() {
+        let (_d, backend) = fixture_backend();
+        // Install a driver plus a view mounted under it.
+        backend.insert_driver(&driver_payload()).unwrap();
+        let view = {
+            let schema = Schema::new(vec![
+                Column::new("kind", ColumnType::Text, false),
+                Column::new("name", ColumnType::Text, false),
+                Column::new("base_url", ColumnType::Text, true),
+                Column::new("auth", ColumnType::Text, true),
+                Column::new("pagination", ColumnType::Text, true),
+                Column::new("of_type", ColumnType::Text, true),
+                Column::new("verb", ColumnType::Text, true),
+                Column::new("body", ColumnType::Text, true),
+                Column::new("irreversible", ColumnType::Bool, false),
+            ]);
+            RowBatch::new(
+                schema,
+                vec![Row::new(vec![
+                    Value::Text("view".into()),
+                    Value::Text("/chatwork/rooms_raw".into()),
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::Text("{}".into()),
+                    Value::Bool(false),
+                ])],
+            )
+        };
+        backend.insert_driver(&view).unwrap();
+        assert_eq!(
+            texts(&backend.scan(SysNode::Drivers).unwrap(), "name"),
+            vec!["chatwork", "/chatwork/rooms_raw"]
+        );
+
+        // Drop the view by (kind, name); the driver row is untouched.
+        let affected = backend
+            .remove_declaration("view", "/chatwork/rooms_raw")
+            .unwrap();
+        assert_eq!(affected, 1);
+        assert_eq!(
+            texts(&backend.scan(SysNode::Drivers).unwrap(), "name"),
+            vec!["chatwork"],
+            "only the view was removed; the driver survives"
+        );
+
+        // The drop is auditable: a REMOVE row against /sys/drivers, and a DDL event carrying the
+        // kind + name (never a secret).
+        let audit = backend.scan(SysNode::Audit).unwrap();
+        assert!(texts(&audit, "verb").contains(&"REMOVE".to_string()));
+        let events = ddl_events(&backend);
+        let removal = events
+            .iter()
+            .find(|e| e.verb == "REMOVE")
+            .expect("a REMOVE ddl event was recorded");
+        assert_eq!(removal.target_path, "/sys/drivers");
+        assert!(removal.payload_json.contains(r#""kind":"view""#));
+        assert!(removal.payload_json.contains("/chatwork/rooms_raw"));
+
+        // A kind that matches no row is idempotent (0 affected), never an error.
+        assert_eq!(
+            backend
+                .remove_declaration("view", "/chatwork/rooms_raw")
+                .unwrap(),
+            0
+        );
     }
 
     /// Re-installing a declaration REPLACES its `(kind, name, verb)` row (owner ruling

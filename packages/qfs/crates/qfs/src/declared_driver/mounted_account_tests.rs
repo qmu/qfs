@@ -13,6 +13,15 @@ fn account_key(label: &str) -> CredentialKey {
     )
 }
 
+#[test]
+fn shipped_slack_file_content_is_discoverable_as_bytes_on_named_mounts() {
+    let (_, _, mount) = shipped_mount(qfs_skill::SLACK_DRIVER, "slack", "/slack-work");
+    let description = report(&mount, "/slack-work/acme/files/F0123/content");
+    assert_eq!(column_names(&description), ["content"]);
+    assert_eq!(description.columns[0].ty, ColumnType::Bytes);
+    qfs_core::check_capability(&mount, &qfs_core::Path::new("/slack-work/acme/files/F0123/content"), qfs_core::Verb::Select).unwrap();
+}
+
 fn bind(path: &str, account: &str, secret_ref: Option<&str>) {
     crate::path_binding::db_upsert_binding(
         &crate::connection::open_system_conn().unwrap(),
@@ -42,6 +51,14 @@ async fn mounted_read(
     path: &str,
     mock: Arc<qfs_driver_http::MockHttpClient>,
 ) -> Result<RowBatch, qfs_core::CfsError> {
+    mounted_read_node(path, "same-workspace/C1/messages", mock).await
+}
+
+async fn mounted_read_node(
+    path: &str,
+    node: &str,
+    mock: Arc<qfs_driver_http::MockHttpClient>,
+) -> Result<RowBatch, qfs_core::CfsError> {
     let d = shipped_slack_declared_driver();
     let binding =
         crate::path_binding::db_get_binding(&crate::connection::open_system_conn().unwrap(), path)
@@ -65,7 +82,7 @@ async fn mounted_read(
     read.scan(
         &qfs_pushdown::ScanNode {
             source: qfs_pushdown::SourceId::new(path.trim_start_matches('/')),
-            path: format!("{path}/same-workspace/C1/messages"),
+            path: format!("{path}/{node}"),
             pushed: qfs_pushdown::PushedQuery::default(),
             schema: Schema::new(vec![]),
             materialize_content: false,
@@ -75,31 +92,83 @@ async fn mounted_read(
     .await
 }
 
+#[tokio::test]
+async fn mounted_slack_file_listing_and_content_use_the_same_selected_account() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-attachment-accounts");
+    seed_accounts();
+    for (path, account, token, payload) in [
+        ("/slack-a", "work-a", "token-a", b"%PDF-1.7\n\0\xffaccount-a\n%%EOF".as_slice()),
+        ("/slack-b", "work-b", "token-b", b"%PDF-1.7\n\0\xfeaccount-b\n%%EOF".as_slice()),
+    ] {
+        bind(path, account, None);
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(200,
+            br#"{"ok":true,"files":[{"id":"F1","name":"report.pdf","mimetype":"application/pdf","size":27,"created":1,"user":"U1"}]}"#.to_vec()));
+        let listing = mounted_read_node(path, "workspace/C1/files", mock.clone()).await.unwrap();
+        assert_eq!(listing.rows[0].values[0], Value::Text("F1".into()));
+        mock.push_response(qfs_driver_http::HttpResponse::new(200,
+            br#"{"ok":true,"file":{"id":"F1","url_private":"https://files.slack.com/files-pri/T1-F1/report.pdf"}}"#.to_vec()));
+        mock.push_response(qfs_driver_http::HttpResponse::new(200, payload.to_vec()));
+        let content = mounted_read_node(path, "workspace/files/F1/content", mock.clone()).await.unwrap();
+        assert_eq!(content.schema.columns[0].name, "content");
+        assert_eq!(content.rows[0].values, vec![Value::Bytes(payload.to_vec())]);
+        let requests = mock.recorded();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].url, "https://slack.com/api/files.list?channel=C1");
+        assert_eq!(requests[1].url, "https://slack.com/api/files.info?file=F1");
+        assert!(requests.iter().all(|req| req.header_value("Authorization") == Some(format!("Bearer {token}").as_str())));
+    }
+}
+
+#[tokio::test]
+async fn mounted_slack_file_read_fails_closed_for_an_inaccessible_selected_account() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-attachment-denied");
+    seed_accounts();
+    bind("/slack-a", "work-a", None);
+    let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+    mock.push_response(qfs_driver_http::HttpResponse::new(200,
+        br#"{"ok":false,"error":"file_not_found"}"#.to_vec()));
+    let error = mounted_read_node("/slack-a", "workspace/files/F1/content", mock.clone()).await.unwrap_err();
+    assert!(error.to_string().contains("slack_file_not_found"));
+    assert_eq!(mock.recorded().len(), 1);
+    bind("/slack-a", "absent", None);
+    let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+    assert!(mounted_read_node("/slack-a", "workspace/files/F1/content", mock.clone()).await.is_err());
+    assert!(mock.recorded().is_empty());
+}
+
 fn mounted_registry(
     path: &str,
     mock: Arc<qfs_driver_http::MockHttpClient>,
 ) -> (qfs_core::DriverId, DriverRegistry) {
-    let d = shipped_slack_declared_driver();
+    mounted_registry_for(path, mock, &shipped_slack_declared_driver())
+}
+
+fn mounted_registry_for(
+    path: &str,
+    mock: Arc<qfs_driver_http::MockHttpClient>,
+    d: &DeclaredDriver,
+) -> (qfs_core::DriverId, DriverRegistry) {
     let binding =
         crate::path_binding::db_get_binding(&crate::connection::open_system_conn().unwrap(), path)
             .unwrap()
             .unwrap();
     let secrets = declared_secrets(
-        &d,
+        d,
         binding.secret_ref.as_deref(),
         binding.account.as_deref(),
         None,
     );
-    let driver = live_rest_driver(&d, &qfs_core::DeclaredTypeDefs::new(), mock, secrets).unwrap();
+    let driver = live_rest_driver(d, &qfs_core::DeclaredTypeDefs::new(), mock, secrets).unwrap();
     let remap = declared_remap(path, "slack").unwrap();
     let id = remap.outer_id();
     let facet = crate::apply_facets::RestApplyDriver::new(
         Arc::new(qfs_driver_http::rest_apply_driver(&driver)),
         d.name.clone(),
-        crate::declared_eval::map_specs(&d),
-        crate::declared_eval::view_specs(&d, &shipped_slack_types()),
+        crate::declared_eval::map_specs(d),
+        crate::declared_eval::view_specs(d, &shipped_slack_types()),
         driver.rest_applier().clone(),
-        crate::declared_eval::shared_lookups(&d),
+        crate::declared_eval::shared_lookups(d),
     );
     let registry = DriverRegistry::new().with(
         id.clone(),
@@ -371,10 +440,324 @@ fn service_read_failure_has_a_non_usage_exit_code_and_preserves_reason() {
         "/rest/slack/conversations.history",
         qfs_driver_http::HttpError::Application {
             code: "channel_not_found",
+            operation: "conversations.history",
+            hint: "check channel membership",
         },
     );
     let err = qfs_exec::ExecError::from_qfs(&err);
     assert_eq!(err.exit_code().code(), 5);
     assert_eq!(err.code, "channel_not_found");
     assert!(err.message.contains("channel_not_found"));
+}
+
+#[test]
+fn slack_text_binding_records_message_and_reply_payloads() {
+    use qfs_exec::{run_oneshot, ErrorKind, ExecCtx, ExecError, OutputFormat, ReadRegistry, StmtSource, Streams};
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-text-binding");
+    seed_accounts();
+    bind("/slack-a", "work-a", None);
+    let mut d = shipped_slack_declared_driver();
+    // A locally installed reply map, using the same pattern as the reported operation.
+    d.maps.push(DeclaredMap {
+        path: "/slack/{ws}/{channel}/messages/{ts}/replies".into(),
+        verb: "INSERT".into(),
+        body: serde_json::to_string(&qfs_exec::parse("INSERT INTO /http/slack/chat.postMessage VALUES ({channel: path.channel, thread_ts: path.ts, text: row.text})").unwrap()).unwrap(),
+        irreversible: false,
+    });
+    let mut engine = qfs_core::Engine::new();
+    engine.mounts.register(Arc::new(declared_describe_mount_with_types("/slack-a", &d, &qfs_core::DeclaredTypeDefs::new()).unwrap())).unwrap();
+    let reads = ReadRegistry::new();
+    for suffix in ["messages", "messages/123.456789/replies"] {
+        for values in ["('hello')", "(text) ('hello')", "(text) (null)"] {
+            let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+            response(&mock);
+            let world = |plan: &qfs_core::Plan| -> Result<(), ExecError> {
+                let (id, registry) = mounted_registry_for("/slack-a", mock.clone(), &d);
+                let caps = CapabilitySet::none().grant(id, &EffectKind::Insert);
+                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                match rt.block_on(Interpreter::with_defaults(registry).commit(plan.clone(), &caps)) {
+                    Ok(out) if out.is_complete() => Ok(()),
+                    other => Err(ExecError::new(ErrorKind::CommitFailed, "commit_failed", format!("{other:?}"))),
+                }
+            };
+            let ctx = ExecCtx { engine: &engine, reads: &reads, world_apply: Some(&world), safety_mode: qfs_core::SafetyMode::default(), transform: None };
+            let source = StmtSource::Expr(format!("insert into /slack-a/workspace/C1/{suffix} values {values}"));
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let code = run_oneshot(&source, &ctx, OutputFormat::Json, true, false, &mut Streams { out: &mut out, err: &mut err }).code();
+            if values != "(text) ('hello')" {
+                assert_eq!(code, 5, "{}", String::from_utf8_lossy(&err));
+                let diagnostic = String::from_utf8_lossy(&err);
+                assert!(diagnostic.contains("chat.postMessage") && diagnostic.contains("explicit input column bindings"), "{diagnostic}");
+                assert!(!diagnostic.contains("hello") && !diagnostic.contains("token-a"));
+                assert!(mock.recorded().is_empty(), "invalid text must send nothing");
+                continue;
+            }
+            assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+            let recorded = mock.recorded();
+            assert_eq!(recorded.len(), 1);
+            let body: serde_json::Value = serde_json::from_slice(recorded[0].body.as_ref().unwrap()).unwrap();
+            eprintln!("{suffix} VALUES {values}: {body}");
+            assert_eq!(body["channel"], "C1");
+            assert_eq!(body["text"], if values == "(text) ('hello')" { serde_json::json!("hello") } else { serde_json::Value::Null });
+            if suffix.ends_with("replies") { assert_eq!(body["thread_ts"], "123.456789"); }
+        }
+    }
+}
+
+fn parsed_mount_plan(path: &str, d: &DeclaredDriver, source: &str) -> qfs_core::Plan {
+    let mut mounts = qfs_core::MountRegistry::new();
+    mounts
+        .register(Arc::new(
+            declared_describe_mount_with_types(path, d, &qfs_core::DeclaredTypeDefs::new())
+                .unwrap(),
+        ))
+        .unwrap();
+    let stmt = qfs_exec::parse(source).expect("shipped spelling parses");
+    qfs_core::Evaluator::new(&mounts)
+        .eval(&stmt)
+        .expect("selected mount resolves")
+        .as_plan()
+        .unwrap()
+        .clone()
+}
+
+#[tokio::test]
+async fn shipped_slack_post_example_commits_explicit_text() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-explicit-example");
+    seed_accounts();
+    let cookbook = include_str!("../../../../../../docs/cookbook/slack.md");
+    let mut cases = vec![(
+        include_str!("../../../skill/assets/examples/slack.qfs").to_string(),
+        "/slack",
+        "general",
+        "Deploy finished",
+    )];
+    let embedded = qfs_skill::SKILL_MD
+        .lines()
+        .find(|line| line.trim_start().starts_with("insert into /slack/"))
+        .unwrap();
+    cases.push((
+        embedded.trim().to_string(),
+        "/slack",
+        "general",
+        "Deploy finished",
+    ));
+    let recipes: Vec<_> = cookbook
+        .split("```qfs\n")
+        .skip(1)
+        .map(|part| part.split("```").next().unwrap().trim())
+        .filter(|recipe| recipe.starts_with("insert into /slack"))
+        .collect();
+    assert_eq!(
+        recipes.len(),
+        3,
+        "update fixture expectations when adding a posting recipe"
+    );
+    for (recipe, (mount, text)) in recipes.into_iter().zip([
+        ("/slack", "Deploy finished ✅"),
+        ("/slack", "Deploy finished ✅"),
+        ("/slack-me", "Sent from my own account 👋"),
+    ]) {
+        cases.push((recipe.to_string(), mount, "general", text));
+    }
+    let shell: Vec<_> = cookbook
+        .lines()
+        .filter(|line| line.starts_with(r#"qfs run -e "insert into /slack"#))
+        .collect();
+    assert_eq!(shell.len(), 2);
+    for (line, (mount, channel, text)) in shell.into_iter().zip([
+        ("/slack-a", "C0123456789", "Hello from work-a"),
+        ("/slack-b", "C9876543210", "Hello from work-b"),
+    ]) {
+        cases.push((
+            line.split('"').nth(1).unwrap().to_string(),
+            mount,
+            channel,
+            text,
+        ));
+    }
+    for (source, path, channel, text) in cases {
+        bind(path, "work-a", None);
+        let d = shipped_slack_declared_driver();
+        let plan = parsed_mount_plan(path, &d, &source);
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        response(&mock);
+        let (id, registry) = mounted_registry(path, mock.clone());
+        let caps = CapabilitySet::none().grant(id, &EffectKind::Insert);
+        assert!(Interpreter::with_defaults(registry)
+            .commit(plan, &caps)
+            .await
+            .unwrap()
+            .is_complete());
+        let requests = mock.recorded();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(requests[0].body.as_ref().unwrap())
+                .unwrap(),
+            serde_json::json!({"channel":channel,"text":text}),
+            "{source}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn advertised_slack_calls_commit_on_the_selected_hyphenated_mount() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-named-calls");
+    seed_accounts();
+    bind("/slack-a", "work-a", None);
+    bind("/slack-b", "work-b", None);
+    let d = shipped_slack_declared_driver();
+    for (path, token) in [("/slack-a", "token-a"), ("/slack-b", "token-b")] {
+        for proc in d.procedures() {
+            let args = match proc.name.as_str() {
+                "react" => "channel => 'general', ts => '1.1', emoji => 'eyes'",
+                "update" => "channel => 'general', ts => '1.1', text => 'updated'",
+                _ => "channel => 'general', ts => '1.1'",
+            };
+            let source = format!(
+                "{path}/W1/general/messages |> CALL {}.{}({args})",
+                path.trim_start_matches('/'),
+                proc.name
+            );
+            let plan = parsed_mount_plan(path, &d, &source);
+            assert_eq!(plan.nodes()[0].irreversible, proc.irreversible);
+            let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+            mock.push_response(qfs_driver_http::HttpResponse::new(
+                200,
+                SLACK_CHANNELS_FIXTURE.as_bytes().to_vec(),
+            ));
+            response(&mock);
+            let (id, registry) = mounted_registry(path, mock.clone());
+            let kind = EffectKind::Call(qfs_core::ProcId::new(format!(
+                "{}.{}",
+                path.trim_start_matches('/'),
+                proc.name
+            )));
+            let caps = CapabilitySet::none().grant(id, &kind);
+            let outcome = Interpreter::with_defaults(registry)
+                .commit(plan, &caps)
+                .await
+                .unwrap();
+            assert!(outcome.is_complete(), "{source}: {outcome:?}");
+            let requests = mock.recorded();
+            assert_eq!(requests.len(), 2, "{source}");
+            assert!(requests
+                .iter()
+                .all(|r| r.header_value("authorization") == Some(&format!("Bearer {token}"))));
+            let endpoint = match proc.name.as_str() {
+                "react" => "reactions.add",
+                "pin" => "pins.add",
+                "unpin" => "pins.remove",
+                "update" => "chat.update",
+                "delete" => "chat.delete",
+                other => panic!("{other}"),
+            };
+            assert_eq!(requests[1].url, format!("https://slack.com/api/{endpoint}"));
+            let body: serde_json::Value =
+                serde_json::from_slice(requests[1].body.as_ref().unwrap()).unwrap();
+            let expected = match proc.name.as_str() {
+                "react" => serde_json::json!({"channel":"C0EQUIV","timestamp":"1.1","name":"eyes"}),
+                "pin" | "unpin" => serde_json::json!({"channel":"C0EQUIV","timestamp":"1.1"}),
+                "update" => serde_json::json!({"channel":"C0EQUIV","ts":"1.1","text":"updated"}),
+                "delete" => serde_json::json!({"channel":"C0EQUIV","ts":"1.1"}),
+                other => panic!("{other}"),
+            };
+            assert_eq!(body, expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_slack_text_survives_schema_order_and_thread_mapping() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-schema-thread");
+    seed_accounts();
+    bind("/slack-a", "work-a", None);
+    let mut d = shipped_slack_declared_driver();
+    let post = d.maps.iter_mut().find(|m| m.verb == "INSERT").unwrap();
+    post.body = serde_json::to_string(&qfs_exec::parse(
+        "INSERT INTO /http/slack/chat.postMessage VALUES ({channel: path.channel, text: row.text, thread_ts: row.thread_ts})"
+    ).unwrap()).unwrap();
+    for columns in [
+        vec!["ts", "user", "text", "thread_ts", "subtype"],
+        vec!["subtype", "thread_ts", "text", "user", "ts"],
+    ] {
+        let schema = Schema::new(
+            columns
+                .into_iter()
+                .map(|n| Column::new(n, ColumnType::Text, true))
+                .collect(),
+        );
+        let mut types = qfs_core::DeclaredTypeDefs::new();
+        types.insert(
+            "slack/message".into(),
+            qfs_core::ddl::types::ResolvedTypeDef {
+                columns: vec![],
+                schema,
+                refinement: None,
+                column_refinements: vec![],
+            },
+        );
+        let mut mounts = qfs_core::MountRegistry::new();
+        mounts
+            .register(Arc::new(
+                declared_describe_mount_with_types("/slack-a", &d, &types).unwrap(),
+            ))
+            .unwrap();
+        let evaluator = qfs_core::Evaluator::new(&mounts);
+        let positional =
+            qfs_exec::parse("INSERT INTO /slack-a/W/C1/messages VALUES ('reply')").unwrap();
+        let positional = evaluator
+            .eval(&positional)
+            .unwrap()
+            .as_plan()
+            .unwrap()
+            .clone();
+        let args = &positional.nodes()[0].args;
+        assert_ne!(
+            args.schema.columns[0].name, "text",
+            "the old positional spelling binds the first described column"
+        );
+        let source = qfs_exec::parse(
+            "INSERT INTO /slack-a/W/C1/messages VALUES (text, thread_ts) ('reply', '1.000001')",
+        )
+        .unwrap();
+        let plan = evaluator.eval(&source).unwrap().as_plan().unwrap().clone();
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        response(&mock);
+        let (id, registry) = mounted_registry_for("/slack-a", mock.clone(), &d);
+        let caps = CapabilitySet::none().grant(id, &EffectKind::Insert);
+        assert!(Interpreter::with_defaults(registry)
+            .commit(plan, &caps)
+            .await
+            .unwrap()
+            .is_complete());
+        let requests = mock.recorded();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(requests[0].body.as_ref().unwrap())
+                .unwrap(),
+            serde_json::json!({"channel":"C1","text":"reply","thread_ts":"1.000001"})
+        );
+    }
+}
+
+#[test]
+fn named_slack_calls_do_not_resolve_a_missing_mount_or_bad_arguments() {
+    let d = shipped_slack_declared_driver();
+    let mut mounts = qfs_core::MountRegistry::new();
+    mounts
+        .register(Arc::new(
+            declared_describe_mount_with_types("/slack-a", &d, &qfs_core::DeclaredTypeDefs::new())
+                .unwrap(),
+        ))
+        .unwrap();
+    for source in [
+        "/slack-b/W/C/messages |> CALL slack-b.pin('C', '1')",
+        "/slack-a/W/C/messages |> CALL slack-b.pin('C', '1')",
+        "/slack-a/W/C/messages |> CALL slack-a.pin(channel => 'C', emoji => 'eyes')",
+    ] {
+        let stmt = qfs_exec::parse(source).unwrap();
+        assert!(
+            qfs_core::Evaluator::new(&mounts).eval(&stmt).is_err(),
+            "{source}"
+        );
+    }
 }
