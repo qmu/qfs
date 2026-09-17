@@ -136,4 +136,5 @@
 * [[FB] Support authenticated Slack attachment downloads through the selected QFS mount](20260916065746-fb-support-authenticated-slack-attachment-downloads-through-the-selected-qfs-mount.md)
 * [[FB] Untracked /moderate tick logs stop every [Implement] freshen](20260917211211-fb-untracked-moderate-tick-logs-stop-every-implement-freshen.md)
 * [[FB] The loop's Slack destination does not exist, so nothing reaches a person](20260917212108-fb-the-loop-s-slack-destination-does-not-exist-so-nothing-reaches-a-person.md)
+* [Diagnose declared Slack read failures when the same account succeeds through the Web API](20260918022343-diagnose-declared-slack-read-failures-when-the-same-account-succeeds-through-the-web-api.md)
 <!-- okf:generated:end -->
