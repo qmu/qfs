@@ -134,4 +134,5 @@
 * [[FB] Make Slack write failures actionable instead of collapsing upstream errors to service_rejected](20260916065407-fb-make-slack-write-failures-actionable-instead-of-collapsing-upstream-errors-to-service-rejected.md)
 * [[FB] Slack worked example in `qfs skill` posts an empty message, and the correct spelling is ungrammatical](20260916065638-fb-slack-worked-example-in-qfs-skill-posts-an-empty-message-and-the-correct-spelling-is-ungrammatical.md)
 * [[FB] Support authenticated Slack attachment downloads through the selected QFS mount](20260916065746-fb-support-authenticated-slack-attachment-downloads-through-the-selected-qfs-mount.md)
+* [[FB] Untracked /moderate tick logs stop every [Implement] freshen](20260917211211-fb-untracked-moderate-tick-logs-stop-every-implement-freshen.md)
 <!-- okf:generated:end -->
