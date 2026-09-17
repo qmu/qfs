@@ -28,6 +28,7 @@ use crate::error::HttpError;
 use crate::request::{HttpMethod, HttpRequest, HttpResponse};
 
 mod slack_file;
+mod slack_upload;
 
 /// The synchronous REST apply leg. Holds the per-instance config, the resolved response codec,
 /// the HTTP transport client, and the shared secrets surface — all behind `Arc` so the leg is
@@ -83,6 +84,14 @@ impl RestApplier {
     /// happens. Returns the decoded rows alongside the count so the interpreter (E1/E4) can
     /// surface them; the runtime's [`EffectOutput`] carries only the count today.
     fn apply_effect(&self, effect: &HttpEffect) -> Result<(RowBatch, u64), HttpError> {
+        // The scoped Slack upload is three exchanges behind one effect, so it intercepts before
+        // the single-request path — the write-side twin of the read facet's `qfs.file-content`
+        // interception. Everything else is the ordinary, API-neutral REST leg.
+        if resource_segment_of(&effect.vfs_path).as_deref() == Some(slack_upload::RESOURCE) {
+            let rows = self.slack_file_upload(effect.body.as_deref())?;
+            let n = rows.rows.len() as u64;
+            return Ok((rows, n));
+        }
         let base = self.build_request(effect)?;
         // A bodyless GET may paginate; every other method is a single exchange.
         if matches!(effect.method, HttpMethod::Get) && effect.override_url.is_none() {
