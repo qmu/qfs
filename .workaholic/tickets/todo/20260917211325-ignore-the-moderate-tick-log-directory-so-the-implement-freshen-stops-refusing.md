@@ -6,6 +6,7 @@ depends_on:
 feedback: [20260917211211-fb-untracked-moderate-tick-logs-stop-every-implement-freshen.md]
 merge_policy:
 verification_handoff: 
+claim: work-20260917-212851
 ---
 
 # Ignore the /moderate tick-log directory so the [Implement] freshen stops refusing
