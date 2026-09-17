@@ -1,5 +1,6 @@
 ---
 created_at: 2026-09-17T21:13:25+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -130,3 +131,62 @@ clone — the committed `.gitignore` line is what makes the fix real everywhere.
   freshen, as `divergent_residue`. It was stashed, not discarded
   (`git stash list` → `drive-residue: npm-init boilerplate ...`). Whoever intended that change
   should pop and commit it; this ticket does not touch it.
+
+## Final Report
+
+**Outcome**: implemented.
+
+**What changed**: one entry in `.gitignore` (three lines, comment included) —
+`.workaholic/moderations/`, placed in the `.workaholic` area beside the existing
+`.workaholic/leak-denylist` line. No other file is touched.
+
+**Step 1, the refusal reproduced.** Run in an isolated scratch repository rather than by
+removing this server's shared `.git/info/exclude` line (worktrees share that file, and a
+concurrent session freshening against it would have seen the tree go dirty mid-run):
+
+```
+$ mkdir -p .workaholic/moderations && touch .workaholic/moderations/2026-09-17.md
+$ git status --porcelain
+?? .workaholic/
+$ branching/scripts/check-workspace.sh
+{"clean": false, "untracked_count": 1, "unstaged_count": 0, "staged_count": 0, "summary": "1 untracked"}
+```
+
+`"summary": "1 untracked"` is exactly the reading `sync-main.sh` maps to `dirty_workspace`,
+so the refusal is localized to the untracked path and not to the freshen logic. With the
+`.gitignore` line added in the same scratch repository the same reader answers
+`{"clean": true, "untracked_count": 0, ... "summary": ""}`.
+
+`clear-proved-residue.sh` could not be measured in the scratch repository (it answered
+`{"ok": false, "reason": "no_origin"}` — the scratch has no remote); its `untracked_present`
+refusal stands on the ticket's own 2026-09-17 measurement and on its header's stated contract.
+
+**Steps 3-4, verified in this unit's worktree** with the tick-log probe file present:
+
+```
+$ git check-ignore -v .workaholic/moderations/probe.md
+.gitignore:34:.workaholic/moderations/	.workaholic/moderations/probe.md
+$ git ls-files .workaholic/moderations
+$ git status --porcelain
+ M .gitignore
+```
+
+The first line is the acceptance criterion stated in a stronger form than step 4 asked for:
+the **committed** `.gitignore` rule wins the match over the local-only `.git/info/exclude`
+entry, which is still on disk. Git orders `.gitignore` above `.git/info/exclude`, so the
+committed line is what is actually being exercised here — proved without mutating a file
+shared by every worktree of this checkout. `git ls-files` is empty, so the entry hides no
+file already in the index. `M .gitignore` is this change and nothing else; the probe file
+does not appear, which is the whole point.
+
+**Step 5 is deliberately not taken in this commit.** Removing the `.git/info/exclude` lines
+is a local act on this one server and belongs after the committed line reaches `main`, not
+inside the branch that proposes it. It is named in the unit's report so it is not lost.
+
+**Repository gates**: the change edits no Rust, no TypeScript and no generated document, so
+`cargo`/`check-all.sh`/`gen-docs` have nothing to re-check for it. The branch carries nothing
+else.
+
+**Out of scope, carried forward untouched**: `stash@{0}` still holds the `npm init -y`
+boilerplate in `package.json` that an earlier tick set aside. It was not popped, not dropped
+and not committed here.

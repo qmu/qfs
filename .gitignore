@@ -28,3 +28,7 @@ docs/.vitepress/dist/
 
 # The release-scan leak denylist is a list of external names, so it must never itself ship.
 .workaholic/leak-denylist
+
+# /moderate writes its tick log here and deliberately leaves it untracked; without this
+# every sync-main.sh freshen refuses dirty_workspace and the [Implement] loop stalls.
+.workaholic/moderations/
