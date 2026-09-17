@@ -1635,12 +1635,8 @@ pub(crate) fn credential_hint(code: &str) -> &'static str {
     }
 }
 
-/// Preserve application rejection codes as service failures, rather than blaming query syntax.
-pub(crate) fn read_http_error(path: &str, error: qfs_driver_http::HttpError) -> qfs_core::CfsError {
-    read_http_error_at(path, path, error)
-}
-
-/// [`read_http_error`], reporting an **auth** failure against the path the caller addressed
+/// Preserve application rejection codes as service failures, rather than blaming query syntax,
+/// reporting an **auth** failure against the path the caller addressed
 /// (`addressed`) rather than the wire path the view fetched (`wire_path`).
 ///
 /// A credential that did not resolve has nothing to do with the URL the body names: reporting
@@ -2985,9 +2981,9 @@ mod tests {
         let stmts = shipped_statements(script);
         assert_eq!(
             stmts.len(),
-            25,
-            "1 driver + 6 types + 10 views + 1 post map + 1 shared LOOKUP + 5 typed CALL maps + \
-             1 file-detach REMOVE map: {stmts:?}"
+            27,
+            "1 driver + 6 types + 11 views + 1 post map + 1 shared LOOKUP + 5 typed CALL maps + \
+             1 file-detach REMOVE map + 1 file-upload UPSERT map: {stmts:?}"
         );
         for s in &stmts {
             assert!(
@@ -3022,9 +3018,17 @@ mod tests {
         // rather than closer.
         // The scoped file-content type and read add three lines (46 total); no generic FOLLOW
         // credentials or new grammar are introduced by the authenticated transport primitive.
+        //
+        // 51 since the twin stopped being half a file surface and half a channel listing (ticket
+        // 20260918041500): +2 for the `private-channels` sibling view, which is what makes a miss
+        // on `channels` mean something, and +3 for the upload UPSERT map with its own path-keyed
+        // lookup. Both are surface the service HAS and the twin did not, so the number moving is
+        // the twin becoming complete — the calibration concern `the-13-2-calibration-table-was`
+        // now has a twin that covers its service to answer about, which is the more useful
+        // question than whether an incomplete one fit ~40.
         assert!(
-            statement_lines <= 46,
-            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~46 statement-lines); \
+            statement_lines <= 51,
+            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~51 statement-lines); \
              measured {statement_lines}"
         );
         // Host-confinement floor over the shipped bytes: every /http/ reference is /http/slack/.
@@ -3139,8 +3143,9 @@ mod tests {
         let maps = shipped_maps(qfs_skill::SLACK_DRIVER);
         assert_eq!(
             maps.len(),
-            7,
-            "the post map, the five CALL maps, and the file-detach REMOVE map: {maps:?}"
+            8,
+            "the post map, the five CALL maps, the file-detach REMOVE map, and the file-upload \
+             UPSERT map: {maps:?}"
         );
         maps
     }

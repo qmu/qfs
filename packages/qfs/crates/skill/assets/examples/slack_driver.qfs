@@ -156,20 +156,20 @@ CREATE MAP REMOVE /slack/{ws}/files/{file} AS
 -- URL Slack itself delivered and refusing every redirect.
 --
 -- The file is ADDRESSED by name — `upsert into /slack/<ws>/<channel>/files/<name>` — so the round
--- trip reads the way every other blob does: a `content: bytes` row in, a shared file out. The
--- destination channel binds through the shared `slack/cid` lookup, so a human-readable `general`
--- works exactly as it does for the CALL maps above.
+-- trip reads the way every other blob does: a `content: bytes` row in, a shared file out.
+--
+-- The destination is passed through as the caller addressed it, with NO `cid` lookup. Every lookup
+-- this driver can declare searches `/slack/{ws}/channels`, which is Slack's PUBLIC listing, so
+-- resolving through one would make a PRIVATE channel unaddressable — by name (not in the
+-- collection) and by id alike, since the `id ==` arm searches those same public rows. Uploading to
+-- a private channel is a case this exists for, so the map takes the channel ID and Slack's own
+-- refusal names a bad one. That is the shape every Slack path has today; ticket 20260918044700 is
+-- the one place to fix reference resolution for all of them at once.
+--
 -- The body binds exactly the three fields every upload has. `title` and `comment` are NOT bound:
 -- a declared map's `row.<col>` is a column reference, so naming an optional column would refuse
 -- every row that does not carry it — including the one-column `content` row the download view
 -- delivers, which is the round trip this exists for. The primitive still accepts both when a map
 -- supplies them.
--- The destination binds through a map-LOCAL lookup rather than the shared `slack/cid`: the shared
--- one searches by `row.channel`, which a CALL map has as an argument and this map does not — its
--- channel is in the ADDRESS. `path.<param>` is the same lookup asked of the same collection, by the
--- coordinate this map actually carries. A private channel's name is not in the public `channels`
--- collection, so address a private destination by its id (which resolves to itself through the
--- `id ==` arm).
 CREATE MAP UPSERT /slack/{ws}/{channel}/files/{filename} AS
-  LET cid = /slack/{ws}/channels |> WHERE name == path.channel OR id == path.channel |> SELECT id
-  UPSERT INTO /http/slack/qfs.file-upload VALUES ({channel: cid, filename: path.filename, content: row.content});
+  UPSERT INTO /http/slack/qfs.file-upload VALUES ({channel: path.channel, filename: path.filename, content: row.content});

@@ -38,6 +38,10 @@ fn failure(code: &'static str) -> HttpError {
         "slack_upload_access_denied" => {
             "Check the selected account's membership of the destination channel."
         }
+        "slack_upload_channel_unresolved" => {
+            "Address the destination by its channel ID; Slack's complete-upload call does not take \
+             a name. Find the id in the channels or private-channels view."
+        }
         "slack_upload_url_unavailable" => {
             "Slack reserved no upload URL for this file; retry, and check the file size."
         }
@@ -238,9 +242,11 @@ fn ok_envelope(response: &HttpResponse) -> Result<serde_json::Value, HttpError> 
             match json.get("error").and_then(serde_json::Value::as_str) {
                 Some("missing_scope" | "not_allowed_token_type") => "slack_upload_missing_scope",
                 Some("invalid_auth" | "token_revoked" | "not_authed") => "slack_upload_auth_failed",
-                Some("channel_not_found" | "not_in_channel" | "access_denied") => {
-                    "slack_upload_access_denied"
-                }
+                // `channel_not_found` is what Slack answers for a NAME as much as for a channel
+                // the token cannot see, and the first is the likelier mistake — the path segment
+                // is where a human writes `general`. Naming both beats naming neither.
+                Some("channel_not_found") => "slack_upload_channel_unresolved",
+                Some("not_in_channel" | "access_denied") => "slack_upload_access_denied",
                 _ => "slack_upload_rejected",
             },
         ));
@@ -456,6 +462,7 @@ mod tests {
             ("missing_scope", "slack_upload_missing_scope"),
             ("invalid_auth", "slack_upload_auth_failed"),
             ("not_in_channel", "slack_upload_access_denied"),
+            ("channel_not_found", "slack_upload_channel_unresolved"),
             ("something_else", "slack_upload_rejected"),
         ] {
             let mock = Arc::new(MockHttpClient::new());
