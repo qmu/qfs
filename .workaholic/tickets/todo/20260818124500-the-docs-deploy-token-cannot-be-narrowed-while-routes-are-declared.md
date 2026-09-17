@@ -5,7 +5,7 @@ assignees: [a@qmu.jp]
 depends_on: [the first v0.0.111 tag — the production Worker and its custom domain must exist first]
 mission: [the-documentation-site-publishes-itself-staging-on-merge-production-on-release]
 merge_policy: review
-verification_handoff:
+verification_handoff: Minting and revoking a Cloudflare API token are dashboard acts needing a credential with User -> API Tokens: Edit, which no runner here carries. The repository-secret swap and its verification need a session whose GitHub access is not the unattended proxy - a developer session reads and writes repos/qmu/qfs/actions/secrets fine, an unattended one is refused 403 on both.
 ---
 
 # The docs-deploy CI token cannot be narrowed while `routes` are declared
@@ -207,4 +207,129 @@ and minting or revoking a Cloudflare token needs a credential that grants `User 
 Then one merge to `main` confirms it: `curl -sS https://staging-qfs.qmu.co.jp/version.json` should
 report that merge's commit. That command is now known to work from a developer machine, so the
 confirmation costs nothing and needs no workflow archaeology.
+
+
+## Still blocked, and unobservable from here — 2026-08-19 06:4x UTC (work-20260819-063922)
+
+Re-checked by a later unattended `/implement` run. Step 2 is still the whole of what remains and
+is still three console acts this runner cannot perform. What this pass adds is not another
+restatement of that: it is the reason **no unattended run will ever be able to close this ticket**,
+which the three entries above each assumed away by implying a future tick might find the work done.
+
+### The credential check, with the empty-carry tell ruled out
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Cloudflare credential in the environment? | `env \| grep -ci cloudflare` | `0` |
+| Did this worktree actually carry its env file, or silently get none? | `wc -c .env.worktree` then list its keys | present, 77 bytes, holding exactly `WORKAHOLIC_PORT_BASE`, `WORKAHOLIC_DEV_PORT`, `WORKAHOLIC_DOCS_PORT` — carried, and holding no credential |
+| Any other env source at the root? | `ls -a \| grep -i env` | `.env.example`, `.env.worktree` — nothing else |
+
+So this is the checked form of the claim, not the silent-loader form: the file the worktree
+creator carries is present and simply does not hold a Cloudflare token.
+
+### The new fact: the Actions secrets API is refused for reading, not only writing
+
+The entry of 2026-08-18 recorded that *writes* through this session's GitHub proxy are refused.
+Reads of the same surface are refused too — measured this run, verbatim:
+
+```
+$ gh api repos/qmu/qfs/actions/secrets/public-key
+{"message":"Access to this GitHub Actions path is not permitted through this proxy.", ...}
+gh: Access to this GitHub Actions path is not permitted through this proxy. (HTTP 403)
+
+$ gh api repos/qmu/qfs/actions/secrets
+{"message":"Access to this GitHub Actions path is not permitted through this proxy.", ...}
+gh: Access to this GitHub Actions path is not permitted through this proxy. (HTTP 403)
+```
+
+The second call asks only for secret **names and their `updated_at` timestamps** — GitHub never
+returns a secret's value to anybody — and it is refused all the same. That is the load-bearing
+part: a runner cannot see when `CLOUDFLARE_API_TOKEN` was last written.
+
+### Why nothing else can stand in for that observation either
+
+Narrowing the token produces **no observable change anywhere this runner can look**. With no
+`routes` declared, a steady-state `wrangler deploy --env staging` never touches the zone, so a
+narrow token and the wide one both deploy successfully and both leave an identical green
+`ci.yml` run and an identical `version.json`. Token scope is readable only from the Cloudflare
+dashboard, or from `GET /user/tokens/verify` with a credential that this environment does not
+carry. There is therefore no green signal an unattended tick can wait for.
+
+### What this means for the queue
+
+Left as it stands, this ticket is re-offered on every survey, claimed, re-blocked and re-reported
+by every unattended run, indefinitely — four such runs so far, each producing a pull request whose
+only content is a note saying the same human act is outstanding. That is the cost of a ticket
+whose completion is both unperformable and unverifiable from an unattended session.
+
+Two dispositions close the loop, and **both are the developer's to choose** — a run may not pick
+either for itself, and this run did not:
+
+1. **Do the three acts, then archive the ticket by hand.** Nothing else will archive it, because
+   nothing else can confirm them.
+2. **Declare it unverifiable here** — set `verification_handoff:` on the ticket frontmatter to the
+   reason above. The unit then takes the handoff route on sight instead of re-attempting: the PR
+   opens, quotes the reason and stays open, which is the shape this actually is. A drive run is
+   forbidden from writing that field for itself (`workaholic:drive` §6 — the declaration is read
+   off the artifact and never made mid-drive), which is why it is recorded here as a
+   recommendation rather than applied.
+
+Until one of them happens, the exposure is unchanged: `CLOUDFLARE_API_TOKEN` still holds
+`Zone → Workers Routes → Edit` on `qmu.co.jp`, and `.workaholic/deployments/docs-site.md` still
+states that outstanding gap where an operator reads it.
+
+*(Egress note, for completeness and not as evidence: `curl https://staging-qfs.qmu.co.jp/version.json`
+and the production equivalent both returned `curl: (56) CONNECT tunnel failed, response 403` from
+this container, as the 2026-08-19 correction predicts. Step 4 was verified directly on the
+developer's host and is not reopened by that.)*
+
+## Handoff declared, and the "unobservable" finding scoped — 2026-08-21 (developer session)
+
+`verification_handoff:` is now set, which is the disposition the entry above recommends and is
+forbidden from applying to itself. An unattended unit takes the declared-handoff route on sight
+from here on, so the ticket stops being re-offered, re-claimed and re-blocked every survey. That
+ends the loop whether or not this pull request stays open — the parking was the temporary form of
+the same intent.
+
+### One correction to the entry above: the refusal is the proxy's, not GitHub's
+
+That entry reads the read-side 403 as "a runner cannot see when `CLOUDFLARE_API_TOKEN` was last
+written", and concludes there is no signal anyone can wait for. The first half is right about an
+unattended run; the second half is too strong. Measured from a developer session on the owner's
+host, the same endpoints answer:
+
+```
+$ gh secret list -R qmu/qfs
+CLOUDFLARE_ACCOUNT_ID   2026-08-18T12:37:03Z
+CLOUDFLARE_API_TOKEN    2026-08-18T12:36:43Z
+
+$ gh api repos/qmu/qfs/actions/secrets/public-key --jq .key_id
+3380204578043523366
+```
+
+So the 403 is a property of the unattended session's GitHub proxy, exactly as the
+`CONNECT tunnel failed` 403 in the 2026-08-19 correction was a property of its egress proxy. Two
+consequences, both practical:
+
+1. **The swap is observable.** `CLOUDFLARE_API_TOKEN`'s `updated_at` is `2026-08-18T12:36:43Z`
+   today. When it changes, the secret was replaced — that is a real acceptance signal for act 2,
+   and it costs one API call. It does **not** prove the new token's *scope*; only the Cloudflare
+   dashboard or an authenticated `GET /user/tokens/verify` shows that.
+2. **The swap is performable here.** `public-key` answering means a developer session can run
+   `gh secret set CLOUDFLARE_API_TOKEN -R qmu/qfs`. Act 2 of the three is therefore not a
+   dashboard act at all; acts 1 and 3 — minting and revoking — still are, because they need a
+   credential holding `User → API Tokens: Edit`, which nothing here carries.
+
+### What remains, stated exactly
+
+| Act | Needs | Can a developer session do it? |
+| --- | --- | --- |
+| 1. Mint a token with only `Account → Workers Scripts: Edit` + `Account → Account Settings: Read` | Cloudflare dashboard | No |
+| 2. Replace the `CLOUDFLARE_API_TOKEN` repository secret | GitHub admin on `qmu/qfs` | **Yes** — `gh secret set` |
+| 3. Revoke the wide token | Cloudflare dashboard | No |
+
+Acceptance, once done: `gh secret list -R qmu/qfs` shows a newer `updated_at` for
+`CLOUDFLARE_API_TOKEN`, and one merge to `main` still publishes —
+`curl -sS https://staging-qfs.qmu.co.jp/version.json` reports that merge's commit. The scope
+itself is confirmed in the dashboard, by the person who minted it.
 
