@@ -6,6 +6,7 @@ depends_on:
 feedback: [20260918022343-diagnose-declared-slack-read-failures-when-the-same-account-succeeds-through-the-web-api.md]
 merge_policy:
 verification_handoff: 
+claim: work-20260918-023508
 ---
 
 # Say what the declared view body evaluation actually failed at, and fix the Slack replies read it is masking
