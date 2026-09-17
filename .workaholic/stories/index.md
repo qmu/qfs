@@ -1,6 +1,7 @@
 # stories
 
 <!-- okf:generated:begin -->
+* [work-20260918-040100](work-20260918-040100.md) - Slack gains file upload and private-channel discovery, and a credential that cannot be resolved says which one and why
 * [work-20260917-212851](work-20260917-212851.md) - Ignore the /moderate tick-log directory so every [Implement] freshen stops refusing a dirty workspace
 * [work-20260916-102958](work-20260916-102958.md) - Restore combined-main compilation by completing the Slack file and no-redirect HTTP error constructors.
 * [work-20260916-091802](work-20260916-091802.md) - Read Slack attachment bytes through the selected account with confined destinations and no redirects.
