@@ -382,11 +382,11 @@ write and the round trip reads symmetrically — read a `content: bytes` row, wr
 
 ```qfs
 /slack-work/acme/files/F0123/content
-|> upsert into /slack-work/acme/general/files/report.pdf
+|> upsert into /slack-work/acme/C0123456789/files/report.pdf
 ```
 
 ```text
-qfs run -e "/slack-work/acme/files/F0123/content |> upsert into /slack-work/acme/general/files/report.pdf" --commit
+qfs run -e "/slack-work/acme/files/F0123/content |> upsert into /slack-work/acme/C0123456789/files/report.pdf" --commit
 ```
 
 Any one-row `content: bytes` source works the same way — a local file, a Drive download, a
@@ -394,11 +394,15 @@ Chatwork attachment:
 
 ```qfs
 /local/tmp/report.pdf
-|> upsert into /slack-work/acme/general/files/report.pdf
+|> upsert into /slack-work/acme/C0123456789/files/report.pdf
 ```
 
-The channel segment takes a name or an id, resolved exactly as `slack.react` resolves it. The
-account needs `files:write` and membership of the destination channel. The upload previews like
+**Address the destination by its channel ID.** Slack's complete-upload call takes an id, and no
+lookup can supply one for a private channel: every listing a declaration can search is the public
+one. A name therefore comes back as `slack_upload_channel_unresolved`, which says exactly that
+rather than implying the app was never invited. Find the id in `channels` or `private-channels`.
+
+The account needs `files:write` and membership of the destination channel. The upload previews like
 every other write and sends nothing until `--commit`.
 
 Slack retired the single-call `files.upload`, and its replacement is three calls: reserve an upload
