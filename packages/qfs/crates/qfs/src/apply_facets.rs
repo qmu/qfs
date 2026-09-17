@@ -124,7 +124,13 @@ impl RestApplyDriver {
                             ),
                             None => qfs_driver_http::rest_read_rows(&self.applier, rest_path),
                         };
-                        result.map_err(|e| crate::declared_driver::read_http_error(rest_path, e))
+                        result.map_err(|e| {
+                            crate::declared_driver::read_http_error_at(
+                                rest_path,
+                                &lookup.source_path,
+                                e,
+                            )
+                        })
                     },
                     |url| {
                         self.applier.follow_bytes(url).map_err(|e| {

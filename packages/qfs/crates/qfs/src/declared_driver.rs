@@ -1612,15 +1612,60 @@ fn declared_param_type(token: &str) -> qfs_core::ColumnType {
     }
 }
 
+/// The action that clears a credential which did not resolve, chosen from the store's own
+/// secret-free code ([`qfs_secrets::SecretError::code`]). The codes are a closed vocabulary, so
+/// the hint is a constant: no credential, account label or store path is interpolated into it.
+pub(crate) fn credential_hint(code: &str) -> &'static str {
+    match code {
+        "secret_locked" => crate::shell::LOCKED_STORE_HINT,
+        "secret_not_found" => {
+            "no credential is stored for the account this mount binds — authorize it (`qfs \
+             account add <provider> <label>`) and bind it (`qfs connect <path> --driver <driver> \
+             --account <label>`)"
+        }
+        "secret_revoked" => {
+            "the credential this mount binds is revoked and will not be resolved — re-mint it \
+             with `qfs account rotate <provider> <label>`, which replaces the secret and clears \
+             the revocation"
+        }
+        _ => {
+            "the credential this mount binds could not be resolved — check what it is bound to \
+             with `qfs connect --list`"
+        }
+    }
+}
+
 /// Preserve application rejection codes as service failures, rather than blaming query syntax.
 pub(crate) fn read_http_error(path: &str, error: qfs_driver_http::HttpError) -> qfs_core::CfsError {
+    read_http_error_at(path, path, error)
+}
+
+/// [`read_http_error`], reporting an **auth** failure against the path the caller addressed
+/// (`addressed`) rather than the wire path the view fetched (`wire_path`).
+///
+/// A credential that did not resolve has nothing to do with the URL the body names: reporting
+/// `/rest/slack/conversations.list` — a path nobody typed and cannot connect — is what made a
+/// locked vault read as a malformed path (ticket `20260918040200`). Every other class stays on
+/// the wire path, which is exactly where a service rejection or a transport failure happened.
+pub(crate) fn read_http_error_at(
+    wire_path: &str,
+    addressed: &str,
+    error: qfs_driver_http::HttpError,
+) -> qfs_core::CfsError {
     match error {
         qfs_driver_http::HttpError::Application { code, .. } => qfs_core::CfsError::Service {
-            path: path.to_string(),
+            path: wire_path.to_string(),
             code,
         },
+        // The store told us WHY (locked / absent / revoked / backend). Carry that code through
+        // with the action that clears it, instead of collapsing all four into `http_auth`.
+        qfs_driver_http::HttpError::Auth { code } => qfs_core::CfsError::Auth {
+            path: addressed.to_string(),
+            code,
+            hint: credential_hint(code),
+        },
         other => qfs_core::CfsError::InvalidPath {
-            path: path.to_string(),
+            path: wire_path.to_string(),
             reason: other.code(),
         },
     }

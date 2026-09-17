@@ -177,6 +177,10 @@ impl ExecError {
                 ErrorKind::Capability
             }
             CfsError::InvalidPath { .. } => ErrorKind::Usage,
+            // A credential that did not RESOLVE is the auth class (exit 6), never usage (exit 2).
+            // The path was right, the mount was right; the key is missing, locked or revoked, and
+            // the only recovery is on the credential — not on the query (ticket `20260918040200`).
+            CfsError::Auth { .. } => ErrorKind::Auth,
             CfsError::Service { .. } => ErrorKind::CommitFailed,
             CfsError::Decode { .. } | CfsError::Encode { .. } => ErrorKind::Internal,
             CfsError::DuplicateRegistration(_) | CfsError::NotImplemented { .. } => {
@@ -195,6 +199,12 @@ impl ExecError {
         }
         if let CfsError::InvalidPath { path, .. } | CfsError::Service { path, .. } = err {
             out.path = Some(path.clone());
+        }
+        // The auth failure carries both coordinates a reader needs: the path that could not be
+        // authorized, and the store's own code for WHY — locked vs absent vs revoked.
+        if let CfsError::Auth { path, code, .. } = err {
+            out.path = Some(path.clone());
+            out.detail = Some((*code).to_string());
         }
         out
     }
