@@ -45,6 +45,16 @@ CREATE TYPE slack/file_content ( content bytes );
 CREATE VIEW /slack/{ws}/channels OF slack/channel AS
   /http/slack/conversations.list |> DECODE json |> EXPAND channels;
 
+-- Private discovery is its OWN view, never a `types=` widening of `/channels`. Slack's
+-- `conversations.list` defaults to `types=public_channel`; asking for private channels additionally
+-- needs `groups:read`, and a token without that scope fails the WHOLE call with `missing_scope`.
+-- Widening `/channels` would therefore trade a working public listing for a scope error on every
+-- workspace whose token is channel-scoped. As a sibling view the cost of a missing scope is exactly
+-- the private listing and nothing else — and a name absent from BOTH views is then evidence of
+-- absence, where a miss on the default-typed view alone never was.
+CREATE VIEW /slack/{ws}/private-channels OF slack/channel AS
+  /http/slack/conversations.list?types=private_channel |> DECODE json |> EXPAND channels;
+
 CREATE VIEW /slack/{ws}/{channel}/messages OF slack/message AS
   /http/slack/conversations.history?channel={channel} |> DECODE json |> EXPAND messages;
 
@@ -133,9 +143,33 @@ CREATE MAP CALL slack.delete ( channel text, ts text ) /slack/{ws}/{channel}/mes
 -- (REMOVE) is what a `remove /slack/<ws>/files/<id>` statement matches on, and IRREVERSIBLE puts it
 -- behind the standard gate.
 --
--- This is the whole file-write surface, deliberately. Slack's upload is a three-call
--- external flow (`files.getUploadURLExternal` → PUT the bytes → `files.completeUploadExternal`),
--- which a declared map — one request — cannot express. Downloads use the scoped content view
--- above; FOLLOW still injects no credential (Chatwork's URL is self-authorizing).
+-- Downloads use the scoped content view above; FOLLOW still injects no credential (Chatwork's
+-- URL is self-authorizing).
 CREATE MAP REMOVE /slack/{ws}/files/{file} AS
   INSERT INTO /http/slack/files.delete VALUES ({file: path.file}) IRREVERSIBLE;
+
+-- UPLOAD. Slack's upload is a three-call external flow (`files.getUploadURLExternal` → send the
+-- bytes to the URL it delivers → `files.completeUploadExternal`), which a declared map — ONE
+-- request — cannot express. So it rides the same kind of scoped transport primitive the download
+-- does: `qfs.file-upload` is a QFS primitive, not a Slack Web API method, and it performs the
+-- three exchanges with the selected mount account, admitting only the https://files.slack.com/
+-- URL Slack itself delivered and refusing every redirect.
+--
+-- The file is ADDRESSED by name — `upsert into /slack/<ws>/<channel>/files/<name>` — so the round
+-- trip reads the way every other blob does: a `content: bytes` row in, a shared file out.
+--
+-- The destination is passed through as the caller addressed it, with NO `cid` lookup. Every lookup
+-- this driver can declare searches `/slack/{ws}/channels`, which is Slack's PUBLIC listing, so
+-- resolving through one would make a PRIVATE channel unaddressable — by name (not in the
+-- collection) and by id alike, since the `id ==` arm searches those same public rows. Uploading to
+-- a private channel is a case this exists for, so the map takes the channel ID and Slack's own
+-- refusal names a bad one. That is the shape every Slack path has today; ticket 20260918044700 is
+-- the one place to fix reference resolution for all of them at once.
+--
+-- The body binds exactly the three fields every upload has. `title` and `comment` are NOT bound:
+-- a declared map's `row.<col>` is a column reference, so naming an optional column would refuse
+-- every row that does not carry it — including the one-column `content` row the download view
+-- delivers, which is the round trip this exists for. The primitive still accepts both when a map
+-- supplies them.
+CREATE MAP UPSERT /slack/{ws}/{channel}/files/{filename} AS
+  UPSERT INTO /http/slack/qfs.file-upload VALUES ({channel: path.channel, filename: path.filename, content: row.content});

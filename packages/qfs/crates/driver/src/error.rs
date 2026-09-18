@@ -143,6 +143,26 @@ pub enum CfsError {
         /// A secret-free reason (the failed predicate + the columns it constrains).
         detail: String,
     },
+
+    /// A credential could not be **resolved** for the mount a read or write addressed — the
+    /// store is locked, the account was never authorized, or its credential is revoked. This is
+    /// not a path mistake: the path resolved, the driver is mounted, and the only thing missing
+    /// is the key. It used to render as [`CfsError::InvalidPath`] (`kind: usage`, exit 2), which
+    /// tells an agent to rewrite a query that was never wrong (ticket `20260918040200`).
+    ///
+    /// Carries the store's own secret-free `code` (`secret_locked`, `secret_not_found`,
+    /// `secret_revoked`, `secret_backend`) and the `hint` that clears it. Never a credential, a
+    /// header value or a tokenized URL — by construction, both fields are `&'static str` drawn
+    /// from a closed vocabulary.
+    #[error("cannot authorize {path:?}: {hint}")]
+    Auth {
+        /// The path the CALLER addressed, not an internal wire remap.
+        path: String,
+        /// The store's secret-free resolution code.
+        code: &'static str,
+        /// The action that clears it.
+        hint: &'static str,
+    },
 }
 
 impl CfsError {
@@ -167,6 +187,7 @@ impl CfsError {
             // code is the stable family label.
             Self::Server { .. } => "server_config",
             Self::TypeMembership { .. } => "type_membership",
+            Self::Auth { .. } => "auth_unresolved",
         }
     }
 }

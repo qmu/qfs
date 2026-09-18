@@ -436,8 +436,9 @@ fn slack_failure_reaches_cli_exit_and_output_without_success_receipt() {
 
 #[test]
 fn service_read_failure_has_a_non_usage_exit_code_and_preserves_reason() {
-    let err = crate::declared_driver::read_http_error(
+    let err = crate::declared_driver::read_http_error_at(
         "/rest/slack/conversations.history",
+        "/slack/acme/general/messages",
         qfs_driver_http::HttpError::Application {
             code: "channel_not_found",
             operation: "conversations.history",
@@ -448,6 +449,39 @@ fn service_read_failure_has_a_non_usage_exit_code_and_preserves_reason() {
     assert_eq!(err.exit_code().code(), 5);
     assert_eq!(err.code, "channel_not_found");
     assert!(err.message.contains("channel_not_found"));
+}
+
+/// The auth arm (ticket `20260918040200`): a credential that did not resolve names the store's own
+/// cause and the action that clears it, against the path the CALLER addressed — and lands in the
+/// auth class (exit 6), not usage (exit 2), so an agent fixes the credential instead of the query.
+#[test]
+fn unresolved_credential_reports_its_cause_and_the_addressed_path() {
+    for (code, needle) in [
+        ("secret_locked", "credential store is locked"),
+        ("secret_not_found", "qfs account add"),
+        ("secret_revoked", "qfs account rotate"),
+        ("secret_backend", "could not be resolved"),
+    ] {
+        let err = crate::declared_driver::read_http_error_at(
+            "/rest/slack/conversations.list",
+            "/slack-work/acme/channels",
+            qfs_driver_http::HttpError::Auth { code },
+        );
+        let err = qfs_exec::ExecError::from_qfs(&err);
+        assert_eq!(err.exit_code().code(), 6, "{code} is the auth class");
+        assert_eq!(err.code, "auth_unresolved");
+        assert_eq!(err.detail.as_deref(), Some(code), "the store code survives");
+        assert_eq!(
+            err.path.as_deref(),
+            Some("/slack-work/acme/channels"),
+            "the refusal names the path the caller addressed, never the wire remap"
+        );
+        assert!(
+            err.message.contains(needle),
+            "{code} must carry its own action, got: {}",
+            err.message
+        );
+    }
 }
 
 #[test]

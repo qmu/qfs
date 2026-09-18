@@ -21,29 +21,36 @@ qfs describe /slack-work --json
 qfs describe /slack-work/acme --json
 ```
 
-Inspect the workspace's `children` before choosing a collection. The installed registry can expose
-additional views such as `private-channels` that are absent from the shipped driver asset. Describe
-the discovered collection to check its schema, then query its real name:
+Inspect the workspace's `children` before choosing a collection. **A channel is not listed by one
+view.** Slack's [`conversations.list`](https://docs.slack.dev/reference/methods/conversations.list/)
+defaults to `types=public_channel`, so `channels` carries the public ones and `private-channels`
+— its sibling, declared against `types=private_channel` — carries the private ones the token can
+see. Query both before reporting that a name does not exist:
 
 ```sh
 qfs describe /slack-work/acme/private-channels --json
+qfs run '/slack-work/acme/channels |> select id, name, is_private'
 qfs run '/slack-work/acme/private-channels |> select id, name, is_private'
 ```
 
-This example applies **when that view is installed**. If it is not shown, inspect the Slack views
-in `/sys/drivers` before changing configuration or asking the user for a channel ID:
+The two are separate views because they are separate grants: private discovery needs `groups:read`,
+and a token without it fails the **whole** call with `missing_scope`. Splitting them means a
+channel-scoped token keeps its working public listing and loses only the private one. That also
+makes the refusal legible: `missing_scope` on `private-channels` says *this token cannot see private
+channels*, which is different from *the channel is not there*.
+
+An older install may predate the sibling view. If `describe` does not show it, read what is actually
+installed before changing configuration or asking the user for a channel ID:
 
 ```sh
 qfs describe /sys/drivers --json
 qfs run "/sys/drivers |> where kind == 'view' AND name LIKE '/slack/%' |> select name, body"
 ```
 
-Slack's [`conversations.list`](https://docs.slack.dev/reference/methods/conversations.list/)
-defaults to `types=public_channel`. Private discovery needs `types=private_channel` (or both types)
-and `groups:read`, and returns only channels accessible to the token. The shipped `/channels` view
-omits `types`: a miss there is **not** evidence that a private channel is absent or inaccessible.
-Check the installed view body, relevant sibling collections, pagination, and API errors before
-reporting a miss. Do not interpret a generic `invalid_path` evaluation error as `missing_scope`.
+Re-running the shipped `slack_driver.qfs` install adds the missing view. Until it is installed, a
+miss on `channels` alone is **not** evidence that a private channel is absent or inaccessible.
+Check pagination and API errors too, and do not read a generic `invalid_path` evaluation error as
+`missing_scope`.
 
 Search the accessible collections for the supplied name, allowing for spaces versus underscores
 or hyphens, and use the returned channel ID for reads and posts. Keep the account that found the
@@ -368,14 +375,50 @@ qfs run -e "remove /slack/acme/files/F0123" --commit-irreversible
 Like every irreversible effect it previews by default and asks for the gate before anything leaves
 the machine; the id is the one from the listings above.
 
+## Upload a file to Slack
+
+A file is **addressed by name** under the destination channel, so an upload is the ordinary blob
+write and the round trip reads symmetrically — read a `content: bytes` row, write it back:
+
+```qfs
+/slack-work/acme/files/F0123/content
+|> upsert into /slack-work/acme/C0123456789/files/report.pdf
+```
+
+```text
+qfs run -e "/slack-work/acme/files/F0123/content |> upsert into /slack-work/acme/C0123456789/files/report.pdf" --commit
+```
+
+Any one-row `content: bytes` source works the same way — a local file, a Drive download, a
+Chatwork attachment:
+
+```qfs
+/local/tmp/report.pdf
+|> upsert into /slack-work/acme/C0123456789/files/report.pdf
+```
+
+**Address the destination by its channel ID.** Slack's complete-upload call takes an id, and no
+lookup can supply one for a private channel: every listing a declaration can search is the public
+one. A name therefore comes back as `slack_upload_channel_unresolved`, which says exactly that
+rather than implying the app was never invited. Find the id in `channels` or `private-channels`.
+
+The account needs `files:write` and membership of the destination channel. The upload previews like
+every other write and sends nothing until `--commit`.
+
+Slack retired the single-call `files.upload`, and its replacement is three calls: reserve an upload
+URL, send the bytes to it, then complete the share. QFS performs all three with the selected mount
+account and reports one row, `id` and `name`, for the shared file. Only the
+`https://files.slack.com/` URL Slack itself delivered is admitted, every redirect is refused on
+both legs, and no caller-supplied URL or credential is ever accepted.
+
+**One cost, stated plainly.** The declared write path carries bytes as a JSON array, so a file
+costs roughly four times its size in memory while it is in flight. For ordinary attachments —
+images, documents, logs — that is invisible. For a very large file (a screen recording of tens of
+megabytes) prefer the Slack UI until the raw-bytes wire encoding lands.
+
 ### What the file surface does not do
 
-Uploading remains unsupported:
-
-- **Uploading a file.** Slack's current upload is a three-call external flow (reserve an upload URL,
-  PUT the bytes out-of-band, then complete the share); `files.upload` is retired for new apps. A
-  declared map is **one** request, so the flow cannot be written as one — unlike Chatwork's
-  single-POST multipart upload.
+- **Editing a shared file in place.** Upload a new file and detach the old one.
 
 ## Post a message
 
@@ -490,6 +533,7 @@ working.
 | open a DM (`/slack/<ws>/dms/<user>`) | either | `im:write` |
 | read a DM's messages | either | `im:history` |
 | list shared files or read their content | either | `files:read` |
+| upload a file (`upsert into …/files/<name>`) | either | `files:write` |
 | detach a file (`remove /slack/<ws>/files/<id>`) | either | `files:write` |
 | add a reaction (`slack.react`) | either | `reactions:write` |
 | pin or unpin a message (`slack.pin` / `slack.unpin`) | either | `pins:write` |
