@@ -237,10 +237,13 @@ impl ApplyDriver for RestApplyDriver {
         for body in &write.bodies {
             let mut wire = effect.clone();
             wire.target.path = qfs_core::VfsPath::new(&write.rest_path);
-            if called.is_some() {
-                // The procedure kind stops here: the wire leg is the write the map body declares.
-                wire.kind = write.wire_kind.clone();
-            }
+            // The wire leg is the write the map body DECLARES, whatever verb the mount was
+            // addressed with. A `CREATE MAP REMOVE … AS INSERT INTO /http/<api>/<method>` means
+            // "a remove here is that POST" — and until ticket `20260919050000` only a CALL map's
+            // kind was honoured, so the universal-verb maps sent the MOUNT's verb: Slack's file
+            // detach went out as `DELETE /files.delete`, which Slack answers `invalid_arguments`.
+            // The declaration is the authority on its own wire leg; the address is not.
+            wire.kind = write.wire_kind.clone();
             wire.args = match write.encoding.as_deref() {
                 None => qfs_driver_http::http_body_args(body),
                 Some("multipart") => {
