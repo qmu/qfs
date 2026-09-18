@@ -1,6 +1,7 @@
 # stories
 
 <!-- okf:generated:begin -->
+* [work-20260919-050000](work-20260919-050000.md) - A declared write addressed at its target now sends the request its body declares, instead of reporting success and sending nothing
 * [work-20260919-000500](work-20260919-000500.md) - qfs declare installs a shipped driver declaration from the binary that already carries it
 * [work-20260918-040100](work-20260918-040100.md) - Slack gains file upload and private-channel discovery, and a credential that cannot be resolved says which one and why
 * [work-20260917-212851](work-20260917-212851.md) - Ignore the /moderate tick-log directory so every [Implement] freshen stops refusing a dirty workspace

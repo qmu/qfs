@@ -43,4 +43,5 @@
 * [qmu/plgg is public, not private, and the upstream issue was already filed etc](work-20260818-224038.md)
 * [Step 4 verified against the live hostnames, and the staging robots guard is one mechanism etc](work-20260818-224556.md)
 * [Slack files read and write, private channels are discoverable, and a credential failure names itself](work-20260918-040100.md)
+* [qfs declare: install a shipped driver declaration from the binary that carries it](work-20260919-000500.md)
 <!-- okf:generated:end -->
