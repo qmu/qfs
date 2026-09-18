@@ -42,4 +42,5 @@
 * [One Workers target, two environments, neither of them reachable without an explicit --env etc](work-20260817-163919.md)
 * [qmu/plgg is public, not private, and the upstream issue was already filed etc](work-20260818-224038.md)
 * [Step 4 verified against the live hostnames, and the staging robots guard is one mechanism etc](work-20260818-224556.md)
+* [Slack files read and write, private channels are discoverable, and a credential failure names itself](work-20260918-040100.md)
 <!-- okf:generated:end -->
