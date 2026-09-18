@@ -1077,6 +1077,36 @@ pub fn eval_map_body(
             .map(|(k, v)| (k.clone(), Value::Text(v.clone())))
             .collect(),
     ));
+    // A write ADDRESSED at its target carries no row: `remove /slack/<ws>/files/<id>` names the
+    // file in the path and has nothing to enumerate. The body still evaluates — once — because
+    // everything it needs is in `path.<param>`. Before this, a rowless write produced zero bodies,
+    // the wire loop ran zero times, and the effect reported `committed: true` having sent nothing:
+    // a silent no-op on an IRREVERSIBLE verb (ticket 20260919050000).
+    //
+    // A body that reads `row.<field>` is REFUSED here instead, because evaluating it against a row
+    // that does not exist would put nulls on the wire and call that success — the same failure
+    // wearing a different mask.
+    if incoming.rows.is_empty() {
+        if expr_reads_row(expr) {
+            return Err(invalid(
+                "this declared map's body reads `row.<field>` but the write carries no row",
+            ));
+        }
+        let mut values = vec![Value::Struct(Fields::new(Vec::new())), path_struct.clone()];
+        let empty_row = Row::new(Vec::new());
+        for (lookup, collection) in lookups {
+            values.push(resolve_lookup(
+                lookup, collection, incoming, &empty_row, params, &invalid,
+            )?);
+        }
+        return Ok(MapWrite {
+            rest_path,
+            bodies: vec![eval_value(&scalar, &schema, &Row::new(values))],
+            encoding,
+            wire_kind: wire_kind_of(effect.verb),
+        });
+    }
+
     let mut bodies = Vec::with_capacity(incoming.rows.len());
     for r in &incoming.rows {
         let row_struct = Value::Struct(Fields::new(
@@ -1103,6 +1133,32 @@ pub fn eval_map_body(
         encoding,
         wire_kind: wire_kind_of(effect.verb),
     })
+}
+
+/// Whether an expression reads `row.<field>` anywhere inside it — the question that decides
+/// whether a rowless (address-only) write can evaluate its body at all.
+///
+/// Total over the expression grammar by construction: every variant either recurses into its
+/// sub-expressions or is a leaf that cannot carry one. A new variant defaults to `false` only if
+/// it is genuinely a leaf, which is why the match is exhaustive rather than `_ => false`.
+fn expr_reads_row(expr: &Expr) -> bool {
+    match expr {
+        Expr::Path(segments) => segments.first().map(|s| s.as_str()) == Some("row"),
+        Expr::Lit(_) | Expr::Col(_) => false,
+        Expr::Fn(call) => call.args.iter().any(expr_reads_row),
+        Expr::Binary { lhs, rhs, .. } => expr_reads_row(lhs) || expr_reads_row(rhs),
+        Expr::Unary { expr, .. } => expr_reads_row(expr),
+        Expr::In { expr, set } | Expr::AnyOp { expr, set, .. } => {
+            expr_reads_row(expr) || set.iter().any(expr_reads_row)
+        }
+        Expr::Between { expr, low, high } => {
+            expr_reads_row(expr) || expr_reads_row(low) || expr_reads_row(high)
+        }
+        Expr::Like { expr, pattern } => expr_reads_row(expr) || expr_reads_row(pattern),
+        Expr::Lambda { body, .. } => expr_reads_row(body),
+        Expr::Array(items) => items.iter().any(expr_reads_row),
+        Expr::Struct(fields) => fields.iter().any(|(_, e)| expr_reads_row(e)),
+    }
 }
 
 /// The parsed body verb as the runtime effect kind the wire applier services.
@@ -2413,6 +2469,61 @@ mod tests {
         .expect("a disjunction over one row field extracts");
         assert_eq!(found[0].match_cols, vec!["name", "id"]);
         assert_eq!(found[0].key, LookupKey::Row("channel".into()));
+    }
+
+    /// An ADDRESS-ONLY write evaluates its body ONCE, not once per row it does not have — the
+    /// shape of `remove /slack/<ws>/files/<id>`, whose body needs only `path.file`. Before ticket
+    /// `20260919050000` this produced zero bodies, so the wire loop ran zero times and an
+    /// IRREVERSIBLE delete reported success having sent nothing.
+    #[test]
+    fn eval_map_body_evaluates_an_address_only_write_once() {
+        let body = map_body_of(
+            "CREATE MAP REMOVE /slack/{ws}/files/{file} AS \
+             INSERT INTO /http/slack/files.delete VALUES ({file: path.file}) IRREVERSIBLE",
+        );
+        let rowless = RowBatch::new(Schema::new(Vec::new()), Vec::new());
+        let write = eval_map_body(
+            &body,
+            "slack",
+            "/slack/T1/files/F1",
+            &[
+                ("ws".to_string(), "T1".to_string()),
+                ("file".to_string(), "F1".to_string()),
+            ],
+            &rowless,
+            &[],
+        )
+        .expect("an address-only body evaluates");
+        assert_eq!(write.rest_path, "/rest/slack/files.delete");
+        assert_eq!(write.bodies.len(), 1, "exactly one wire body, not zero");
+        match &write.bodies[0] {
+            Value::Struct(fields) => {
+                assert_eq!(fields.get("file"), Some(&Value::Text("F1".to_string())));
+            }
+            other => panic!("expected a struct wire body, got {other:?}"),
+        }
+    }
+
+    /// A rowless write whose body READS a row is refused, never evaluated against nulls: putting
+    /// `{text: null}` on the wire and calling it success is the same defect wearing a mask.
+    #[test]
+    fn a_rowless_write_whose_body_reads_a_row_is_refused() {
+        let body = map_body_of(
+            "CREATE MAP INSERT /slack/{ws}/{channel}/messages AS \
+             INSERT INTO /http/slack/chat.postMessage \
+               VALUES ({channel: path.channel, text: row.text})",
+        );
+        let rowless = RowBatch::new(Schema::new(Vec::new()), Vec::new());
+        let err = eval_map_body(
+            &body,
+            "slack",
+            "/slack/T1/general/messages",
+            &[("channel".to_string(), "general".to_string())],
+            &rowless,
+            &[],
+        )
+        .expect_err("a body that needs a row cannot run without one");
+        assert_eq!(err.code(), "invalid_path");
     }
 
     /// The `path.<param>` arm (ticket 20260918041500): a map addressed AT the thing it must resolve
