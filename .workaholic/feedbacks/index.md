@@ -137,4 +137,9 @@
 * [[FB] Untracked /moderate tick logs stop every [Implement] freshen](20260917211211-fb-untracked-moderate-tick-logs-stop-every-implement-freshen.md)
 * [[FB] The loop's Slack destination does not exist, so nothing reaches a person](20260917212108-fb-the-loop-s-slack-destination-does-not-exist-so-nothing-reaches-a-person.md)
 * [Diagnose declared Slack read failures when the same account succeeds through the Web API](20260918022343-diagnose-declared-slack-read-failures-when-the-same-account-succeeds-through-the-web-api.md)
+* [A Slack channel resolves by id only, on every path](20260918221502-a-slack-channel-resolves-by-id.md)
+* [The §13.2 conciseness bar moved again](20260918221502-c-3ed82558.md)
+* [The declared write path carries bytes as a JSON array](20260918221502-the-declared-write-path-carries-bytes.md)
+* [The `path.<param>` lookup key has no shipped consumer](20260918221502-the-path-param-lookup-key-has.md)
+* [A Slack file detach reports success and deletes nothing](20260918222801-a-slack-file-detach-reports-success-and-deletes-nothing.md)
 <!-- okf:generated:end -->
