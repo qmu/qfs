@@ -53,6 +53,19 @@ fn main() {
         // `qfs_skill::render(..)` — this NORMAL `qfs → qfs-skill` edge is what makes SKILL.md ship in
         // the artifact and be discoverable from the running binary.
         &qfs_skill::render,
+        // `qfs declare [<driver>] [--commit]`: the declared-driver programs this binary embeds,
+        // handed over so the CLI can install one. Same edge and same reason as the skill above —
+        // the binary owns `qfs-skill`, qfs-cmd only routes. A binary that ships a declaration an
+        // operator cannot install from it is a capability the artifact carries and cannot reach.
+        &|| {
+            qfs_skill::DECLARED_DRIVERS
+                .iter()
+                .map(|d| qfs_cmd::ShippedDeclaration {
+                    label: d.label,
+                    source: d.source,
+                })
+                .collect()
+        },
         // `qfs connect`/`disconnect`/`connect --list`: the defined-path binding I/O, injected here (the
         // binary owns the envelope-encrypted SQLite store over the Project DB — t43; qfs-cmd stays
         // off the concrete backend). The secret is read from stdin, never argv; each value is

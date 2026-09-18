@@ -233,6 +233,31 @@ your own `qfs` binary, so it resolves with no network and no credentials. Nothin
 you — re-installing is an ordinary previewed-and-committed write you choose to make, because a
 declaration you edited on purpose must not be silently overwritten (blueprint §13.4).
 
+### Re-installing one: `qfs declare`
+
+The statements come from the binary itself, so the refresh needs no download and no copy-paste:
+
+```text
+qfs declare                      # what this binary ships, and how many statements each one writes
+qfs declare slack                # list them — writes nothing
+qfs declare slack --commit       # install / refresh
+```
+
+Re-installing **replaces**: a declaration's identity is `(kind, name, verb)`, and the superseded row
+is deleted in the same transaction the new one lands in, so running it twice is safe. Each statement
+goes through the same one-shot path `qfs run` takes, and the first failure stops the run and returns
+its exit code — a half-installed declaration is reported where it stopped, never summarised as done.
+
+**It adds and replaces; it never removes.** Nodes you added locally that the binary does not ship
+stay exactly as they are — which is why a declaration carrying local extras still reads `stale`
+after a successful `--commit`. That is a local addition, not a failed install; drop one with
+`REMOVE VIEW|MAP|TYPE <name>` if you want the row gone.
+
+**Upgrading the binary does not update a declaration.** Config and code move independently, so a
+current binary can run a declaration years older than it — the shape behind a Slack mount that could
+list attachments and not read one. After any upgrade, `qfs run "/sys/declarations |> select driver,
+status"` is the one question worth asking.
+
 ## Common errors & fixes
 
 | You see | What it means | Fix |
