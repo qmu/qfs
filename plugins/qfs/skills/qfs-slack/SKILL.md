@@ -47,8 +47,9 @@ qfs describe /sys/drivers --json
 qfs run "/sys/drivers |> where kind == 'view' AND name LIKE '/slack/%' |> select name, body"
 ```
 
-Re-running the shipped `slack_driver.qfs` install adds the missing view. Until it is installed, a
-miss on `channels` alone is **not** evidence that a private channel is absent or inaccessible.
+`qfs declare slack --commit` re-installs the shipped declaration from the binary and adds the
+missing view. Until it is installed, a miss on `channels` alone is **not** evidence that a private
+channel is absent or inaccessible.
 Check pagination and API errors too, and do not read a generic `invalid_path` evaluation error as
 `missing_scope`.
 
