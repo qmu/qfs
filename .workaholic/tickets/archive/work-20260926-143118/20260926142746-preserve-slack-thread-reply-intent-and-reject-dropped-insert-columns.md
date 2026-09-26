@@ -1,5 +1,6 @@
 ---
 created_at: 2026-09-26T14:27:46+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -58,3 +59,28 @@ Resolve qmu/qfs#139 and #140 together: a Slack thread reply must preserve its pa
 ## Considerations
 
 Generic map field-use analysis must account for row-object forwarding and nested expressions; avoid a Slack-only allowlist masquerading as generic validation. The reporter's suggested map is a hypothesis to validate against actual executor semantics. The two feedback records are carried together because both write surfaces share the same regression and test fixture.
+
+## Final Report
+
+Implemented messages INSERT with optional `thread_ts` and a shipped replies INSERT whose parent
+comes from `path.ts`. Account routing remains covered by mocked wire tests. Named unconsumed
+columns now fail with `unused_map_columns` before any wire write; the diagnostic includes column
+names and excludes values. Nested expressions, whole-row forwarding and lookup-consumed fields
+are covered by the generic evaluator and existing non-Slack/lookup regressions.
+
+The cookbook and generated Slack skill include thread read, preview, reply commit, read-back and
+`qfs declare slack --commit` refresh examples. Binary version is 0.0.140; plugin version is 0.24.1.
+No live Slack messages were sent. Deployment and live Slack verification are not claimed.
+
+Verification: qfs-exec 123 tests; qfs declared-driver 97 tests; parser/core/driver-http/xtask suites
+479 tests; plugin distribution validation and 12 negative fixtures; generated-doc and generated-skill
+checks. Root, null-parent, explicit-parent, replies-path, account binding and unused-column
+zero-HTTP regression cases pass.
+
+### Discovered Insights
+
+- Absent map row fields already evaluate to null. Slack explicitly documents that JSON null takes
+  the argument's default (https://docs.slack.dev/apis/web-api/), so forwarding optional thread_ts
+  preserves root posts without adding a service-specific evaluator rule.
+- The lowered scalar reference walker already covers nested objects, arrays and whole-row use.
+  Reusing it avoids maintaining a second expression grammar for column-use analysis.

@@ -1036,6 +1036,36 @@ pub fn eval_map_body(
     let scalar =
         lower_scalar(expr).map_err(|_| invalid("declared map body is not a per-row expression"))?;
 
+    // Refuse silent input loss before constructing ANY wire body. Use the lowered scalar's
+    // exhaustive reference walker, including nested objects/arrays and whole-row forwarding.
+    // Lookup keys consume input too, even when the wire body only names their result.
+    let mut refs = Vec::new();
+    scalar.col_refs(&mut refs);
+    let forwards_row = refs.iter().any(|r| r.path.as_slice() == ["row"]);
+    if !forwards_row {
+        let unused: Vec<String> = incoming
+            .schema
+            .columns
+            .iter()
+            .filter(|column| {
+                !refs.iter().any(|r| {
+                    r.path.first().map(String::as_str) == Some("row")
+                        && r.path.get(1) == Some(&column.name)
+                }) && !lookups.iter().any(|(lookup, _)| {
+                    matches!(&lookup.key,
+                LookupKey::Row(name) if name == &column.name)
+                })
+            })
+            .map(|c| c.name.clone())
+            .collect();
+        if !unused.is_empty() {
+            return Err(CfsError::UnusedMapColumns {
+                path: map_path.to_string(),
+                columns: unused,
+            });
+        }
+    }
+
     // 4. Evaluate per incoming row: bind the row as a single `row` struct column — plus one column
     //    per resolved §13.1 G9 lookup, so the effect body references `cid` exactly as it is written —
     //    then run the scalar through the SHIPPED per-row evaluator. `row` passthrough yields the
@@ -1862,6 +1892,54 @@ mod tests {
                     .collect(),
             )],
         )
+    }
+
+    #[test]
+    fn declared_maps_refuse_named_unused_columns_without_disclosing_values() {
+        let body = serde_json::to_string(
+            &qfs_parser::parse_statement(
+                "INSERT INTO /http/example/post VALUES ({payload: [{text: row.text}]})",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let err = eval_map_body(
+            &body,
+            "example",
+            "/example/post",
+            &[],
+            &incoming(&[("text", "hello"), ("thread_id", "PRIVATE_PARENT")]),
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "unused_map_columns");
+        assert!(err.to_string().contains("thread_id"));
+        assert!(!err.to_string().contains("PRIVATE_PARENT"));
+        assert!(eval_map_body(
+            &body,
+            "example",
+            "/example/post",
+            &[],
+            &incoming(&[("text", "hello")]),
+            &[]
+        )
+        .is_ok());
+        let body = serde_json::to_string(
+            &qfs_parser::parse_statement(
+                "INSERT INTO /http/example/post VALUES ({payload: [row]})",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(eval_map_body(
+            &body,
+            "example",
+            "/example/post",
+            &[],
+            &incoming(&[("text", "hello"), ("extra", "retained")]),
+            &[]
+        )
+        .is_ok());
     }
 
     #[test]
