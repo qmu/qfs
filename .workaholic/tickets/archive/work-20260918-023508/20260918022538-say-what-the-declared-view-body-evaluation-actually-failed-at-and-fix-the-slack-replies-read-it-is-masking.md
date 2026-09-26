@@ -1,5 +1,6 @@
 ---
 created_at: 2026-09-18T02:25:38+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -191,3 +192,47 @@ ticket's first deliverable is the diagnostic, and the second is whatever the dia
 - **Scope boundary.** This is the read/evaluator path. The upstream write-rejection diagnostics in
   #108 (`service_rejected` collapsing Slack write errors) are a separate defect on a separate seam
   and are not touched here.
+
+## Final Report
+
+### Diagnosis and scope of the evidence
+
+The synthetic 18-message envelope returned 18 rows before the fix, but the first regression failed
+with `left: Null`, `right: Text("1780000000.000000")` for a later reply's `thread_ts`.
+`Value::type_of(Array)` inferred the entire element schema from the first message only. The
+first root lacked optional fields that later replies carried; EXPAND's name-based projection
+then correctly followed an incomplete schema and OF shaping filled those missing fields with null.
+The existing `Schema::unify`/type widening now combines every array element, including nested
+optional fields and numeric widening. No Slack-specific inference rule was added.
+
+The original reported `declared view body evaluation failed` exception was **not reproduced** on
+valid reconstructed envelopes; it must not be attributed to this data-loss defect without further
+evidence. Negative envelopes did reproduce `EngineError::NotExpandable` for scalar messages and
+`EngineError::UnknownColumn` for a missing messages column, both at the evaluate/expand stage.
+Unsupported projections exercise the lower-stage diagnosis. No speculative engine-error fix was
+made. The fixture is synthetic and contains no live message, credential or response payload.
+
+### Diagnostics and named accounts
+
+`ViewBodyEval` now carries lower/plan/evaluate plus the original stable error code and safe static
+operation/count metadata. All three body-evaluation call sites use it, including before/after
+FOLLOW. CLI kind is internal (exit 5), not usage/invalid_path; remote names, schemas, type strings,
+message content and credentials are omitted. The named-mount adapter restores the caller's
+addressed alias in this error instead of exposing the declaration's inner `/slack` coordinate.
+
+Credential routing was already correct: the bound mount's selected account initializes its
+applier before inward path remapping. Mocked reads under two named mounts select their respective
+synthetic accounts, never the poisoned default, and return all 18 rows with optional fields intact.
+The old inner path in diagnostics did not establish a default-account credential leak.
+
+### Delivery and verification
+
+The Slack cookbook/skill explain `view_body_eval`; binary 0.0.141 and plugin 0.24.2 carry the change.
+No live Slack read or write was attempted, and resolution of the original private-channel
+exception is not claimed. The PR addresses #129's diagnosed code defects and offline quality gate.
+
+Verification: full workspace tests (2847 passed), XDG-unset serial qfs lib tests (536 passed, 8 ignored), workspace clippy with warnings
+denied, formatting, generated docs/skills drift checks, plugin distribution validation and its
+12 negative fixtures. New tests cover the realistic replies envelope, empty/reordered envelopes,
+missing/scalar messages, lower/evaluate failures, both FOLLOW evaluation legs, safe CLI error
+classification, named mount routing and generic nested array type inference.
