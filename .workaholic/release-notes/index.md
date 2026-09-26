@@ -44,4 +44,5 @@
 * [Step 4 verified against the live hostnames, and the staging robots guard is one mechanism etc](work-20260818-224556.md)
 * [Slack files read and write, private channels are discoverable, and a credential failure names itself](work-20260918-040100.md)
 * [qfs declare: install a shipped driver declaration from the binary that carries it](work-20260919-000500.md)
+* [A declared write addressed at its target sends the request its body declares](work-20260919-050000.md)
 <!-- okf:generated:end -->

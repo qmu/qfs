@@ -141,4 +141,9 @@
 * [The §13.2 conciseness bar moved again](20260918221502-c-3ed82558.md)
 * [The declared write path carries bytes as a JSON array](20260918221502-the-declared-write-path-carries-bytes.md)
 * [The `path.<param>` lookup key has no shipped consumer](20260918221502-the-path-param-lookup-key-has.md)
+* [Each statement rebuilds the run context](20260919043535-each-statement-rebuilds-the-run-context.md)
+* [`qfs declare` never removes a node](20260919043535-qfs-declare-never-removes-a-node.md)
+* [A rowless write that needs a row now fails where it used to be silent](20260919054300-a-rowless-write-that-needs-a.md)
+* [Slack INSERT drops thread_ts, so a thread reply lands in the channel](20260926142729-slack-insert-drops-thread-ts-so-a-thread-reply-lands-in-the-channel.md)
+* [Ship and document the Slack thread-reply write (replies INSERT map)](20260926142734-ship-and-document-the-slack-thread-reply-write-replies-insert-map.md)
 <!-- okf:generated:end -->
