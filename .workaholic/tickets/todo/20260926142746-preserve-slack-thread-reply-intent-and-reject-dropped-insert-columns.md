@@ -6,6 +6,7 @@ depends_on:
 feedback: [20260926142729-slack-insert-drops-thread-ts-so-a-thread-reply-lands-in-the-channel.md, 20260926142734-ship-and-document-the-slack-thread-reply-write-replies-insert-map.md]
 merge_policy:
 verification_handoff: 
+claim: work-20260926-143118
 ---
 
 # Preserve Slack thread reply intent and reject dropped INSERT columns
