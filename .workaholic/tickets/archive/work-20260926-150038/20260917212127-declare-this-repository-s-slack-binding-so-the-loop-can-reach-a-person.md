@@ -1,11 +1,13 @@
 ---
 created_at: 2026-09-17T21:21:27+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
 feedback: [20260917212108-fb-the-loop-s-slack-destination-does-not-exist-so-nothing-reaches-a-person.md]
 merge_policy:
-verification_handoff: Which Slack workspace and channel this loop posts to - creating or nominating a channel is visible to other people and is the operator's call
+verification_handoff:
+claim: work-20260926-150038
 ---
 
 # Declare this repository's Slack binding so the loop can reach a person
@@ -186,3 +188,58 @@ work.
   `observe-channel.sh` — that a repository with no declaration silently resolves a destination
   derived from its own name is arguably worth its own ask, but it lives in the `workaholic`
   plugin repository and is out of reach from here.
+
+## Final Report — 2026-09-26
+
+### Repository implementation
+
+Declared the existing `qmu` / `dev-qfs` destination, channel `C0BM2ASB63G`, mount
+`/slack-cc-for-qmu`, account `cc-for-qmu` in root `CLAUDE.md`. These values come
+from the 2026-09-18 correction above, not a new destination choice. That correction
+supersedes the original Open Decisions and step 1; no channel creation is required.
+No `sender_id` was invented. The reader should report a valid partial declaration.
+
+### Verification and handoff
+
+Current-source qfs 0.0.141 plus macOS timeout/sha256sum adapters can execute transport
+discovery, which reports `no_connection`. The previous `connections_unreadable` was
+not evidence of channel absence. This local environment has no connected Slack account
+for the declared route. No Slack message was posted and no notification backlog was drained.
+The ticket remains in todo because channel resolution and live post/read-back acceptance
+are unmet. Restore the existing account connection, verify its sender identity and channel,
+and obtain explicit authorization for the verification post before sending anything.
+
+### Related FB reconciliation
+
+The evidence for #128 and #131 is persisted in
+`.workaholic/reports/20260926-feedback-residue-audit.md`. All seven historical branches
+are preserved. Five branches exactly match their squash-merge trees; the attachment
+branch is landed with later integrated diagnostics; the remaining branch was explicitly
+superseded by #46 and its salvaged Chatwork fields are also shipped. There is no remaining
+qfs source change to recover blindly. Claim-lifecycle improvements belong to upstream
+workaholic, whose repository was not modified.
+
+Declaration reader result: `ok:true`, `declared:true`, `missing:[]`, `conflicts:[]`,
+`unknown_keys:[]`, `invalid:[]`, `errors:[]`, `complete:false` (sender_id unverified).
+
+## Live verification — 2026-09-26
+
+This measured completion supersedes the earlier no_connection handoff above. The user
+explicitly authorized one root and one thread reply; both committed through QFS on host `q`.
+The isolated verification binary was `/tmp/qfs-fb-v141-verification/qfs` version 0.0.141;
+the installed 0.0.139 binary was unchanged. Before refreshing the shipped declaration
+(`declare slack --commit`, 28 statements), the secret-free configuration was backed up
+to `/tmp/qfs-fb-v141-verification/config-before-slack-update.jsonl` on that host.
+
+- Route: `/slack-cc-for-qmu/qmu/C0BM2ASB63G/messages`.
+- Root: `1790417037.548209`.
+- Reply: `1790417050.979679`.
+- Both read-back rows identify sender `U0BFLKVB66N` and thread_ts `1790417037.548209`.
+- Reading `/slack-cc-for-qmu/qmu/C0BM2ASB63G/messages/1790417037.548209/replies`
+  returned exactly those two rows. History read returned 20 rows.
+- sender_id is now declared; declaration validation must report complete:true.
+
+No additional messages were sent and historical notification backlog was not drained,
+because the explicit authorization covered only this verification pair. The destination,
+selected sender, thread write and read-back gates are fulfilled. This does not claim
+reproduction of #129's original 18-message historical thread.
