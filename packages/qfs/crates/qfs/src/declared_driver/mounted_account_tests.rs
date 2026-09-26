@@ -844,3 +844,48 @@ async fn unused_slack_insert_columns_fail_before_any_http_write() {
         assert!(mock.recorded().is_empty());
     }
 }
+
+
+#[tokio::test]
+async fn named_mount_replies_keep_optional_fields_and_selected_accounts() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("synthetic-replies-accounts");
+    seed_accounts();
+    for (mount, account, token) in [("/slack-a", "work-a", "token-a"), ("/slack-b", "work-b", "token-b")] {
+        bind(mount, account, None);
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(200,
+            include_bytes!("../../../exec/tests/fixtures/slack_replies.json").to_vec()));
+        let rows = mounted_read_node(mount, "acme/C_SYNTHETIC/messages/1780000000.000000/replies", mock.clone()).await.unwrap();
+        assert_eq!(rows.rows.len(), 18);
+        let parent = rows.schema.columns.iter().position(|c| c.name == "thread_ts").unwrap();
+        let subtype = rows.schema.columns.iter().position(|c| c.name == "subtype").unwrap();
+        assert_eq!(rows.rows[1].values[parent], Value::Text("1780000000.000000".into()));
+        assert_eq!(rows.rows[2].values[subtype], Value::Text("bot_message".into()));
+        let requests = mock.recorded();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].url.contains("conversations.replies?channel=C_SYNTHETIC&ts=1780000000.000000"));
+        let authorization = requests[0].header_value("authorization").unwrap();
+        assert_eq!(authorization.split_whitespace().last(), Some(token));
+        assert!(!authorization.contains("poisoned-default"));
+    }
+}
+
+#[tokio::test]
+async fn named_mount_view_failure_names_the_addressed_path_without_payload() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("synthetic-replies-diagnostic");
+    seed_accounts();
+    bind("/slack-a", "work-a", None);
+    for envelope in [r#"{"ok":true,"messages":"PRIVATE_VALUE"}"#, r#"{"ok":true,"PRIVATE_SCHEMA":"PRIVATE_VALUE"}"#] {
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        mock.push_response(qfs_driver_http::HttpResponse::new(200, envelope.as_bytes().to_vec()));
+        let err = mounted_read_node("/slack-a", "acme/C_SYNTHETIC/messages/1.000001/replies", mock.clone()).await.unwrap_err();
+        let err = qfs_exec::ExecError::from_qfs(&err);
+        assert_eq!(err.code, "view_body_eval");
+        assert_eq!(err.kind, qfs_exec::ErrorKind::Internal);
+        assert_eq!(err.path.as_deref(), Some("/slack-a/acme/C_SYNTHETIC/messages/1.000001/replies"));
+        assert!(err.detail.as_deref().unwrap().contains("evaluate"));
+        assert!(!err.message.contains("PRIVATE"));
+        assert!(!err.message.contains("token-a"));
+        assert_eq!(mock.recorded().len(), 1);
+    }
+}

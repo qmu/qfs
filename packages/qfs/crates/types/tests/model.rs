@@ -416,3 +416,59 @@ fn property_unify_commutative_up_to_column_order() {
     ba_cols.sort_by(|l, r| l.0.cmp(&r.0));
     assert_eq!(ab_cols, ba_cols);
 }
+
+#[test]
+fn array_type_inference_unifies_every_struct_element() {
+    let first = Value::Struct(qfs_types::Fields::new(vec![(
+        "text".into(),
+        Value::Text("root".into()),
+    )]));
+    let second = Value::Struct(qfs_types::Fields::new(vec![
+        ("text".into(), Value::Text("reply".into())),
+        ("thread_ts".into(), Value::Text("1.000001".into())),
+    ]));
+    let ColumnType::Array(element) = Value::Array(vec![first, second]).type_of() else {
+        panic!("array");
+    };
+    let ColumnType::Struct(schema) = *element else {
+        panic!("struct");
+    };
+    assert_eq!(schema.columns.len(), 2);
+    assert!(schema.column("thread_ts").unwrap().nullable);
+    assert_eq!(schema.column("thread_ts").unwrap().ty, ColumnType::Text);
+}
+
+#[test]
+fn array_type_inference_widens_nested_optional_and_numeric_fields() {
+    let value = Value::Array(vec![
+        Value::Struct(qfs_types::Fields::new(vec![(
+            "nested".into(),
+            Value::Struct(qfs_types::Fields::new(vec![(
+                "count".into(),
+                Value::Int(1),
+            )])),
+        )])),
+        Value::Struct(qfs_types::Fields::new(vec![(
+            "nested".into(),
+            Value::Struct(qfs_types::Fields::new(vec![
+                ("count".into(), Value::Float(1.5)),
+                ("optional".into(), Value::Bool(true)),
+            ])),
+        )])),
+    ]);
+    let ColumnType::Array(element) = value.type_of() else {
+        panic!("array");
+    };
+    let ColumnType::Struct(schema) = *element else {
+        panic!("struct");
+    };
+    let ColumnType::Struct(nested) = &schema.column("nested").unwrap().ty else {
+        panic!("nested struct");
+    };
+    assert_eq!(nested.column("count").unwrap().ty, ColumnType::Float);
+    assert!(nested.column("optional").unwrap().nullable);
+    assert_eq!(
+        Value::Array(vec![Value::Int(1), Value::Float(2.0)]).type_of(),
+        ColumnType::Array(Box::new(ColumnType::Float))
+    );
+}

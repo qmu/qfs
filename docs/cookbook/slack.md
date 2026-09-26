@@ -50,8 +50,10 @@ qfs run "/sys/drivers |> where kind == 'view' AND name LIKE '/slack/%' |> select
 `qfs declare slack --commit` re-installs the shipped declaration from the binary and adds the
 missing view. Until it is installed, a miss on `channels` alone is **not** evidence that a private
 channel is absent or inaccessible.
-Check pagination and API errors too, and do not read a generic `invalid_path` evaluation error as
-`missing_scope`.
+Check pagination and API errors too. `view_body_eval` names the internal phase (`lower`, `plan`,
+`evaluate`) and a stable cause such as `unknown_column` or `not_expandable`; it is not evidence of
+`missing_scope` or a bad channel path. The error names the connection path you addressed without
+printing the response's message text, schema keys or credentials.
 
 Search the accessible collections for the supplied name, allowing for spaces versus underscores
 or hyphens, and use the returned channel ID for reads and posts. Keep the account that found the

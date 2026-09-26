@@ -367,7 +367,17 @@ impl MountReadDriver {
 #[async_trait::async_trait]
 impl ReadDriver for MountReadDriver {
     async fn scan(&self, scan: &ScanNode, ctx: &RequestContext) -> Result<RowBatch, CfsError> {
-        self.inner.scan(&self.remap.scan_in(scan), ctx).await
+        self.inner
+            .scan(&self.remap.scan_in(scan), ctx)
+            .await
+            .map_err(|error| match error {
+                CfsError::ViewBodyEval { stage, detail, .. } => CfsError::ViewBodyEval {
+                    path: scan.path.clone(),
+                    stage,
+                    detail,
+                },
+                other => other,
+            })
     }
 
     /// Delegate the pushed-`WHERE` declaration inward: the remap rewrites paths, not predicates, so

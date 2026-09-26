@@ -703,10 +703,7 @@ where
         .iter()
         .position(|op| matches!(op, PipeOp::Follow(_)));
     let evaluated = match follow_at {
-        None => run_body_ops(&pipeline, fetched).map_err(|reason| CfsError::InvalidPath {
-            path: view_path.to_string(),
-            reason,
-        })?,
+        None => run_body_ops(&pipeline, fetched, view_path)?,
         Some(at) => {
             if pipeline.ops[at + 1..]
                 .iter()
@@ -720,11 +717,7 @@ where
                 source: pipeline.source.clone(),
                 ops: pipeline.ops[..at].to_vec(),
             };
-            let delivered =
-                run_body_ops(&pre, fetched).map_err(|reason| CfsError::InvalidPath {
-                    path: view_path.to_string(),
-                    reason,
-                })?;
+            let delivered = run_body_ops(&pre, fetched, view_path)?;
             let PipeOp::Follow(fref) = &pipeline.ops[at] else {
                 unreachable!("position() matched a Follow op");
             };
@@ -765,10 +758,7 @@ where
                     source: pipeline.source.clone(),
                     ops: rest_ops,
                 };
-                run_body_ops(&post, batch).map_err(|reason| CfsError::InvalidPath {
-                    path: view_path.to_string(),
-                    reason,
-                })?
+                run_body_ops(&post, batch, view_path)?
             }
         }
     };
@@ -1481,21 +1471,46 @@ fn confined_wire_resource(source_path: &str, driver_name: &str) -> Option<String
 fn run_body_ops(
     pipeline: &qfs_parser::Pipeline,
     fetched: RowBatch,
-) -> Result<RowBatch, &'static str> {
+    view_path: &str,
+) -> Result<RowBatch, CfsError> {
+    let failure = |stage, detail| CfsError::ViewBodyEval {
+        path: view_path.to_string(),
+        stage,
+        detail,
+    };
     let source_of = |_segs: &[String]| SourceId::new(WIRE_SOURCE);
     let schema_of = |_src: &SourceId| Schema::empty();
     // A declared-driver view body carries no `|> transform` stage (and if one appeared it would be
     // unresolvable here) — resolve none.
     let transform_of = |_: &str| None::<qfs_core::ResolvedTransform>;
     let logical = lower_query(pipeline, &source_of, &schema_of, &transform_of)
-        .map_err(|_| "declared view body could not be lowered")?;
+        .map_err(|e| failure("lower", e.code().to_string()))?;
     let mut reg = SourceRegistry::new();
     reg.register(SourceId::new(WIRE_SOURCE), PushdownProfile::None);
-    let physical = partition_by_source(&logical, &reg)
-        .map_err(|_| "declared view body could not be planned")?;
+    let physical =
+        partition_by_source(&logical, &reg).map_err(|e| failure("plan", e.code().to_string()))?;
     MiniEvaluator::new()
         .execute(&physical, ScanResults::new(vec![fetched]))
-        .map_err(|_| "declared view body evaluation failed")
+        .map_err(|e| {
+            // Names, available schemas and remote type strings can contain private data.
+            // Keep only stable codes, static operation labels and numeric counts.
+            let detail = match &e {
+                qfs_engine::EngineError::UnknownColumn { stage, .. } => {
+                    format!("{} (op={stage})", e.code())
+                }
+                qfs_engine::EngineError::NotExpandable { .. } => {
+                    format!("{} (op=expand)", e.code())
+                }
+                qfs_engine::EngineError::Arity { op, inputs } => {
+                    format!("{} (op={op}, inputs={inputs})", e.code())
+                }
+                qfs_engine::EngineError::MissingScanResult { available } => {
+                    format!("{} (available={available})", e.code())
+                }
+                _ => e.code().to_string(),
+            };
+            failure("evaluate", detail)
+        })
 }
 
 /// Shape a batch to a declared `OF` type: project to exactly its columns, in order (a column the
@@ -1614,6 +1629,135 @@ mod tests {
         );
         assert_eq!(confined_wire_resource("/http/evil/steal", "slack"), None);
         assert_eq!(confined_wire_resource("/mail/inbox", "slack"), None);
+    }
+
+    #[test]
+    fn declared_view_failures_keep_safe_phase_and_cause() {
+        for (query, envelope, phase, code) in [
+            (
+                "/http/slack/x |> SELECT upper(text)",
+                r#"{"text":"PRIVATE_VALUE"}"#,
+                "lower",
+                "unsupported_projection",
+            ),
+            (
+                "/http/slack/x |> EXPAND messages",
+                r#"{"ok":true,"messages":"PRIVATE_VALUE"}"#,
+                "evaluate",
+                "not_expandable",
+            ),
+            (
+                "/http/slack/x |> EXPAND messages",
+                r#"{"ok":true,"PRIVATE_SCHEMA":"PRIVATE_VALUE"}"#,
+                "evaluate",
+                "unknown_column",
+            ),
+            (
+                "/http/slack/x |> EXPAND messages |> FOLLOW url",
+                r#"{"ok":true}"#,
+                "evaluate",
+                "unknown_column",
+            ),
+            (
+                "/http/slack/x |> FOLLOW url |> EXPAND messages",
+                r#"{"url":"https://example.invalid/private"}"#,
+                "evaluate",
+                "unknown_column",
+            ),
+        ] {
+            let body = serde_json::to_string(&qfs_parser::parse_statement(query).unwrap()).unwrap();
+            let err = eval_view_body(
+                &body,
+                "slack",
+                "/slack/test",
+                None,
+                None,
+                &[],
+                &[],
+                |_, _| Ok(decode(envelope.as_bytes())),
+                |_| Ok(b"PRIVATE_BYTES".to_vec()),
+            )
+            .unwrap_err();
+            match &err {
+                CfsError::ViewBodyEval { stage, detail, .. } => {
+                    assert_eq!(*stage, phase);
+                    assert!(detail.contains(code), "{detail}");
+                }
+                other => panic!("expected ViewBodyEval, got {other:?}"),
+            }
+            let rendered = crate::ExecError::from_qfs(&err);
+            assert_eq!(rendered.code, "view_body_eval");
+            assert_eq!(rendered.kind, crate::ErrorKind::Internal);
+            assert_eq!(rendered.exit_code().code(), 5);
+            assert_eq!(rendered.path.as_deref(), Some("/slack/test"));
+            assert!(rendered.detail.as_deref().unwrap().contains(phase));
+            assert!(!rendered.message.contains("PRIVATE"));
+            assert!(!rendered.message.contains("example.invalid"));
+        }
+    }
+
+    #[test]
+    fn declared_replies_accept_empty_and_reordered_envelopes() {
+        let body = serde_json::to_string(
+            &qfs_parser::parse_statement(
+                "/http/slack/conversations.replies |> DECODE json |> EXPAND messages",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for envelope in [
+            r#"{"messages":[],"ok":true,"has_more":false}"#,
+            r#"{"response_metadata":{"next_cursor":""},"has_more":false,"ok":true,"messages":[]}"#,
+        ] {
+            let rows = eval_view_body(
+                &body,
+                "slack",
+                "/slack/test",
+                None,
+                None,
+                &[],
+                &[],
+                |_, _| Ok(decode(envelope.as_bytes())),
+                no_follow,
+            )
+            .unwrap();
+            assert!(rows.rows.is_empty());
+        }
+    }
+
+    #[test]
+    fn realistic_slack_replies_preserve_optional_fields() {
+        let body = serde_json::to_string(
+            &qfs_parser::parse_statement(
+                "/http/slack/conversations.replies |> DECODE json |> EXPAND messages",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let of = ["ts", "user", "text", "thread_ts", "subtype"].map(String::from);
+        let batch = eval_view_body(
+            &body,
+            "slack",
+            "/slack/acme/C_SYNTHETIC/messages/1780000000.000000/replies",
+            Some(&of),
+            None,
+            &[],
+            &[],
+            |_, _| {
+                Ok(decode(include_bytes!(
+                    "../tests/fixtures/slack_replies.json"
+                )))
+            },
+            no_follow,
+        )
+        .unwrap();
+        assert_eq!(batch.rows.len(), 18);
+        assert_eq!(
+            batch.rows[1].values[3],
+            Value::Text("1780000000.000000".into())
+        );
+        assert_eq!(batch.rows[2].values[4], Value::Text("bot_message".into()));
+        assert_eq!(batch.rows[5].values[2], Value::Text(String::new()));
     }
 
     #[test]

@@ -182,7 +182,9 @@ impl ExecError {
             // the only recovery is on the credential — not on the query (ticket `20260918040200`).
             CfsError::Auth { .. } => ErrorKind::Auth,
             CfsError::Service { .. } => ErrorKind::CommitFailed,
-            CfsError::Decode { .. } | CfsError::Encode { .. } => ErrorKind::Internal,
+            CfsError::Decode { .. } | CfsError::Encode { .. } | CfsError::ViewBodyEval { .. } => {
+                ErrorKind::Internal
+            }
             CfsError::DuplicateRegistration(_) | CfsError::NotImplemented { .. } => {
                 ErrorKind::Internal
             }
@@ -199,6 +201,15 @@ impl ExecError {
         }
         if let CfsError::InvalidPath { path, .. } | CfsError::Service { path, .. } = err {
             out.path = Some(path.clone());
+        }
+        if let CfsError::ViewBodyEval {
+            path,
+            stage,
+            detail,
+        } = err
+        {
+            out.path = Some(path.clone());
+            out.detail = Some(format!("{stage}: {detail}"));
         }
         // The auth failure carries both coordinates a reader needs: the path that could not be
         // authorized, and the store's own code for WHY — locked vs absent vs revoked.

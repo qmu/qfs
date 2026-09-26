@@ -100,6 +100,17 @@ pub enum CfsError {
         columns: Vec<String>,
     },
 
+    /// A resolved declared view failed inside its stored body, not in user addressing.
+    #[error("declared view {path:?} failed at {stage}: {detail}")]
+    ViewBodyEval {
+        /// The view the caller addressed.
+        path: String,
+        /// The failing internal phase: lower, plan, or evaluate.
+        stage: &'static str,
+        /// Stable cause code and safe operation/count metadata; never response values.
+        detail: String,
+    },
+
     /// A verb was planned against a node whose driver does not declare it — the
     /// **parse/resolve-time capability gate** (blueprint §6). Structured for AI consumption:
     /// it names the path, the rejected verb, and the verbs the node *does* support so
@@ -190,6 +201,7 @@ impl CfsError {
             Self::Encode { .. } => "encode_error",
             Self::InvalidPath { .. } => "invalid_path",
             Self::UnusedMapColumns { .. } => "unused_map_columns",
+            Self::ViewBodyEval { .. } => "view_body_eval",
             Self::Service { code, .. } => code,
             Self::UnsupportedVerb { .. } => "unsupported_verb",
             Self::ReservedRealmMount { .. } => "reserved_realm_mount",

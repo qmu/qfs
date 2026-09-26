@@ -111,7 +111,11 @@ impl Value {
             Value::Timestamp(_) => ColumnType::Timestamp,
             Value::Struct(fields) => ColumnType::Struct(fields.schema_of()),
             Value::Array(items) => {
-                let elem = items.first().map_or(ColumnType::Unknown, Value::type_of);
+                // Later elements may introduce optional fields or wider nested types.
+                // Inferring from only the first silently dropped those fields at EXPAND.
+                let elem = items.iter().fold(ColumnType::Unknown, |ty, item| {
+                    crate::unify::widen(&ty, &item.type_of())
+                });
                 ColumnType::Array(Box::new(elem))
             }
             Value::Json(_) => ColumnType::Json,

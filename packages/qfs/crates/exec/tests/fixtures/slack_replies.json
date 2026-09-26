@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "messages": [
+    {"ts": "1780000000.000000", "user": "U_SYNTHETIC_0", "text": "synthetic reply 0", "reply_count": 17, "reply_users": ["U_SYNTHETIC_1"], "latest_reply": "1780000000.000017"},
+    {"ts": "1780000000.000001", "user": "U_SYNTHETIC_1", "text": "synthetic reply 1", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000002", "user": "U_SYNTHETIC_2", "text": "synthetic reply 2", "thread_ts": "1780000000.000000", "subtype": "bot_message", "bot_id": "B_SYNTHETIC", "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "synthetic block"}}]},
+    {"ts": "1780000000.000003", "user": "U_SYNTHETIC_3", "text": "synthetic reply 3", "thread_ts": "1780000000.000000", "edited": {"user": "U_SYNTHETIC_3", "ts": "1780000001.000003"}, "reactions": [{"name": "eyes", "count": 1, "users": ["U_SYNTHETIC_1"]}]},
+    {"ts": "1780000000.000004", "user": "U_SYNTHETIC_4", "text": "synthetic reply 4", "thread_ts": "1780000000.000000", "files": [{"id": "F_SYNTHETIC", "name": "synthetic.txt", "size": 4}]},
+    {"ts": "1780000000.000005", "user": "U_SYNTHETIC_5", "text": "", "thread_ts": "1780000000.000000", "subtype": "channel_join"},
+    {"ts": "1780000000.000006", "user": "U_SYNTHETIC_6", "text": "synthetic reply 6", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000007", "user": "U_SYNTHETIC_7", "text": "synthetic reply 7", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000008", "user": "U_SYNTHETIC_8", "text": "synthetic reply 8", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000009", "user": "U_SYNTHETIC_9", "text": "synthetic reply 9", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000010", "user": "U_SYNTHETIC_10", "text": "synthetic reply 10", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000011", "user": "U_SYNTHETIC_11", "text": "synthetic reply 11", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000012", "user": "U_SYNTHETIC_12", "text": "synthetic reply 12", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000013", "user": "U_SYNTHETIC_13", "text": "synthetic reply 13", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000014", "user": "U_SYNTHETIC_14", "text": "synthetic reply 14", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000015", "user": "U_SYNTHETIC_15", "text": "synthetic reply 15", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000016", "user": "U_SYNTHETIC_16", "text": "synthetic reply 16", "thread_ts": "1780000000.000000"},
+    {"ts": "1780000000.000017", "user": "U_SYNTHETIC_17", "text": "synthetic reply 17", "thread_ts": "1780000000.000000"}
+  ],
+  "has_more": false,
+  "response_metadata": {"next_cursor": ""}
+}
