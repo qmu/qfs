@@ -54,3 +54,36 @@ GitHub's repository-secret name listing now succeeds and includes CLOUDFLARE_ACC
 and CLOUDFLARE_API_TOKEN. No secret values were retrieved. Local Cloudflare token environment
 variables are unset; token issuance/revocation privileges remain unverified. PR #103's
 credential-dependent token narrowing therefore remains separate outstanding work.
+
+## Current upstream verification — 2026-09-26
+
+Read-only inspection of qmu/workaholic main `e903f8bc030f41967dbdfa4c3c78f9f187548a5e`
+(plugin 1.0.389) confirms that closing upstream issues does not complete qfs#131.
+Installed plugin is 1.0.368; its `drive/scripts/archive.sh` and `drive/scripts/lib/claims.sh`
+are byte-identical to current upstream versions. Merely upgrading does not supply the missing route.
+
+Implemented protection: merged [PR #893](https://github.com/qmu/workaholic/pull/893),
+answering [#788](https://github.com/qmu/workaholic/issues/788), adds branch emptiness evidence
+and a stranded verdict before destructive retirement. `claims_branch_emptiness` compares
+merge-base to branch tip, excluding `.workaholic`; `claims_superseded` routes retained content
+to stranded. Existing tests in `scripts/test-workflow-scripts.mjs` around 25379/25429 pin
+that verdict; the holder-notification test starts at 25462. These are source/test inspections,
+not a claim that the whole upstream suite was run here.
+
+Still missing from qfs#131: `archive.sh` does not assess or record residual branch contents
+before ticket archival. `step-retire-claims.sh:500` still emits
+`tell_the_claim_holder_their_branch_holds_work_nothing_else_has`; its bound explicitly says
+not to merge, release or re-drive the ticket. There is no Implement-drivable review PR route
+for that stranded claim state. The separate stranded-publication helper operates on publication
+branches and does not satisfy this claim-residue request.
+
+[#915](https://github.com/qmu/workaholic/issues/915) was closed after a human established
+that its branch was already squash-merged by #889 and deleted it manually. Its closure comment
+explicitly leaves class-dependent retirement unresolved; it is not evidence of an implemented
+residue route. Open #1212/#1225 concern worktree reaping, a different lifecycle boundary.
+
+Narrow upstream follow-up: record a branch-specific residual-content assessment at archival,
+with squash/supersession evidence so merged copies are not labeled lost; expose genuine
+unlanded residue as a reviewable PR unit that preserves the original branch and requires an
+explicit discard decision. Pin both already-squashed and truly unique-code cases. This remains
+upstream work; no plugin cache or upstream source was changed by this audit.
