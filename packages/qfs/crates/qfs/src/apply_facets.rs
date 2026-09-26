@@ -222,7 +222,14 @@ impl ApplyDriver for RestApplyDriver {
             &resolved,
         )
         .map_err(|e| {
-            EffectError::terminal(format!("declared map body did not evaluate: {}", e.code()))
+            // This typed error carries column names, never values or request bodies.
+            let detail = match &e {
+                qfs_core::CfsError::UnusedMapColumns { columns, .. } => {
+                    format!("unused_map_columns: {}", columns.join(", "))
+                }
+                _ => e.code().to_string(),
+            };
+            EffectError::terminal(format!("declared map body did not evaluate: {detail}"))
         })?;
 
         // POST each evaluated body through the stock confined applier, rewriting the effect to carry

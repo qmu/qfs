@@ -264,7 +264,7 @@ async fn mounted_slack_accounts_isolate_reads_and_posts() {
         assert_eq!(pair[1].url, "https://slack.com/api/chat.postMessage");
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(pair[1].body.as_ref().unwrap()).unwrap(),
-            serde_json::json!({"channel":"C1","text":"hello"})
+            serde_json::json!({"channel":"C1","text":"hello","thread_ts":null})
         );
     }
 }
@@ -490,14 +490,7 @@ fn slack_text_binding_records_message_and_reply_payloads() {
     let _home = crate::testenv::HomeGuard::with_passphrase("slack-text-binding");
     seed_accounts();
     bind("/slack-a", "work-a", None);
-    let mut d = shipped_slack_declared_driver();
-    // A locally installed reply map, using the same pattern as the reported operation.
-    d.maps.push(DeclaredMap {
-        path: "/slack/{ws}/{channel}/messages/{ts}/replies".into(),
-        verb: "INSERT".into(),
-        body: serde_json::to_string(&qfs_exec::parse("INSERT INTO /http/slack/chat.postMessage VALUES ({channel: path.channel, thread_ts: path.ts, text: row.text})").unwrap()).unwrap(),
-        irreversible: false,
-    });
+    let d = shipped_slack_declared_driver();
     let mut engine = qfs_core::Engine::new();
     engine.mounts.register(Arc::new(declared_describe_mount_with_types("/slack-a", &d, &qfs_core::DeclaredTypeDefs::new()).unwrap())).unwrap();
     let reads = ReadRegistry::new();
@@ -521,7 +514,11 @@ fn slack_text_binding_records_message_and_reply_payloads() {
             if values != "(text) ('hello')" {
                 assert_eq!(code, 5, "{}", String::from_utf8_lossy(&err));
                 let diagnostic = String::from_utf8_lossy(&err);
-                assert!(diagnostic.contains("chat.postMessage") && diagnostic.contains("explicit input column bindings"), "{diagnostic}");
+                if values == "('hello')" {
+                    assert!(diagnostic.contains("unused_map_columns") && diagnostic.contains("col0"), "{diagnostic}");
+                } else {
+                    assert!(diagnostic.contains("chat.postMessage") && diagnostic.contains("explicit input column bindings"), "{diagnostic}");
+                }
                 assert!(!diagnostic.contains("hello") && !diagnostic.contains("token-a"));
                 assert!(mock.recorded().is_empty(), "invalid text must send nothing");
                 continue;
@@ -580,7 +577,7 @@ async fn shipped_slack_post_example_commits_explicit_text() {
         .split("```qfs\n")
         .skip(1)
         .map(|part| part.split("```").next().unwrap().trim())
-        .filter(|recipe| recipe.starts_with("insert into /slack"))
+        .filter(|recipe| recipe.starts_with("insert into /slack") && !recipe.contains("thread_ts"))
         .collect();
     assert_eq!(
         recipes.len(),
@@ -627,7 +624,7 @@ async fn shipped_slack_post_example_commits_explicit_text() {
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(requests[0].body.as_ref().unwrap())
                 .unwrap(),
-            serde_json::json!({"channel":channel,"text":text}),
+            serde_json::json!({"channel":channel,"text":text,"thread_ts":null}),
             "{source}"
         );
     }
@@ -793,5 +790,57 @@ fn named_slack_calls_do_not_resolve_a_missing_mount_or_bad_arguments() {
             qfs_core::Evaluator::new(&mounts).eval(&stmt).is_err(),
             "{source}"
         );
+    }
+}
+
+
+#[tokio::test]
+async fn shipped_slack_thread_and_root_writes_preserve_parent_and_account() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-shipped-threads");
+    seed_accounts();
+    bind("/slack-a", "work-a", None);
+    let d = shipped_slack_declared_driver();
+    for (tail, values, parent) in [
+        ("messages", "(text) ('hello')", serde_json::Value::Null),
+        ("messages", "(text, thread_ts) ('hello', null)", serde_json::Value::Null),
+        ("messages", "(thread_ts, text) ('1780000000.123456', 'hello')", serde_json::json!("1780000000.123456")),
+        ("messages/1780000000.123456/replies", "(text) ('hello')", serde_json::json!("1780000000.123456")),
+    ] {
+        let source = format!("INSERT INTO /slack-a/acme/C1/{tail} VALUES {values}");
+        let plan = parsed_mount_plan("/slack-a", &d, &source);
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        response(&mock);
+        let (id, registry) = mounted_registry("/slack-a", mock.clone());
+        let caps = CapabilitySet::none().grant(id, &EffectKind::Insert);
+        let outcome = Interpreter::with_defaults(registry).commit(plan, &caps).await.unwrap();
+        assert!(outcome.is_complete(), "{source}: {outcome:?}");
+        let requests = mock.recorded();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url, "https://slack.com/api/chat.postMessage");
+        assert_eq!(requests[0].header_value("authorization"), Some("Bearer token-a"));
+        let body: serde_json::Value = serde_json::from_slice(requests[0].body.as_ref().unwrap()).unwrap();
+        assert_eq!(body, serde_json::json!({"channel":"C1", "text":"hello", "thread_ts":parent}));
+    }
+}
+
+#[tokio::test]
+async fn unused_slack_insert_columns_fail_before_any_http_write() {
+    let _home = crate::testenv::HomeGuard::with_passphrase("slack-unused-input");
+    seed_accounts();
+    bind("/slack-a", "work-a", None);
+    let d = shipped_slack_declared_driver();
+    for (tail, extra) in [("messages", "thread_id"), ("messages/1.000001/replies", "thread_ts")] {
+        let source = format!("INSERT INTO /slack-a/acme/C1/{tail} VALUES (text, {extra}) ('hello', 'PRIVATE_PARENT')");
+        let plan = parsed_mount_plan("/slack-a", &d, &source);
+        let mock = Arc::new(qfs_driver_http::MockHttpClient::new());
+        let (id, registry) = mounted_registry("/slack-a", mock.clone());
+        let caps = CapabilitySet::none().grant(id, &EffectKind::Insert);
+        let outcome = Interpreter::with_defaults(registry).commit(plan, &caps).await.unwrap();
+        assert!(!outcome.is_complete());
+        let diagnostic = format!("{outcome:?}");
+        assert!(diagnostic.contains("unused_map_columns"), "{diagnostic}");
+        assert!(diagnostic.contains(extra), "{diagnostic}");
+        assert!(!diagnostic.contains("PRIVATE_PARENT"));
+        assert!(mock.recorded().is_empty());
     }
 }

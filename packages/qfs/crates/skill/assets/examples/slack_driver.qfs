@@ -91,14 +91,20 @@ CREATE VIEW /slack/{ws}/users OF slack/user AS
   /http/slack/users.list |> DECODE json |> EXPAND members;
 
 -- A write: post a message. An ordinary reversible INSERT (a message can be deleted). The wire body
--- is the exact `{channel, text}` `chat.postMessage` expects.
+-- includes the optional parent. An absent row field evaluates to null; Slack explicitly treats
+-- JSON null as the argument's default (https://docs.slack.dev/apis/web-api/), so absent/null
+-- thread_ts remains a root post while a supplied timestamp is preserved byte-for-byte.
 --
 -- `path.channel` is the map's OWN `{channel}` segment (ticket 20260726090000). The destination is
 -- named once, in the address, instead of once here and again on every inserted row. `path.<name>`
 -- and `row.<name>` are separate namespaces, so a path parameter and a column sharing a name is not
 -- an ambiguity to resolve — the two are simply different expressions.
 CREATE MAP INSERT /slack/{ws}/{channel}/messages AS
-  INSERT INTO /http/slack/chat.postMessage VALUES ({channel: path.channel, text: row.text});
+  INSERT INTO /http/slack/chat.postMessage VALUES ({channel: path.channel, text: row.text, thread_ts: row.thread_ts});
+
+-- The addressed parent is authoritative: reply text is the only input column.
+CREATE MAP INSERT /slack/{ws}/{channel}/messages/{ts}/replies AS
+  INSERT INTO /http/slack/chat.postMessage VALUES ({channel: path.channel, thread_ts: path.ts, text: row.text});
 
 -- Every ID-requiring CALL below resolves its channel argument the same way, with the §13.1 G9
 -- reverse lookup: search this driver's OWN `/slack/{ws}/channels` view for a row whose `name` OR

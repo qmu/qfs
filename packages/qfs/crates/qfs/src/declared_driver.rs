@@ -2981,8 +2981,8 @@ mod tests {
         let stmts = shipped_statements(script);
         assert_eq!(
             stmts.len(),
-            27,
-            "1 driver + 6 types + 11 views + 1 post map + 1 shared LOOKUP + 5 typed CALL maps + \
+            28,
+            "1 driver + 6 types + 11 views + 2 post maps + 1 shared LOOKUP + 5 typed CALL maps + \
              1 file-detach REMOVE map + 1 file-upload UPSERT map: {stmts:?}"
         );
         for s in &stmts {
@@ -3026,9 +3026,10 @@ mod tests {
         // the twin becoming complete — the calibration concern `the-13-2-calibration-table-was`
         // now has a twin that covers its service to answer about, which is the more useful
         // question than whether an incomplete one fit ~40.
+        // The shipped replies INSERT adds two statement-lines; measured total is now 52.
         assert!(
-            statement_lines <= 51,
-            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~51 statement-lines); \
+            statement_lines <= 53,
+            "the declared slack twin must fit the §13.2 one-screen bar (≤ ~53 statement-lines); \
              measured {statement_lines}"
         );
         // Host-confinement floor over the shipped bytes: every /http/ reference is /http/slack/.
@@ -3143,8 +3144,8 @@ mod tests {
         let maps = shipped_maps(qfs_skill::SLACK_DRIVER);
         assert_eq!(
             maps.len(),
-            8,
-            "the post map, the five CALL maps, the file-detach REMOVE map, and the file-upload \
+            9,
+            "the post and replies maps, the five CALL maps, the file-detach REMOVE map, and the file-upload \
              UPSERT map: {maps:?}"
         );
         maps

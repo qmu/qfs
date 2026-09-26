@@ -91,6 +91,15 @@ pub enum CfsError {
         reason: &'static str,
     },
 
+    /// A declared write would discard supplied columns. Values are never included.
+    #[error("declared map at {path:?} does not consume input columns: [{}]", columns.join(", "))]
+    UnusedMapColumns {
+        /// The addressed map.
+        path: String,
+        /// Supplied column names that no body or lookup reads.
+        columns: Vec<String>,
+    },
+
     /// A verb was planned against a node whose driver does not declare it — the
     /// **parse/resolve-time capability gate** (blueprint §6). Structured for AI consumption:
     /// it names the path, the rejected verb, and the verbs the node *does* support so
@@ -180,6 +189,7 @@ impl CfsError {
             Self::Decode { .. } => "decode_error",
             Self::Encode { .. } => "encode_error",
             Self::InvalidPath { .. } => "invalid_path",
+            Self::UnusedMapColumns { .. } => "unused_map_columns",
             Self::Service { code, .. } => code,
             Self::UnsupportedVerb { .. } => "unsupported_verb",
             Self::ReservedRealmMount { .. } => "reserved_realm_mount",

@@ -66,17 +66,52 @@ message timestamp is the string `1780000000.123456`. Preserve its six fractional
 message/thread through the discovered `messages/<ts>/replies` path; when a linked reply supplies a
 `thread_ts`, use that root timestamp for the thread.
 
-Before posting, inspect the installed `map` rows for the Slack namespace in `/sys/drivers`.
-The shipped channel-post map forwards only `channel` and `text`; adding a `thread_ts` input column
-to that map does **not** make it a thread reply. A thread-capable map must forward the parent
-timestamp to Slack's `chat.postMessage` as `thread_ts`. A readable replies view or `describe` showing
-INSERT alone does not prove the corresponding write map is installed.
+The shipped declaration supports both `messages` INSERT with a `thread_ts` column and
+`messages/<parent-ts>/replies` INSERT, where the parent comes from the path. Use named input
+columns: the read schema also contains server-generated fields such as `ts` and `user`.
+The examples below use a discovered channel ID and keep the same account throughout.
 
-When a thread-reply map exists, preview and commit against its exact path using the chosen account.
-Read the thread back and verify the new message's `thread_ts` equals the requested parent. If the
-map is absent, report the specific missing mapping and address it within the task's authorization;
-do not silently substitute a top-level channel post. Sending a message requires user authorization;
-reading a greeting alone is not authorization to answer it.
+Read the requested thread first:
+
+```sh
+qfs run '/slack-work/acme/C0123456789/messages/1780000000.123456/replies |> select ts, thread_ts, text'
+```
+
+After authorization to send, preview, then commit the reply:
+
+```sh
+qfs run "insert into /slack-work/acme/C0123456789/messages/1780000000.123456/replies values (text) ('Confirmed the deployment')"
+qfs run "insert into /slack-work/acme/C0123456789/messages/1780000000.123456/replies values (text) ('Confirmed the deployment')" --commit
+```
+
+Alternatively, the messages surface accepts the parent explicitly:
+
+```qfs
+insert into /slack-work/acme/C0123456789/messages
+values (text, thread_ts) ('Confirmed the deployment', '1780000000.123456')
+```
+
+Omitting `thread_ts`, or supplying `null`, posts to the channel root. Slack treats JSON null as
+an argument's default ([Web API JSON rules](https://docs.slack.dev/apis/web-api/)). A supplied
+column that the installed map does not consume is rejected with `unused_map_columns` before
+any write is sent; select only the fields the map accepts. `reply_broadcast` is not mapped.
+
+Read back after commit and confirm the new message's `thread_ts` matches the parent exactly:
+
+```sh
+qfs run "/slack-work/acme/C0123456789/messages/1780000000.123456/replies |> where thread_ts == '1780000000.123456' |> select ts, thread_ts, text"
+```
+
+For an older install, inspect its map bodies and refresh the declaration from the updated binary:
+
+```sh
+qfs run "/sys/drivers |> where kind == 'map' AND name LIKE '/slack/%' |> select name, body"
+qfs declare slack --commit
+```
+
+Refreshing preserves connection/account bindings and reinstalls the shipped maps. Do not silently
+substitute a channel-root post when the thread map is missing. Sending a message requires user
+authorization; reading a greeting alone is not authorization to answer it.
 
 ## Example
 
