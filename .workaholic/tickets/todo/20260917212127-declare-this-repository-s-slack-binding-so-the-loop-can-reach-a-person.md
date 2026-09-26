@@ -6,6 +6,7 @@ depends_on:
 feedback: [20260917212108-fb-the-loop-s-slack-destination-does-not-exist-so-nothing-reaches-a-person.md]
 merge_policy:
 verification_handoff: Which Slack workspace and channel this loop posts to - creating or nominating a channel is visible to other people and is the operator's call
+claim: work-20260926-150038
 ---
 
 # Declare this repository's Slack binding so the loop can reach a person
