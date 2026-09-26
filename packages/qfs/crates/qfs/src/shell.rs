@@ -570,16 +570,22 @@ impl ReadDriver for LazyCloudReadDriver {
             None => match self.bind() {
                 Some(facet) => self.bound.get_or_init(|| facet).clone(),
                 None => {
-                    // Choose the honest hint: a store that still cannot be unlocked is the
-                    // cause (locked vault), else the app/account is genuinely not configured.
-                    let reason = if crate::connection::open_store_for_commit().is_none() {
-                        LOCKED_STORE_HINT
-                    } else {
-                        self.connect_hint
-                    };
+                    // Choose the honest hint, AND the honest class. A store that still cannot be
+                    // unlocked is an AUTH failure (exit 6): the path and the mount are both fine
+                    // and only the key is missing, so an agent must act on the credential, not on
+                    // the query (ticket `20260918040200`). An account that is genuinely not
+                    // connected stays a CAPABILITY denial (exit 3) — this source is not available
+                    // here yet, which is a different recovery and a different exit code.
+                    if crate::connection::open_store_for_commit().is_none() {
+                        return Err(CfsError::Auth {
+                            path: scan.path.clone(),
+                            code: "secret_locked",
+                            hint: LOCKED_STORE_HINT,
+                        });
+                    }
                     return Err(CfsError::InvalidPath {
                         path: scan.path.clone(),
-                        reason,
+                        reason: self.connect_hint,
                     });
                 }
             },

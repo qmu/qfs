@@ -22,7 +22,39 @@ unsendable, re-presented every tick against an unconsumed ledger.
 
 The fix is one fenced block in this repository's `CLAUDE.md`. What it cannot supply is the one
 value the block needs — **which channel** — because creating a channel or nominating an existing
-one is an act other people see. That fork is recorded under `## Open Decisions` and this ticket
+one is an act other people see. That fork is recorded under `## Correction, measured 2026-09-18
+
+**`#dev-qfs` exists. It is a PRIVATE channel, and qfs can read it.** Everything below this line
+that says otherwise was measured through a view that could not see it.
+
+Slack's `conversations.list` defaults to `types=public_channel`, and the shipped declaration had
+exactly one discovery view built on that default. Every probe recorded in this ticket and in its
+feedback record — three mounts, zero matches, "a settled zero rather than an unknown" — was a
+question asked of the public half of the namespace only. The sibling `private-channels` view
+(`types=private_channel`) was added on 2026-09-18 and the answer changed on the first read:
+
+| mount | account | `private-channels` | `dev-qfs` |
+| --- | --- | --- | --- |
+| `/slack` | team | 4 rows | **present** |
+| `/slack-cc-for-qmu` | cc-for-qmu | 4 rows | **present** |
+| `/slack-me` | me | `missing_scope` (no `groups:read`) | unknown, not absent |
+| `/slack-codex-for-osbr` | codex-for-osbr | 1 row | absent |
+
+`dev-qfs` is `C0BM2ASB63G`, and `/slack-cc-for-qmu/<ws>/C0BM2ASB63G/messages` returns its history
+— including this loop's own past posts. So the destination was never gone; the instrument was
+blind, and a `missing_scope` on one account was being reported as absence on all of them.
+
+**What this does to the fork below.** It dissolves it. The operator does not have to create or
+nominate a channel: the channel this loop already used is reachable today from two of the five
+connected mounts. What remains is mechanical — declare `workspace` / `channel: dev-qfs` /
+`channel_id: C0BM2ASB63G` / `mount: /slack-cc-for-qmu` in the binding block. Read the fork below as
+history, not as a live question.
+
+Note for whoever lands this: address the channel by **id**, not by name — a declared read view
+substitutes the path segment into `conversations.history?channel=` verbatim and Slack's method takes
+an id, which ticket `20260918044700` covers.
+
+## Open Decisions` and this ticket
 declares `verification_handoff`, so the unit opens a pull request that stays open for the
 operator rather than being re-claimed and re-failed every tick.
 

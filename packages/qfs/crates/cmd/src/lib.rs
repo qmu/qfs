@@ -244,6 +244,29 @@ pub type DescribeProvider<'a> = dyn Fn() -> qfs_core::MountRegistry + 'a;
 /// edge adds zero transitive runtime weight. The argument is `include_examples`.
 pub type SkillProvider<'a> = dyn Fn(bool) -> String + 'a;
 
+/// One declared-driver install program the binary ships, as [`DeclarationProvider`] hands it over:
+/// the asset label an operator re-installs from, and its embedded source text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShippedDeclaration {
+    /// The asset's file name (`slack_driver.qfs`).
+    pub label: &'static str,
+    /// The embedded `CREATE DRIVER`/`TYPE`/`VIEW`/`MAP` program.
+    pub source: &'static str,
+}
+
+/// The declared-driver programs this binary ships — injected for the same reason
+/// [`SkillProvider`] is: the `qfs → qfs-skill` edge belongs to the terminal binary, and qfs-cmd
+/// only knows "the `declare` subcommand → ask for the shipped set → split it → run each
+/// statement through the ordinary run path".
+///
+/// This exists because a binary that EMBEDS a declaration an operator cannot install from it is a
+/// capability the product ships and cannot reach: before `qfs declare`, refreshing a stale
+/// declaration meant fetching the asset from GitHub by hand and pasting its statements one at a
+/// time, and an operator who did not know that ran a current binary against a declaration years
+/// older than it (measured 2026-09-18: a Slack file surface that could list attachments and not
+/// read one, on a binary that had shipped the read for weeks).
+pub type DeclarationProvider<'a> = dyn Fn() -> Vec<ShippedDeclaration> + 'a;
+
 /// A parsed `qfs connect` / `qfs disconnect` request, handed to the binary-injected
 /// [`ConnectionLauncher`] (the connect layer — ADR 0008 §3; the credentialed `qfs connection`
 /// verb namespace is RETIRED: accounts live under `qfs account`, the store re-wrap under
@@ -595,6 +618,21 @@ enum Command {
         /// Output format: `json` or `table`. Default: `table` on a TTY, `json` when piped.
         #[arg(long = "format", value_name = "FORMAT")]
         format: Option<String>,
+    },
+    /// Install (or re-install) a declared driver this binary ships — the `.qfs` declaration
+    /// embedded in the artifact. PREVIEW by default; `--commit` writes the rows.
+    ///
+    /// With no argument it lists what the binary carries. A declaration is config, not code, so
+    /// upgrading the binary never updates one: `qfs declare <driver> --commit` is what makes an
+    /// installed driver current with the binary running it. Re-installing REPLACES (a declaration's
+    /// identity is `(kind, name, verb)`), so running it twice is safe. Ask
+    /// `/sys/declarations` which of your installed declarations are stale.
+    Declare {
+        /// The driver to install (`slack`, `chatwork`, …). Omit to list what this binary ships.
+        driver: Option<String>,
+        /// Apply. Without this flag the statements are listed, nothing is written.
+        #[arg(long = "commit")]
+        commit: bool,
     },
     /// Print the embedded AI operating-procedure skill (`SKILL.md`) and exit (t39).
     ///
@@ -1060,6 +1098,7 @@ pub fn run<I, T>(
     serve: &ServeLauncher,
     describe: &DescribeProvider,
     skill: &SkillProvider,
+    declarations: &DeclarationProvider,
     connection: &ConnectionLauncher,
     identity: &IdentityLauncher,
     init: &InitLauncher,
@@ -1165,6 +1204,20 @@ where
         return 0;
     }
 
+    // `qfs declare [<driver>] [--commit]`: the shipped declarations, listed or installed. Each
+    // statement goes through the SAME one-shot path `qfs run` uses, so the preview/commit gate,
+    // the renderers and the exit codes are the ones the rest of the CLI already contracts.
+    if let Some(Command::Declare { driver, commit }) = &cli.cmd {
+        return dispatch_declare(
+            driver.as_deref(),
+            *commit,
+            cli.json,
+            declarations,
+            apply,
+            run_ctx,
+        );
+    }
+
     // No subcommand → the interactive shell, run by the injected launcher (which owns the
     // runtime-coupled local read facet + REPL driver; see [`ShellLauncher`]). It returns the
     // process exit code directly.
@@ -1178,6 +1231,7 @@ where
         Some(Command::Run { .. })
         | Some(Command::Describe { .. })
         | Some(Command::Skill { .. })
+        | Some(Command::Declare { .. })
         | None => Ok(()),
         // `serve` is dispatched through the injected launcher (the binary composition root that
         // wires the HTTP binding); it returns the process exit code directly.
@@ -1399,6 +1453,16 @@ struct RunOpts {
 /// piped), and hand off to the execution layer, which renders the result and returns the
 /// stable exit code. Logic-free: all execution lives in `qfs-exec`.
 fn dispatch_run(opts: RunOpts, apply: &qfs_exec::WorldApply, run_ctx: &RunContextProvider) -> i32 {
+    dispatch_run_into(opts, apply, run_ctx, None)
+}
+
+/// [`dispatch_run`], with the result envelope optionally collected into `sink` instead of stdout.
+fn dispatch_run_into(
+    opts: RunOpts,
+    apply: &qfs_exec::WorldApply,
+    run_ctx: &RunContextProvider,
+    sink: Option<&mut dyn std::io::Write>,
+) -> i32 {
     use std::io::IsTerminal;
 
     // Resolve the statement source. A positional `-` means "read from stdin".
@@ -1433,21 +1497,235 @@ fn dispatch_run(opts: RunOpts, apply: &qfs_exec::WorldApply, run_ctx: &RunContex
 
     let _ = opts.quiet; // `--quiet` suppresses progress; the renderers emit no progress yet.
 
-    let mut out = std::io::stdout();
-    let mut err = std::io::stderr();
-    let mut streams = qfs_exec::Streams {
-        out: &mut out,
-        err: &mut err,
+    match sink {
+        // The ordinary `qfs run`: the result envelope goes to the operator's stdout.
+        None => {
+            let mut out = std::io::stdout();
+            let mut err = std::io::stderr();
+            let mut streams = qfs_exec::Streams {
+                out: &mut out,
+                err: &mut err,
+            };
+            qfs_exec::run_oneshot(
+                &source,
+                &ctx,
+                fmt,
+                opts.commit,
+                opts.commit_irreversible,
+                &mut streams,
+            )
+            .code()
+        }
+        // A batch caller (`qfs declare --commit`) collects the per-statement envelopes instead of
+        // printing 27 of them: the batch's own summary is the answer, and the exit code is still
+        // the statement's. Errors keep going to the real stderr, so a failure is never swallowed.
+        Some(collected) => {
+            let mut err = std::io::stderr();
+            let mut streams = qfs_exec::Streams {
+                out: collected,
+                err: &mut err,
+            };
+            qfs_exec::run_oneshot(
+                &source,
+                &ctx,
+                fmt,
+                opts.commit,
+                opts.commit_irreversible,
+                &mut streams,
+            )
+            .code()
+        }
+    }
+}
+
+/// Dispatch `qfs declare [<driver>] [--commit]`.
+///
+/// With no driver it lists what the binary ships — label, driver name, statement count — and
+/// stops. With one it splits that declaration with the SAME `qfs-core` splitter the reconcile
+/// loop and the shell boot use (never a private chunker) and runs each statement through
+/// [`dispatch_run`], so an install is exactly the `qfs run` the operator would have typed, N
+/// times, with the same preview/commit gate and the same exit codes.
+///
+/// The first failing statement stops the run and returns its code: a half-installed declaration
+/// is reported where it stopped, never summarised as success.
+fn dispatch_declare(
+    driver: Option<&str>,
+    commit: bool,
+    json: bool,
+    declarations: &DeclarationProvider,
+    apply: &qfs_exec::WorldApply,
+    run_ctx: &RunContextProvider,
+) -> i32 {
+    let shipped = declarations();
+
+    let Some(wanted) = driver else {
+        return list_declarations(&shipped, json);
     };
-    qfs_exec::run_oneshot(
-        &source,
-        &ctx,
-        fmt,
-        opts.commit,
-        opts.commit_irreversible,
-        &mut streams,
-    )
-    .code()
+
+    let Some(found) = shipped
+        .iter()
+        .find(|d| declared_driver_name(d.source).as_deref() == Some(wanted))
+    else {
+        let names: Vec<String> = shipped
+            .iter()
+            .filter_map(|d| declared_driver_name(d.source))
+            .collect();
+        eprintln!(
+            "qfs: error: this binary ships no declaration for `{wanted}` (it ships: {})",
+            names.join(", ")
+        );
+        return 2;
+    };
+
+    let statements = match qfs_core::ddl::document::split_document(found.source) {
+        Ok(stmts) => stmts,
+        Err(e) => {
+            eprintln!(
+                "qfs: error: the embedded declaration `{}` does not split (line {}): {}",
+                found.label, e.line, e.message
+            );
+            return 1;
+        }
+    };
+
+    if !commit {
+        // Written through one locked handle that STOPS on a closed pipe: a listing is the natural
+        // thing to pipe into `head`, and a `println!` panics there (the process gets EPIPE and the
+        // macro unwraps). A manifest that kills the process when you read the top of it is not a
+        // manifest.
+        use std::io::Write;
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        let _ = writeln!(
+            out,
+            "PREVIEW: {} statement(s) from {} — re-run with --commit to install",
+            statements.len(),
+            found.label
+        );
+        for (_, src) in &statements {
+            if writeln!(out, "  {}", statement_headline(src)).is_err() {
+                return 0;
+            }
+        }
+        return 0;
+    }
+
+    let mut collected: Vec<u8> = Vec::new();
+    for (n, (line, src)) in statements.iter().enumerate() {
+        let code = dispatch_run_into(
+            RunOpts {
+                stmt: Some(src.clone()),
+                expr: None,
+                format: Some("json".to_string()),
+                json: true,
+                commit: true,
+                commit_irreversible: false,
+                quiet: true,
+            },
+            apply,
+            run_ctx,
+            Some(&mut collected),
+        );
+        if code != 0 {
+            eprintln!(
+                "qfs: error: statement {} of {} (line {line}) failed: {}",
+                n + 1,
+                statements.len(),
+                statement_headline(src)
+            );
+            return code;
+        }
+    }
+    println!(
+        "installed {} statement(s) from {}",
+        statements.len(),
+        found.label
+    );
+    println!("  locally-added nodes this binary does not ship are left alone; `/sys/declarations`");
+    println!(
+        "  calls a declaration carrying extras `stale` — a local addition, not a failed install."
+    );
+
+    0
+}
+
+/// List the shipped declarations: the asset label, the driver it declares, and how many
+/// statements installing it writes.
+fn list_declarations(shipped: &[ShippedDeclaration], json: bool) -> i32 {
+    let rows: Vec<(String, &'static str, usize)> = shipped
+        .iter()
+        .map(|d| {
+            let count = qfs_core::ddl::document::split_document(d.source)
+                .map(|s| s.len())
+                .unwrap_or(0);
+            (
+                declared_driver_name(d.source).unwrap_or_else(|| "?".to_string()),
+                d.label,
+                count,
+            )
+        })
+        .collect();
+    if json {
+        let body: Vec<String> = rows
+            .iter()
+            .map(|(driver, label, count)| {
+                format!(r#"{{"driver":"{driver}","asset":"{label}","statements":{count}}}"#)
+            })
+            .collect();
+        println!("[{}]", body.join(","));
+    } else {
+        use std::io::Write;
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        let _ = writeln!(out, "Declarations this binary ships:");
+        for (driver, label, count) in &rows {
+            if writeln!(out, "  {driver:<12} {label:<24} {count} statement(s)").is_err() {
+                return 0;
+            }
+        }
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "  qfs declare <driver>            list the statements (writes nothing)"
+        );
+        let _ = writeln!(
+            out,
+            "  qfs declare <driver> --commit   install / refresh it"
+        );
+        let _ = writeln!(
+            out,
+            "  qfs run \"/sys/declarations |> select driver, status\"   which installed ones are stale"
+        );
+    }
+    0
+}
+
+/// The driver a declaration program declares, read from its own `CREATE DRIVER <name>` statement.
+/// Derived, never carried beside the asset: a hand-written name would be a second claim about the
+/// same fact and the two would drift the first time an asset was renamed.
+fn declared_driver_name(source: &str) -> Option<String> {
+    let stmts = qfs_core::ddl::document::split_document(source).ok()?;
+    stmts.iter().find_map(|(_, src)| {
+        let mut words = src.split_whitespace();
+        match (words.next(), words.next(), words.next()) {
+            (Some(a), Some(b), Some(name))
+                if a.eq_ignore_ascii_case("create") && b.eq_ignore_ascii_case("driver") =>
+            {
+                Some(name.to_string())
+            }
+            _ => None,
+        }
+    })
+}
+
+/// A one-line headline for a statement — its leading keywords and the node it names, so a listing
+/// reads as a manifest instead of a wall of bodies.
+fn statement_headline(src: &str) -> String {
+    let flat = src.split_whitespace().collect::<Vec<_>>().join(" ");
+    match flat.find(" AS ") {
+        Some(i) => flat[..i].to_string(),
+        None => flat.chars().take(100).collect(),
+    }
 }
 
 /// Dispatch `qfs describe <path>` (t39): build the describe-only driver registry via the injected
@@ -1834,6 +2112,21 @@ mod tests {
 
     /// A stand-in skill provider for the dispatch tests (the real embedded skill is wired + tested
     /// in the binary crate). Returns a minimal loop-landmarked text so the `skill` arm is total.
+    /// Two shipped declarations, the smallest shape that exercises name derivation and the
+    /// per-statement loop: one names a driver, one is unnamed (so the listing must not claim it).
+    fn stub_declarations() -> Vec<ShippedDeclaration> {
+        vec![
+            ShippedDeclaration {
+                label: "demo.qfs",
+                source: "CREATE DRIVER demo AT 'https://demo.test';\n                         CREATE TYPE demo/row ( id text PRIMARY KEY );\n",
+            },
+            ShippedDeclaration {
+                label: "nameless.qfs",
+                source: "CREATE TYPE loose/row ( id text PRIMARY KEY );\n",
+            },
+        ]
+    }
+
     fn stub_skill(examples: bool) -> String {
         if examples {
             "DESCRIBE PREVIEW COMMIT\n## Example corpus\n".to_string()
@@ -1952,6 +2245,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -1971,6 +2265,51 @@ mod tests {
         )
     }
 
+    /// `qfs declare` with no argument lists what the binary ships, derives each driver name from
+    /// the declaration's own `CREATE DRIVER` statement, and writes nothing.
+    #[test]
+    fn declare_lists_the_shipped_declarations_and_writes_nothing() {
+        let code = run_t(["qfs", "declare", "--json"]);
+        assert_eq!(code, 0, "listing is a pure read");
+    }
+
+    /// A driver this binary does not ship is a usage refusal naming what it does ship — never a
+    /// silent zero, and never an attempt to install something that is not there.
+    #[test]
+    fn declare_refuses_a_driver_the_binary_does_not_ship() {
+        assert_eq!(run_t(["qfs", "declare", "nosuch"]), 2);
+    }
+
+    /// Without `--commit` the statements are listed and nothing executes: the preview/commit gate
+    /// that governs every other write governs an install too.
+    #[test]
+    fn declare_previews_by_default() {
+        assert_eq!(run_t(["qfs", "declare", "demo"]), 0);
+    }
+
+    /// The driver name comes from the declaration's own `CREATE DRIVER`, so an asset that declares
+    /// none is listed but cannot be installed by name.
+    #[test]
+    fn declared_driver_name_reads_the_create_driver_statement() {
+        assert_eq!(
+            declared_driver_name("CREATE DRIVER demo AT 'https://demo.test';").as_deref(),
+            Some("demo")
+        );
+        assert_eq!(
+            declared_driver_name("CREATE TYPE loose/row ( id text PRIMARY KEY );"),
+            None
+        );
+    }
+
+    /// A headline stops at the `AS` seam: a manifest line names the node, never its body.
+    #[test]
+    fn a_statement_headline_stops_at_the_body() {
+        assert_eq!(
+            statement_headline("CREATE VIEW /slack/{ws}/channels OF slack/channel AS\n  /http/slack/conversations.list"),
+            "CREATE VIEW /slack/{ws}/channels OF slack/channel"
+        );
+    }
+
     #[test]
     fn host_verbs_dispatch_through_the_injected_launcher() {
         // ADR 0008 §1: `qfs host list/login/logout` route to the injected HostLauncher.
@@ -1985,6 +2324,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -2042,6 +2382,7 @@ mod tests {
                 &|_cfg| 0,
                 &empty_describe,
                 &stub_skill,
+                &stub_declarations,
                 &stub_connection,
                 &stub_identity,
                 &stub_init,
@@ -2101,6 +2442,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -2154,6 +2496,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -2194,6 +2537,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -2240,6 +2584,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -2290,6 +2635,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -2328,6 +2674,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -2369,6 +2716,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -2427,6 +2775,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -2491,6 +2840,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -2553,6 +2903,7 @@ mod tests {
             },
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &stub_init,
@@ -2704,6 +3055,7 @@ mod tests {
             &|_cfg| 0,
             &empty_describe,
             &stub_skill,
+            &stub_declarations,
             &stub_connection,
             &stub_identity,
             &launcher,
@@ -2798,6 +3150,7 @@ mod tests {
                 &|_| 0,
                 &empty_describe,
                 &provider,
+                &stub_declarations,
                 &stub_connection,
                 &stub_identity,
                 &stub_init,
@@ -2825,6 +3178,7 @@ mod tests {
                 &|_| 0,
                 &empty_describe,
                 &provider,
+                &stub_declarations,
                 &stub_connection,
                 &stub_identity,
                 &stub_init,

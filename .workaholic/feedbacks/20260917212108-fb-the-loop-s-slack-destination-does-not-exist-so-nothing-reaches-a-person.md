@@ -38,6 +38,14 @@ on the owner's own `me` account alike:
 succeeded, so this is a settled zero rather than an unknown. `describe-native-qfs.sh` cannot
 resolve the channel name to a single id and returns `channel_unreadable` on every mount.
 
+## Superseded in part, 2026-09-18
+
+The destination **exists**: `#dev-qfs` is a private channel (`C0BM2ASB63G`), readable today through
+`/slack` and `/slack-cc-for-qmu`. Every zero recorded below was measured through a channel listing
+that only ever asked for public channels (Slack's `conversations.list` default), so it could not
+have found it. The `private-channels` sibling view added on 2026-09-18 finds it on the first read.
+The impact recorded below was real; its stated cause was not.
+
 ## What this run measured on top of the report
 
 The obvious repair — point the binding at the channel this repository actually used — was

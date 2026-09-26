@@ -125,6 +125,31 @@ pub struct MapWrite {
 /// [`eval_map_body`], which matches them **locally per row**. That split is what keeps the evaluator
 /// pure and makes the shape identical to the compiled oracle's (one `conversations.list`, then a
 /// local scan), so equivalence is provable on shared fixtures rather than asserted.
+/// What a declared lookup matches the collection against — the one value the binding resolves by.
+///
+/// A CALL map takes its channel as an argument, so it searches by `row.channel`. A universal-verb
+/// map addressed at the channel (`UPSERT /slack/{ws}/{channel}/files/{filename}`) has no such
+/// column: its destination is in the ADDRESS, and the row carries only the payload. Both are the
+/// same question asked of the same collection, so both are accepted — and each binding still names
+/// exactly ONE of them, which is what keeps a hit's meaning readable from the declaration alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LookupKey {
+    /// `row.<field>` — a column of the incoming row.
+    Row(String),
+    /// `path.<param>` — a `{param}` segment of the map's own path.
+    Path(String),
+}
+
+impl LookupKey {
+    /// The bound name, for a refusal message that can name what was missing.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            LookupKey::Row(name) | LookupKey::Path(name) => name,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MapLookup {
     /// The bound name the effect body references (`cid`).
@@ -140,8 +165,9 @@ pub struct MapLookup {
     /// a value that is ALREADY that column's value resolves to itself, without the runtime knowing
     /// anything about the shape of either (ticket 20260724014100).
     pub match_cols: Vec<String>,
-    /// The incoming-row field it is compared to (`channel`, from `row.channel`).
-    pub row_field: String,
+    /// What the collection is searched BY: a field of the incoming row (`row.channel`) or a
+    /// segment of the map's own address (`path.channel`).
+    pub key: LookupKey,
     /// The collection column whose value is bound (`id`).
     pub select_col: String,
 }
@@ -332,18 +358,19 @@ fn lookup_of_binding(
     }
     let source_path = render_source_path(&path.segments, params);
 
-    let (match_cols, row_field, select_col) = match pipeline.ops.as_slice() {
+    let (match_cols, key, select_col) = match pipeline.ops.as_slice() {
         [PipeOp::Where(pred), PipeOp::Select(projections)] => {
-            let (match_cols, row_field) = eq_against_row_field(pred, invalid)?;
+            let (match_cols, key) = eq_against_binding_key(pred, invalid)?;
             (
                 match_cols,
-                row_field,
+                key,
                 single_projected_column(projections, invalid)?,
             )
         }
         _ => {
             return Err(invalid(
-                "declared map LET must be `|> WHERE <col> == row.<field> |> SELECT <col>`",
+                "declared map LET must be `|> WHERE <col> == row.<field> |> SELECT <col>` \
+                 (`path.<param>` in place of `row.<field>` is equally accepted)",
             ))
         }
     };
@@ -352,22 +379,24 @@ fn lookup_of_binding(
         name: name.to_string(),
         source_path,
         match_cols,
-        row_field,
+        key,
         select_col,
     })
 }
 
-/// The `WHERE <col> == row.<field>` predicate, as `(collection column, incoming-row field)`.
-fn eq_against_row_field(
+/// The `WHERE <col> == row.<field>` / `== path.<param>` predicate, as
+/// `(collection columns, the key they are all compared to)`.
+fn eq_against_binding_key(
     pred: &Expr,
     invalid: &impl Fn(&'static str) -> CfsError,
-) -> Result<(Vec<String>, String), CfsError> {
+) -> Result<(Vec<String>, LookupKey), CfsError> {
     let mut cols = Vec::new();
-    let mut field: Option<String> = None;
-    collect_eq_terms(pred, &mut cols, &mut field, invalid)?;
-    let row_field = field
-        .ok_or_else(|| invalid("declared map LET predicate must compare against `row.<field>`"))?;
-    Ok((cols, row_field))
+    let mut key: Option<LookupKey> = None;
+    collect_eq_terms(pred, &mut cols, &mut key, invalid)?;
+    let key = key.ok_or_else(|| {
+        invalid("declared map LET predicate must compare against `row.<field>` or `path.<param>`")
+    })?;
+    Ok((cols, key))
 }
 
 /// Flatten a `<col> == row.<f> [OR <col> == row.<f>]…` predicate into its collection columns,
@@ -381,7 +410,7 @@ fn eq_against_row_field(
 fn collect_eq_terms(
     pred: &Expr,
     cols: &mut Vec<String>,
-    field: &mut Option<String>,
+    key: &mut Option<LookupKey>,
     invalid: &impl Fn(&'static str) -> CfsError,
 ) -> Result<(), CfsError> {
     if let Expr::Binary {
@@ -390,8 +419,8 @@ fn collect_eq_terms(
         rhs,
     } = pred
     {
-        collect_eq_terms(lhs, cols, field, invalid)?;
-        return collect_eq_terms(rhs, cols, field, invalid);
+        collect_eq_terms(lhs, cols, key, invalid)?;
+        return collect_eq_terms(rhs, cols, key, invalid);
     }
     let Expr::Binary {
         op: Op::Eq,
@@ -410,21 +439,29 @@ fn collect_eq_terms(
     };
     let Expr::Path(segments) = rhs.as_ref() else {
         return Err(invalid(
-            "declared map LET predicate must compare against `row.<field>`",
+            "declared map LET predicate must compare against `row.<field>` or `path.<param>`",
         ));
     };
-    if segments.len() != 2 || segments[0].as_str() != "row" {
+    if segments.len() != 2 {
         return Err(invalid(
-            "declared map LET predicate must compare against `row.<field>`",
+            "declared map LET predicate must compare against `row.<field>` or `path.<param>`",
         ));
     }
-    let this_field = segments[1].to_string();
-    match field {
-        Some(seen) if *seen != this_field => return Err(invalid(
-            "declared map LET disjunction must compare every term against the same `row.<field>`",
+    let this_key =
+        match segments[0].as_str() {
+            "row" => LookupKey::Row(segments[1].to_string()),
+            "path" => LookupKey::Path(segments[1].to_string()),
+            _ => return Err(invalid(
+                "declared map LET predicate must compare against `row.<field>` or `path.<param>`",
+            )),
+        };
+    match key {
+        Some(seen) if *seen != this_key => return Err(invalid(
+            "declared map LET disjunction must compare every term against the same `row.<field>` \
+             or `path.<param>`",
         )),
         Some(_) => {}
-        None => *field = Some(this_field),
+        None => *key = Some(this_key),
     }
     cols.push(col.to_string());
     Ok(())
@@ -458,15 +495,32 @@ fn resolve_lookup(
     collection: &RowBatch,
     incoming: &RowBatch,
     row: &Row,
+    params: &[(String, String)],
     invalid: &impl Fn(&'static str) -> CfsError,
 ) -> Result<Value, CfsError> {
-    let wanted = incoming
-        .schema
-        .columns
-        .iter()
-        .position(|c| c.name == lookup.row_field)
-        .and_then(|i| row.values.get(i))
-        .ok_or_else(|| invalid("the declared map LET names a field the incoming row lacks"))?;
+    // The searched-for value comes from the row or from the address, whichever the binding names.
+    // A path segment is text by construction (it is a rendered path), so it compares against a
+    // text column exactly as a row value does.
+    let from_path;
+    let wanted = match &lookup.key {
+        LookupKey::Row(field) => incoming
+            .schema
+            .columns
+            .iter()
+            .position(|c| &c.name == field)
+            .and_then(|i| row.values.get(i))
+            .ok_or_else(|| invalid("the declared map LET names a field the incoming row lacks"))?,
+        LookupKey::Path(param) => {
+            from_path = params
+                .iter()
+                .find(|(name, _)| name == param)
+                .map(|(_, value)| Value::Text(value.clone()))
+                .ok_or_else(|| {
+                    invalid("the declared map LET names a `{param}` the map's path lacks")
+                })?;
+            &from_path
+        }
+    };
 
     let mut match_idxs = Vec::with_capacity(lookup.match_cols.len());
     for col in &lookup.match_cols {
@@ -982,6 +1036,36 @@ pub fn eval_map_body(
     let scalar =
         lower_scalar(expr).map_err(|_| invalid("declared map body is not a per-row expression"))?;
 
+    // Refuse silent input loss before constructing ANY wire body. Use the lowered scalar's
+    // exhaustive reference walker, including nested objects/arrays and whole-row forwarding.
+    // Lookup keys consume input too, even when the wire body only names their result.
+    let mut refs = Vec::new();
+    scalar.col_refs(&mut refs);
+    let forwards_row = refs.iter().any(|r| r.path.as_slice() == ["row"]);
+    if !forwards_row {
+        let unused: Vec<String> = incoming
+            .schema
+            .columns
+            .iter()
+            .filter(|column| {
+                !refs.iter().any(|r| {
+                    r.path.first().map(String::as_str) == Some("row")
+                        && r.path.get(1) == Some(&column.name)
+                }) && !lookups.iter().any(|(lookup, _)| {
+                    matches!(&lookup.key,
+                LookupKey::Row(name) if name == &column.name)
+                })
+            })
+            .map(|c| c.name.clone())
+            .collect();
+        if !unused.is_empty() {
+            return Err(CfsError::UnusedMapColumns {
+                path: map_path.to_string(),
+                columns: unused,
+            });
+        }
+    }
+
     // 4. Evaluate per incoming row: bind the row as a single `row` struct column — plus one column
     //    per resolved §13.1 G9 lookup, so the effect body references `cid` exactly as it is written —
     //    then run the scalar through the SHIPPED per-row evaluator. `row` passthrough yields the
@@ -1023,6 +1107,36 @@ pub fn eval_map_body(
             .map(|(k, v)| (k.clone(), Value::Text(v.clone())))
             .collect(),
     ));
+    // A write ADDRESSED at its target carries no row: `remove /slack/<ws>/files/<id>` names the
+    // file in the path and has nothing to enumerate. The body still evaluates — once — because
+    // everything it needs is in `path.<param>`. Before this, a rowless write produced zero bodies,
+    // the wire loop ran zero times, and the effect reported `committed: true` having sent nothing:
+    // a silent no-op on an IRREVERSIBLE verb (ticket 20260919050000).
+    //
+    // A body that reads `row.<field>` is REFUSED here instead, because evaluating it against a row
+    // that does not exist would put nulls on the wire and call that success — the same failure
+    // wearing a different mask.
+    if incoming.rows.is_empty() {
+        if expr_reads_row(expr) {
+            return Err(invalid(
+                "this declared map's body reads `row.<field>` but the write carries no row",
+            ));
+        }
+        let mut values = vec![Value::Struct(Fields::new(Vec::new())), path_struct.clone()];
+        let empty_row = Row::new(Vec::new());
+        for (lookup, collection) in lookups {
+            values.push(resolve_lookup(
+                lookup, collection, incoming, &empty_row, params, &invalid,
+            )?);
+        }
+        return Ok(MapWrite {
+            rest_path,
+            bodies: vec![eval_value(&scalar, &schema, &Row::new(values))],
+            encoding,
+            wire_kind: wire_kind_of(effect.verb),
+        });
+    }
+
     let mut bodies = Vec::with_capacity(incoming.rows.len());
     for r in &incoming.rows {
         let row_struct = Value::Struct(Fields::new(
@@ -1036,7 +1150,9 @@ pub fn eval_map_body(
         ));
         let mut values = vec![row_struct, path_struct.clone()];
         for (lookup, collection) in lookups {
-            values.push(resolve_lookup(lookup, collection, incoming, r, &invalid)?);
+            values.push(resolve_lookup(
+                lookup, collection, incoming, r, params, &invalid,
+            )?);
         }
         bodies.push(eval_value(&scalar, &schema, &Row::new(values)));
     }
@@ -1047,6 +1163,32 @@ pub fn eval_map_body(
         encoding,
         wire_kind: wire_kind_of(effect.verb),
     })
+}
+
+/// Whether an expression reads `row.<field>` anywhere inside it — the question that decides
+/// whether a rowless (address-only) write can evaluate its body at all.
+///
+/// Total over the expression grammar by construction: every variant either recurses into its
+/// sub-expressions or is a leaf that cannot carry one. A new variant defaults to `false` only if
+/// it is genuinely a leaf, which is why the match is exhaustive rather than `_ => false`.
+fn expr_reads_row(expr: &Expr) -> bool {
+    match expr {
+        Expr::Path(segments) => segments.first().map(|s| s.as_str()) == Some("row"),
+        Expr::Lit(_) | Expr::Col(_) => false,
+        Expr::Fn(call) => call.args.iter().any(expr_reads_row),
+        Expr::Binary { lhs, rhs, .. } => expr_reads_row(lhs) || expr_reads_row(rhs),
+        Expr::Unary { expr, .. } => expr_reads_row(expr),
+        Expr::In { expr, set } | Expr::AnyOp { expr, set, .. } => {
+            expr_reads_row(expr) || set.iter().any(expr_reads_row)
+        }
+        Expr::Between { expr, low, high } => {
+            expr_reads_row(expr) || expr_reads_row(low) || expr_reads_row(high)
+        }
+        Expr::Like { expr, pattern } => expr_reads_row(expr) || expr_reads_row(pattern),
+        Expr::Lambda { body, .. } => expr_reads_row(body),
+        Expr::Array(items) => items.iter().any(expr_reads_row),
+        Expr::Struct(fields) => fields.iter().any(|(_, e)| expr_reads_row(e)),
+    }
 }
 
 /// The parsed body verb as the runtime effect kind the wire applier services.
@@ -1753,6 +1895,54 @@ mod tests {
     }
 
     #[test]
+    fn declared_maps_refuse_named_unused_columns_without_disclosing_values() {
+        let body = serde_json::to_string(
+            &qfs_parser::parse_statement(
+                "INSERT INTO /http/example/post VALUES ({payload: [{text: row.text}]})",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let err = eval_map_body(
+            &body,
+            "example",
+            "/example/post",
+            &[],
+            &incoming(&[("text", "hello"), ("thread_id", "PRIVATE_PARENT")]),
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "unused_map_columns");
+        assert!(err.to_string().contains("thread_id"));
+        assert!(!err.to_string().contains("PRIVATE_PARENT"));
+        assert!(eval_map_body(
+            &body,
+            "example",
+            "/example/post",
+            &[],
+            &incoming(&[("text", "hello")]),
+            &[]
+        )
+        .is_ok());
+        let body = serde_json::to_string(
+            &qfs_parser::parse_statement(
+                "INSERT INTO /http/example/post VALUES ({payload: [row]})",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(eval_map_body(
+            &body,
+            "example",
+            "/example/post",
+            &[],
+            &incoming(&[("text", "hello"), ("extra", "retained")]),
+            &[]
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn eval_map_body_shapes_the_wire_body_from_the_incoming_row() {
         // Tier 2 write: `VALUES ({channel: row.channel, text: row.text})` maps an incoming row into
         // the exact `{channel, text}` body Slack's chat.postMessage expects (the tier-1 gap: a bare
@@ -2330,7 +2520,7 @@ mod tests {
                 name: "cid".into(),
                 source_path: "/slack/T1/channels".into(),
                 match_cols: vec!["name".into()],
-                row_field: "channel".into(),
+                key: LookupKey::Row("channel".into()),
                 select_col: "id".into(),
             }]
         );
@@ -2356,7 +2546,150 @@ mod tests {
         )
         .expect("a disjunction over one row field extracts");
         assert_eq!(found[0].match_cols, vec!["name", "id"]);
-        assert_eq!(found[0].row_field, "channel");
+        assert_eq!(found[0].key, LookupKey::Row("channel".into()));
+    }
+
+    /// An ADDRESS-ONLY write evaluates its body ONCE, not once per row it does not have — the
+    /// shape of `remove /slack/<ws>/files/<id>`, whose body needs only `path.file`. Before ticket
+    /// `20260919050000` this produced zero bodies, so the wire loop ran zero times and an
+    /// IRREVERSIBLE delete reported success having sent nothing.
+    #[test]
+    fn eval_map_body_evaluates_an_address_only_write_once() {
+        let body = map_body_of(
+            "CREATE MAP REMOVE /slack/{ws}/files/{file} AS \
+             INSERT INTO /http/slack/files.delete VALUES ({file: path.file}) IRREVERSIBLE",
+        );
+        let rowless = RowBatch::new(Schema::new(Vec::new()), Vec::new());
+        let write = eval_map_body(
+            &body,
+            "slack",
+            "/slack/T1/files/F1",
+            &[
+                ("ws".to_string(), "T1".to_string()),
+                ("file".to_string(), "F1".to_string()),
+            ],
+            &rowless,
+            &[],
+        )
+        .expect("an address-only body evaluates");
+        assert_eq!(write.rest_path, "/rest/slack/files.delete");
+        assert_eq!(write.bodies.len(), 1, "exactly one wire body, not zero");
+        match &write.bodies[0] {
+            Value::Struct(fields) => {
+                assert_eq!(fields.get("file"), Some(&Value::Text("F1".to_string())));
+            }
+            other => panic!("expected a struct wire body, got {other:?}"),
+        }
+    }
+
+    /// A rowless write whose body READS a row is refused, never evaluated against nulls: putting
+    /// `{text: null}` on the wire and calling it success is the same defect wearing a mask.
+    #[test]
+    fn a_rowless_write_whose_body_reads_a_row_is_refused() {
+        let body = map_body_of(
+            "CREATE MAP INSERT /slack/{ws}/{channel}/messages AS \
+             INSERT INTO /http/slack/chat.postMessage \
+               VALUES ({channel: path.channel, text: row.text})",
+        );
+        let rowless = RowBatch::new(Schema::new(Vec::new()), Vec::new());
+        let err = eval_map_body(
+            &body,
+            "slack",
+            "/slack/T1/general/messages",
+            &[("channel".to_string(), "general".to_string())],
+            &rowless,
+            &[],
+        )
+        .expect_err("a body that needs a row cannot run without one");
+        assert_eq!(err.code(), "invalid_path");
+    }
+
+    /// The `path.<param>` arm (ticket 20260918041500): a map addressed AT the thing it must resolve
+    /// — `UPSERT /slack/{ws}/{channel}/files/{filename}` — carries the channel in its path, never as
+    /// a column of the payload row. The binding names that coordinate and resolves identically.
+    #[test]
+    fn map_body_lookups_accepts_a_path_param_as_the_binding_key() {
+        let body = map_body_of(
+            "CREATE MAP UPSERT /slack/{ws}/{channel}/files/{filename} AS \
+             LET cid = /slack/{ws}/channels \
+               |> WHERE name == path.channel OR id == path.channel |> SELECT id \
+             UPSERT INTO /http/slack/qfs.file-upload VALUES ({channel: cid, content: row.content})",
+        );
+        let found = map_body_lookups(
+            &body,
+            "slack",
+            "/slack/T1/general/files/report.pdf",
+            &[("ws".to_string(), "T1".to_string())],
+            &[],
+        )
+        .expect("a path-param binding extracts");
+        assert_eq!(found[0].match_cols, vec!["name", "id"]);
+        assert_eq!(found[0].key, LookupKey::Path("channel".into()));
+        assert_eq!(found[0].source_path, "/slack/T1/channels");
+    }
+
+    /// And it RESOLVES from the address: the payload row carries only `content`, so a row-keyed
+    /// lookup could not answer this at all. The bound `cid` is the channel's id, from its name.
+    #[test]
+    fn eval_map_body_resolves_a_path_param_lookup_against_the_collection() {
+        let body = map_body_of(
+            "CREATE MAP UPSERT /slack/{ws}/{channel}/files/{filename} AS \
+             LET cid = /slack/{ws}/channels \
+               |> WHERE name == path.channel OR id == path.channel |> SELECT id \
+             UPSERT INTO /http/slack/qfs.file-upload \
+               VALUES ({channel: cid, filename: path.filename, content: row.content})",
+        );
+        let channels = RowBatch::new(
+            Schema::new(vec![
+                Column::new("name", ColumnType::Text, false),
+                Column::new("id", ColumnType::Text, false),
+            ]),
+            vec![
+                Row::new(vec![Value::Text("random".into()), Value::Text("C9".into())]),
+                Row::new(vec![
+                    Value::Text("general".into()),
+                    Value::Text("C1".into()),
+                ]),
+            ],
+        );
+        let lookups = map_body_lookups(
+            &body,
+            "slack",
+            "/slack/T1/general/files/report.pdf",
+            &[("ws".to_string(), "T1".to_string())],
+            &[],
+        )
+        .expect("extracts");
+        let params = vec![
+            ("ws".to_string(), "T1".to_string()),
+            ("channel".to_string(), "general".to_string()),
+            ("filename".to_string(), "report.pdf".to_string()),
+        ];
+        let payload = RowBatch::new(
+            Schema::new(vec![Column::new("content", ColumnType::Bytes, false)]),
+            vec![Row::new(vec![Value::Bytes(vec![1, 2, 3])])],
+        );
+        let write = eval_map_body(
+            &body,
+            "slack",
+            "/slack/T1/general/files/report.pdf",
+            &params,
+            &payload,
+            &[(lookups[0].clone(), channels)],
+        )
+        .expect("evals");
+        assert_eq!(write.rest_path, "/rest/slack/qfs.file-upload");
+        match &write.bodies[0] {
+            Value::Struct(fields) => {
+                assert_eq!(fields.get("channel"), Some(&Value::Text("C1".to_string())));
+                assert_eq!(
+                    fields.get("filename"),
+                    Some(&Value::Text("report.pdf".to_string()))
+                );
+                assert_eq!(fields.get("content"), Some(&Value::Bytes(vec![1, 2, 3])));
+            }
+            other => panic!("expected a struct wire body, got {other:?}"),
+        }
     }
 
     /// The one disjunction shape that is REFUSED: terms comparing against two different row fields.
