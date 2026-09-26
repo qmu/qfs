@@ -141,3 +141,20 @@ Every deploy stamps the build with `version.json` (commit, ref, environment, bui
 non-indexable; production is indexable. Both deploys read `CLOUDFLARE_API_TOKEN` and
 `CLOUDFLARE_ACCOUNT_ID` — repository secrets, scoped to the deploying job. `npm run
 docs:deploy:dry-run` checks both environments without credentials.
+
+## Work loop Slack destination
+
+The existing destination was confirmed in the binding ticket's 2026-09-18 correction.
+The account and mount identify the historical sender route; `sender_id` remains unspecified
+until that account is available for a read-only identity check. This declaration does not
+authorize posting messages.
+
+```workaholic-slack-binding
+workspace: qmu
+channel: dev-qfs
+channel_id: C0BM2ASB63G
+mount: /slack-cc-for-qmu
+account: cc-for-qmu
+operations: read_channel_delta, read_thread, post_root, post_reply
+fallback: connector
+```
