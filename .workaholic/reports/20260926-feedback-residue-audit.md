@@ -87,3 +87,14 @@ with squash/supersession evidence so merged copies are not labeled lost; expose 
 unlanded residue as a reviewable PR unit that preserves the original branch and requires an
 explicit discard decision. Pin both already-squashed and truly unique-code cases. This remains
 upstream work; no plugin cache or upstream source was changed by this audit.
+
+## Live binding handoff resolved
+
+On 2026-09-26 the user explicitly authorized one root and one reply. Through QFS 0.0.141
+on SSH host `q`, both committed and read back under `/slack-cc-for-qmu/qmu/C0BM2ASB63G`.
+Root `1790417037.548209` and reply `1790417050.979679` both identify sender `U0BFLKVB66N`
+and thread_ts `1790417037.548209`; the replies view returned exactly two rows. History
+returned 20 rows. The original historical 18-message #129 thread was not reproduced.
+This resolves the live destination/sender/write/read-back handoff above. The local machine's
+no_connection reading remains accurate but an authorized remote route is now verified.
+No historical notification backlog was drained and no additional post is authorized here.

@@ -1,11 +1,12 @@
 ---
 created_at: 2026-09-17T21:21:27+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
 feedback: [20260917212108-fb-the-loop-s-slack-destination-does-not-exist-so-nothing-reaches-a-person.md]
 merge_policy:
-verification_handoff: Restore the existing cc-for-qmu Slack connection, verify the selected identity and channel, then explicitly authorize and verify one transport post before draining pending notifications
+verification_handoff:
 claim: work-20260926-150038
 ---
 
@@ -220,3 +221,25 @@ workaholic, whose repository was not modified.
 
 Declaration reader result: `ok:true`, `declared:true`, `missing:[]`, `conflicts:[]`,
 `unknown_keys:[]`, `invalid:[]`, `errors:[]`, `complete:false` (sender_id unverified).
+
+## Live verification — 2026-09-26
+
+This measured completion supersedes the earlier no_connection handoff above. The user
+explicitly authorized one root and one thread reply; both committed through QFS on host `q`.
+The isolated verification binary was `/tmp/qfs-fb-v141-verification/qfs` version 0.0.141;
+the installed 0.0.139 binary was unchanged. Before refreshing the shipped declaration
+(`declare slack --commit`, 28 statements), the secret-free configuration was backed up
+to `/tmp/qfs-fb-v141-verification/config-before-slack-update.jsonl` on that host.
+
+- Route: `/slack-cc-for-qmu/qmu/C0BM2ASB63G/messages`.
+- Root: `1790417037.548209`.
+- Reply: `1790417050.979679`.
+- Both read-back rows identify sender `U0BFLKVB66N` and thread_ts `1790417037.548209`.
+- Reading `/slack-cc-for-qmu/qmu/C0BM2ASB63G/messages/1790417037.548209/replies`
+  returned exactly those two rows. History read returned 20 rows.
+- sender_id is now declared; declaration validation must report complete:true.
+
+No additional messages were sent and historical notification backlog was not drained,
+because the explicit authorization covered only this verification pair. The destination,
+selected sender, thread write and read-back gates are fulfilled. This does not claim
+reproduction of #129's original 18-message historical thread.

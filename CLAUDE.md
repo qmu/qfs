@@ -145,9 +145,9 @@ docs:deploy:dry-run` checks both environments without credentials.
 ## Work loop Slack destination
 
 The existing destination was confirmed in the binding ticket's 2026-09-18 correction.
-The account and mount identify the historical sender route; `sender_id` remains unspecified
-until that account is available for a read-only identity check. This declaration does not
-authorize posting messages.
+The account and mount identify the verified sender route. On 2026-09-26, one explicitly
+authorized root and thread reply read back as sender `U0BFLKVB66N`. This declaration does
+not authorize additional posts or draining old notifications.
 
 ```workaholic-slack-binding
 workspace: qmu
@@ -155,6 +155,7 @@ channel: dev-qfs
 channel_id: C0BM2ASB63G
 mount: /slack-cc-for-qmu
 account: cc-for-qmu
+sender_id: U0BFLKVB66N
 operations: read_channel_delta, read_thread, post_root, post_reply
 fallback: connector
 ```
