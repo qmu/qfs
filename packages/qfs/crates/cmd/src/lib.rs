@@ -111,6 +111,54 @@ pub type PlanLauncher<'a> = dyn Fn(&PlanAction) -> i32 + 'a;
 /// the dispatching applier (the `/sys` System-DB writes + the `/server` daemon face).
 pub type ApplyLauncher<'a> = dyn Fn(&ApplyAction) -> i32 + 'a;
 
+/// The injected **cluster launcher**: the binary supplies `qfs cluster host|join|token|members|
+/// sessions` (it owns the tokio listener, the WebSocket member link, the persisted cluster secret
+/// and the Claude session reader). qfs-cmd only parses the verb into a [`ClusterRequest`].
+pub type ClusterLauncher<'a> = dyn Fn(&ClusterRequest) -> i32 + 'a;
+
+/// An owned `qfs cluster <verb>` request. A join token travels here only for `join`, and the
+/// binary never logs it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClusterRequest {
+    /// `qfs cluster host` — run the host listener.
+    Host {
+        /// `--listen` address (default loopback).
+        listen: String,
+        /// `--state-dir`: where the cluster secret lives (default: the qfs config dir).
+        state_dir: Option<PathBuf>,
+    },
+    /// `qfs cluster token` — mint a member join token.
+    Token {
+        /// The member name the token admits.
+        name: String,
+        /// Lifetime, e.g. `24h`.
+        ttl: String,
+        /// `--state-dir` (as for `host`).
+        state_dir: Option<PathBuf>,
+    },
+    /// `qfs cluster join` — connect this machine to a host as a member.
+    Join {
+        /// `ws://host:port`.
+        url: String,
+        /// The join token.
+        token: String,
+        /// Presented member name (default: the token's name).
+        name: Option<String>,
+        /// Heartbeat interval, seconds.
+        heartbeat_secs: f64,
+    },
+    /// `qfs cluster members` — print the host's members as JSON.
+    Members {
+        /// The host's listen address.
+        host: String,
+    },
+    /// `qfs cluster sessions` — print the members' Claude Code sessions as JSON.
+    Sessions {
+        /// The host's listen address.
+        host: String,
+    },
+}
+
 /// A parsed `qfs plan <document>` request — the pure diff preview (blueprint §16). Writes nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanAction {
@@ -826,7 +874,68 @@ enum Command {
         #[command(subcommand)]
         verb: ViewVerb,
     },
+    /// Run or join a qfs cluster: a host accepts members over an authenticated WebSocket and
+    /// aggregates their resources (CPU, memory, disk) and Claude Code sessions. Trust model:
+    /// docs/adr/0008-cluster-trust-model.md.
+    Cluster {
+        #[command(subcommand)]
+        verb: ClusterVerb,
+    },
     // The absence of a subcommand starts the interactive shell (handled in `run`).
+}
+
+/// `qfs cluster <verb>` — host, join and inspect a cluster.
+#[derive(Subcommand, Debug)]
+enum ClusterVerb {
+    /// Run the cluster host: accept members on `--listen` (loopback by default) and serve the
+    /// loopback-only JSON read API (`/api/cluster/members`, `/api/cluster/sessions`).
+    Host {
+        /// Listen address. Anything other than loopback exposes the member WebSocket to the network
+        /// (plain `ws://`; use a trusted LAN or an SSH/TLS tunnel).
+        #[arg(long = "listen", default_value = "127.0.0.1:7466")]
+        listen: String,
+        /// Directory holding the cluster secret (default: the qfs config dir).
+        #[arg(long = "state-dir")]
+        state_dir: Option<PathBuf>,
+    },
+    /// Mint a join token for one member (run on the host machine).
+    Token {
+        /// The member name the token admits.
+        #[arg(long = "name")]
+        name: String,
+        /// Token lifetime, e.g. `24h`, `30m`, `7d`.
+        #[arg(long = "ttl", default_value = "24h")]
+        ttl: String,
+        /// Directory holding the cluster secret (default: the qfs config dir).
+        #[arg(long = "state-dir")]
+        state_dir: Option<PathBuf>,
+    },
+    /// Join a host as a member and report resources + Claude Code sessions until stopped.
+    Join {
+        /// The host URL, e.g. `ws://192.168.1.10:7466`.
+        url: String,
+        /// The join token minted by `qfs cluster token` on the host.
+        #[arg(long = "token")]
+        token: String,
+        /// The member name to present (default: the name the token admits).
+        #[arg(long = "name")]
+        name: Option<String>,
+        /// Heartbeat interval in seconds.
+        #[arg(long = "heartbeat", default_value_t = 10.0)]
+        heartbeat: f64,
+    },
+    /// Print the host's members as JSON rows (run on the host machine).
+    Members {
+        /// The host's listen address.
+        #[arg(long = "host", default_value = "127.0.0.1:7466")]
+        host: String,
+    },
+    /// Print the members' Claude Code sessions as JSON rows (run on the host machine).
+    Sessions {
+        /// The host's listen address.
+        #[arg(long = "host", default_value = "127.0.0.1:7466")]
+        host: String,
+    },
 }
 
 /// `qfs job <verb>` — the saved-JOB invocation verbs (t65). Maps onto the injected [`JobLauncher`]
@@ -1113,6 +1222,7 @@ pub fn run<I, T>(
     restore: &RestoreLauncher,
     plan_reconcile: &PlanLauncher,
     apply_reconcile: &ApplyLauncher,
+    cluster: &ClusterLauncher,
     apply: &qfs_exec::WorldApply,
     run_ctx: &RunContextProvider,
 ) -> i32
@@ -1350,6 +1460,12 @@ where
         Some(Command::View { verb }) => {
             tracing::debug!(target: "qfs::cmd", "dispatch view via launcher");
             return view(&view_request(&verb, cli.json));
+        }
+        // `cluster` is dispatched through the injected launcher (the binary owns the listener,
+        // the member link and the secret). qfs-cmd only parses the verb.
+        Some(Command::Cluster { verb }) => {
+            tracing::debug!(target: "qfs::cmd", "dispatch cluster via launcher");
+            return cluster(&cluster_request(verb));
         }
         // `dump` is dispatched through the injected launcher (the binary owns the System/Project DB
         // reads and JSONL rendering; qfs-cmd only parses the requested shape).
@@ -2093,6 +2209,35 @@ fn init_tracing() {
         .try_init();
 }
 
+/// Map a parsed `qfs cluster` verb onto the owned request the binary launcher executes.
+fn cluster_request(verb: ClusterVerb) -> ClusterRequest {
+    match verb {
+        ClusterVerb::Host { listen, state_dir } => ClusterRequest::Host { listen, state_dir },
+        ClusterVerb::Token {
+            name,
+            ttl,
+            state_dir,
+        } => ClusterRequest::Token {
+            name,
+            ttl,
+            state_dir,
+        },
+        ClusterVerb::Join {
+            url,
+            token,
+            name,
+            heartbeat,
+        } => ClusterRequest::Join {
+            url,
+            token,
+            name,
+            heartbeat_secs: heartbeat,
+        },
+        ClusterVerb::Members { host } => ClusterRequest::Members { host },
+        ClusterVerb::Sessions { host } => ClusterRequest::Sessions { host },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2210,6 +2355,11 @@ mod tests {
         21
     }
 
+    /// A stub cluster launcher (the real host/member live in the binary crate).
+    fn stub_cluster(_req: &ClusterRequest) -> i32 {
+        23
+    }
+
     /// A no-op world-apply: a `--commit` in a unit test "succeeds" without touching the World
     /// (the real interpreter-backed applier lives in the binary crate).
     fn noop_apply(_plan: &qfs_core::Plan) -> Result<(), qfs_exec::ExecError> {
@@ -2260,9 +2410,55 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         )
+    }
+
+    /// Every `qfs cluster` verb parses and routes to the injected cluster launcher, and the join
+    /// verb carries its token and heartbeat through to the request.
+    #[test]
+    fn cluster_verbs_route_to_the_cluster_launcher() {
+        for argv in [
+            vec!["qfs", "cluster", "host"],
+            vec!["qfs", "cluster", "token", "--name", "alice", "--ttl", "1h"],
+            vec![
+                "qfs",
+                "cluster",
+                "join",
+                "ws://127.0.0.1:7466",
+                "--token",
+                "t",
+            ],
+            vec!["qfs", "cluster", "members"],
+            vec!["qfs", "cluster", "sessions", "--host", "127.0.0.1:9"],
+        ] {
+            assert_eq!(run_t(argv.clone()), 23, "{argv:?}");
+        }
+        let cli = <Cli as clap::Parser>::try_parse_from([
+            "qfs",
+            "cluster",
+            "join",
+            "ws://h:1",
+            "--token",
+            "tok",
+            "--heartbeat",
+            "0.5",
+        ])
+        .unwrap();
+        let Some(Command::Cluster { verb }) = cli.cmd else {
+            panic!("not a cluster command");
+        };
+        assert_eq!(
+            cluster_request(verb),
+            ClusterRequest::Join {
+                url: "ws://h:1".into(),
+                token: "tok".into(),
+                name: None,
+                heartbeat_secs: 0.5,
+            }
+        );
     }
 
     /// `qfs declare` with no argument lists what the binary ships, derives each driver name from
@@ -2339,6 +2535,7 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -2397,6 +2594,7 @@ mod tests {
                 &stub_restore,
                 &stub_plan,
                 &stub_apply,
+                &stub_cluster,
                 &noop_apply,
                 &stub_run_ctx,
             );
@@ -2457,6 +2655,7 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -2511,6 +2710,7 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -2552,6 +2752,7 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -2599,6 +2800,7 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -2650,6 +2852,7 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -2689,6 +2892,7 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -2731,6 +2935,7 @@ mod tests {
             &launcher,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -2790,6 +2995,7 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &launcher,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -2855,6 +3061,7 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -2918,6 +3125,7 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -3070,6 +3278,7 @@ mod tests {
             &stub_restore,
             &stub_plan,
             &stub_apply,
+            &stub_cluster,
             &noop_apply,
             &stub_run_ctx,
         );
@@ -3165,6 +3374,7 @@ mod tests {
                 &stub_restore,
                 &stub_plan,
                 &stub_apply,
+                &stub_cluster,
                 &noop_apply,
                 &stub_run_ctx
             ),
@@ -3193,6 +3403,7 @@ mod tests {
                 &stub_restore,
                 &stub_plan,
                 &stub_apply,
+                &stub_cluster,
                 &noop_apply,
                 &stub_run_ctx
             ),

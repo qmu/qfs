@@ -1,5 +1,6 @@
 ---
 created_at: 2026-09-28T02:11:22+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on:
@@ -64,3 +65,16 @@ trust model is written as an ADR before code relies on it.
 - WebSocket is the developer's stated transport; the in-house HTTP server has no upgrade path, so the cluster listener is its own port rather than a route on `qfs serve`. Folding it into `qfs serve` is later work.
 - `crates/tunnel` (relay fabric) overlaps in intent; reuse is deferred to keep this slice small.
 - Plain `ws://` is an MVP limit, named in the ADR.
+
+## Final Report
+
+Development completed as planned.
+
+### Discovered Insights
+
+- **Insight**: `/cluster/members` and `/cluster/sessions` are exposed as the host's loopback JSON API and the `qfs cluster members|sessions` subcommands, not yet as `qfs run "/cluster/..."` driver paths.
+  **Context**: A `qfs run` one-shot is a separate process from the long-running `qfs cluster host`, so a read driver would have to fetch from the host listener anyway; the JSON API is that seam, and a thin `/cluster` read driver over it is a small follow-up.
+- **Insight**: Creating the cluster secret must be atomic — a `qfs cluster host` and a `qfs cluster token` started together raced on first use during the manual smoke test.
+  **Context**: The secret is now written to a private temp file and hard-linked into place; the loser of the race reads the winner's secret.
+- **Insight**: The repository had no live `docs/adr/` directory (the old qfs ADRs 0001–0007 were removed from `packages/qfs/docs/adr/`), so the trust-model ADR is `docs/adr/0008-cluster-trust-model.md`, continuing that numbering.
+  **Context**: Avoids reusing a number that historical code comments still cite (e.g. ADR-0005, ADR-0007).

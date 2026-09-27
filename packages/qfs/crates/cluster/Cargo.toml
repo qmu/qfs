@@ -1,0 +1,27 @@
+[package]
+name = "qfs-cluster"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "qfs cluster core: a host accepts members over an authenticated WebSocket (HMAC join token), keeps an in-memory member registry fed by heartbeats (hostname, CPU, memory, disk, Claude Code sessions), and answers a loopback-only JSON read API. A LEAF consumed only by the terminal `qfs` binary, so its tokio dead-ends there. Trust model: docs/adr/0008-cluster-trust-model.md."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util"] }
+futures = { workspace = true }
+tokio-tungstenite = "0.30"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.9"
+sysinfo = { version = "0.39", default-features = false, features = ["system", "disk"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util", "rt-multi-thread", "macros"] }

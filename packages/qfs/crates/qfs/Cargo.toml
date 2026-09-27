@@ -108,6 +108,9 @@ qfs-oauth = { path = "../oauth" }
 # TokenValidator (decision N — a qfs Cloud sign-in is required) and would dispatch inbound frames to
 # the local crates/http handler path. A pure leaf consumed only by this terminal binary.
 qfs-tunnel = { path = "../tunnel" }
+# The cluster core (docs/adr/0008-cluster-trust-model.md): member WebSocket, join tokens, registry,
+# loopback JSON read API. A leaf whose tokio dead-ends here in the terminal binary.
+qfs-cluster = { path = "../cluster" }
 # The shared secrets surface the watchtower resolves webhook signing secrets from (by handle); also
 # the redacting `Secret` wrapper the binary carries the OAuth passphrase + decrypted signing key in.
 qfs-secrets = { path = "../secrets" }
@@ -250,7 +253,7 @@ serde_json = { workspace = true }
 # material crosses this seam.
 serde = { workspace = true }
 # The serve composition builds a tokio runtime to drive the async listener + supervised wait.
-tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "signal", "macros"] }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "signal", "macros", "net"] }
 async-trait = { workspace = true }
 # Secret-free structured logging for the watchtower dispatch loop (the same target the serve
 # bindings log under). No secrets ever logged (RFD §10).
