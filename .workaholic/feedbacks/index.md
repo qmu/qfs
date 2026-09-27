@@ -146,4 +146,5 @@
 * [A rowless write that needs a row now fails where it used to be silent](20260919054300-a-rowless-write-that-needs-a.md)
 * [Slack INSERT drops thread_ts, so a thread reply lands in the channel](20260926142729-slack-insert-drops-thread-ts-so-a-thread-reply-lands-in-the-channel.md)
 * [Ship and document the Slack thread-reply write (replies INSERT map)](20260926142734-ship-and-document-the-slack-thread-reply-write-replies-insert-map.md)
+* [qfs becomes an orchestrator - a cluster whose members borrow the host's connections, seen through a pool GUI](20260928020955-qfs-becomes-an-orchestrator-a-cluster-whose-members-borrow-the-host-s-connections-seen-through-a-pool-gui.md)
 <!-- okf:generated:end -->

@@ -2,6 +2,7 @@
 
 ## active
 
+* [a-qfs-cluster-lets-a-member-borrow-the-host-s-connections-and-shows-its-pools](active/a-qfs-cluster-lets-a-member-borrow-the-host-s-connections-and-shows-its-pools/mission.md) - A qfs cluster lets a member borrow the host's connections and shows its pools
 * [the-documentation-site-publishes-itself-staging-on-merge-production-on-release](active/the-documentation-site-publishes-itself-staging-on-merge-production-on-release/mission.md) - The documentation site publishes itself: staging on merge, production on release
 
 ## archive
