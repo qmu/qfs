@@ -1,5 +1,6 @@
 ---
 created_at: 2026-09-28T02:11:22+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on: [20260928021122-cluster-members-join-a-host-over-an-authenticated-websocket-and-report-their-resources.md]
@@ -57,3 +58,18 @@ Selecting a row in one column fills the next, in the plggmatic walk style.
 
 - The account pool is data only here; switching accounts on a usage limit is later work.
 - If the plggmatic column engine cannot be built from inside this repository, record which part is missing rather than hand-rolling a second UI framework.
+
+## Final Report
+
+Development completed as planned.
+
+### Discovered Insights
+
+- **Insight**: The console is built on plgg + plgg-view only, not plggmatic (developer correction mid-ticket); plggmatic served as the design reference for the column walk and the two-scheme role palette.
+  **Context**: `packages/qfs-viewer/packages/cluster-console` has its own pure walk core (`domain/usecase/walk.ts`: area column → list → member detail → directories → sessions → session detail) and a plgg-view view in `entrypoints/main.ts`. The package's runtime deps are `plgg` and `plgg-view` only.
+- **Insight**: plgg-bundle's `"app"` target resolves bare specifiers through workspace discovery (sibling packages, then `node_modules`), not through the configured self-alias, so a `#cluster-console/...` import fails to bundle; the console imports its own modules by relative `.ts` path instead.
+  **Context**: A bare `cluster-console/...` self-import bundles but is flagged by `gate-vendor-boundary.sh` as third-party. Relative imports satisfy both. Note the app target would also inline the SIBLING `packages/plggmatic` source (siblings win over `node_modules`) if anything imported `plggmatic`.
+- **Insight**: The embedded console is a committed build artifact (`packages/qfs/crates/cluster/ui/index.html`, ~260 KB, deterministic), so `cargo build` needs no node; `./scripts/build-cluster-console.sh` regenerates it and `--check` (run by `check-all.sh` via `test-cluster-console.sh`) fails when it is stale.
+  **Context**: `include_bytes!` in `host.rs` serves it at `GET /` and `/index.html`, loopback-only like the JSON API.
+- **Insight**: On this machine's Node 23.x, `check-all.sh` fails in steps unrelated to this ticket: plgg-bundle 0.0.6's and qfs-viewer's own `relocate.mjs` call `rmSync` on a directory symlink left by a previous run (`ERR_FS_EISDIR`), and the npx smoke compares `--version` output that Node 23 prefixes with a type-stripping `ExperimentalWarning`.
+  **Context**: Every gate this ticket touches passed individually (dependency and vendor-boundary gates, qfs-viewer 386 tests, plggmatic 311 tests, cluster-console 5 tests at 100% line coverage, embed `--check`). The full script needs Node 24, which the scripts already assume.

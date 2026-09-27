@@ -195,6 +195,40 @@ pub enum ClusterRequest {
         /// `--name` (default: the token's name).
         name: Option<String>,
     },
+    /// `qfs cluster account add` — register an account in the host's pool (metadata only).
+    AccountAdd {
+        /// `claude-code` or `codex`.
+        provider: String,
+        /// The unique label.
+        label: String,
+        /// `--email`.
+        email: Option<String>,
+        /// `--plan`.
+        plan: Option<String>,
+        /// `--state-dir` (as for `host`).
+        state_dir: Option<PathBuf>,
+    },
+    /// `qfs cluster account list` — print the account pool as JSON.
+    AccountList {
+        /// `--state-dir` (as for `host`).
+        state_dir: Option<PathBuf>,
+    },
+    /// `qfs cluster account remove <label>` — drop an account from the pool.
+    AccountRemove {
+        /// The label.
+        label: String,
+        /// `--state-dir` (as for `host`).
+        state_dir: Option<PathBuf>,
+    },
+    /// `qfs cluster account assign <label> [<member>]` — assign (or, without a member, unassign).
+    AccountAssign {
+        /// The label.
+        label: String,
+        /// The member, or `None` to unassign.
+        member: Option<String>,
+        /// `--state-dir` (as for `host`).
+        state_dir: Option<PathBuf>,
+    },
 }
 
 /// A parsed `qfs plan <document>` request — the pure diff preview (blueprint §16). Writes nothing.
@@ -926,7 +960,8 @@ enum Command {
 #[derive(Subcommand, Debug)]
 enum ClusterVerb {
     /// Run the cluster host: accept members on `--listen` (loopback by default) and serve the
-    /// loopback-only JSON read API (`/api/cluster/members`, `/api/cluster/sessions`).
+    /// loopback-only cluster console (`/`) and JSON read API (`/api/cluster/members`,
+    /// `/api/cluster/sessions`, `/api/cluster/accounts`).
     Host {
         /// Listen address. Anything other than loopback exposes the member WebSocket to the network
         /// (plain `ws://`; use a trusted LAN or an SSH/TLS tunnel).
@@ -1018,6 +1053,59 @@ enum ClusterVerb {
         /// The member name to present (default: `QFS_CLUSTER_NAME`, else the token's name).
         #[arg(long = "name")]
         name: Option<String>,
+    },
+    /// Manage the host's account pool (Claude Code / Codex accounts; metadata only, no
+    /// credentials) shown in the cluster console (run on the host machine).
+    Account {
+        #[command(subcommand)]
+        verb: ClusterAccountVerb,
+    },
+}
+
+/// `qfs cluster account <verb>` — the host's account pool.
+#[derive(Subcommand, Debug)]
+enum ClusterAccountVerb {
+    /// Register an account (metadata only; no credential is stored).
+    Add {
+        /// The account's provider.
+        #[arg(long = "provider", value_parser = ["claude-code", "codex"])]
+        provider: String,
+        /// A unique label for the account.
+        #[arg(long = "label")]
+        label: String,
+        /// The account's email.
+        #[arg(long = "email")]
+        email: Option<String>,
+        /// The account's plan, e.g. `max` or `pro`.
+        #[arg(long = "plan")]
+        plan: Option<String>,
+        /// Directory holding the cluster state (default: the qfs config dir).
+        #[arg(long = "state-dir")]
+        state_dir: Option<PathBuf>,
+    },
+    /// Print the account pool as JSON rows.
+    List {
+        /// Directory holding the cluster state (default: the qfs config dir).
+        #[arg(long = "state-dir")]
+        state_dir: Option<PathBuf>,
+    },
+    /// Remove an account from the pool.
+    Remove {
+        /// The account's label.
+        label: String,
+        /// Directory holding the cluster state (default: the qfs config dir).
+        #[arg(long = "state-dir")]
+        state_dir: Option<PathBuf>,
+    },
+    /// Assign an account to a member (omit the member to unassign it).
+    Assign {
+        /// The account's label.
+        label: String,
+        /// The member name.
+        member: Option<String>,
+        /// Directory holding the cluster state (default: the qfs config dir).
+        #[arg(long = "state-dir")]
+        state_dir: Option<PathBuf>,
     },
 }
 
@@ -2350,6 +2438,34 @@ fn cluster_request(verb: ClusterVerb) -> ClusterRequest {
             token,
             name,
         },
+        ClusterVerb::Account { verb } => match verb {
+            ClusterAccountVerb::Add {
+                provider,
+                label,
+                email,
+                plan,
+                state_dir,
+            } => ClusterRequest::AccountAdd {
+                provider,
+                label,
+                email,
+                plan,
+                state_dir,
+            },
+            ClusterAccountVerb::List { state_dir } => ClusterRequest::AccountList { state_dir },
+            ClusterAccountVerb::Remove { label, state_dir } => {
+                ClusterRequest::AccountRemove { label, state_dir }
+            }
+            ClusterAccountVerb::Assign {
+                label,
+                member,
+                state_dir,
+            } => ClusterRequest::AccountAssign {
+                label,
+                member,
+                state_dir,
+            },
+        },
     }
 }
 
@@ -2551,6 +2667,19 @@ mod tests {
             vec!["qfs", "cluster", "grant", "alice", "/slack"],
             vec!["qfs", "cluster", "revoke", "alice", "/slack"],
             vec!["qfs", "cluster", "grants"],
+            vec![
+                "qfs",
+                "cluster",
+                "account",
+                "add",
+                "--provider",
+                "codex",
+                "--label",
+                "c1",
+            ],
+            vec!["qfs", "cluster", "account", "list"],
+            vec!["qfs", "cluster", "account", "remove", "c1"],
+            vec!["qfs", "cluster", "account", "assign", "c1", "alice"],
             vec![
                 "qfs",
                 "cluster",

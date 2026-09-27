@@ -12,6 +12,7 @@
 //! The trust model is `docs/adr/0008-cluster-trust-model.md`. This crate is a LEAF consumed only
 //! by the terminal `qfs` binary, so its tokio dead-ends there.
 
+pub mod accounts;
 pub mod borrow;
 pub mod frame;
 pub mod grants;
@@ -21,6 +22,7 @@ pub mod registry;
 pub mod sample;
 pub mod token;
 
+pub use accounts::{AccountRow, Accounts};
 pub use borrow::{Borrow, Execute, PathsOf, Touched};
 pub use frame::{Frame, Report, SessionReport};
 pub use grants::Grants;

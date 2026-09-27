@@ -1,4 +1,4 @@
-//! `qfs cluster host|token|join|members|sessions|grant|revoke|grants|run` — the binary composition
+//! `qfs cluster host|token|join|members|sessions|grant|revoke|grants|run|account` — the binary composition
 //! root for the cluster.
 //!
 //! The protocol, registry and listener live in `qfs-cluster`; this module owns what only the binary
@@ -14,7 +14,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use qfs_cluster::sample::Sampler;
-use qfs_cluster::{Borrow, Grants, MemberConfig, Registry, Report, SessionReport, Touched};
+use qfs_cluster::{
+    Accounts, Borrow, Grants, MemberConfig, Registry, Report, SessionReport, Touched,
+};
 use qfs_cmd::ClusterRequest;
 use qfs_driver_claude::SessionSource as _;
 use qfs_types::Value;
@@ -360,6 +362,7 @@ fn run(req: &ClusterRequest) -> Result<(), String> {
             let secret = Arc::new(load_or_create_secret(&dir)?);
             // Refuse to start over a corrupt grant table rather than discover it per request.
             Grants::load(&dir)?;
+            Accounts::load(&dir)?;
             let borrow = Borrow {
                 state_dir: dir,
                 paths_of: Arc::new(touched_paths),
@@ -377,6 +380,7 @@ fn run(req: &ClusterRequest) -> Result<(), String> {
                     );
                 }
                 eprintln!("qfs cluster: host listening on {addr} (members join ws://{addr})");
+                eprintln!("qfs cluster: console http://{addr}/ (loopback only)");
                 eprintln!("qfs cluster: read API http://{addr}/api/cluster/members (loopback only)");
                 qfs_cluster::serve_with(listener, secret, Registry::new(), Some(borrow))
                     .await
@@ -459,6 +463,56 @@ fn run(req: &ClusterRequest) -> Result<(), String> {
                 "{}",
                 serde_json::to_string_pretty(&g.members).map_err(|e| e.to_string())?
             );
+            Ok(())
+        }
+        ClusterRequest::AccountAdd {
+            provider,
+            label,
+            email,
+            plan,
+            state_dir: dir,
+        } => {
+            let dir = state_dir(dir.as_deref())?;
+            let mut a = Accounts::load(&dir)?;
+            a.add(provider, label, email.as_deref(), plan.as_deref())?;
+            a.save(&dir)?;
+            println!("added {provider} account `{}`", label.trim());
+            Ok(())
+        }
+        ClusterRequest::AccountList { state_dir: dir } => {
+            let a = Accounts::load(&state_dir(dir.as_deref())?)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&a.accounts).map_err(|e| e.to_string())?
+            );
+            Ok(())
+        }
+        ClusterRequest::AccountRemove {
+            label,
+            state_dir: dir,
+        } => {
+            let dir = state_dir(dir.as_deref())?;
+            let mut a = Accounts::load(&dir)?;
+            if !a.remove(label) {
+                return Err(format!("no account labelled `{label}`"));
+            }
+            a.save(&dir)?;
+            println!("removed account `{label}`");
+            Ok(())
+        }
+        ClusterRequest::AccountAssign {
+            label,
+            member,
+            state_dir: dir,
+        } => {
+            let dir = state_dir(dir.as_deref())?;
+            let mut a = Accounts::load(&dir)?;
+            a.assign(label, member.as_deref())?;
+            a.save(&dir)?;
+            match member {
+                Some(m) => println!("assigned account `{label}` to member `{m}`"),
+                None => println!("unassigned account `{label}`"),
+            }
             Ok(())
         }
         ClusterRequest::Run {
@@ -571,6 +625,42 @@ mod tests {
         assert!(touched_paths("this is not pipe sql").is_err());
         assert!(touched_paths("CREATE VIEW v AS /sql/a/t").is_err());
         assert!(touched_paths("nobody_bound_me |> limit 1").is_err());
+    }
+
+    #[test]
+    fn account_verbs_write_the_pool_under_the_config_home() {
+        let _home = HomeGuard::new();
+        let add = ClusterRequest::AccountAdd {
+            provider: "claude-code".into(),
+            label: "work".into(),
+            email: Some("a@example.com".into()),
+            plan: Some("max".into()),
+            state_dir: None,
+        };
+        assert_eq!(run_cluster(&add), 0);
+        assert_eq!(run_cluster(&add), 1, "a duplicate label is refused");
+        let assign = ClusterRequest::AccountAssign {
+            label: "work".into(),
+            member: Some("m1".into()),
+            state_dir: None,
+        };
+        assert_eq!(run_cluster(&assign), 0);
+        let pool = Accounts::load(&state_dir(None).unwrap()).unwrap();
+        assert_eq!(pool.accounts.len(), 1);
+        assert_eq!(pool.accounts[0].assigned_member.as_deref(), Some("m1"));
+        let text = std::fs::read_to_string(
+            state_dir(None)
+                .unwrap()
+                .join(qfs_cluster::accounts::ACCOUNTS_FILE),
+        )
+        .unwrap();
+        assert!(!text.contains("token") && !text.contains("secret"));
+        let rm = ClusterRequest::AccountRemove {
+            label: "work".into(),
+            state_dir: None,
+        };
+        assert_eq!(run_cluster(&rm), 0);
+        assert_eq!(run_cluster(&rm), 1);
     }
 
     #[test]

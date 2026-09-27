@@ -1,12 +1,14 @@
 //! The host listener: one TCP port serving both the member WebSocket (`/cluster/ws`) and a small
-//! loopback-only JSON read API (`GET /api/cluster/members`, `GET /api/cluster/sessions`).
+//! loopback-only JSON read API (`GET /api/cluster/{members,sessions,accounts}`) plus the cluster
+//! console GUI (`GET /`, a single self-contained page embedded from `ui/index.html`).
 //!
 //! Each connection's request head is *peeked* (not consumed) to route it: a WebSocket upgrade on
 //! `/cluster/ws` goes to the member session; anything else is answered as plain HTTP by
-//! [`http_route`], which is the single place to add routes (a GUI's `GET /` lands there).
+//! [`http_route`], which is the single place to add routes.
 
 use std::io::{Read as _, Write as _};
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,6 +17,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::accounts::Accounts;
 use crate::borrow::Borrow;
 use crate::frame::{redacted, Frame};
 use crate::registry::Registry;
@@ -25,6 +28,11 @@ pub const DEFAULT_LISTEN: &str = "127.0.0.1:7466";
 
 /// The WebSocket path members connect to.
 pub const WS_PATH: &str = "/cluster/ws";
+
+/// The cluster console GUI: one self-contained HTML page (inlined JS/CSS) built from
+/// `packages/qfs-viewer/packages/cluster-console` and committed under `ui/`, so `cargo build`
+/// needs no node toolchain.
+pub const CONSOLE_HTML: &[u8] = include_bytes!("../ui/index.html");
 
 const MAX_HEAD: usize = 8 * 1024;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -52,14 +60,16 @@ pub async fn serve_with(
     registry: Registry,
     borrow: Option<Borrow>,
 ) -> std::io::Result<()> {
+    let state_dir: Option<Arc<PathBuf>> = borrow.as_ref().map(|b| Arc::new(b.state_dir.clone()));
     let borrow = borrow.map(Arc::new);
     loop {
         let (stream, peer) = listener.accept().await?;
         let secret = Arc::clone(&secret);
         let registry = registry.clone();
         let borrow = borrow.clone();
+        let state_dir = state_dir.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle(stream, peer, secret, registry, borrow).await {
+            if let Err(e) = handle(stream, peer, secret, registry, borrow, state_dir).await {
                 eprintln!("qfs cluster: connection from {peer}: {e}");
             }
         });
@@ -109,6 +119,7 @@ async fn handle(
     secret: Arc<Vec<u8>>,
     registry: Registry,
     borrow: Option<Arc<Borrow>>,
+    state_dir: Option<Arc<PathBuf>>,
 ) -> std::io::Result<()> {
     let head = peek_head(&stream).await?;
     let mut first = head.lines().next().unwrap_or("").split_whitespace();
@@ -124,43 +135,54 @@ async fn handle(
         (
             403,
             "text/plain",
-            "the cluster read API is served to loopback only\n".to_string(),
+            b"the cluster read API is served to loopback only\n".to_vec(),
         )
     } else if method != "GET" {
-        (405, "text/plain", "method not allowed\n".to_string())
+        (405, "text/plain", b"method not allowed\n".to_vec())
     } else {
-        http_route(&path, &registry)
+        http_route(&path, &registry, state_dir.as_deref().map(PathBuf::as_path))
     };
     let reason = match status {
         200 => "OK",
         403 => "Forbidden",
         404 => "Not Found",
+        500 => "Internal Server Error",
         _ => "Method Not Allowed",
     };
-    let resp = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+    let head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    stream.write_all(resp.as_bytes()).await?;
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(&body).await?;
     stream.shutdown().await
 }
 
-/// Route a loopback GET. Returns `(status, content-type, body)`.
+/// Route a loopback GET. Returns `(status, content-type, body)`. `state_dir` is the host's
+/// cluster state dir (the account pool lives there); `None` serves an empty account pool.
 #[must_use]
-pub fn http_route(path: &str, registry: &Registry) -> (u16, &'static str, String) {
+pub fn http_route(
+    path: &str,
+    registry: &Registry,
+    state_dir: Option<&Path>,
+) -> (u16, &'static str, Vec<u8>) {
     let path = path.split('?').next().unwrap_or("");
+    let json = |v: Result<String, serde_json::Error>| {
+        (
+            200,
+            "application/json",
+            v.unwrap_or_else(|_| "[]".into()).into_bytes(),
+        )
+    };
     match path {
-        "/api/cluster/members" => (
-            200,
-            "application/json",
-            serde_json::to_string(&registry.members()).unwrap_or_else(|_| "[]".into()),
-        ),
-        "/api/cluster/sessions" => (
-            200,
-            "application/json",
-            serde_json::to_string(&registry.sessions()).unwrap_or_else(|_| "[]".into()),
-        ),
-        _ => (404, "text/plain", "not found\n".to_string()),
+        "/" | "/index.html" => (200, "text/html; charset=utf-8", CONSOLE_HTML.to_vec()),
+        "/api/cluster/members" => json(serde_json::to_string(&registry.members())),
+        "/api/cluster/sessions" => json(serde_json::to_string(&registry.sessions())),
+        "/api/cluster/accounts" => match state_dir.map(Accounts::load).transpose() {
+            Ok(a) => json(serde_json::to_string(&a.unwrap_or_default().accounts)),
+            Err(e) => (500, "text/plain", format!("{e}\n").into_bytes()),
+        },
+        _ => (404, "text/plain", b"not found\n".to_vec()),
     }
 }
 
