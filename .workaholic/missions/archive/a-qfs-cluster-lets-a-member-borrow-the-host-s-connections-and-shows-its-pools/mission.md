@@ -47,3 +47,4 @@ lists servers (CPU/mem/disk), the account pool and each member's sessions.
 - 2026-09-28 — ticket archived — 20260928021122-a-member-runs-a-statement-against-a-host-mount-without-receiving-the-credential.md
 - 2026-09-28 — ticket archived — 20260928021122-the-host-serves-a-column-gui-over-its-server-pool-account-pool-and-sessions.md
 - 2026-09-28 — mission achieved — mission.md
+- 2026-09-28 — story reported — work-20260928-021457.md

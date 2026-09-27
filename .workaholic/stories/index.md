@@ -1,6 +1,7 @@
 # stories
 
 <!-- okf:generated:begin -->
+* [work-20260928-021457](work-20260928-021457.md) - qfs cluster — members join a host over authenticated WebSocket, run statements on granted host mounts without receiving credentials, and the host serves a column console over its server, account and session pools.
 * [work-20260926-143118](work-20260926-143118.md) - Preserve Slack reply parents on both write surfaces and reject discarded map inputs.
 * [work-20260919-050000](work-20260919-050000.md) - A declared write addressed at its target now sends the request its body declares, instead of reporting success and sending nothing
 * [work-20260919-000500](work-20260919-000500.md) - qfs declare installs a shipped driver declaration from the binary that already carries it
