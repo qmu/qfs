@@ -15,6 +15,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::borrow::Borrow;
 use crate::frame::{redacted, Frame};
 use crate::registry::Registry;
 use crate::token;
@@ -28,7 +29,8 @@ pub const WS_PATH: &str = "/cluster/ws";
 const MAX_HEAD: usize = 8 * 1024;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Run the accept loop forever on `listener`.
+/// Run the accept loop forever on `listener`, with borrowed execution disabled (every
+/// [`Frame::Request`] is refused).
 ///
 /// # Errors
 /// Only an `accept` failure that is not per-connection.
@@ -37,12 +39,27 @@ pub async fn serve(
     secret: Arc<Vec<u8>>,
     registry: Registry,
 ) -> std::io::Result<()> {
+    serve_with(listener, secret, registry, None).await
+}
+
+/// [`serve`], with borrowed execution wired to `borrow` (grant-checked; see [`crate::borrow`]).
+///
+/// # Errors
+/// Only an `accept` failure that is not per-connection.
+pub async fn serve_with(
+    listener: TcpListener,
+    secret: Arc<Vec<u8>>,
+    registry: Registry,
+    borrow: Option<Borrow>,
+) -> std::io::Result<()> {
+    let borrow = borrow.map(Arc::new);
     loop {
         let (stream, peer) = listener.accept().await?;
         let secret = Arc::clone(&secret);
         let registry = registry.clone();
+        let borrow = borrow.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle(stream, peer, secret, registry).await {
+            if let Err(e) = handle(stream, peer, secret, registry, borrow).await {
                 eprintln!("qfs cluster: connection from {peer}: {e}");
             }
         });
@@ -91,13 +108,14 @@ async fn handle(
     peer: SocketAddr,
     secret: Arc<Vec<u8>>,
     registry: Registry,
+    borrow: Option<Arc<Borrow>>,
 ) -> std::io::Result<()> {
     let head = peek_head(&stream).await?;
     let mut first = head.lines().next().unwrap_or("").split_whitespace();
     let method = first.next().unwrap_or("").to_string();
     let path = first.next().unwrap_or("").to_string();
     if path == WS_PATH && is_upgrade(&head) {
-        return member_session(stream, peer, &secret, &registry).await;
+        return member_session(stream, peer, &secret, &registry, borrow).await;
     }
     // Plain HTTP: consume the head we peeked, then answer and close.
     let mut sink = vec![0u8; head.len()];
@@ -151,6 +169,7 @@ async fn member_session(
     peer: SocketAddr,
     secret: &[u8],
     registry: &Registry,
+    borrow: Option<Arc<Borrow>>,
 ) -> std::io::Result<()> {
     let ws = tokio_tungstenite::accept_async(stream)
         .await
@@ -162,12 +181,13 @@ async fn member_session(
     let Ok(Some(Ok(Message::Text(text)))) = hello else {
         return Ok(());
     };
-    let (token, name, heartbeat_ms) = match Frame::from_json(text.as_str()) {
+    let (token, name, heartbeat_ms, exec_only) = match Frame::from_json(text.as_str()) {
         Ok(Frame::Hello {
             token,
             name,
             heartbeat_ms,
-        }) => (token, name, heartbeat_ms),
+            exec_only,
+        }) => (token, name, heartbeat_ms, exec_only),
         _ => {
             let _ = tx
                 .send(Message::text(
@@ -203,8 +223,10 @@ async fn member_session(
     };
     let member = claims.member;
     let heartbeat = Duration::from_millis(heartbeat_ms.clamp(10, 3_600_000));
-    registry.admit(&member, &peer.to_string(), heartbeat);
-    eprintln!("qfs cluster: member `{member}` joined from {peer}");
+    if !exec_only {
+        registry.admit(&member, &peer.to_string(), heartbeat);
+        eprintln!("qfs cluster: member `{member}` joined from {peer}");
+    }
     tx.send(Message::text(
         Frame::Welcome {
             member: member.clone(),
@@ -218,19 +240,38 @@ async fn member_session(
         let Ok(msg) = msg else { break };
         match msg {
             Message::Text(text) => match Frame::from_json(text.as_str()) {
-                Ok(Frame::Heartbeat { report }) => registry.heartbeat(&member, report),
-                Ok(Frame::Request { id, .. }) => {
+                Ok(Frame::Heartbeat { report }) if !exec_only => {
+                    registry.heartbeat(&member, report);
+                }
+                Ok(Frame::Request {
+                    id,
+                    statement,
+                    commit,
+                }) => {
+                    let (ok, body) = match &borrow {
+                        None => (
+                            false,
+                            serde_json::json!({ "error": { "kind": "refused",
+                                "message": "borrowed execution is not enabled on this host" } }),
+                        ),
+                        Some(b) => {
+                            let b = Arc::clone(b);
+                            let m = member.clone();
+                            tokio::task::spawn_blocking(move || {
+                                crate::borrow::handle(&b, &m, &statement, commit)
+                            })
+                            .await
+                            .unwrap_or_else(|e| {
+                                (
+                                    false,
+                                    serde_json::json!({ "error": { "kind": "internal",
+                                        "message": format!("the execution task failed ({e})") } }),
+                                )
+                            })
+                        }
+                    };
                     let _ = tx
-                        .send(Message::text(
-                            Frame::Response {
-                                id,
-                                ok: false,
-                                body: serde_json::Value::String(
-                                    "borrowed execution is not enabled on this host yet".into(),
-                                ),
-                            }
-                            .to_json(),
-                        ))
+                        .send(Message::text(Frame::Response { id, ok, body }.to_json()))
                         .await;
                 }
                 Ok(other) => {
@@ -242,7 +283,9 @@ async fn member_session(
             _ => {}
         }
     }
-    eprintln!("qfs cluster: member `{member}` disconnected (lapses to offline)");
+    if !exec_only {
+        eprintln!("qfs cluster: member `{member}` disconnected (lapses to offline)");
+    }
     Ok(())
 }
 

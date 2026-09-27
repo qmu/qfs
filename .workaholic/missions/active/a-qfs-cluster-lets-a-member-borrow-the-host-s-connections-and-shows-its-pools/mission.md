@@ -37,10 +37,11 @@ lists servers (CPU/mem/disk), the account pool and each member's sessions.
 ## Acceptance
 
 - [x] A member joins a host over an authenticated WebSocket, and the host lists it with CPU, memory and disk (#20260928021122-cluster-members-join-a-host-over-an-authenticated-websocket-and-report-their-resources.md)
-- [ ] A member posts a Slack thread reply through a host mount; the credential never leaves the host (#20260928021122-a-member-runs-a-statement-against-a-host-mount-without-receiving-the-credential.md)
+- [x] A member posts a Slack thread reply through a host mount; the credential never leaves the host (#20260928021122-a-member-runs-a-statement-against-a-host-mount-without-receiving-the-credential.md)
 - [ ] A GUI on the host shows server pool, account pool and session allocation columns (#20260928021122-the-host-serves-a-column-gui-over-its-server-pool-account-pool-and-sessions.md)
 
 ## Changelog
 
 - 2026-09-28: proposed by /specificate from the developer's orchestrator vision.
 - 2026-09-28 — ticket archived — 20260928021122-cluster-members-join-a-host-over-an-authenticated-websocket-and-report-their-resources.md
+- 2026-09-28 — ticket archived — 20260928021122-a-member-runs-a-statement-against-a-host-mount-without-receiving-the-credential.md

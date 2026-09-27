@@ -46,20 +46,47 @@ code relies on it.
 5. **Members are stateless reporters.** A member sends hostname, CPU, memory, disk and its live
    Claude Code session rows (id, cwd, name, status, last visible message — the `/claude/sessions`
    surface, not transcripts). The host keeps them in memory only; a member lapses to `offline`
-   after three missed heartbeats. Members accept no inbound commands in this slice: a `request`
-   frame is answered with a refusal.
-6. **Lend the query, not the secret** (next ticket). Borrowed execution will send a *statement*
-   from member to host; the host runs it against its own mounts and returns rows. Credentials stay
-   on the host. The host executes only mounts it has explicitly **granted** to that member
-   (default: nothing), checked before execution.
+   after three missed heartbeats. Members accept no inbound commands: a `request` frame sent *to*
+   a member is answered with a refusal (execution only flows member → host).
+6. **Lend the query, not the secret.** A member sends a *statement* (`request` frame) from
+   member to host; the host runs it against its own mounts and returns the result envelope
+   (`response` frame). Credentials stay inside the host's engine: a frame carries only the
+   statement and its result rows or error. See "Borrowed execution" below.
 7. **Audit.** Admissions, refusals (with reason, never the token) and disconnects are logged by the
-   host. Every borrowed execution (next ticket) is written to the host's audit log with member,
-   statement and outcome.
+   host. Every borrowed request — executed, failed, or refused — is appended to
+   `<config>/cluster/audit.log` as one JSON line: `ts`, `member`, `statement`, `commit` (effective,
+   including a `COMMIT <stmt>` wrapper), `outcome` (`ok` / `error` / `refused`) and, when not `ok`,
+   the `detail` envelope.
+
+### Borrowed execution
+
+- **Grant table, default deny.** `qfs cluster grant <member> <mount>` / `revoke` / `grants` edit
+  `<config>/cluster/grants.json` on the host. A grant is a path prefix compared segment by segment:
+  `/slack-acct` admits everything under that mount, `/sql/demo` only that connection (and not
+  `/sql/other`, nor a sibling `/slack-acctx`). The table is re-read on every request, so a revoke
+  takes effect without restarting the host; a corrupt table refuses (never reads as "allow").
+- **Authorize before executing.** The host parses the statement on the shipped grammar and lists
+  every path it touches (every path expression, `FOLLOW … INTO` target, and `CALL <driver>.…`).
+  Every one must be under a grant for that member, or the request is refused before anything runs.
+  Fail closed: an unparsable statement, one with no path, server DDL (`CREATE …` — a member must
+  not define bindings on the host), a `TRANSFORM` stage (it spends the host's model provider), and
+  a bare-name source not bound by a `LET` in the same statement are all refused.
+- **Same engine, same gates.** An authorized statement runs through the one-shot path `qfs run`
+  uses (the live run context, the real commit applier, the host's safety mode). Preview unless the
+  member passes `--commit`. The irreversible acknowledgement is never forwarded: an irreversible
+  effect is refused exactly as `qfs run --commit` without `--commit-irreversible` refuses it.
+- **Authentication.** A request is honoured only on a connection whose `hello` verified. `qfs
+  cluster run` opens a one-shot connection with the member's join token and an `exec_only` hello:
+  it is authenticated like a member but never registered, so it does not disturb the joined
+  member's liveness row. A request before a valid hello is answered with `refused` and the socket
+  closes.
+- **Not in this slice.** Agent-level provenance (the member is the unit of trust), temporary
+  credential lending, and TLS.
 
 ## Consequences
 
-- A leaked token admits one named member until it expires; it grants no host credential and (in
-  this slice) no execution. A leaked cluster secret admits anything — it is guarded like the
+- A leaked token admits one named member until it expires; it grants no host credential, and it
+  can execute only what the host granted that member. A leaked cluster secret admits anything — it is guarded like the
   credential vault.
 - Anyone on the LAN path can read frames while the transport is plain `ws://`; this is stated, not
   hidden, and is why exposure requires an explicit `--listen`.

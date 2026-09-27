@@ -36,8 +36,8 @@ pub struct Report {
     pub sessions: Vec<SessionReport>,
 }
 
-/// A cluster frame. `Request`/`Response` are reserved for borrowed execution (the next ticket:
-/// "lend the query, not the secret") and are answered with a refusal in this slice.
+/// A cluster frame. `Request`/`Response` carry borrowed execution ("lend the query, not the
+/// secret", [`crate::borrow`]): only the statement and its result ever cross the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Frame {
@@ -49,6 +49,11 @@ pub enum Frame {
         name: String,
         /// The member's heartbeat interval in milliseconds (the host lapses it after 3 misses).
         heartbeat_ms: u64,
+        /// A one-shot borrowed-execution connection (`qfs cluster run`): authenticated like a
+        /// member but never registered, so it neither sends heartbeats nor disturbs the joined
+        /// member's liveness row.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        exec_only: bool,
     },
     /// Host → member: the hello was accepted.
     Welcome {
@@ -65,7 +70,7 @@ pub enum Frame {
         /// The report.
         report: Report,
     },
-    /// Reserved: run a statement on the peer.
+    /// Member → host: run a statement on the host against its (granted) mounts.
     Request {
         /// Correlation id.
         id: u64,
@@ -74,7 +79,7 @@ pub enum Frame {
         /// Apply (`true`) or preview (`false`).
         commit: bool,
     },
-    /// Reserved: the answer to a [`Frame::Request`].
+    /// Host → member: the answer to a [`Frame::Request`].
     Response {
         /// Correlation id.
         id: u64,
@@ -134,6 +139,7 @@ mod tests {
             token: "SECRET.TOKEN".into(),
             name: "a".into(),
             heartbeat_ms: 1,
+            exec_only: false,
         };
         assert!(!redacted(&f).contains("SECRET"));
     }

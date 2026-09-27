@@ -6,20 +6,26 @@
 //! ([`frame::Report`]) carrying its hostname, CPU, memory, disk and Claude Code sessions. The host
 //! keeps the aggregate in an in-memory [`registry::Registry`] (members are stateless; the host is
 //! the only state) and answers a loopback-only JSON read API on the same listener ([`host`]).
+//! A member may also **borrow** a host mount ([`borrow`]): it sends a statement, the host checks
+//! its grant table ([`grants`]) and runs it, and only the result crosses the wire.
 //!
 //! The trust model is `docs/adr/0008-cluster-trust-model.md`. This crate is a LEAF consumed only
 //! by the terminal `qfs` binary, so its tokio dead-ends there.
 
+pub mod borrow;
 pub mod frame;
+pub mod grants;
 pub mod host;
 pub mod member;
 pub mod registry;
 pub mod sample;
 pub mod token;
 
+pub use borrow::{Borrow, Execute, PathsOf, Touched};
 pub use frame::{Frame, Report, SessionReport};
-pub use host::{fetch_json, serve, DEFAULT_LISTEN};
-pub use member::{run_member, MemberConfig, MemberError};
+pub use grants::Grants;
+pub use host::{fetch_json, serve, serve_with, DEFAULT_LISTEN};
+pub use member::{run_member, run_once, MemberConfig, MemberError};
 pub use registry::{MemberRow, Registry, SessionRow};
 pub use token::{mint, verify, TokenClaims, TokenError};
 

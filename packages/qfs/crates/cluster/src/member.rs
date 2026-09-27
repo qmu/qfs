@@ -89,6 +89,7 @@ pub async fn session_once(
         token: cfg.token.clone(),
         name: cfg.name.clone(),
         heartbeat_ms: u64::try_from(cfg.heartbeat.as_millis()).unwrap_or(u64::MAX),
+        exec_only: false,
     };
     tx.send(Message::text(hello.to_json()))
         .await
@@ -136,6 +137,74 @@ pub async fn session_once(
             }
         }
     }
+}
+
+/// How long a one-shot borrowed request waits for the host's answer.
+pub const RUN_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// One borrowed execution over a one-shot connection (`qfs cluster run`): hello with the join
+/// token (`exec_only`, so nothing is registered), send one [`Frame::Request`], await its
+/// [`Frame::Response`], close. Returns `(ok, body)` exactly as the host answered.
+///
+/// # Errors
+/// [`MemberError::Refused`] when the host refuses the token; [`MemberError::Transport`] on a
+/// connection failure, a timeout, or an unexpected frame.
+pub async fn run_once(
+    cfg: &MemberConfig,
+    statement: &str,
+    commit: bool,
+) -> Result<(bool, serde_json::Value), MemberError> {
+    let t = |e: &dyn std::fmt::Display| MemberError::Transport(e.to_string());
+    let (ws, _) = tokio_tungstenite::connect_async(ws_url(&cfg.url))
+        .await
+        .map_err(|e| t(&e))?;
+    let (mut tx, mut rx) = ws.split();
+    let hello = Frame::Hello {
+        token: cfg.token.clone(),
+        name: cfg.name.clone(),
+        heartbeat_ms: u64::try_from(cfg.heartbeat.as_millis()).unwrap_or(u64::MAX),
+        exec_only: true,
+    };
+    tx.send(Message::text(hello.to_json()))
+        .await
+        .map_err(|e| t(&e))?;
+    let answer = async {
+        let mut sent = false;
+        while let Some(msg) = rx.next().await {
+            let text = match msg.map_err(|e| t(&e))? {
+                Message::Text(text) => text,
+                Message::Close(_) => break,
+                _ => continue,
+            };
+            match Frame::from_json(text.as_str()) {
+                Ok(Frame::Refused { reason }) => return Err(MemberError::Refused(reason)),
+                Ok(Frame::Welcome { .. }) if !sent => {
+                    sent = true;
+                    let req = Frame::Request {
+                        id: 1,
+                        statement: statement.to_string(),
+                        commit,
+                    };
+                    tx.send(Message::text(req.to_json()))
+                        .await
+                        .map_err(|e| t(&e))?;
+                }
+                Ok(Frame::Response { id: 1, ok, body }) if sent => {
+                    let _ = tx.close().await;
+                    return Ok((ok, body));
+                }
+                _ => {}
+            }
+        }
+        Err(if sent {
+            MemberError::Transport("the host closed the connection before answering".into())
+        } else {
+            MemberError::Refused("the host closed the connection".into())
+        })
+    };
+    tokio::time::timeout(RUN_TIMEOUT, answer)
+        .await
+        .map_err(|_| MemberError::Transport("timed out waiting for the host's answer".into()))?
 }
 
 /// Run a member forever: reconnect with exponential backoff (1 s → 30 s) on transport loss; stop

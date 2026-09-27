@@ -157,6 +157,44 @@ pub enum ClusterRequest {
         /// The host's listen address.
         host: String,
     },
+    /// `qfs cluster grant <member> <mount>` — let a member borrow a host mount (host side).
+    Grant {
+        /// The member name.
+        member: String,
+        /// The mount or path prefix, e.g. `/slack-acct` or `/sql/demo`.
+        mount: String,
+        /// `--state-dir` (as for `host`).
+        state_dir: Option<PathBuf>,
+    },
+    /// `qfs cluster revoke <member> <mount>` — withdraw a grant (host side).
+    Revoke {
+        /// The member name.
+        member: String,
+        /// The granted mount or path prefix.
+        mount: String,
+        /// `--state-dir` (as for `host`).
+        state_dir: Option<PathBuf>,
+    },
+    /// `qfs cluster grants` — print the grant table as JSON (host side).
+    Grants {
+        /// `--state-dir` (as for `host`).
+        state_dir: Option<PathBuf>,
+    },
+    /// `qfs cluster run` — execute one statement on the host against its granted mounts (member
+    /// side). The binary falls back to `QFS_CLUSTER_URL` / `QFS_CLUSTER_TOKEN` /
+    /// `QFS_CLUSTER_NAME` for an absent flag.
+    Run {
+        /// The statement.
+        statement: String,
+        /// Apply instead of preview.
+        commit: bool,
+        /// `--host-url`, e.g. `ws://192.168.1.10:7466`.
+        url: Option<String>,
+        /// `--token` (the join token).
+        token: Option<String>,
+        /// `--name` (default: the token's name).
+        name: Option<String>,
+    },
 }
 
 /// A parsed `qfs plan <document>` request — the pure diff preview (blueprint §16). Writes nothing.
@@ -935,6 +973,51 @@ enum ClusterVerb {
         /// The host's listen address.
         #[arg(long = "host", default_value = "127.0.0.1:7466")]
         host: String,
+    },
+    /// Let a member borrow a host mount: statements it sends with `qfs cluster run` may touch
+    /// paths under `<mount>` (run on the host machine; default: nothing is granted).
+    Grant {
+        /// The member name (as admitted by its join token).
+        member: String,
+        /// The mount or path prefix, e.g. `/slack-acct` or `/sql/demo`.
+        mount: String,
+        /// Directory holding the cluster state (default: the qfs config dir).
+        #[arg(long = "state-dir")]
+        state_dir: Option<PathBuf>,
+    },
+    /// Withdraw a grant made with `qfs cluster grant` (run on the host machine).
+    Revoke {
+        /// The member name.
+        member: String,
+        /// The granted mount or path prefix.
+        mount: String,
+        /// Directory holding the cluster state (default: the qfs config dir).
+        #[arg(long = "state-dir")]
+        state_dir: Option<PathBuf>,
+    },
+    /// Print the grant table as JSON (run on the host machine).
+    Grants {
+        /// Directory holding the cluster state (default: the qfs config dir).
+        #[arg(long = "state-dir")]
+        state_dir: Option<PathBuf>,
+    },
+    /// Run one statement on the host against a mount it granted to this member; the credential
+    /// stays on the host and only the result comes back (preview unless `--commit`).
+    Run {
+        /// The statement, e.g. `/sql/demo/users |> limit 5`.
+        statement: String,
+        /// Apply the statement instead of previewing it.
+        #[arg(long = "commit")]
+        commit: bool,
+        /// The host URL, e.g. `ws://192.168.1.10:7466` (default: `QFS_CLUSTER_URL`).
+        #[arg(long = "host-url")]
+        host_url: Option<String>,
+        /// The join token minted by the host (default: `QFS_CLUSTER_TOKEN`).
+        #[arg(long = "token")]
+        token: Option<String>,
+        /// The member name to present (default: `QFS_CLUSTER_NAME`, else the token's name).
+        #[arg(long = "name")]
+        name: Option<String>,
     },
 }
 
@@ -2235,6 +2318,38 @@ fn cluster_request(verb: ClusterVerb) -> ClusterRequest {
         },
         ClusterVerb::Members { host } => ClusterRequest::Members { host },
         ClusterVerb::Sessions { host } => ClusterRequest::Sessions { host },
+        ClusterVerb::Grant {
+            member,
+            mount,
+            state_dir,
+        } => ClusterRequest::Grant {
+            member,
+            mount,
+            state_dir,
+        },
+        ClusterVerb::Revoke {
+            member,
+            mount,
+            state_dir,
+        } => ClusterRequest::Revoke {
+            member,
+            mount,
+            state_dir,
+        },
+        ClusterVerb::Grants { state_dir } => ClusterRequest::Grants { state_dir },
+        ClusterVerb::Run {
+            statement,
+            commit,
+            host_url,
+            token,
+            name,
+        } => ClusterRequest::Run {
+            statement,
+            commit,
+            url: host_url,
+            token,
+            name,
+        },
     }
 }
 
@@ -2433,6 +2548,16 @@ mod tests {
             ],
             vec!["qfs", "cluster", "members"],
             vec!["qfs", "cluster", "sessions", "--host", "127.0.0.1:9"],
+            vec!["qfs", "cluster", "grant", "alice", "/slack"],
+            vec!["qfs", "cluster", "revoke", "alice", "/slack"],
+            vec!["qfs", "cluster", "grants"],
+            vec![
+                "qfs",
+                "cluster",
+                "run",
+                "--commit",
+                "/sql/demo/t |> limit 1",
+            ],
         ] {
             assert_eq!(run_t(argv.clone()), 23, "{argv:?}");
         }
@@ -2457,6 +2582,30 @@ mod tests {
                 token: "tok".into(),
                 name: None,
                 heartbeat_secs: 0.5,
+            }
+        );
+        let cli = <Cli as clap::Parser>::try_parse_from([
+            "qfs",
+            "cluster",
+            "run",
+            "--host-url",
+            "ws://h:1",
+            "--token",
+            "tok",
+            "/sql/demo/t",
+        ])
+        .unwrap();
+        let Some(Command::Cluster { verb }) = cli.cmd else {
+            panic!("not a cluster command");
+        };
+        assert_eq!(
+            cluster_request(verb),
+            ClusterRequest::Run {
+                statement: "/sql/demo/t".into(),
+                commit: false,
+                url: Some("ws://h:1".into()),
+                token: Some("tok".into()),
+                name: None,
             }
         );
     }
