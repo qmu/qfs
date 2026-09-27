@@ -16,6 +16,7 @@ stories: []
 gate_type:
 gate_target:
 gate_assert:
+claim: work-20260928-021457
 ---
 
 # A qfs cluster lets a member borrow the host's connections and shows its pools
