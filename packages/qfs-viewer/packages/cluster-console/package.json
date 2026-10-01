@@ -1,0 +1,17 @@
+{
+  "name": "cluster-console",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The qfs cluster console: a column SPA on plgg + plgg-view over a cluster host's server pool, account pool and session allocation, built to one self-contained index.html the qfs binary embeds",
+  "type": "module",
+  "dependencies": {
+    "plgg": "^0.0.27",
+    "plgg-view": "^0.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "plgg-bundle": "^0.0.6",
+    "plgg-test": "^0.0.5",
+    "typescript": "^6.0.3"
+  }
+}

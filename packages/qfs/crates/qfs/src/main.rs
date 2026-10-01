@@ -12,8 +12,8 @@
 //! [`qfs_cmd::ShellLauncher`]. The shell LOGIC itself lives in `qfs-exec`; this only wires it.
 
 use qfs::{
-    account, agent, commit, connection, describe, dump, hosts, identity, init, invite, job,
-    provision, restore, serve, shell, store, vault, version, view,
+    account, agent, cluster, commit, connection, describe, dump, hosts, identity, init, invite,
+    job, provision, restore, serve, shell, store, vault, version, view,
 };
 
 fn main() {
@@ -120,6 +120,9 @@ fn main() {
         // and the dispatching ReconcileApplier commit; qfs-cmd only parses the request.
         &provision::run_plan,
         &provision::run_apply,
+        // `qfs cluster host|token|join|members|sessions`: the binary owns the tokio listener, the
+        // member WebSocket link, the persisted cluster secret and the Claude session reader.
+        &cluster::run_cluster,
         // The REAL `qfs run --commit` apply path: drives the qfs-runtime interpreter over the live
         // driver registry (local-fs today). qfs-cmd/qfs-exec stay off qfs-runtime; this is the leaf.
         &commit::apply_plan,

@@ -1,5 +1,6 @@
 ---
 created_at: 2026-09-28T02:11:22+09:00
+status: done
 author: a@qmu.jp
 assignees: [a@qmu.jp]
 depends_on: [20260928021122-cluster-members-join-a-host-over-an-authenticated-websocket-and-report-their-resources.md]
@@ -59,3 +60,16 @@ leaves the host. The host executes only mounts it has explicitly **granted** to 
 - This is "lend the query, not the secret": safer than handing the member a temporary credential. Temporary credential lending is left to a later ticket if the orchestrator needs it.
 - Agent-level provenance (an agent the host spawned) is out of scope; the member identity is the unit of trust in this slice.
 - The Slack post by hand needs a real Slack account on the host: verification by a person.
+
+## Final Report
+
+Development completed as planned.
+
+### Discovered Insights
+
+- **Insight**: The `qfs` binary may not depend on `qfs-parser` directly (`crates/cmd/tests/dep_direction.rs` pins the binary's dependency set), so borrowed-statement analysis parses through the public `qfs_exec::parse` and walks the serialized AST rather than the typed one.
+  **Context**: Walking the serde form (every `segments` path, every `FOLLOW … INTO` target, every `CALL driver.action`) also means a new grammar construct that carries a path is picked up without code changes; constructs that are not mount paths (DDL, `TRANSFORM`, unbound bare names) are refused explicitly.
+- **Insight**: Borrowed statements must execute on a fresh OS thread, not `spawn_blocking`.
+  **Context**: The commit applier and several drivers build their own tokio runtime and `block_on`, which panics inside a thread that already has the host's runtime context entered.
+- **Insight**: The engine's irreversible gate carries over unchanged: a borrowed `REMOVE … --commit` returns `irreversible_ack_required` (exit 4) because the ack flag is never forwarded, and a statement written with a `COMMIT` prefix applies even without `--commit`, exactly as with `qfs run`. The audit's `commit` field records the effective value.
+  **Context**: Found during the manual smoke test against a SQLite `/sql/demo` mount.

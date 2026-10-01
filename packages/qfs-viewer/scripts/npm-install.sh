@@ -8,6 +8,7 @@ REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) && cd "$REPO_ROOT"
 # own. (Add packages to this list as they land; the order is alphabetical
 # until a real dependency forces otherwise.)
 echo "=== Running 'npm install' in every package ==="
+cd "$REPO_ROOT/packages/cluster-console" && npm install
 cd "$REPO_ROOT/packages/plggmatic" && npm install
 cd "$REPO_ROOT/packages/qfs-viewer" && npm install
 echo "\n=== All shell scripts have been executed successfully ==="

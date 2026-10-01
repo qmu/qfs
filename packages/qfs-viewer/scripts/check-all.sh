@@ -37,4 +37,8 @@ REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) && cd "$REPO_ROOT"
 # plggmatic: tsc --noEmit + plgg-test unit suite (coverage-gated).
 ./scripts/test-plggmatic.sh
 
+# cluster-console (the qfs cluster GUI): tsc + unit suite, and the embedded
+# copy under packages/qfs/crates/cluster/ui/ must equal a fresh build.
+./scripts/test-cluster-console.sh
+
 echo "\n=== All shell scripts have been executed successfully ==="

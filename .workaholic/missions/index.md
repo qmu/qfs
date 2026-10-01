@@ -2,13 +2,13 @@
 
 ## active
 
-* [a-qfs-cluster-lets-a-member-borrow-the-host-s-connections-and-shows-its-pools](active/a-qfs-cluster-lets-a-member-borrow-the-host-s-connections-and-shows-its-pools/mission.md) - A qfs cluster lets a member borrow the host's connections and shows its pools
 * [the-documentation-site-publishes-itself-staging-on-merge-production-on-release](active/the-documentation-site-publishes-itself-staging-on-merge-production-on-release/mission.md) - The documentation site publishes itself: staging on merge, production on release
 
 ## archive
 
 * [a-declared-write-resolves-a-name-the-way-a-query-does](archive/a-declared-write-resolves-a-name-the-way-a-query-does/mission.md) - A declared write resolves a name the way a query does
 * [a-file-collection-is-a-declared-set-over-any-blob-source](archive/a-file-collection-is-a-declared-set-over-any-blob-source/mission.md) - A file collection is a declared set over any blob source
+* [a-qfs-cluster-lets-a-member-borrow-the-host-s-connections-and-shows-its-pools](archive/a-qfs-cluster-lets-a-member-borrow-the-host-s-connections-and-shows-its-pools/mission.md) - A qfs cluster lets a member borrow the host's connections and shows its pools
 * [a-request-resolves-to-a-principal-the-query-path-can-read](archive/a-request-resolves-to-a-principal-the-query-path-can-read/mission.md) - A request resolves to a principal the query path can read
 * [a-shutdown-signal-is-graceful-from-the-first-instant-of-boot](archive/a-shutdown-signal-is-graceful-from-the-first-instant-of-boot/mission.md) - A shutdown signal is graceful from the first instant of boot
 * [a-walk-extends-one-trail-one-column-at-a-time](archive/a-walk-extends-one-trail-one-column-at-a-time/mission.md) - A walk extends one trail one column at a time
