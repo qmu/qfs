@@ -147,4 +147,5 @@
 * [Slack INSERT drops thread_ts, so a thread reply lands in the channel](20260926142729-slack-insert-drops-thread-ts-so-a-thread-reply-lands-in-the-channel.md)
 * [Ship and document the Slack thread-reply write (replies INSERT map)](20260926142734-ship-and-document-the-slack-thread-reply-write-replies-insert-map.md)
 * [qfs becomes an orchestrator - a cluster whose members borrow the host's connections, seen through a pool GUI](20260928020955-qfs-becomes-an-orchestrator-a-cluster-whose-members-borrow-the-host-s-connections-seen-through-a-pool-gui.md)
+* [The host spawns a Claude Code agent on a cluster member by query and reads its answer back](20261001210535-the-host-spawns-a-claude-code-agent-on-a-cluster-member-by-query-and-reads-its-answer-back.md)
 <!-- okf:generated:end -->
