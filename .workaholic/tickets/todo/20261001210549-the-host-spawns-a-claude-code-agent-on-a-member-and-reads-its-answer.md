@@ -69,3 +69,43 @@ drive it on that branch or after it merges.
 - A spawned agent runs as the member's OS user with that user's Claude Code login; the account pool is not used yet.
 - No container sandbox in this slice (the vision's default podman is later work); the tool allowlist and opt-in are the guard.
 - Spawning is a remote-code-execution surface by nature; that is why it is opt-in per member and loopback-only on the host.
+
+## Final Report
+
+### What was built
+
+- **Frames** (`cluster/src/frame.rs`): `Spawn{id, prompt, cwd?, allowed_tools}` host→member, `SpawnResult{id, ok, output, exit_code?}` member→host.
+- **Member runner** (`cluster/src/spawn.rs`, wired in `member.rs`): opt-in only (`MemberConfig.spawn: Option<SpawnConfig>`; `None` answers `spawn not accepted by this member`). Runs `claude -p <prompt>` via `tokio::process`, adding `--allowedTools <comma list>` only for a non-empty host list. The binary comes from `QFS_CLUSTER_CLAUDE_BIN`, else `claude` on PATH, else `~/.local/bin/claude`. Each run gets a fresh temp dir (removed afterwards) unless `--spawn-cwd` is set. A host `--cwd` is refused when there is no spawn root, and must canonicalize under the root when there is one. Stdin is null. The agent is killed at `--spawn-timeout` (default 600 s). stdout and stderr are each capped at 64 KiB. At most 4 runs at once. Runs are tokio tasks, so heartbeats continue.
+- **Host run table** (`cluster/src/agents.rs`, held by `Registry::agents()`): per-member live links, runs `running → done|failed` (newest 500 kept). A run fails when its member is not connected, refuses, exits non-zero, times out, or disconnects. A result is accepted only from the member the run was sent to. Every spawn and result is audited to `<config>/cluster/audit.log` (`kind: spawn` / `spawn_result`).
+- **Host API** (`host.rs`): `GET /api/cluster/agents[?id=N]` and `POST /api/cluster/agents`, both loopback-only. The POST additionally requires `Content-Type: application/json` (CSRF guard), a loopback `Host` (DNS-rebinding guard), and no foreign `Origin`. Body capped at 64 KiB, prompt at 32 KiB. `post_json` client helper.
+- **CLI**: `qfs cluster join … --accept-spawn [--spawn-cwd D] [--spawn-timeout 600]`, `qfs cluster spawn (--member N | --all) "<prompt>" [--cwd D] [--allowed-tools T]… [--wait] [--host 127.0.0.1:7466]` (with `--wait`, prints `member → [run id] answer` and exits 1 if any run failed), `qfs cluster agents [--id ID] [--host …]`.
+- **Console**: an Agents area (runs newest-first → detail with prompt, answer, tools, exit code, times). Tone colours for running/done/failed. Embedded bundle rebuilt.
+- **Docs**: ADR 0008 has a new "Spawning an agent" section. The new `Command::new` site is added to the exec-inventory allowlist (`cmd/tests/exec_inventory.rs`) and to the blueprint's Command-execution assurance table, which that lock requires in the same PR.
+
+### Gates
+
+- `cargo build --workspace`: ok
+- `cargo test --workspace --no-fail-fast`: 2887 passed, 0 failed
+- `env -u XDG_CONFIG_HOME cargo test -p qfs --lib -- --test-threads=1`: 542 passed
+- clippy `-D warnings`: clean
+- `fmt --check`: clean
+- `gen-docs --check` / `gen-skills --check`: in sync
+- cluster-console: tsc, plgg-test 100% statements, 93% branches; `build-cluster-console.sh --check` up to date
+
+Hermetic tests (`cluster/tests/spawn.rs`, fake `claude` script) cover: opt-out refuses, opt-in answers, `--all` fans out, the tool allowlist is passed only when given, heartbeats continue, the timeout kills, and the loopback POST/GET API works (a bad request is a 400 and creates no run). Unit tests cover the write guard, the cwd confinement, the argv shape, and result spoofing / unlink.
+
+### Smoke (free port 17466, temp config home, fake claude)
+
+One member joined with `--accept-spawn`, one without. Then `spawn --all --wait "tell a joke"`:
+- `no → [run 1 (failed)] spawn not accepted by this member`
+- `yes → [run 2] fake claude in /…/T/qfs-spawn-…: tell a joke`
+- exit 1, because one run failed
+
+`qfs cluster agents` listed both runs. `audit.log` had 2 spawn lines and 2 spawn_result lines. A `text/plain` POST and a foreign-`Origin` POST were both refused with 403. All smoke processes were killed afterwards.
+
+### Deviations / notes
+
+- A spawn to an unconnected member records a failed run instead of returning an HTTP error, so it shows up the same way as a refusal.
+- The timeout kills only the `claude` process, not its process group. A grandchild it leaves behind can outlive it. Its pipes are abandoned after a 2 s grace, which was found by the timeout test under load. This is stated in the ADR.
+- `spawn --wait` exits non-zero when any run failed, but still prints every answer.
+- The live three-machine joke run is still to be done by hand. Not done here.

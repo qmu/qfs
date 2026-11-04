@@ -1,4 +1,4 @@
-//! `qfs cluster host|token|join|members|sessions|grant|revoke|grants|run|account` — the binary composition
+//! `qfs cluster host|token|join|members|sessions|grant|revoke|grants|run|account|spawn|agents` — the binary composition
 //! root for the cluster.
 //!
 //! The protocol, registry and listener live in `qfs-cluster`; this module owns what only the binary
@@ -15,7 +15,8 @@ use std::time::Duration;
 
 use qfs_cluster::sample::Sampler;
 use qfs_cluster::{
-    Accounts, Borrow, Grants, MemberConfig, Registry, Report, SessionReport, Touched,
+    Accounts, AgentRun, Borrow, Grants, MemberConfig, Registry, Report, SessionReport, SpawnConfig,
+    SpawnRequest, Touched,
 };
 use qfs_cmd::ClusterRequest;
 use qfs_driver_claude::SessionSource as _;
@@ -392,15 +393,24 @@ fn run(req: &ClusterRequest) -> Result<(), String> {
             token,
             name,
             heartbeat_secs,
+            accept_spawn,
+            spawn_cwd,
+            spawn_timeout_secs,
         } => {
             if !heartbeat_secs.is_finite() || *heartbeat_secs < 0.05 {
                 return Err("--heartbeat must be at least 0.05 seconds".into());
             }
+            let spawn = if *accept_spawn {
+                Some(spawn_policy(spawn_cwd.as_deref(), *spawn_timeout_secs)?)
+            } else {
+                None
+            };
             let cfg = MemberConfig {
                 url: url.clone(),
                 token: token.clone(),
                 name: name.clone().unwrap_or_default(),
                 heartbeat: Duration::from_secs_f64(*heartbeat_secs),
+                spawn,
             };
             let sampler = Mutex::new(Sampler::new());
             let claude = claude_source();
@@ -424,6 +434,29 @@ fn run(req: &ClusterRequest) -> Result<(), String> {
                 .block_on(qfs_cluster::run_member(cfg, source))
                 .map_err(|e| e.to_string())
         }
+        ClusterRequest::Spawn {
+            member,
+            all,
+            prompt,
+            cwd,
+            allowed_tools,
+            wait,
+            host,
+        } => spawn_agents(
+            &SpawnRequest {
+                member: member.clone(),
+                all: *all,
+                prompt: prompt.clone(),
+                cwd: cwd.clone(),
+                allowed_tools: allowed_tools.clone(),
+            },
+            *wait,
+            host,
+        ),
+        ClusterRequest::Agents { id, host } => match id {
+            Some(id) => print_json(host, &format!("/api/cluster/agents?id={id}")),
+            None => print_json(host, "/api/cluster/agents"),
+        },
         ClusterRequest::Members { host } => print_json(host, "/api/cluster/members"),
         ClusterRequest::Sessions { host } => print_json(host, "/api/cluster/sessions"),
         ClusterRequest::Grant {
@@ -531,6 +564,7 @@ fn run(req: &ClusterRequest) -> Result<(), String> {
                 token,
                 name: env_or(name.as_ref(), "QFS_CLUSTER_NAME").unwrap_or_default(),
                 heartbeat: Duration::from_secs(10),
+                spawn: None,
             };
             let (ok, body) = runtime()?
                 .block_on(qfs_cluster::run_once(&cfg, statement, *commit))
@@ -545,6 +579,70 @@ fn run(req: &ClusterRequest) -> Result<(), String> {
             }
         }
     }
+}
+
+/// The member's spawn policy for `join --accept-spawn`.
+fn spawn_policy(root: Option<&Path>, timeout_secs: u64) -> Result<SpawnConfig, String> {
+    if timeout_secs == 0 {
+        return Err("--spawn-timeout must be at least 1 second".into());
+    }
+    if let Some(r) = root {
+        if !r.is_dir() {
+            return Err(format!("--spawn-cwd {} is not a directory", r.display()));
+        }
+    }
+    let bin = qfs_cluster::spawn::resolve_claude_bin().ok_or(
+        "--accept-spawn needs the `claude` CLI (set QFS_CLUSTER_CLAUDE_BIN, put `claude` on PATH, \
+         or install it at ~/.local/bin/claude)",
+    )?;
+    eprintln!(
+        "qfs cluster: accepting agent spawns (claude: {}, cwd: {}, timeout: {timeout_secs}s)",
+        bin.display(),
+        root.map_or_else(|| "a fresh temp dir".into(), |r| r.display().to_string())
+    );
+    let mut cfg = SpawnConfig::new(bin, root.map(Path::to_path_buf));
+    cfg.timeout = Duration::from_secs(timeout_secs);
+    Ok(cfg)
+}
+
+/// How long `spawn --wait` polls before giving up.
+const WAIT_LIMIT: Duration = Duration::from_secs(2 * 60 * 60);
+
+/// `qfs cluster spawn`: post the request to the host's loopback API, then (with `--wait`) poll
+/// each run until it finishes and print `member → answer`. Exits non-zero when any run failed.
+fn spawn_agents(req: &SpawnRequest, wait: bool, host: &str) -> Result<(), String> {
+    let body = serde_json::to_string(req).map_err(|e| e.to_string())?;
+    let created = qfs_cluster::post_json(host, "/api/cluster/agents", &body)?;
+    let mut runs: Vec<AgentRun> = serde_json::from_str(&created).map_err(|e| e.to_string())?;
+    if runs.is_empty() {
+        return Err("no member is connected".into());
+    }
+    if !wait {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&runs).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    let deadline = std::time::Instant::now() + WAIT_LIMIT;
+    while runs.iter().any(|r| r.status == "running") {
+        if std::time::Instant::now() > deadline {
+            return Err("gave up waiting for the runs (see `qfs cluster agents`)".into());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        for r in runs.iter_mut().filter(|r| r.status == "running") {
+            let body = qfs_cluster::fetch_json(host, &format!("/api/cluster/agents?id={}", r.id))?;
+            *r = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        }
+    }
+    for r in &runs {
+        let mark = if r.status == "done" { "" } else { " (failed)" };
+        println!("{} → [run {}{mark}]\n{}\n", r.member, r.id, r.output);
+    }
+    if runs.iter().any(|r| r.status != "done") {
+        return Err("one or more runs failed".into());
+    }
+    Ok(())
 }
 
 fn print_json(host: &str, path: &str) -> Result<(), String> {

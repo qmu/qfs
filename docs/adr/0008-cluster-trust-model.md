@@ -83,6 +83,38 @@ code relies on it.
 - **Not in this slice.** Agent-level provenance (the member is the unit of trust), temporary
   credential lending, and TLS.
 
+### Spawning an agent
+
+The host can run a one-shot, non-interactive Claude Code agent on a member and read its answer
+(`qfs cluster spawn (--member <name> | --all) "<prompt>" [--cwd D] [--allowed-tools T]… [--wait]`,
+`qfs cluster agents [--id ID]`). This is remote code execution by nature, so every guard is
+default-deny:
+
+- **Member opt-in.** A member runs a `spawn` frame only when it joined with
+  `qfs cluster join --accept-spawn`; otherwise it answers `spawn not accepted by this member` and
+  the host records the run as `failed`. The agent is `claude -p <prompt>` (binary from
+  `QFS_CLUSTER_CLAUDE_BIN`, else `claude` on `PATH`, else `~/.local/bin/claude`) running as the
+  member's OS user with that user's Claude Code login. No container sandbox in this slice.
+- **Least privilege.** `--allowedTools` is passed only when the host sent a non-empty list, so by
+  default the agent may use no permission-gated tool. The agent runs in a fresh temp dir (removed
+  afterwards) unless the member set `--spawn-cwd`; a host `--cwd` is refused without a spawn root
+  and must canonicalize under it. Stdin is closed.
+- **Bounded.** Killed at `--spawn-timeout` (default 600 s); stdout and stderr are each capped at
+  64 KiB; at most 4 agents run at once per member. Agents run as tasks, so heartbeats continue.
+  The timeout kills the `claude` process itself; a grandchild it left behind is not reaped (no
+  process-group kill in this slice), and its output pipes are abandoned after a 2 s grace.
+- **Loopback-only, hardened write.** The host dispatches only from `POST /api/cluster/agents` on
+  its listener, served to loopback peers only, and additionally requiring
+  `Content-Type: application/json` (a cross-site page cannot send it without a CORS preflight the
+  host never grants), a loopback `Host` header (defeats DNS rebinding), and no foreign `Origin`.
+  The body is capped at 64 KiB, the prompt at 32 KiB. A result is accepted only from the member the
+  run was sent to.
+- **Recorded and audited.** Runs (`running` → `done` | `failed`) live in an in-memory table
+  (`GET /api/cluster/agents`, newest 500) shown in the console's Agents area. Every spawn (member,
+  prompt, cwd, tool list) and every result (status, exit code, output size) is appended to
+  `<config>/cluster/audit.log` (`kind: spawn` / `spawn_result`). A member that disconnects fails its
+  running runs.
+
 ## Consequences
 
 - A leaked token admits one named member until it expires; it grants no host credential, and it

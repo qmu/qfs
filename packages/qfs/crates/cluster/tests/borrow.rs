@@ -95,6 +95,7 @@ fn cfg(addr: &str, name: &str) -> MemberConfig {
         token: mint(SECRET, name, 60, now_secs()),
         name: name.into(),
         heartbeat: Duration::from_secs(10),
+        spawn: None,
     }
 }
 

@@ -180,6 +180,13 @@ fn every_process_spawn_site_is_on_the_allowlist() {
     expected.insert("crates/qfs/src/tty.rs", vec!["OPENER"]);
     expected.insert("crates/qfs/src/claude.rs", vec!["&self.binary"]);
     expected.insert("crates/qfs/src/tmux.rs", vec!["\"tmux\""]);
+    //   * cluster/src/spawn.rs — the cluster member's OPT-IN agent spawn (`qfs cluster join
+    //     --accept-spawn`): `Command::new(&cfg.claude_bin)` where the binary is MEMBER-operator config
+    //     (`QFS_CLUSTER_CLAUDE_BIN`, else `claude` on PATH, else `~/.local/bin/claude`), never sent by
+    //     the host; the host's prompt and tool list cross as DISCRETE arguments (`-p <prompt>`,
+    //     `--allowedTools <list>` only when non-empty), never a shell (ticket 20261001210549; argv
+    //     coverage in that module's `allowed_tools_are_passed_only_when_non_empty`).
+    expected.insert("crates/cluster/src/spawn.rs", vec!["&cfg.claude_bin"]);
     //   * xtask/src/main.rs — BUILD-ONLY release tooling (`publish = false`, a TERMINAL_LEAVES
     //     crate never shipped in any artifact, per the dep-direction guard): `cmd` spawns the
     //     platform checksum tool (`sha256sum` / `shasum -a 256`) over release tarballs, and

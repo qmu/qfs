@@ -1,4 +1,5 @@
-//! The member side: connect, hello, heartbeat, reconnect with backoff.
+//! The member side: connect, hello, heartbeat, reconnect with backoff — and, when the member
+//! opted in with `--accept-spawn`, run the host's agent spawns concurrently ([`crate::spawn`]).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,6 +9,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::frame::{Frame, Report};
 use crate::host::WS_PATH;
+use crate::spawn::SpawnConfig;
 
 /// What a member needs to join.
 #[derive(Clone)]
@@ -20,6 +22,8 @@ pub struct MemberConfig {
     pub name: String,
     /// Heartbeat interval.
     pub heartbeat: Duration,
+    /// The spawn policy; `None` (the default) refuses every [`Frame::Spawn`].
+    pub spawn: Option<SpawnConfig>,
 }
 
 impl std::fmt::Debug for MemberConfig {
@@ -29,6 +33,7 @@ impl std::fmt::Debug for MemberConfig {
             .field("token", &"<redacted>")
             .field("name", &self.name)
             .field("heartbeat", &self.heartbeat)
+            .field("spawn", &self.spawn)
             .finish()
     }
 }
@@ -110,8 +115,16 @@ pub async fn session_once(
     }
 
     let mut tick = tokio::time::interval(cfg.heartbeat);
+    // Spawned agents run as tasks and report here, so heartbeats keep flowing meanwhile.
+    let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel::<Frame>();
+    let running = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     loop {
         tokio::select! {
+            Some(result) = done_rx.recv() => {
+                tx.send(Message::text(result.to_json()))
+                    .await
+                    .map_err(|e| MemberError::Transport(e.to_string()))?;
+            }
             _ = tick.tick() => {
                 let report = sample(source).await;
                 tx.send(Message::text(Frame::Heartbeat { report }.to_json()))
@@ -120,7 +133,9 @@ pub async fn session_once(
             }
             msg = rx.next() => match msg {
                 Some(Ok(Message::Text(t))) => {
-                    if let Ok(Frame::Request { id, .. }) = Frame::from_json(t.as_str()) {
+                    if let Ok(Frame::Spawn { id, prompt, cwd, allowed_tools }) = Frame::from_json(t.as_str()) {
+                        start_spawn(cfg.spawn.clone(), &running, &done_tx, id, prompt, cwd, allowed_tools);
+                    } else if let Ok(Frame::Request { id, .. }) = Frame::from_json(t.as_str()) {
                         let reply = Frame::Response {
                             id,
                             ok: false,
@@ -137,6 +152,52 @@ pub async fn session_once(
             }
         }
     }
+}
+
+/// Answer one [`Frame::Spawn`]: refuse it without a policy or at the concurrency cap, else run
+/// it on a task that sends its [`Frame::SpawnResult`] to `done`.
+fn start_spawn(
+    policy: Option<SpawnConfig>,
+    running: &Arc<std::sync::atomic::AtomicUsize>,
+    done: &tokio::sync::mpsc::UnboundedSender<Frame>,
+    id: u64,
+    prompt: String,
+    cwd: Option<String>,
+    allowed_tools: Vec<String>,
+) {
+    use std::sync::atomic::Ordering;
+    let reply = move |(ok, output, exit_code): crate::spawn::Outcome| Frame::SpawnResult {
+        id,
+        ok,
+        output,
+        exit_code,
+    };
+    let Some(policy) = policy else {
+        eprintln!("qfs cluster: refused spawn {id} (this member did not --accept-spawn)");
+        let _ = done.send(reply(crate::spawn::refused()));
+        return;
+    };
+    if running.fetch_add(1, Ordering::SeqCst) >= crate::spawn::MAX_CONCURRENT {
+        running.fetch_sub(1, Ordering::SeqCst);
+        let _ = done.send(reply((
+            false,
+            format!(
+                "this member is already running {} agents",
+                crate::spawn::MAX_CONCURRENT
+            ),
+            None,
+        )));
+        return;
+    }
+    eprintln!("qfs cluster: running spawn {id}");
+    let running = Arc::clone(running);
+    let done = done.clone();
+    tokio::spawn(async move {
+        let out = crate::spawn::run(&policy, id, &prompt, cwd.as_deref(), &allowed_tools).await;
+        running.fetch_sub(1, Ordering::SeqCst);
+        eprintln!("qfs cluster: spawn {id} finished (ok: {})", out.0);
+        let _ = done.send(reply(out));
+    });
 }
 
 /// How long a one-shot borrowed request waits for the host's answer.

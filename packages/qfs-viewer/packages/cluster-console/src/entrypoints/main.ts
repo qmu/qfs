@@ -26,6 +26,7 @@ import {
   asMembers,
   asAccounts,
   asSessions,
+  asAgents,
 } from "../domain/model/Cluster.ts";
 import {
   type Column,
@@ -61,13 +62,15 @@ const poll = (): Promise<Msg> =>
     getJson("/api/cluster/members"),
     getJson("/api/cluster/accounts"),
     getJson("/api/cluster/sessions"),
+    getJson("/api/cluster/agents"),
   ]).then(
-    ([m, a, s]) =>
+    ([m, a, s, g]) =>
       polled(
         {
           members: asMembers(m),
           accounts: asAccounts(a),
           sessions: asSessions(s),
+          agents: asAgents(g),
         },
         Date.now(),
       ),
@@ -104,7 +107,10 @@ body { font:14px/1.45 system-ui, sans-serif; background:var(--surface); color:va
 .item .count { float:right; color:var(--muted); font-size:12px; }
 .tone { display:inline-block; width:.55rem; height:.55rem; border-radius:50%; margin-right:.45rem; background:var(--off); vertical-align:middle; }
 .tone.online, .tone.available, .tone.idle { background:var(--ok); }
-.tone.busy, .tone.assigned { background:var(--warn); }
+.tone.busy, .tone.assigned, .tone.running { background:var(--warn); }
+.tone.done { background:var(--ok); }
+.tone.failed { background:var(--danger); }
+.field .v { white-space:pre-wrap; }
 .empty { padding:.8rem .9rem; color:var(--muted); font-size:12px; }
 .field { padding:.45rem .9rem; border-bottom:1px solid var(--border); }
 .field .k { display:block; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
@@ -233,7 +239,7 @@ const areaView = (
 const status = (model: Model): string =>
   model.polledAt === 0
     ? "connecting…"
-    : `${model.snapshot.members.length} members · ${model.snapshot.accounts.length} accounts · ${model.snapshot.sessions.length} sessions · updated ${new Date(model.polledAt).toLocaleTimeString()} (every 5 s)`;
+    : `${model.snapshot.members.length} members · ${model.snapshot.accounts.length} accounts · ${model.snapshot.sessions.length} sessions · ${model.snapshot.agents.length} agent runs · updated ${new Date(model.polledAt).toLocaleTimeString()} (every 5 s)`;
 
 const view = (model: Model): Html<Msg> =>
   div(

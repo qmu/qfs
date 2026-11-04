@@ -42,6 +42,7 @@ fn cfg(addr: &str, token: String, name: &str, ms: u64) -> MemberConfig {
         token,
         name: name.into(),
         heartbeat: Duration::from_millis(ms),
+        spawn: None,
     }
 }
 

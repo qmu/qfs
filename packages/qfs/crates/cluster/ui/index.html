@@ -28,10 +28,12 @@ const poll = () => Promise.all([
     getJson("/api/cluster/members"),
     getJson("/api/cluster/accounts"),
     getJson("/api/cluster/sessions"),
-]).then(([m, a, s]) => (0, walk_ts_1.polled)({
+    getJson("/api/cluster/agents"),
+]).then(([m, a, s, g]) => (0, walk_ts_1.polled)({
     members: (0, Cluster_ts_1.asMembers)(m),
     accounts: (0, Cluster_ts_1.asAccounts)(a),
     sessions: (0, Cluster_ts_1.asSessions)(s),
+    agents: (0, Cluster_ts_1.asAgents)(g),
 }, Date.now()), (e) => (0, walk_ts_1.pollFailed)(e instanceof Error
     ? e.message
     : String(e)));
@@ -57,7 +59,10 @@ body { font:14px/1.45 system-ui, sans-serif; background:var(--surface); color:va
 .item .count { float:right; color:var(--muted); font-size:12px; }
 .tone { display:inline-block; width:.55rem; height:.55rem; border-radius:50%; margin-right:.45rem; background:var(--off); vertical-align:middle; }
 .tone.online, .tone.available, .tone.idle { background:var(--ok); }
-.tone.busy, .tone.assigned { background:var(--warn); }
+.tone.busy, .tone.assigned, .tone.running { background:var(--warn); }
+.tone.done { background:var(--ok); }
+.tone.failed { background:var(--danger); }
+.field .v { white-space:pre-wrap; }
 .empty { padding:.8rem .9rem; color:var(--muted); font-size:12px; }
 .field { padding:.45rem .9rem; border-bottom:1px solid var(--border); }
 .field .k { display:block; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
@@ -109,7 +114,7 @@ const areaView = (model) => (0, plgg_view_1.nav)([(0, plgg_view_1.class_)("col a
 ]);
 const status = (model) => model.polledAt === 0
     ? "connecting…"
-    : `${model.snapshot.members.length} members · ${model.snapshot.accounts.length} accounts · ${model.snapshot.sessions.length} sessions · updated ${new Date(model.polledAt).toLocaleTimeString()} (every 5 s)`;
+    : `${model.snapshot.members.length} members · ${model.snapshot.accounts.length} accounts · ${model.snapshot.sessions.length} sessions · ${model.snapshot.agents.length} agent runs · updated ${new Date(model.polledAt).toLocaleTimeString()} (every 5 s)`;
 const view = (model) => (0, plgg_view_1.div)([(0, plgg_view_1.class_)("console")], [
     (0, plgg_view_1.div)([(0, plgg_view_1.class_)("rail")], [
         (0, plgg_view_1.span)([(0, plgg_view_1.class_)("brand")], [(0, plgg_view_1.text)("qfs cluster console")]),
@@ -4639,11 +4644,12 @@ exports.application = __entry.application, exports.browserSubEnv = __entry.brows
 "src/domain/model/Cluster.ts": function (module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.asSessions = exports.asAccounts = exports.asMembers = exports.emptySnapshot = void 0;
+exports.asAgents = exports.asSessions = exports.asAccounts = exports.asMembers = exports.emptySnapshot = void 0;
 exports.emptySnapshot = {
     members: [],
     accounts: [],
     sessions: [],
+    agents: [],
 };
 const isObj = (v) => typeof v === "object" &&
     v !== null &&
@@ -4701,6 +4707,32 @@ const asSessions = (body) => rowsOf(body, (o) => str(o, "id") === "" || str(o, "
         ts: num(o, "ts"),
     });
 exports.asSessions = asSessions;
+const asAgents = (body) => rowsOf(body, (o) => {
+    const tools = o["allowed_tools"];
+    const code = o["exit_code"];
+    return num(o, "id") === 0 ||
+        str(o, "member") === ""
+        ? undefined
+        : {
+            id: num(o, "id"),
+            member: str(o, "member"),
+            prompt: str(o, "prompt"),
+            cwd: str(o, "cwd"),
+            allowedTools: Array.isArray(tools)
+                ? tools
+                    .filter((t) => typeof t === "string")
+                    .join(", ")
+                : "",
+            status: str(o, "status"),
+            output: str(o, "output"),
+            exitCode: typeof code === "number"
+                ? String(code)
+                : "",
+            started: num(o, "started"),
+            finished: num(o, "finished"),
+        };
+});
+exports.asAgents = asAgents;
 
 },
 "src/domain/usecase/walk.ts": function (module, exports, require) {
@@ -4715,6 +4747,7 @@ exports.areas = [
     ["servers", "Server pool"],
     ["accounts", "Account pool"],
     ["allocation", "Session allocation"],
+    ["agents", "Agents"],
 ];
 const open = (a) => (0, plgg_1.box)("Open")(a);
 exports.open = open;
@@ -4898,6 +4931,26 @@ const sessionFields = (s) => [
     ["Last message", orDash(s.lastMessage)],
     ["Reported", (0, exports.iso)(s.ts)],
 ];
+const agentItem = (r, sel) => ({
+    id: String(r.id),
+    label: `${r.member} · ${r.prompt}`,
+    detail: `#${r.id} · ${r.status} · ${(0, exports.iso)(r.started).slice(11, 19)}`,
+    tone: r.status,
+    active: sel.first === String(r.id),
+    msg: (0, exports.pickFirst)(String(r.id)),
+});
+const agentFields = (r) => [
+    ["Run", String(r.id)],
+    ["Member", r.member],
+    ["Status", r.status],
+    ["Prompt", r.prompt],
+    ["Answer", orDash(r.output)],
+    ["Directory", orDash(r.cwd)],
+    ["Allowed tools", r.allowedTools === "" ? "none" : r.allowedTools],
+    ["Exit code", orDash(r.exitCode)],
+    ["Started", (0, exports.iso)(r.started)],
+    ["Finished", (0, exports.iso)(r.finished)],
+];
 const drill = (snap, sel) => {
     if (sel.first === "") {
         return [];
@@ -4937,6 +4990,19 @@ const columns = (model) => {
                 listCol("allocation", "Session allocation", snap.members.map((x) => allocationItem(snap, x, sel)), "no members have joined"),
                 ...drill(snap, sel),
             ];
+        case "agents": {
+            const r = snap.agents.find((x) => String(x.id) === sel.first);
+            return [
+                listCol("agents", "Agents", [...snap.agents]
+                    .reverse()
+                    .map((x) => agentItem(x, sel)), "no agent runs (qfs cluster spawn)"),
+                ...(r === undefined
+                    ? []
+                    : [
+                        detailCol("agent", `run ${r.id}`, agentFields(r)),
+                    ]),
+            ];
+        }
         case "accounts": {
             const a = snap.accounts.find((x) => x.label === sel.first);
             return [
@@ -4955,7 +5021,9 @@ const areaCount = (snap, area) => area === "servers"
     ? snap.members.length
     : area === "accounts"
         ? snap.accounts.length
-        : snap.sessions.length;
+        : area === "agents"
+            ? snap.agents.length
+            : snap.sessions.length;
 exports.areaCount = areaCount;
 
 }

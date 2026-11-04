@@ -11,7 +11,7 @@ description = "qfs cluster core: a host accepts members over an authenticated We
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["net", "io-util"] }
+tokio = { workspace = true, features = ["net", "io-util", "process"] }
 futures = { workspace = true }
 tokio-tungstenite = "0.30"
 hmac = "0.12"

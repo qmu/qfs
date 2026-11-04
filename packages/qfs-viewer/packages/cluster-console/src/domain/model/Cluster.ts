@@ -39,11 +39,26 @@ export type Session = Readonly<{
   ts: number;
 }>;
 
-/** One poll of the host: all three collections. */
+/** A `/cluster/agents` row (one spawned agent run). */
+export type Agent = Readonly<{
+  id: number;
+  member: string;
+  prompt: string;
+  cwd: string;
+  allowedTools: string;
+  status: string;
+  output: string;
+  exitCode: string;
+  started: number;
+  finished: number;
+}>;
+
+/** One poll of the host: every collection. */
 export type Snapshot = Readonly<{
   members: ReadonlyArray<Member>;
   accounts: ReadonlyArray<Account>;
   sessions: ReadonlyArray<Session>;
+  agents: ReadonlyArray<Agent>;
 }>;
 
 /** The empty snapshot (before the first poll). */
@@ -51,6 +66,7 @@ export const emptySnapshot: Snapshot = {
   members: [],
   accounts: [],
   sessions: [],
+  agents: [],
 };
 
 type Obj = Readonly<Record<string, unknown>>;
@@ -142,3 +158,37 @@ export const asSessions = (
           ts: num(o, "ts"),
         },
   );
+
+/** Cast an agents body. */
+export const asAgents = (
+  body: unknown,
+): ReadonlyArray<Agent> =>
+  rowsOf(body, (o) => {
+    const tools = o["allowed_tools"];
+    const code = o["exit_code"];
+    return num(o, "id") === 0 ||
+      str(o, "member") === ""
+      ? undefined
+      : {
+          id: num(o, "id"),
+          member: str(o, "member"),
+          prompt: str(o, "prompt"),
+          cwd: str(o, "cwd"),
+          allowedTools: Array.isArray(tools)
+            ? tools
+                .filter(
+                  (t: unknown): t is string =>
+                    typeof t === "string",
+                )
+                .join(", ")
+            : "",
+          status: str(o, "status"),
+          output: str(o, "output"),
+          exitCode:
+            typeof code === "number"
+              ? String(code)
+              : "",
+          started: num(o, "started"),
+          finished: num(o, "finished"),
+        };
+  });

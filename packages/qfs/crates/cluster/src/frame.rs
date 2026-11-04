@@ -88,6 +88,32 @@ pub enum Frame {
         /// Result rows or an error message.
         body: serde_json::Value,
     },
+    /// Host → member: run one non-interactive Claude Code agent (`claude -p <prompt>`). A member
+    /// refuses it unless it joined with `--accept-spawn` (see [`crate::spawn`]).
+    Spawn {
+        /// The host's run id (correlates the [`Frame::SpawnResult`]).
+        id: u64,
+        /// The prompt.
+        prompt: String,
+        /// Working directory requested by the host; must lie under the member's `--spawn-cwd`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        /// Tools the agent may use (`--allowedTools`); empty means none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        allowed_tools: Vec<String>,
+    },
+    /// Member → host: the outcome of a [`Frame::Spawn`].
+    SpawnResult {
+        /// The run id from the spawn.
+        id: u64,
+        /// Whether the agent ran and exited successfully.
+        ok: bool,
+        /// The agent's final answer (stdout, capped), or why it did not run.
+        output: String,
+        /// The process exit code, when it exited on its own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+    },
 }
 
 impl Frame {
@@ -131,6 +157,26 @@ mod tests {
         let j = f.to_json();
         assert!(j.contains(r#""type":"request""#));
         assert_eq!(Frame::from_json(&j).unwrap(), f);
+    }
+
+    #[test]
+    fn spawn_frames_round_trip() {
+        let f = Frame::Spawn {
+            id: 3,
+            prompt: "tell a joke".into(),
+            cwd: None,
+            allowed_tools: vec![],
+        };
+        let j = f.to_json();
+        assert!(j.contains(r#""type":"spawn""#) && !j.contains("allowed_tools"));
+        assert_eq!(Frame::from_json(&j).unwrap(), f);
+        let r = Frame::SpawnResult {
+            id: 3,
+            ok: true,
+            output: "ha".into(),
+            exit_code: Some(0),
+        };
+        assert_eq!(Frame::from_json(&r.to_json()).unwrap(), r);
     }
 
     #[test]

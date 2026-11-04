@@ -8,11 +8,14 @@
 //! the only state) and answers a loopback-only JSON read API on the same listener ([`host`]).
 //! A member may also **borrow** a host mount ([`borrow`]): it sends a statement, the host checks
 //! its grant table ([`grants`]) and runs it, and only the result crosses the wire.
+//! The host may also **spawn** a one-shot Claude Code agent on a member that opted in
+//! ([`spawn`], [`agents`]): the prompt goes out, the answer comes back, and the run is recorded.
 //!
 //! The trust model is `docs/adr/0008-cluster-trust-model.md`. This crate is a LEAF consumed only
 //! by the terminal `qfs` binary, so its tokio dead-ends there.
 
 pub mod accounts;
+pub mod agents;
 pub mod borrow;
 pub mod frame;
 pub mod grants;
@@ -20,15 +23,18 @@ pub mod host;
 pub mod member;
 pub mod registry;
 pub mod sample;
+pub mod spawn;
 pub mod token;
 
 pub use accounts::{AccountRow, Accounts};
+pub use agents::{AgentRun, Agents, SpawnRequest};
 pub use borrow::{Borrow, Execute, PathsOf, Touched};
 pub use frame::{Frame, Report, SessionReport};
 pub use grants::Grants;
-pub use host::{fetch_json, serve, serve_with, DEFAULT_LISTEN};
+pub use host::{fetch_json, post_json, serve, serve_with, DEFAULT_LISTEN};
 pub use member::{run_member, run_once, MemberConfig, MemberError};
 pub use registry::{MemberRow, Registry, SessionRow};
+pub use spawn::SpawnConfig;
 pub use token::{mint, verify, TokenClaims, TokenError};
 
 /// Seconds since the Unix epoch (0 if the clock is before it — never a panic).

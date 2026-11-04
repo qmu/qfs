@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use crate::agents::Agents;
 use crate::frame::Report;
 
 /// A member lapses to `offline` after this many missed heartbeats.
@@ -66,6 +67,7 @@ pub struct SessionRow {
 #[derive(Debug, Clone, Default)]
 pub struct Registry {
     inner: Arc<Mutex<BTreeMap<String, Entry>>>,
+    agents: Agents,
 }
 
 impl Registry {
@@ -73,6 +75,12 @@ impl Registry {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The agent-run table (spawned Claude Code runs and the live member links).
+    #[must_use]
+    pub fn agents(&self) -> &Agents {
+        &self.agents
     }
 
     fn with<R>(&self, f: impl FnOnce(&mut BTreeMap<String, Entry>) -> R) -> R {

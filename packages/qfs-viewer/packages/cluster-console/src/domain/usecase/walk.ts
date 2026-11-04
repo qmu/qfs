@@ -26,6 +26,7 @@ import {
 } from "plgg-view/client";
 import {
   type Account,
+  type Agent,
   type Member,
   type Session,
   type Snapshot,
@@ -39,7 +40,8 @@ export const POLL_MS = 5000;
 export type Area =
   | "servers"
   | "accounts"
-  | "allocation";
+  | "allocation"
+  | "agents";
 
 export const areas: ReadonlyArray<
   readonly [Area, string]
@@ -47,12 +49,13 @@ export const areas: ReadonlyArray<
   ["servers", "Server pool"],
   ["accounts", "Account pool"],
   ["allocation", "Session allocation"],
+  ["agents", "Agents"],
 ];
 
 /** Where the walk stands. `""` means "nothing chosen". */
 export type Selection = Readonly<{
   area: Area;
-  /** A member (servers/allocation) or account label. */
+  /** A member (servers/allocation), account label or agent run id. */
   first: string;
   /** A working directory under the member. */
   cwd: string;
@@ -391,6 +394,33 @@ const sessionFields = (
   ["Reported", iso(s.ts)],
 ];
 
+const agentItem = (
+  r: Agent,
+  sel: Selection,
+): Item => ({
+  id: String(r.id),
+  label: `${r.member} · ${r.prompt}`,
+  detail: `#${r.id} · ${r.status} · ${iso(r.started).slice(11, 19)}`,
+  tone: r.status,
+  active: sel.first === String(r.id),
+  msg: pickFirst(String(r.id)),
+});
+
+const agentFields = (
+  r: Agent,
+): ReadonlyArray<Field> => [
+  ["Run", String(r.id)],
+  ["Member", r.member],
+  ["Status", r.status],
+  ["Prompt", r.prompt],
+  ["Answer", orDash(r.output)],
+  ["Directory", orDash(r.cwd)],
+  ["Allowed tools", r.allowedTools === "" ? "none" : r.allowedTools],
+  ["Exit code", orDash(r.exitCode)],
+  ["Started", iso(r.started)],
+  ["Finished", iso(r.finished)],
+];
+
 /** The member → directory → session drill columns. */
 const drill = (
   snap: Snapshot,
@@ -477,6 +507,30 @@ export const columns = (
         ),
         ...drill(snap, sel),
       ];
+    case "agents": {
+      const r = snap.agents.find(
+        (x) => String(x.id) === sel.first,
+      );
+      return [
+        listCol(
+          "agents",
+          "Agents",
+          [...snap.agents]
+            .reverse()
+            .map((x) => agentItem(x, sel)),
+          "no agent runs (qfs cluster spawn)",
+        ),
+        ...(r === undefined
+          ? []
+          : [
+              detailCol(
+                "agent",
+                `run ${r.id}`,
+                agentFields(r),
+              ),
+            ]),
+      ];
+    }
     case "accounts": {
       const a = snap.accounts.find(
         (x) => x.label === sel.first,
@@ -513,4 +567,6 @@ export const areaCount = (
     ? snap.members.length
     : area === "accounts"
       ? snap.accounts.length
-      : snap.sessions.length;
+      : area === "agents"
+        ? snap.agents.length
+        : snap.sessions.length;

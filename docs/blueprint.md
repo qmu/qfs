@@ -2526,6 +2526,7 @@ allowlist:
 | `qfs/src/tty.rs` (×1) | `OPENER` | the desktop opener (`open`/`xdg-open`), `Stdio::null` |
 | `qfs/src/claude.rs` (×1) | `&self.binary` | the `/claude` session LAUNCH — the CONFIGURED CLI (`QFS_CLAUDE_BINARY`, default `claude`); `cwd`/`prompt`/`name` cross as discrete `.arg(..)`, never a shell (ticket 20260717010600) |
 | `qfs/src/tmux.rs` (×1) | `"tmux"` | the safe tmux teardown — fixed program, argv `-L <dedicated-socket> kill-session -t <session>`; the socket is a generated unique name, never a shell (ticket 20260719105527) |
+| `cluster/src/spawn.rs` (×1) | `&cfg.claude_bin` | the cluster member's opt-in agent spawn (`qfs cluster join --accept-spawn`) — the CONFIGURED CLI (`QFS_CLUSTER_CLAUDE_BIN`, else `claude` on `PATH`, else `~/.local/bin/claude`), member-operator config, never host-sent; argv is `-p <prompt>` plus `--allowedTools <list>` only for a non-empty host list, as discrete `.args(..)`, never a shell; stdin null, timeout-killed, output capped (ADR 0008, ticket 20261001210549) |
 | `xtask/src/main.rs` (×2) | `cmd`/`program` | **build-only** release tooling (`publish=false`, never shipped) |
 
 A new `Command::new` — from a future driver, a transform executor, a declared-driver evaluator, a

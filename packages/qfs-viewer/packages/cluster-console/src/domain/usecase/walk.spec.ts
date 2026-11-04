@@ -16,6 +16,7 @@ import {
   asMembers,
   asAccounts,
   asSessions,
+  asAgents,
   emptySnapshot,
   type Snapshot,
 } from "../model/Cluster.ts";
@@ -95,6 +96,32 @@ const snap: Snapshot = {
     },
     { member: "box-a", id: "s3", cwd: null },
     { member: "box-b" },
+  ]),
+  agents: asAgents([
+    {
+      id: 1,
+      member: "box-a",
+      prompt: "tell a joke",
+      cwd: null,
+      allowed_tools: [],
+      status: "done",
+      output: "a joke",
+      exit_code: 0,
+      started: 1790000000,
+      finished: 1790000005,
+    },
+    {
+      id: 2,
+      member: "box-b",
+      prompt: "tell a joke",
+      allowed_tools: ["Read", 7, "Bash"],
+      status: "failed",
+      output: "spawn not accepted by this member",
+      exit_code: null,
+      started: 1790000000,
+    },
+    { id: 3 },
+    { member: "nobody" },
   ]),
 };
 
@@ -233,6 +260,34 @@ test("allocation and account areas", () => {
     check(areaCount(snap, "servers"), toBe(2)),
     check(areaCount(snap, "accounts"), toBe(2)),
     check(areaCount(snap, "allocation"), toBe(3)),
+    check(areaCount(snap, "agents"), toBe(2)),
+    check(
+      columns(run([open("agents")], m)).map(shape),
+      toEqual(["list:agents:2:"]),
+    ),
+    check(
+      columns(
+        run([open("agents"), pickFirst("2")], m),
+      ).map(shape),
+      toEqual([
+        "list:agents:2:2",
+        "detail:agent:10",
+      ]),
+    ),
+    check(
+      snap.agents.map((a) => [
+        a.allowedTools,
+        a.exitCode,
+      ]),
+      toEqual([
+        ["", "0"],
+        ["Read, Bash", ""],
+      ]),
+    ),
+    check(
+      asAgents({ not: "an array" }).length,
+      toBe(0),
+    ),
     check(
       columns(initialModel).map(shape),
       toEqual(["list:servers:0:"]),

@@ -146,6 +146,36 @@ pub enum ClusterRequest {
         name: Option<String>,
         /// Heartbeat interval, seconds.
         heartbeat_secs: f64,
+        /// `--accept-spawn`: run the host's agent spawns (default: refuse them).
+        accept_spawn: bool,
+        /// `--spawn-cwd`: the spawn root (default: a fresh temp dir per run).
+        spawn_cwd: Option<PathBuf>,
+        /// `--spawn-timeout`, seconds.
+        spawn_timeout_secs: u64,
+    },
+    /// `qfs cluster spawn` — run a Claude Code agent on members (host side, loopback API).
+    Spawn {
+        /// `--member`, or `None` with `all`.
+        member: Option<String>,
+        /// `--all`: every connected member.
+        all: bool,
+        /// The prompt.
+        prompt: String,
+        /// `--cwd` on the member.
+        cwd: Option<String>,
+        /// `--allowed-tools` (default none).
+        allowed_tools: Vec<String>,
+        /// `--wait`: block until every run finishes and print the answers.
+        wait: bool,
+        /// The host's listen address.
+        host: String,
+    },
+    /// `qfs cluster agents` — print the host's agent runs as JSON.
+    Agents {
+        /// `--id`: one run.
+        id: Option<u64>,
+        /// The host's listen address.
+        host: String,
     },
     /// `qfs cluster members` — print the host's members as JSON.
     Members {
@@ -960,8 +990,8 @@ enum Command {
 #[derive(Subcommand, Debug)]
 enum ClusterVerb {
     /// Run the cluster host: accept members on `--listen` (loopback by default) and serve the
-    /// loopback-only cluster console (`/`) and JSON read API (`/api/cluster/members`,
-    /// `/api/cluster/sessions`, `/api/cluster/accounts`).
+    /// loopback-only cluster console (`/`) and JSON API (`/api/cluster/members`,
+    /// `/api/cluster/sessions`, `/api/cluster/accounts`, `/api/cluster/agents`).
     Host {
         /// Listen address. Anything other than loopback exposes the member WebSocket to the network
         /// (plain `ws://`; use a trusted LAN or an SSH/TLS tunnel).
@@ -996,6 +1026,59 @@ enum ClusterVerb {
         /// Heartbeat interval in seconds.
         #[arg(long = "heartbeat", default_value_t = 10.0)]
         heartbeat: f64,
+        /// Let the host spawn Claude Code agents (`claude -p`) on this machine as this OS user.
+        /// Without it every spawn is refused.
+        #[arg(long = "accept-spawn")]
+        accept_spawn: bool,
+        /// The spawn root: agents run here, and a host `--cwd` must lie under it (default: a
+        /// fresh temp dir per run, and no host `--cwd` is accepted).
+        #[arg(long = "spawn-cwd", requires = "accept_spawn")]
+        spawn_cwd: Option<PathBuf>,
+        /// Kill a spawned agent after this many seconds.
+        #[arg(
+            long = "spawn-timeout",
+            default_value_t = 600,
+            requires = "accept_spawn"
+        )]
+        spawn_timeout: u64,
+    },
+    /// Spawn a one-shot Claude Code agent (`claude -p <prompt>`) on a member, or on every connected
+    /// member, and record the run (run on the host machine; members must join with
+    /// `--accept-spawn`).
+    Spawn {
+        /// The member to run on.
+        #[arg(
+            long = "member",
+            required_unless_present = "all",
+            conflicts_with = "all"
+        )]
+        member: Option<String>,
+        /// Run on every connected member.
+        #[arg(long = "all")]
+        all: bool,
+        /// The prompt.
+        prompt: String,
+        /// Working directory on the member (must lie under its `--spawn-cwd`).
+        #[arg(long = "cwd")]
+        cwd: Option<String>,
+        /// A tool the agent may use (repeatable; default: none).
+        #[arg(long = "allowed-tools")]
+        allowed_tools: Vec<String>,
+        /// Wait for every run to finish and print each member's answer.
+        #[arg(long = "wait")]
+        wait: bool,
+        /// The host's listen address.
+        #[arg(long = "host", default_value = "127.0.0.1:7466")]
+        host: String,
+    },
+    /// Print the host's agent runs as JSON rows (run on the host machine).
+    Agents {
+        /// Print one run.
+        #[arg(long = "id")]
+        id: Option<u64>,
+        /// The host's listen address.
+        #[arg(long = "host", default_value = "127.0.0.1:7466")]
+        host: String,
     },
     /// Print the host's members as JSON rows (run on the host machine).
     Members {
@@ -2398,12 +2481,36 @@ fn cluster_request(verb: ClusterVerb) -> ClusterRequest {
             token,
             name,
             heartbeat,
+            accept_spawn,
+            spawn_cwd,
+            spawn_timeout,
         } => ClusterRequest::Join {
             url,
             token,
             name,
             heartbeat_secs: heartbeat,
+            accept_spawn,
+            spawn_cwd,
+            spawn_timeout_secs: spawn_timeout,
         },
+        ClusterVerb::Spawn {
+            member,
+            all,
+            prompt,
+            cwd,
+            allowed_tools,
+            wait,
+            host,
+        } => ClusterRequest::Spawn {
+            member,
+            all,
+            prompt,
+            cwd,
+            allowed_tools,
+            wait,
+            host,
+        },
+        ClusterVerb::Agents { id, host } => ClusterRequest::Agents { id, host },
         ClusterVerb::Members { host } => ClusterRequest::Members { host },
         ClusterVerb::Sessions { host } => ClusterRequest::Sessions { host },
         ClusterVerb::Grant {
@@ -2667,6 +2774,8 @@ mod tests {
             vec!["qfs", "cluster", "grant", "alice", "/slack"],
             vec!["qfs", "cluster", "revoke", "alice", "/slack"],
             vec!["qfs", "cluster", "grants"],
+            vec!["qfs", "cluster", "spawn", "--member", "a", "hi"],
+            vec!["qfs", "cluster", "agents", "--id", "3"],
             vec![
                 "qfs",
                 "cluster",
@@ -2711,8 +2820,56 @@ mod tests {
                 token: "tok".into(),
                 name: None,
                 heartbeat_secs: 0.5,
+                accept_spawn: false,
+                spawn_cwd: None,
+                spawn_timeout_secs: 600,
             }
         );
+        let cli = <Cli as clap::Parser>::try_parse_from([
+            "qfs",
+            "cluster",
+            "spawn",
+            "--all",
+            "--allowed-tools",
+            "Read",
+            "--wait",
+            "tell a joke",
+        ])
+        .unwrap();
+        let Some(Command::Cluster { verb }) = cli.cmd else {
+            panic!("not a cluster command");
+        };
+        assert_eq!(
+            cluster_request(verb),
+            ClusterRequest::Spawn {
+                member: None,
+                all: true,
+                prompt: "tell a joke".into(),
+                cwd: None,
+                allowed_tools: vec!["Read".into()],
+                wait: true,
+                host: "127.0.0.1:7466".into(),
+            }
+        );
+        for bad in [
+            vec!["qfs", "cluster", "spawn", "joke"],
+            vec!["qfs", "cluster", "spawn", "--all", "--member", "a", "joke"],
+            vec![
+                "qfs",
+                "cluster",
+                "join",
+                "ws://h:1",
+                "--token",
+                "t",
+                "--spawn-cwd",
+                "/x",
+            ],
+        ] {
+            assert!(
+                <Cli as clap::Parser>::try_parse_from(bad.clone()).is_err(),
+                "{bad:?}"
+            );
+        }
         let cli = <Cli as clap::Parser>::try_parse_from([
             "qfs",
             "cluster",
